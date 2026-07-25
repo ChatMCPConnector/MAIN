@@ -1,0 +1,109 @@
+name: Android CI and Sauce Labs Upload
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Test, build, and upload Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Detect Android project
+        id: android
+        shell: bash
+        run: |
+          if [[ ! -f gradlew ]]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Android build skipped::No gradlew file was found in the repository root."
+            exit 0
+          fi
+
+          if ! find . -type f -path '*/src/main/AndroidManifest.xml' -print -quit | grep -q . \
+            && ! grep -R -E -l \
+              --include='*.gradle' \
+              --include='*.gradle.kts' \
+              'com\.android\.(application|library|dynamic-feature|test)|^[[:space:]]*android[[:space:]]*\{' \
+              . >/dev/null 2>&1; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Android build skipped::No Android project markers were found."
+            exit 0
+          fi
+
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java 17
+        if: steps.android.outputs.available == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Test and build debug APK
+        if: steps.android.outputs.available == 'true'
+        shell: bash
+        run: |
+          chmod +x ./gradlew
+          ./gradlew testDebugUnitTest assembleDebug
+
+      - name: Prepare debug APK
+        if: steps.android.outputs.available == 'true'
+        id: apk
+        shell: bash
+        run: |
+          SOURCE_APK="$(find . -type f -path '*/build/outputs/apk/debug/app-debug.apk' -print -quit)"
+
+          if [[ -z "$SOURCE_APK" ]]; then
+            SOURCE_APK="$(find . -type f -path '*/build/outputs/apk/debug/*.apk' \
+              ! -name '*androidTest*.apk' | sort | head -n 1)"
+          fi
+
+          if [[ -z "$SOURCE_APK" ]]; then
+            echo "::error title=Debug APK missing::The Gradle build completed, but no debug APK was found."
+            exit 1
+          fi
+
+          APK_PATH="${RUNNER_TEMP}/app-debug.apk"
+          cp "$SOURCE_APK" "$APK_PATH"
+          echo "path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Store debug APK as GitHub artifact
+        if: steps.android.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Upload debug APK to Sauce Labs Europe
+        if: steps.android.outputs.available == 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+        shell: bash
+        env:
+          SAUCE_USERNAME: ${{ secrets.SAUCE_USERNAME }}
+          SAUCE_ACCESS_KEY: ${{ secrets.SAUCE_ACCESS_KEY }}
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          if [[ -z "${SAUCE_USERNAME:-}" || -z "${SAUCE_ACCESS_KEY:-}" ]]; then
+            echo "::error title=Missing Sauce Labs secrets::Configure SAUCE_USERNAME and SAUCE_ACCESS_KEY as GitHub Actions secrets."
+            exit 1
+          fi
+
+          curl --fail-with-body --silent --show-error --location \
+            --request POST \
+            --user "${SAUCE_USERNAME}:${SAUCE_ACCESS_KEY}" \
+            --form "payload=@${APK_PATH}" \
+            --form "name=app-debug.apk" \
+            --output /dev/null \
+            "https://api.eu-central-1.saucelabs.com/v1/storage/upload"
+
+          echo "Debug APK uploaded to Sauce Labs Europe as app-debug.apk."
