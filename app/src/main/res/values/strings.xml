@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sauce Labs Test App</string>
+    <string name="app_subtitle">Eine kleine Android-App für manuelle und automatisierte Gerätetests.</string>
+    <string name="greeting_section_title">1. Texteingabe testen</string>
+    <string name="name_hint">Name eingeben</string>
+    <string name="greet_button">Begrüßung anzeigen</string>
+    <string name="greet_button_description">Begrüßung erzeugen</string>
+    <string name="greeting_placeholder">Hier erscheint die Begrüßung.</string>
+    <string name="default_tester_name">Tester</string>
+    <string name="greeting_result">Hallo, %1$s!</string>
+    <string name="greeting_result_description">Begrüßung für %1$s</string>
+    <string name="counter_section_title">2. Schaltflächen testen</string>
+    <string name="decrement">−</string>
+    <string name="reset">Reset</string>
+    <string name="increment">+</string>
+    <string name="decrement_description">Zähler verringern</string>
+    <string name="reset_description">Zähler zurücksetzen</string>
+    <string name="increment_description">Zähler erhöhen</string>
+    <string name="counter_value_description">Zählerstand %1$d</string>
+    <string name="test_mode_switch">Testmodus aktivieren</string>
+    <string name="ready_status">Status: bereit</string>
+    <string name="test_mode_enabled">Status: Testmodus aktiv</string>
+    <string name="complete_test">Test erfolgreich abschließen</string>
+    <string name="complete_test_description">Test als erfolgreich markieren</string>
+    <string name="test_successful">STATUS: TEST ERFOLGREICH</string>
+    <string name="test_successful_description">Der Test wurde erfolgreich abgeschlossen</string>
+</resources>
