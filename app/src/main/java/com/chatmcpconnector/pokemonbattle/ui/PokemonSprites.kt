@@ -78,11 +78,11 @@ fun PokemonPixelSprite(
         val cell = minOf(size.width / columns, size.height / rows.size)
         val imageWidth = cell * columns
         val xStart = (size.width - imageWidth) / 2f
-        rows.forEachIndexed { rowIndex, row ->
-            row.forEachIndexed { columnIndex, symbol ->
-                val sourceColumn = if (side == Side.PLAYER) row.length - 1 - columnIndex else columnIndex
+        for ((rowIndex, row) in rows.withIndex()) {
+            for (columnIndex in row.indices) {
+                val sourceColumn = if (side == Side.PLAYER) row.lastIndex - columnIndex else columnIndex
                 val sourceSymbol = row[sourceColumn]
-                val color = sprite.palette[sourceSymbol] ?: return@forEachIndexed
+                val color = sprite.palette[sourceSymbol] ?: continue
                 drawRect(
                     color = if (flash) Color.White else color,
                     topLeft = Offset(xStart + columnIndex * cell, rowIndex * cell),
