@@ -33,7 +33,9 @@ jobs:
       - name: Install required Android packages
         shell: bash
         run: |
+          set +o pipefail
           yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
           sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0"
 
       - name: Run unit tests, lint, and release build
