@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   release:
@@ -125,3 +126,25 @@ jobs:
             "https://api.eu-central-1.saucelabs.com/v1/storage/upload"
 
           echo "PokemonBattle.apk uploaded to Sauce Labs Europe. No device session was started."
+
+      - name: Publish final commit status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$JOB_STATUS" in
+            success) STATE="success"; DESCRIPTION="Tests, signing, artifact and Sauce upload succeeded." ;;
+            cancelled) STATE="error"; DESCRIPTION="Android release workflow was cancelled." ;;
+            *) STATE="failure"; DESCRIPTION="Android release workflow failed. Inspect the Actions log." ;;
+          esac
+
+          curl --fail-with-body --silent --show-error --location \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data "{\"state\":\"${STATE}\",\"target_url\":\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\",\"description\":\"${DESCRIPTION}\",\"context\":\"pokemon-battle/release\"}" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}"
