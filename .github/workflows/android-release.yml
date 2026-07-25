@@ -76,10 +76,11 @@ jobs:
 
           KEYSTORE_PATH="${RUNNER_TEMP}/pokemon-battle-release.jks"
           KEYSTORE_PASSWORD="$(openssl rand -hex 24)"
-          KEY_PASSWORD="$(openssl rand -hex 24)"
+          KEY_PASSWORD="$KEYSTORE_PASSWORD"
           KEY_ALIAS="pokemon-battle-release"
 
           keytool -genkeypair \
+            -storetype JKS \
             -keystore "$KEYSTORE_PATH" \
             -storepass "$KEYSTORE_PASSWORD" \
             -keypass "$KEY_PASSWORD" \
@@ -88,7 +89,7 @@ jobs:
             -keysize 4096 \
             -validity 3650 \
             -dname "CN=Pokemon Battle CI, OU=Android, O=ChatMCPConnector, L=CI, ST=CI, C=DE" \
-            -noprompt >/dev/null 2>&1
+            -noprompt
 
           BUILD_TOOLS="${ANDROID_SDK_ROOT}/build-tools/35.0.0"
           mkdir -p release-output
