@@ -17,8 +17,8 @@ concurrency:
 env:
   GODOT_VERSION: 4.7.1
   GODOT_STATUS: stable
-  GODOT_BIN: ${{ github.workspace }}/.tools/godot
-  TEMPLATE_DIR: ${{ runner.temp }}/godot-templates
+  GODOT_BIN: .tools/godot
+  TEMPLATE_DIR: .godot-ci-templates
 
 jobs:
   build-test-emulator-upload:
