@@ -77,7 +77,7 @@ func _spawn_pattern(difficulty: float) -> void:
         _activate_obstacle(lanes[i], kind_options[rng.randi_range(0, kind_options.size() - 1)], -68.0 - i * 0.5)
     _spawn_collectible_line(safe_lane, -60.0)
     if blocked_count == 1 and rng.randf() < 0.45:
-        var second_safe := lanes[1]
+        var second_safe: int = int(lanes[1])
         _spawn_collectible_line(second_safe, -64.0)
 
 func _activate_obstacle(lane: int, kind: String, z_pos: float) -> void:
