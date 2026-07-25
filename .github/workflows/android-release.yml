@@ -39,10 +39,29 @@ jobs:
           sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0"
 
       - name: Run unit tests, lint, and release build
+        id: gradle
         shell: bash
         run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon clean testReleaseUnitTest lintRelease assembleRelease
+          set +e
+          ./gradlew --no-daemon clean testReleaseUnitTest lintRelease assembleRelease 2>&1 | tee "${RUNNER_TEMP}/gradle.log"
+          EXIT_CODE="${PIPESTATUS[0]}"
+          set -e
+          if [[ "$EXIT_CODE" != "0" ]]; then
+            SUMMARY="$(grep -E '(^e: |^FAILURE:|What went wrong:|Could not|error:)' "${RUNNER_TEMP}/gradle.log" | tail -n 1 | tr -cd '[:alnum:] ._:/()=-' | cut -c1-100)"
+            if [[ -z "$SUMMARY" ]]; then SUMMARY="Gradle build failed."; fi
+            echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
+            exit "$EXIT_CODE"
+          fi
+
+      - name: Store Gradle diagnostics on failure
+        if: failure() && steps.gradle.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-diagnostics
+          path: ${{ runner.temp }}/gradle.log
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Create temporary signing key and sign release APK
         id: apk
@@ -134,13 +153,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           JOB_STATUS: ${{ job.status }}
+          FAILURE_SUMMARY: ${{ steps.gradle.outputs.summary }}
         shell: bash
         run: |
           set -euo pipefail
           case "$JOB_STATUS" in
             success) STATE="success"; DESCRIPTION="Tests, signing, artifact and Sauce upload succeeded." ;;
             cancelled) STATE="error"; DESCRIPTION="Android release workflow was cancelled." ;;
-            *) STATE="failure"; DESCRIPTION="Android release workflow failed. Inspect the Actions log." ;;
+            *)
+              STATE="failure"
+              if [[ -n "${FAILURE_SUMMARY:-}" ]]; then
+                DESCRIPTION="Build failed: ${FAILURE_SUMMARY}"
+              else
+                DESCRIPTION="Android release workflow failed. Inspect the Actions log."
+              fi
+              ;;
           esac
 
           curl --fail-with-body --silent --show-error --location \
