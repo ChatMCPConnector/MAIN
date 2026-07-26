@@ -100,7 +100,7 @@ capture_screen() {
 echo "no" | avdmanager create avd \
   --force \
   --name "${AVD_NAME}" \
-  --package "system-images;android-35;google_apis;x86_64" \
+  --package "system-images;android-34;google_apis;x86_64" \
   --device "pixel_6"
 
 adb start-server
