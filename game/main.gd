@@ -812,7 +812,9 @@ func capture_ci_gallery() -> void:
 	screen="character_select"; await save_capture(dir.path_join("02-character-select.png"))
 	screen="stage_select"; await save_capture(dir.path_join("03-stage-select.png"))
 	start_match("stage"); await get_tree().process_frame; await save_capture(dir.path_join("04-stage-combat.png"))
-	var p := get_player(0); if p: perform_attack(p,"special")
+	var p = get_player(0)
+	if p:
+		perform_attack(p,"special")
 	await get_tree().process_frame; await save_capture(dir.path_join("05-special-attack.png"))
 	selected_stage=2; start_match("stage"); wave=2; fighters = fighters.filter(func(f): return f.player>=0); spawn_enemy("boss",Vector2(900,455)); await save_capture(dir.path_join("06-boss-fight.png"))
 	get_tree().paused=true; await save_capture(dir.path_join("07-pause-menu.png")); get_tree().paused=false
