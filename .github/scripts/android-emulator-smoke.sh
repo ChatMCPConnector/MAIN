@@ -161,6 +161,22 @@ fi
 
 test -s "${EMULATOR_APK}"
 adb -s "${SERIAL}" install --no-incremental -r "${EMULATOR_APK}"
+
+# `adb install` can return before PackageManager has delivered PACKAGE_ADDED and
+# completed its background work. Launching Godot during that window lets Android
+# recreate the Activity, after which Godot intentionally terminates the reused
+# engine instance. Wait for both package and broadcast queues before launching.
+adb -s "${SERIAL}" shell cmd package wait-for-handler >/dev/null 2>&1 || true
+adb -s "${SERIAL}" shell am wait-for-broadcast-idle >/dev/null 2>&1 || true
+for _ in $(seq 1 30); do
+  if adb -s "${SERIAL}" shell dumpsys package "${PACKAGE}" 2>/dev/null \
+      | grep -q 'User 0:.*installed=true'; then
+    break
+  fi
+  sleep 1
+done
+sleep 8
+
 adb -s "${SERIAL}" shell am force-stop "${PACKAGE}"
 adb -s "${SERIAL}" logcat -c
 
