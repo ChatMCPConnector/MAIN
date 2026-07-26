@@ -111,17 +111,29 @@ jobs:
           Invoke-WebRequest "$base/Godot_v$env:GODOT_VERSION-$env:GODOT_STATUS`_export_templates.tpz" -OutFile templates.zip
           Expand-Archive godot.zip -DestinationPath .godot-bin
           Expand-Archive templates.zip -DestinationPath .godot-templates
+          $template = Get-ChildItem .godot-templates -Recurse -Filter windows_release_x86_64.exe | Select-Object -First 1
+          if ($null -eq $template) { throw "Official Windows release template was not found after extraction" }
           $dest = Join-Path $env:APPDATA "Godot/export_templates/$env:GODOT_VERSION.stable"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           Copy-Item ".godot-templates/templates/*" $dest -Recurse -Force
+          "WINDOWS_TEMPLATE=$($template.FullName)" | Add-Content $env:GITHUB_ENV
+          Write-Host "Using official template: $($template.FullName)"
       - name: Import and export release
         shell: pwsh
         run: |
-          $godot = Resolve-Path ".godot-bin/Godot_v$env:GODOT_VERSION-$env:GODOT_STATUS`_win64.exe"
-          & $godot --headless --editor --path . --quit-after 3
-          New-Item -ItemType Directory -Force -Path dist/NeonRift-Windows-Portable | Out-Null
-          & $godot --headless --path . --export-release "Windows Desktop" "dist/NeonRift-Windows-Portable/NeonRift.exe"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force -Path dist/NeonRift-Windows-Portable,dist/windows-logs | Out-Null
+          $godot = (Resolve-Path ".godot-bin/Godot_v$env:GODOT_VERSION-$env:GODOT_STATUS`_win64.exe").Path
+          $templatePath = $env:WINDOWS_TEMPLATE.Replace('\','/')
+          $preset = Get-Content export_presets.cfg -Raw
+          $preset = $preset.Replace('custom_template/release=""', "custom_template/release=`"$templatePath`"")
+          Set-Content -Path export_presets.cfg -Value $preset -Encoding utf8NoBOM
+          & $godot --headless --editor --path . --quit-after 3 --verbose 2>&1 | Tee-Object -FilePath dist/windows-logs/import.log
+          if ($LASTEXITCODE -ne 0) { throw "Godot project import failed with exit code $LASTEXITCODE" }
+          & $godot --headless --path . --export-release "Windows Desktop" "dist/NeonRift-Windows-Portable/NeonRift.exe" --verbose 2>&1 | Tee-Object -FilePath dist/windows-logs/export.log
+          if ($LASTEXITCODE -ne 0) { throw "Godot Windows export failed with exit code $LASTEXITCODE" }
+          Get-ChildItem dist/NeonRift-Windows-Portable -Recurse | Select-Object FullName,Length | Format-Table | Out-String | Set-Content dist/windows-logs/export-file-list.txt
+          if (!(Test-Path "dist/NeonRift-Windows-Portable/NeonRift.exe")) { throw "Windows export reported success but NeonRift.exe is missing" }
+          if (!(Test-Path "dist/NeonRift-Windows-Portable/NeonRift.pck")) { throw "Windows export reported success but NeonRift.pck is missing" }
       - name: Assemble portable package
         shell: pwsh
         run: |
@@ -160,6 +172,7 @@ jobs:
         with:
           name: NeonRift-Windows-Diagnostics
           path: |
+            dist/windows-logs
             dist/windows-smoke
             dist/binary-manifest.txt
             dist/NeonRift-Windows-Portable/smoke-test.log
