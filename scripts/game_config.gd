@@ -1,7 +1,7 @@
 extends RefCounted
 class_name GameConfig
 
-const LANE_X := PackedFloat32Array([-3.2, 0.0, 3.2])
+const LANE_X := [-3.2, 0.0, 3.2]
 const START_SPEED := 10.0
 const MAX_SPEED := 25.0
 const SPEED_GAIN := 0.22

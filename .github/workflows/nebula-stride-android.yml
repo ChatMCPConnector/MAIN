@@ -24,7 +24,7 @@ jobs:
   build-test-emulator-upload:
     name: Build, test, emulate, and publish
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 65
 
     steps:
       - name: Check out repository
@@ -46,7 +46,7 @@ jobs:
           set +o pipefail
           yes | sdkmanager --licenses >/dev/null
           set -o pipefail
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.1" "emulator" "system-images;android-35;google_apis;x86_64"
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.1" "emulator" "system-images;android-34;google_apis;x86_64"
 
       - name: Cache Godot downloads
         uses: actions/cache@v4
@@ -62,15 +62,15 @@ jobs:
           set -euo pipefail
           mkdir -p .tools "${TEMPLATE_DIR}"
           if [[ ! -x "${GODOT_BIN}" ]]; then
-            curl --fail-with-body --location --retry 4 --output /tmp/godot.zip \
-              "https://downloads.godotengine.org/?flavor=stable&platform=linux.64&slug=linux.x86_64.zip&version=${GODOT_VERSION}"
+            curl --fail-with-body --location --retry 4 --connect-timeout 30 --max-time 600 --output /tmp/godot.zip \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
             unzip -q /tmp/godot.zip -d .tools
             mv ".tools/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64" "${GODOT_BIN}"
             chmod +x "${GODOT_BIN}"
           fi
           if [[ ! -f "${TEMPLATE_DIR}/android_debug.apk" ]]; then
-            curl --fail-with-body --location --retry 4 --output /tmp/templates.tpz \
-              "https://downloads.godotengine.org/?flavor=stable&platform=templates&slug=export_templates.tpz&version=${GODOT_VERSION}"
+            curl --fail-with-body --location --retry 4 --connect-timeout 30 --max-time 900 --output /tmp/templates.tpz \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_export_templates.tpz"
             rm -rf /tmp/godot-template-unpack
             mkdir -p /tmp/godot-template-unpack
             unzip -q /tmp/templates.tpz -d /tmp/godot-template-unpack
@@ -112,18 +112,17 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import os
-          p=Path('export_presets.cfg')
-          s=p.read_text()
-          debug=str(Path(os.environ['RUNNER_TEMP'])/'keys/debug.keystore')
-          release=str(Path(os.environ['RUNNER_TEMP'])/'keys/release.jks')
-          pw=os.environ['RELEASE_PASSWORD']
-          s=s.replace('keystore/debug=""', f'keystore/debug="{debug}"')
-          marker='[preset.1.options]'
-          before, after=s.split(marker,1)
-          after=after.replace('keystore/release=""', f'keystore/release="{release}"',1)
-          after=after.replace('keystore/release_user=""', 'keystore/release_user="nebula-stride"',1)
-          after=after.replace('keystore/release_password=""', f'keystore/release_password="{pw}"',1)
-          p.write_text(before+marker+after)
+
+          path = Path('export_presets.cfg')
+          text = path.read_text()
+          debug = str(Path(os.environ['RUNNER_TEMP']) / 'keys/debug.keystore')
+          release = str(Path(os.environ['RUNNER_TEMP']) / 'keys/release.jks')
+          password = os.environ['RELEASE_PASSWORD']
+          text = text.replace('keystore/debug=""', f'keystore/debug="{debug}"')
+          text = text.replace('keystore/release=""', f'keystore/release="{release}"')
+          text = text.replace('keystore/release_user=""', 'keystore/release_user="nebula-stride"')
+          text = text.replace('keystore/release_password=""', f'keystore/release_password="{password}"')
+          path.write_text(text)
           PY
 
       - name: Export Android APKs
@@ -132,8 +131,10 @@ jobs:
           set -euo pipefail
           "${GODOT_BIN}" --headless --path . --export-debug "Android Debug" build/NebulaStride-debug.apk 2>&1 | tee export-debug.log
           "${GODOT_BIN}" --headless --path . --export-release "Android Release" build/NebulaStride-release.apk 2>&1 | tee export-release.log
+          "${GODOT_BIN}" --headless --path . --export-release "Android Emulator" build/NebulaStride-emulator-x86_64.apk 2>&1 | tee export-emulator.log
           test -s build/NebulaStride-debug.apk
           test -s build/NebulaStride-release.apk
+          test -s build/NebulaStride-emulator-x86_64.apk
 
       - name: Verify package, permissions, architectures, and signatures
         shell: bash
@@ -145,6 +146,7 @@ jobs:
           "$AAPT" dump permissions build/NebulaStride-release.apk | tee apk-permissions.txt
           "$APKSIGNER" verify --verbose --print-certs build/NebulaStride-release.apk | tee apk-signature.txt
           grep -q "package: name='com.chatmcpconnector.nebulastride'" apk-badging.txt
+          grep -q "uses-feature: name='android.hardware.screen.landscape'" apk-badging.txt
           if grep -q "android.permission.INTERNET" apk-permissions.txt; then
             echo "Unexpected INTERNET permission"
             exit 1
@@ -155,48 +157,72 @@ jobs:
             echo "Release APK unexpectedly contains x86_64"
             exit 1
           fi
+          unzip -l build/NebulaStride-debug.apk | tee apk-debug-files.txt
+          grep -q "lib/x86_64/" apk-debug-files.txt
+          unzip -l build/NebulaStride-emulator-x86_64.apk | tee apk-emulator-files.txt
+          grep -q "lib/x86_64/" apk-emulator-files.txt
+          if grep -q "lib/arm64-v8a/" apk-emulator-files.txt; then
+            echo "Emulator APK unexpectedly contains arm64-v8a"
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose build/NebulaStride-emulator-x86_64.apk
+
+      - name: Enable KVM acceleration
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -e /dev/kvm
+          ls -l /dev/kvm
 
       - name: Run Android emulator smoke test
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          target: google_apis
-          profile: pixel_6
-          disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-            set -euo pipefail
-            mkdir -p test-artifacts/screenshots
-            adb shell wm size 1280x720
-            adb shell wm density 320
-            adb shell settings put system accelerometer_rotation 0
-            adb shell settings put system user_rotation 1
-            adb logcat -c
-            adb install -r build/NebulaStride-debug.apk
-            adb shell monkey -p com.chatmcpconnector.nebulastride 1
-            sleep 5
-            adb exec-out screencap -p > test-artifacts/screenshots/01-tutorial.png
-            adb shell input tap 640 625
-            sleep 2
-            adb exec-out screencap -p > test-artifacts/screenshots/02-main-menu.png
-            adb shell input tap 640 330
-            sleep 5
-            adb shell input swipe 640 400 350 400 300
-            adb shell input swipe 350 400 850 400 300
-            adb shell input swipe 640 500 640 230 300
-            adb shell input swipe 640 250 640 540 300
-            sleep 4
-            adb exec-out screencap -p > test-artifacts/screenshots/03-gameplay.png
-            adb shell input keyevent 34
-            sleep 2
-            adb exec-out screencap -p > test-artifacts/screenshots/04-game-over.png
-            PID="$(adb shell pidof com.chatmcpconnector.nebulastride | tr -d '\r')"
-            test -n "$PID"
-            adb logcat -d > test-artifacts/logcat.txt
-            if grep -E "FATAL EXCEPTION|ANR in com.chatmcpconnector.nebulastride|Process com.chatmcpconnector.nebulastride.*has died" test-artifacts/logcat.txt; then
-              exit 1
-            fi
+        shell: bash
+        timeout-minutes: 18
+        run: bash .github/scripts/android-emulator-smoke.sh
+
+      - name: Symbolicate Android native crash
+        if: failure()
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -euo pipefail
+          CRASH_LOG="test-artifacts/native-crash-dropbox.txt"
+          OUTPUT="test-artifacts/symbolicated-crash.txt"
+          if [[ ! -s "${CRASH_LOG}" ]] || ! grep -q "libgodot_android.so" "${CRASH_LOG}"; then
+            echo "No Godot native crash found to symbolicate." | tee "${OUTPUT}"
+            exit 0
+          fi
+
+          SYMBOL_ARCHIVE="/tmp/godot-android-symbols.zip"
+          SYMBOL_ROOT="/tmp/godot-android-symbols"
+          curl --fail-with-body --location --retry 4 --connect-timeout 30 --max-time 1200 \
+            --output "${SYMBOL_ARCHIVE}" \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_native_debug_symbols.${GODOT_VERSION}.${GODOT_STATUS}.template_release.android.zip"
+          rm -rf "${SYMBOL_ROOT}"
+          mkdir -p "${SYMBOL_ROOT}"
+          unzip -q "${SYMBOL_ARCHIVE}" -d "${SYMBOL_ROOT}"
+          find "${SYMBOL_ROOT}" -type f | sort > test-artifacts/native-symbol-files.txt
+
+          SYMBOL_FILE="$(find "${SYMBOL_ROOT}" -type f -path '*/x86_64/*' \
+            \( -name 'libgodot_android.so' -o -name 'libgodot_android.so.debug' \) | head -n 1)"
+          if [[ -z "${SYMBOL_FILE}" ]]; then
+            echo "Matching x86_64 libgodot_android symbol file was not found." | tee "${OUTPUT}"
+            exit 1
+          fi
+          mkdir -p /tmp/ndk-symbols
+          cp "${SYMBOL_FILE}" /tmp/ndk-symbols/libgodot_android.so
+
+          NDK_STACK="$(find "${ANDROID_SDK_ROOT}/ndk" -type f -name ndk-stack 2>/dev/null | sort | tail -n 1 || true)"
+          if [[ -z "${NDK_STACK}" ]]; then
+            sdkmanager "ndk;27.2.12479018"
+            NDK_STACK="${ANDROID_SDK_ROOT}/ndk/27.2.12479018/ndk-stack"
+          fi
+          test -x "${NDK_STACK}"
+
+          awk 'found || /^\*\*\* \*\*\*/ { found=1; print }' "${CRASH_LOG}" > /tmp/godot-crash.txt
+          "${NDK_STACK}" -sym /tmp/ndk-symbols -dump /tmp/godot-crash.txt | tee "${OUTPUT}"
 
       - name: Validate screenshots
         shell: bash
@@ -205,16 +231,17 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import struct
-          paths=sorted(Path('test-artifacts/screenshots').glob('*.png'))
-          if len(paths) < 4:
-              raise SystemExit(f'Expected four screenshots, found {len(paths)}')
+
+          paths = sorted(p for p in Path('test-artifacts/screenshots').glob('*.png') if not p.name.startswith('99-'))
+          if len(paths) < 6:
+              raise SystemExit(f'Expected six screenshots, found {len(paths)}')
           for path in paths:
-              data=path.read_bytes()
+              data = path.read_bytes()
               if len(data) < 20000 or data[:8] != b'\x89PNG\r\n\x1a\n':
                   raise SystemExit(f'{path}: invalid or suspiciously small PNG')
-              width,height=struct.unpack('>II', data[16:24])
-              if (width,height) != (1280,720):
-                  raise SystemExit(f'{path}: unexpected size {(width,height)}')
+              width, height = struct.unpack('>II', data[16:24])
+              if (width, height) != (1280, 720):
+                  raise SystemExit(f'{path}: unexpected size {(width, height)}')
               print(path, width, height, len(data))
           PY
 
@@ -226,6 +253,7 @@ jobs:
           path: |
             build/NebulaStride-debug.apk
             build/NebulaStride-release.apk
+            build/NebulaStride-emulator-x86_64.apk
             test-artifacts/
             *.log
             apk-*.txt
@@ -233,7 +261,7 @@ jobs:
           retention-days: 14
 
       - name: Upload release APK to Sauce Labs Europe
-        if: success()
+        if: success() && github.event_name == 'push'
         shell: bash
         env:
           SAUCE_USERNAME: ${{ secrets.SAUCE_USERNAME }}

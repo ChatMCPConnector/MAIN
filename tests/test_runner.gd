@@ -3,6 +3,7 @@ extends SceneTree
 const GameModel := preload("res://scripts/game_model.gd")
 const SaveManager := preload("res://scripts/save_manager.gd")
 const Config := preload("res://scripts/game_config.gd")
+const AudioManager := preload("res://scripts/audio_manager.gd")
 
 var failures := 0
 var checks := 0
@@ -47,5 +48,15 @@ func _run() -> void:
     _check(model.score == 0 and model.collectibles == 0 and model.speed == Config.START_SPEED, "restart resets run")
     var defaults := SaveManager.defaults()
     _check(defaults.highscore == 0 and defaults.tutorial_done == false, "safe save defaults")
+
+    var audio := AudioManager.new()
+    var music: AudioStreamWAV = audio._make_music()
+    _check(music.format == AudioStreamWAV.FORMAT_16_BITS, "procedural music uses 16-bit PCM")
+    _check(music.mix_rate == 22050, "procedural music sample rate")
+    _check(not music.stereo, "procedural music is mono")
+    _check(music.data.size() == 22050 * 4 * 2, "procedural music buffer size")
+    _check(music.loop_mode == AudioStreamWAV.LOOP_DISABLED, "procedural music avoids unsafe PCM loop boundary")
+    audio.free()
+
     print("Nebula Stride tests: %d checks, %d failures" % [checks, failures])
     quit(failures)
