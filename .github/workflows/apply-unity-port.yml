@@ -1,0 +1,53 @@
+name: Apply atomic Unity port
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'unity-neon-rift-port' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: unity-neon-rift-port
+          fetch-depth: 0
+
+      - name: Reconstruct verified Unity project
+        shell: bash
+        run: |
+          cat \
+            .unity-port-payload.part00 \
+            .unity-port-payload.part01 \
+            .unity-port-payload.part02 \
+            .unity-port-payload.part03-00 \
+            .unity-port-payload.part03-01 \
+            .unity-port-payload.part03-02 \
+            .unity-port-payload.part03-03 \
+            > /tmp/unity-port.b64
+          base64 --decode /tmp/unity-port.b64 > /tmp/unity-port.tar.gz
+          echo "299e61764eff366dd3517cf2e103653526c78ffcfb222e6e6dcd5793ce6cbad3  /tmp/unity-port.tar.gz" | sha256sum --check
+
+      - name: Replace repository tree atomically
+        shell: bash
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          tar -xzf /tmp/unity-port.tar.gz
+          python tools/validate_project.py
+
+      - name: Publish clean Unity candidate
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Port Neon Rift to Unity 6.3"
+          git push --force origin HEAD:unity-neon-rift-port
