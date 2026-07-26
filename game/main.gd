@@ -632,7 +632,7 @@ func draw_character_select() -> void:
 	for i in CHARACTERS.size():
 		var rect := Rect2(82 + i * 300, 155, 260, 440); var active := i == p1_character; var p2 := i == p2_character and selected_mode in ["versus","team"]
 		draw_panel(rect, Color(0.05,0.06,0.13,0.93), CHARACTERS[i].color if active else (Color("ffcf62") if p2 else Color(1,1,1,0.12)), 5 if active or p2 else 2)
-		draw_character_portrait(i, rect.position + Vector2(130,145), 1.55)
+		draw_character_portrait(i, rect.position + Vector2(130,145), 1.18)
 		draw_string(ThemeDB.fallback_font, rect.position + Vector2(18,278), CHARACTERS[i].name, HORIZONTAL_ALIGNMENT_LEFT, -1, 25, Color.WHITE)
 		draw_string(ThemeDB.fallback_font, rect.position + Vector2(18,308), CHARACTERS[i].tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, CHARACTERS[i].color)
 		draw_string(ThemeDB.fallback_font, rect.position + Vector2(18,344), "HP %d   SPD %d" % [CHARACTERS[i].hp, CHARACTERS[i].speed], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("bdd0e8"))
