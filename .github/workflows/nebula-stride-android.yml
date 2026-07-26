@@ -46,7 +46,7 @@ jobs:
           set +o pipefail
           yes | sdkmanager --licenses >/dev/null
           set -o pipefail
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.1" "emulator" "system-images;android-35;google_apis;x86_64"
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.1" "emulator" "system-images;android-34;google_apis;x86_64"
 
       - name: Cache Godot downloads
         uses: actions/cache@v4
