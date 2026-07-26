@@ -7,3 +7,5 @@ Geprüft werden Projektimport, deterministische GDScript-Tests, Debug- und Relea
 Für die Veröffentlichung bleibt das eigentliche Release-APK ausschließlich ARM64 und signiert. Nur dieses APK wird nach einem erfolgreichen Lauf auf `main` in den europäischen Sauce-Labs-App-Speicher geladen. Eine automatische Sauce-Labs-Gerätesitzung wird nicht gestartet.
 
 Der Emulator verwendet den Dummy-Audiotreiber, während die normale ARM64-Anwendung ihre Musik und Soundeffekte behält. Die prozedural erzeugte Musik wird nach dem regulären Stream-Ende über das `finished`-Signal neu gestartet, damit kein PCM-Loop-Endpunkt außerhalb des Puffers gelesen wird.
+
+Die Pull-Request-Abnahme gilt erst als bestanden, wenn der Emulator-Smoke-Test und die technische sowie visuelle Kontrolle aller sechs Screenshots erfolgreich sind.
