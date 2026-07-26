@@ -1,26 +1,49 @@
-# Building Neon Rift
+# Building the Unity edition
 
-## Pinned toolchain
+## Requirements
 
-- Godot Engine **4.7.1 stable**, standard build (not Mono)
-- Matching official Godot 4.7.1 export templates
-- Windows Desktop x86_64 export
+- Unity Editor `6000.3.17f1`
+- Windows Build Support (Mono) module
+- Internet access for the selected CC0 assets and Unity packages
+- A valid Unity license for command-line or CI builds
 
-Download the editor and templates only from the official Godot website or the `godotengine/godot-builds` GitHub organization.
+## Local workflow
 
-## Local Windows build
+1. Open the repository in Unity Hub using the pinned editor version.
+2. Wait for Package Manager import to complete.
+3. Select **Neon Rift → Prepare Unity project**.
+4. Select **Neon Rift → Download or repair CC0 assets**.
+5. Select **Neon Rift → Build portable Windows game**.
 
-1. Install or unpack Godot 4.7.1 stable.
-2. Install the matching export templates in Godot's Export Template Manager.
-3. Open `project.godot`.
-4. Run the project for a functional check.
-5. Export the preset named `Windows Desktop` to `dist/NeonRift-Windows-Portable/NeonRift.exe`.
-6. Keep `NeonRift.exe` and `NeonRift.pck` together.
+Output:
 
-The PCK is deliberately not embedded. Godot documentation notes that embedded PCKs can increase antivirus false positives on Windows and interfere with signing workflows.
+```text
+build/StandaloneWindows64/NeonRift/NeonRift.exe
+```
 
-## CI build
+## Command line
 
-`.github/workflows/build-windows.yml` downloads pinned official binaries, runs validation and tests, exports on `windows-latest`, performs a headless launch check of the actual EXE, creates a normal ZIP, and generates SHA-256 checksums.
+Once the Unity editor is installed and activated:
 
-No installer, executable packer, obfuscator, self-extractor, or dynamic code downloader is used.
+```powershell
+Unity.exe -batchmode -nographics -quit `
+  -projectPath . `
+  -executeMethod NeonRift.Editor.BuildAutomation.BuildWindows `
+  -logFile build-unity.log
+```
+
+## GitHub Actions license secrets
+
+GameCI receives the standard Unity activation variables. Configure one supported route:
+
+### License file
+
+- `UNITY_LICENSE`
+
+### Serial activation
+
+- `UNITY_EMAIL`
+- `UNITY_PASSWORD`
+- `UNITY_SERIAL`
+
+The workflow never prints these secret values. If neither route exists, source validation still runs and Unity-dependent jobs are marked as skipped.

@@ -1,0 +1,150 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!129 &1
+PlayerSettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 25
+  productGUID: 4aa2271aa6fc4bed9fb8b9885b86a837
+  productName: Neon Rift Arena Breakers
+  companyName: ChatMCPConnector
+  defaultScreenWidth: 1280
+  defaultScreenHeight: 720
+  defaultScreenWidthWeb: 960
+  defaultScreenHeightWeb: 600
+  m_StereoRenderingPath: 0
+  m_ActiveColorSpace: 1
+  m_SpriteBatchVertexThreshold: 300
+  m_MTRendering: 1
+  defaultIsNativeResolution: 1
+  macRetinaSupport: 1
+  runInBackground: 1
+  fullscreenMode: 3
+  allowedAutorotateToPortrait: 1
+  allowedAutorotateToPortraitUpsideDown: 1
+  allowedAutorotateToLandscapeRight: 1
+  allowedAutorotateToLandscapeLeft: 1
+  useOnDemandResources: 0
+  accelerometerFrequency: 60
+  overrideDefaultApplicationIdentifier: 0
+  AndroidProfiler: 0
+  AndroidFilterTouchesWhenObscured: 0
+  AndroidEnableSustainedPerformanceMode: 0
+  defaultCursor: {fileID: 0}
+  cursorHotspot: {x: 0, y: 0}
+  m_DefaultScreenOrientation: 4
+  m_TargetDevice: 2
+  useAnimatedAutorotation: 1
+  m_AllowFullscreenSwitch: 1
+  m_HideToolbar: 0
+  m_SplashScreenBackgroundColor: {r: 0.015, g: 0.025, b: 0.065, a: 1}
+  m_ShowUnitySplashScreen: 1
+  m_ShowUnitySplashLogo: 1
+  m_SplashScreenOverlayOpacity: 1
+  m_SplashScreenAnimation: 1
+  m_SplashScreenLogoStyle: 1
+  m_SplashScreenDrawMode: 0
+  m_SplashScreenBackgroundAnimationZoom: 1
+  m_SplashScreenLogoAnimationZoom: 1
+  m_SplashScreenBackgroundLandscapeAspect: 1
+  m_SplashScreenBackgroundPortraitAspect: 1
+  m_SplashScreenBackgroundLandscapeUvs:
+    serializedVersion: 2
+    x: 0
+    y: 0
+    width: 1
+    height: 1
+  m_SplashScreenBackgroundPortraitUvs:
+    serializedVersion: 2
+    x: 0
+    y: 0
+    width: 1
+    height: 1
+  m_SplashScreenLogos: []
+  m_VirtualRealitySplashScreen: {fileID: 0}
+  m_HolographicTrackingLossScreen: {fileID: 0}
+  m_BakeCollisionMeshes: 0
+  m_ForceSingleInstance: 0
+  m_useFlipModelSwapchain: 1
+  m_ResizableWindow: 1
+  m_UseMacAppStoreValidation: 0
+  gpuSkinning: 1
+  xboxPIXTextureCapture: 0
+  xboxEnableAvatar: 0
+  xboxEnableKinect: 0
+  xboxEnableKinectAutoTracking: 0
+  xboxEnableFitness: 0
+  visibleInBackground: 1
+  m_RequireES31: 0
+  m_RequireES31AEP: 0
+  m_RequireES32: 0
+  m_TransparencySortMode: 0
+  m_TransparencySortAxis: {x: 0, y: 0, z: 1}
+  m_DefaultRenderingPath: 1
+  m_DefaultMobileRenderingPath: 1
+  m_ActiveInputHandler: 1
+  m_CloudProjectId:
+  m_FramebufferDepthMemorylessMode: 0
+  qualitySettingsNames: []
+  m_ProjectGenerationIncludedExtensions: txt;xml;fnt;cd;asmdef;asmref;rsp
+  m_ProjectGenerationRootNamespace: NeonRift
+  m_EnableTextureStreamingInEditor: 1
+  m_EnableTextureStreamingInPlayMode: 1
+  m_AsyncUploadTimeSlice: 2
+  m_AsyncUploadBufferSize: 16
+  m_AsyncUploadPersistentBuffer: 1
+  m_AsyncUploadMaxSliceCount: 2
+  m_EditorVersion: 6000.3.17f1
+  m_EditorVersionWithRevision: 6000.3.17f1
+  m_APICompatibilityLevel: 6
+  activeColorGamut: 0
+  hdrBitDepth: 0
+  m_ColorGamuts: 00000000
+  targetPixelDensity: 30
+  resolutionDialogBanner: {fileID: 0}
+  m_BuildTargetBatching: []
+  m_BuildTargetShaderSettings: []
+  m_BuildTargetGraphicsJobs: []
+  m_BuildTargetGraphicsJobMode: []
+  m_BuildTargetGraphicsAPIs: []
+  openGLRequireES31: 0
+  openGLRequireES31AEP: 0
+  openGLRequireES32: 0
+  m_TemplateCustomTags: {}
+  m_TemplateTitleBar: {}
+  m_TemplateDebugSearch: 0
+  m_TemplateUnityVersionCheck: {}
+  scriptingRuntimeVersion: 1
+  gcIncremental: 1
+  assemblyVersionValidation: 1
+  gcWBarrierValidation: 1
+  apiCompatibilityLevelPerPlatform: {}
+  m_RenderingPath: 1
+  m_MobileRenderingPath: 1
+  m_BuildTargetGroupLightmapEncodingQuality: []
+  m_BuildTargetGroupHDRCubemapEncodingQuality: []
+  m_BuildTargetGroupLightmapSettings: []
+  playModeTestRunnerEnabled: 0
+  runPlayModeTestAsEditModeTest: 0
+  scriptingBackend: {}
+  il2cppCompilerConfiguration: {}
+  il2cppCodeGeneration: {}
+  il2cppStacktraceInformation: {}
+  managedStrippingLevel: {}
+  incrementalIl2cppBuild: {}
+  suppressCommonWarnings: 1
+  allowUnsafeCode: 0
+  useDeterministicCompilation: 1
+  additionalIl2CppArgs:
+  scriptingDefineSymbols: {}
+  additionalCompilerArguments: {}
+  platformArchitecture: {}
+  scriptingBackend1: {}
+  il2cppCompilerConfiguration1: {}
+  il2cppCodeGeneration1: 0
+  additionalIl2CppArgs1:
+  scriptingDefineSymbols1: {}
+  scriptingRuntimeVersion1: 0
+  gcIncremental1: 1
+  gcWBarrierValidation1: 1
+  additionalCompilerArguments1: {}
+  overrideDefaultApplicationIdentifier1: 0

@@ -1,19 +1,9 @@
-# Security
+# Security and privacy
 
-Neon Rift is an offline game. It contains no networking, telemetry, advertising, updater, account system, background service, registry persistence, autostart, privilege escalation, code injection, obfuscation, executable packing, or dynamic code download.
+Neon Rift is an offline game. The runtime contains no telemetry, advertisements, account system, analytics SDK, remote-control service or background updater.
 
-## Build trust
+Network access is used only by the Unity Editor asset installer to retrieve the exact public CC0 files listed in `ASSET_SOURCES.md`. The Unity Editor imports the downloaded files into project Resources before the build. Runtime builds perform no asset downloads and contain only local imported data.
 
-- Engine/editor/templates are pinned to official Godot 4.7.1 stable downloads.
-- The Windows PCK is external rather than embedded.
-- CI produces a binary manifest and SHA-256 checksums.
-- The portable package is a normal ZIP, never a self-extracting executable.
-- No signing certificate or private key is stored in the repository.
+The Windows build is unsigned. Reputation-based antivirus warnings are therefore possible. GitHub Actions produces a SHA-256 checksum and performs a real launch smoke test, but these checks do not replace a user's preferred antivirus or VirusTotal policy.
 
-## Antivirus and VirusTotal
-
-No unsigned indie executable can be guaranteed to receive zero heuristic detections. A code-signing certificate can reduce reputation warnings, but none is assumed.
-
-VirusTotal uploads may share files with security vendors. CI therefore does not upload builds automatically without an explicitly configured, authorized process. Use the checksum in `SHA256SUMS.txt`, confirm the file is non-confidential, then upload the portable ZIP manually if acceptable. Record the scan URL, date, SHA-256, detection count, and engines that report a finding.
-
-Report security concerns through a private GitHub security advisory where available rather than a public issue.
+Do not commit Unity credentials or license files. Store them only as encrypted GitHub Secrets.

@@ -1,40 +1,45 @@
 # Testing
 
-## Automated logic tests
-
-Run with Godot 4.7.1:
+## Static validator
 
 ```text
-godot --headless --path . --script tests/test_runner.gd
+python tools/validate_project.py
 ```
 
-The test runner checks project loading, main menu startup, character/stage/mode counts, stage spawning, movement/combat primitives, damage, specials, second local player, team assignment, training dummy, and required export/documentation files.
+This checks the Unity version, package pins, required C# components, CC0 source pins, documentation, workflow configuration and removal of the former Godot project files.
 
-## Visual smoke gallery
+## Unity EditMode tests
 
-CI starts the project under a virtual display and captures:
+The `NeonRift.EditModeTests` assembly checks:
 
-1. Main menu
-2. Character select
-3. Stage select
-4. Stage combat
-5. Special attack
-6. Boss fight
-7. Pause menu
-8. Result screen
+- four fighter definitions,
+- three arena definitions,
+- five mode definitions,
+- damage scaling,
+- minimum damage and knockback invariants.
 
-The screenshots are uploaded as `NeonRift-Visual-Smoke-Gallery` for human inspection.
 
-## Windows start test
+## Visual Windows gallery
 
-The Windows job exports the game, starts the exact packaged `NeonRift.exe` with `--headless --smoke-test`, waits for its exit, verifies exit code zero, and checks `smoke-test.log` for `PASS`. This detects immediate engine startup failures, missing PCK/DLL problems, and core initialization errors.
+The packaged Windows player is also launched with `--capture-ci`. It renders eight real 1280×720 states: main menu, mode selection, character selection, arena selection, combat, boss combat, pause and result. CI rejects fewer than eight PNG files and uploads the complete gallery with player logs for human review.
+
+## Windows player smoke test
+
+The built Windows player is launched with:
+
+```text
+NeonRift.exe -batchmode -nographics --smoke-test
+```
+
+The runtime starts Training mode, creates two fighters, applies verified damage, writes `smoke-test.log` beside the executable and returns a non-zero process code if the contract fails.
 
 ## Manual acceptance checklist
 
+- Confirm all eight KayKit GLB models were imported through glTFast, load from Resources and animate.
+- Confirm Kenney props appear around each arena.
+- Play all five modes to a result or progression state.
 - Test both keyboard layouts simultaneously.
-- Test two physical controllers and keyboard/controller combinations.
-- Play each mode through to its result screen.
-- Check all three arenas at 1280×720 and a larger resolution.
-- Toggle fullscreen and restart to confirm portable settings persistence.
-- Inspect audio levels and rapid-combo responsiveness.
-- Scan the final ZIP manually with the user's preferred antivirus/VirusTotal policy.
+- Test two physical gamepads and mixed keyboard/gamepad play.
+- Inspect the three arena themes at 1280×720 and a larger resolution.
+- Check bloom, fog and emission on a DirectX 11 Windows system.
+- Confirm the procedural fallback remains playable after temporarily moving the downloaded asset directories.

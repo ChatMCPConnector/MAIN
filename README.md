@@ -1,46 +1,57 @@
-# Neon Rift: Arena Breakers
+# Neon Rift: Arena Breakers — Unity Edition
 
-Neon Rift is a compact, original 2.5D side-view arena brawler inspired by the pace and local multiplayer atmosphere of classic arcade fighting games. It uses no Little Fighter 2 names, characters, graphics, audio, code, or other copyrighted assets.
+Neon Rift is an original 2.5D local arena brawler rebuilt for **Unity 6.3 LTS**. The Unity edition replaces the former procedural Godot presentation with a lit 3D arena, animated CC0 characters, dynamic camera framing, URP post-processing, neon materials, particles, fog and three distinct visual themes.
 
-## Features
+## Highlights
 
-- Five modes: Stage Run, Local Versus, Team Battle, Training, and Survival.
-- Four distinct fighters: Kira Volt, Brakk Forge, Mira Bloom, and Nyx Shade.
-- Five enemy roles: brawler, runner, ranger, elite, and boss.
-- Three arenas: Skyline Foundry, Verdant Metro, and Null Observatory.
-- Horizontal and depth movement, jump, dash/guard, light/heavy attacks, specials, combos, knockback, projectiles, pickups, destructible props, health and energy.
-- Keyboard and basic two-controller input.
-- Procedural vector graphics and synthesized sound effects; no downloaded game assets.
-- Portable Windows export with an external PCK, no installer, telemetry, advertising, network calls, registry persistence, or administrator requirement.
+- Five modes: Stage Run, Local Versus, Team Battle, Training and Survival.
+- Four fighters: Kira Volt, Brakk Forge, Mira Bloom and Nyx Shade.
+- KayKit CC0 adventurer models for the player roster.
+- KayKit CC0 skeleton models for enemies, elites and bosses.
+- Kenney CC0 Mini Arena and City Kit Industrial environment props.
+- Three arenas: Skyline Foundry, Verdant Metro and Null Observatory.
+- Four-direction arena movement, jumping, dash/guard, light/heavy attacks and energy specials.
+- Local keyboard and two-gamepad support through Unity's Input System.
+- URP lighting, bloom, ACES tonemapping, fog, emissive surfaces, impact particles and camera shake.
+- Procedural fallback characters and props when a community download is unavailable.
+- Portable Windows build with a real executable smoke test in GitHub Actions.
 
-## Start the portable Windows build
+## Unity version
 
-1. Download the `NeonRift-Windows-Portable` workflow artifact.
-2. Extract `NeonRift-Windows-Portable.zip` to a writable folder.
-3. Run `NeonRift.exe`.
-4. Settings are saved as `settings.cfg` beside the executable.
+The project is pinned to **Unity 6000.3.17f1** and URP 17.3. Install the same editor version and the Windows Build Support module through Unity Hub.
 
-Windows 10/11 x86_64 and a GPU supporting Godot's GL Compatibility renderer are recommended.
+## First launch
 
-## Build locally
+1. Open this repository as a Unity project.
+2. Unity automatically creates the main scene and URP assets.
+3. Run **Neon Rift → Download or repair CC0 assets**.
+4. Open `Assets/NeonRift/Scenes/Main.unity` and press Play.
 
-The project targets **Godot Engine 4.7.1 stable**. Open `project.godot` in Godot, install matching export templates, and export the `Windows Desktop` preset. See [BUILDING.md](BUILDING.md).
+The game remains runnable with generated fallback art if an asset host is temporarily unavailable.
 
-## Controls
+## Build Windows
 
-See [CONTROLS.md](CONTROLS.md). The same overview is available in the game.
+Use **Neon Rift → Build portable Windows game**. The build is written to:
 
-## Testing
+```text
+build/StandaloneWindows64/NeonRift/
+```
 
-GitHub Actions validates source structure, runs Godot headless tests, renders eight visual smoke screenshots, exports Windows, launches the exported EXE in headless smoke mode, packages the portable ZIP, and produces SHA-256 checksums. See [TESTING.md](TESTING.md).
+The build command downloads missing CC0 source assets, prepares the Unity scene, creates the URP configuration, builds `NeonRift.exe` and copies documentation and license notices beside the executable.
 
-## Known limitations
+## GitHub Actions and Unity licensing
 
-- Art is intentionally procedural and stylized rather than sprite-sheet based.
-- Controller remapping is not yet exposed in the UI.
-- Automated CI confirms startup and logic but cannot replace hands-on latency and controller testing on a real Windows PC.
-- The unsigned executable may still trigger a reputation-based antivirus warning despite the transparent build process.
+Static project and license checks always run. Unity Editor tests and the Windows build run when the repository has a usable Unity license configuration in GitHub Secrets:
+
+- `UNITY_LICENSE`, or
+- `UNITY_EMAIL`, `UNITY_PASSWORD` and `UNITY_SERIAL`.
+
+Without those secrets, Unity-dependent jobs are deliberately skipped rather than reporting a false successful build. See [BUILDING.md](BUILDING.md).
+
+## Asset policy
+
+No proprietary Unity Asset Store package is copied into this public repository. Selected community content is downloaded from pinned public sources with redistribution-friendly licenses. Exact files, commits, URLs and licenses are listed in [ASSET_SOURCES.md](ASSET_SOURCES.md).
 
 ## License
 
-Source code is MIT licensed. Godot Engine is distributed under the MIT license by its contributors. Asset and audio details are separated in [ASSET_LICENSES.md](ASSET_LICENSES.md).
+Original source code is MIT licensed. Third-party engine packages and CC0 assets retain their own licenses as described in `ThirdPartyNotices` and `ASSET_SOURCES.md`.

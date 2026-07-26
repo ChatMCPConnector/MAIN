@@ -1,0 +1,8 @@
+CC0 1.0 Universal
+
+The KayKit and Kenney assets selected by this project are published under
+Creative Commons CC0 1.0 Universal. The complete legal text is available at:
+https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+No attribution is legally required. Sources and pinned versions remain listed
+in ASSET_SOURCES.md for reproducibility and transparency.

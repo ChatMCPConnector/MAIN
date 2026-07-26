@@ -1,0 +1,5 @@
+Unity packages are governed by the Unity Companion License or the license
+shipped with the respective package. This project references only packages
+available through Unity's Package Manager plus the Apache-2.0 glTFast package.
+Unity Editor and runtime licensing remain separate from this project's MIT
+source-code license.

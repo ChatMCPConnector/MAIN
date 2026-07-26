@@ -1,0 +1,307 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
+
+namespace NeonRift
+{
+    public sealed class ArenaVisualFactory : MonoBehaviour
+    {
+        public Transform ArenaRoot { get; private set; }
+        public Camera GameCamera { get; private set; }
+
+        private readonly List<Material> _materials = new();
+
+        public void Build(ArenaSpec spec, int arenaIndex)
+        {
+            ClearArena();
+            ConfigureWorld(spec);
+            CreateCamera(spec);
+            CreateLights(spec);
+            CreatePostProcessing(spec);
+            CreateGround(spec);
+            CreateBackdrop(spec, arenaIndex);
+            CreateCommunityProps(spec, arenaIndex);
+            CreateAtmosphere(spec, arenaIndex);
+        }
+
+        private void ClearArena()
+        {
+            if (ArenaRoot != null)
+            {
+                ArenaRoot.gameObject.SetActive(false);
+                Destroy(ArenaRoot.gameObject);
+            }
+
+            foreach (Material material in _materials)
+            {
+                if (material != null) Destroy(material);
+            }
+            _materials.Clear();
+
+            ArenaRoot = new GameObject("Arena Visuals").transform;
+            ArenaRoot.SetParent(transform, false);
+        }
+
+        private static void ConfigureWorld(ArenaSpec spec)
+        {
+            RenderSettings.fog = true;
+            RenderSettings.fogMode = FogMode.ExponentialSquared;
+            RenderSettings.fogColor = spec.Fog;
+            RenderSettings.fogDensity = 0.012f;
+            RenderSettings.ambientMode = AmbientMode.Trilight;
+            RenderSettings.ambientSkyColor = spec.Sky * 1.7f;
+            RenderSettings.ambientEquatorColor = spec.Fog * 1.2f;
+            RenderSettings.ambientGroundColor = spec.Ground * 0.7f;
+        }
+
+        private void CreateCamera(ArenaSpec spec)
+        {
+            var cameraObject = new GameObject("Arena Camera");
+            cameraObject.transform.SetParent(ArenaRoot, false);
+            GameCamera = cameraObject.AddComponent<Camera>();
+            GameCamera.tag = "MainCamera";
+            GameCamera.fieldOfView = 43f;
+            GameCamera.nearClipPlane = 0.15f;
+            GameCamera.farClipPlane = 180f;
+            GameCamera.backgroundColor = spec.Sky;
+            GameCamera.clearFlags = CameraClearFlags.SolidColor;
+            GameCamera.allowHDR = true;
+            GameCamera.allowMSAA = true;
+
+            var additional = cameraObject.AddComponent<UniversalAdditionalCameraData>();
+            additional.renderPostProcessing = true;
+            additional.antialiasing = AntialiasingMode.FastApproximateAntialiasing;
+
+            cameraObject.AddComponent<ArenaCameraRig>();
+        }
+
+        private void CreateLights(ArenaSpec spec)
+        {
+            var sunObject = new GameObject("Key Light");
+            sunObject.transform.SetParent(ArenaRoot, false);
+            sunObject.transform.rotation = Quaternion.Euler(48f, -34f, 0f);
+            var sun = sunObject.AddComponent<Light>();
+            sun.type = LightType.Directional;
+            sun.color = Color.Lerp(Color.white, spec.Neon, 0.16f);
+            sun.intensity = 1.45f;
+            sun.shadows = LightShadows.Soft;
+            sun.shadowStrength = 0.85f;
+
+            CreatePointLight(new Vector3(-7f, 4.5f, 2.5f), spec.Neon, 14f, 5f);
+            CreatePointLight(new Vector3(7f, 3.8f, -1.5f), Color.Lerp(spec.Neon, Color.magenta, 0.38f), 12f, 4f);
+            CreatePointLight(new Vector3(0f, 5.5f, 7f), Color.Lerp(spec.Neon, Color.white, 0.45f), 16f, 3.4f);
+        }
+
+        private void CreatePointLight(Vector3 position, Color color, float range, float intensity)
+        {
+            var lightObject = new GameObject("Arena Accent Light");
+            lightObject.transform.SetParent(ArenaRoot, false);
+            lightObject.transform.position = position;
+            var light = lightObject.AddComponent<Light>();
+            light.type = LightType.Point;
+            light.color = color;
+            light.range = range;
+            light.intensity = intensity;
+            light.shadows = LightShadows.None;
+        }
+
+        private void CreatePostProcessing(ArenaSpec spec)
+        {
+            var volumeObject = new GameObject("Global Visual Grade");
+            volumeObject.transform.SetParent(ArenaRoot, false);
+            var volume = volumeObject.AddComponent<Volume>();
+            volume.isGlobal = true;
+            volume.priority = 20f;
+            var profile = ScriptableObject.CreateInstance<VolumeProfile>();
+            profile.name = "Neon Rift Runtime Grade";
+            volume.profile = profile;
+
+            var bloom = profile.Add<Bloom>(true);
+            bloom.intensity.Override(0.65f);
+            bloom.threshold.Override(0.85f);
+            bloom.scatter.Override(0.72f);
+
+            var colorAdjustments = profile.Add<ColorAdjustments>(true);
+            colorAdjustments.contrast.Override(9f);
+            colorAdjustments.saturation.Override(12f);
+            colorAdjustments.colorFilter.Override(Color.Lerp(Color.white, spec.Neon, 0.08f));
+
+            var vignette = profile.Add<Vignette>(true);
+            vignette.intensity.Override(0.26f);
+            vignette.smoothness.Override(0.72f);
+
+            var tonemapping = profile.Add<Tonemapping>(true);
+            tonemapping.mode.Override(TonemappingMode.ACES);
+        }
+
+        private void CreateGround(ArenaSpec spec)
+        {
+            Material floor = Remember(MaterialFactory.CreateLit("Arena floor", spec.Ground, 0.48f, 0.62f));
+            Material grid = Remember(MaterialFactory.CreateLit("Neon grid", spec.Neon * 0.55f, 0.15f, 0.9f, spec.Neon * 3.2f));
+
+            CreateBox("Main platform", new Vector3(0f, -0.42f, 0f), new Vector3(24f, 0.8f, 11f), floor, true);
+            CreateBox("Front lip", new Vector3(0f, -0.05f, -5.35f), new Vector3(24.5f, 0.12f, 0.15f), grid, false);
+            CreateBox("Back lip", new Vector3(0f, -0.05f, 5.35f), new Vector3(24.5f, 0.12f, 0.15f), grid, false);
+
+            for (int x = -10; x <= 10; x += 2)
+            {
+                CreateBox("Floor line", new Vector3(x, 0.015f, 0f), new Vector3(0.028f, 0.018f, 10.4f), grid, false);
+            }
+
+            for (int z = -4; z <= 4; z += 2)
+            {
+                CreateBox("Floor line", new Vector3(0f, 0.016f, z), new Vector3(23.5f, 0.018f, 0.028f), grid, false);
+            }
+
+            CreateBox("Left boundary", new Vector3(-12f, 1f, 0f), new Vector3(0.3f, 2f, 11f), floor, true);
+            CreateBox("Right boundary", new Vector3(12f, 1f, 0f), new Vector3(0.3f, 2f, 11f), floor, true);
+        }
+
+        private void CreateBackdrop(ArenaSpec spec, int arenaIndex)
+        {
+            Material dark = Remember(MaterialFactory.CreateLit("Backdrop", spec.Ground * 0.55f, 0.7f, 0.5f));
+            Material neon = Remember(MaterialFactory.CreateLit("Backdrop neon", spec.Neon, 0.15f, 0.95f, spec.Neon * 4f));
+
+            for (int i = -5; i <= 5; i++)
+            {
+                float height = 3.5f + Mathf.Abs(Mathf.Sin(i * 1.71f + arenaIndex)) * 7f;
+                float depth = 1.4f + Mathf.Abs(Mathf.Cos(i * 0.63f)) * 2.2f;
+                CreateBox("Skyline block", new Vector3(i * 3.2f, height * 0.5f - 0.2f, 9f + depth * 0.35f), new Vector3(2.2f, height, depth), dark, false);
+                CreateBox("Skyline strip", new Vector3(i * 3.2f, height * 0.7f, 8.9f), new Vector3(1.6f, 0.08f, 0.04f), neon, false);
+            }
+
+            for (int side = -1; side <= 1; side += 2)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    float x = side * (7.8f + i * 1.1f);
+                    CreateCylinder("Energy pylon", new Vector3(x, 1.4f + i * 0.18f, 5.4f), new Vector3(0.34f, 1.4f + i * 0.18f, 0.34f), dark, false);
+                    CreateCylinder("Pylon core", new Vector3(x, 1.6f + i * 0.18f, 5.4f), new Vector3(0.13f, 1.1f, 0.13f), neon, false);
+                }
+            }
+        }
+
+        private void CreateCommunityProps(ArenaSpec spec, int arenaIndex)
+        {
+            GameObject[] allProps = Resources.LoadAll<GameObject>("Community/Kenney");
+            if (allProps.Length == 0)
+            {
+                CreateProceduralProps(spec, arenaIndex);
+                return;
+            }
+
+            GameObject[] candidates = allProps
+                .Where(prop => spec.PropKeywords.Any(keyword => prop.name.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
+                .Take(18)
+                .ToArray();
+
+            if (candidates.Length == 0)
+            {
+                candidates = allProps.Take(12).ToArray();
+            }
+
+            var random = new System.Random(713 + arenaIndex * 97);
+            for (int i = 0; i < Mathf.Min(14, candidates.Length * 2); i++)
+            {
+                GameObject source = candidates[random.Next(candidates.Length)];
+                var instance = Instantiate(source, ArenaRoot);
+                instance.name = $"CC0 prop - {source.name}";
+                float side = i % 2 == 0 ? -1f : 1f;
+                float x = side * (7.4f + (float)random.NextDouble() * 3.2f);
+                float z = -3.8f + (float)random.NextDouble() * 8.2f;
+                instance.transform.position = new Vector3(x, 0f, z);
+                instance.transform.rotation = Quaternion.Euler(0f, random.Next(0, 4) * 90f, 0f);
+                instance.transform.localScale = Vector3.one * Mathf.Lerp(0.75f, 1.35f, (float)random.NextDouble());
+            }
+        }
+
+        private void CreateProceduralProps(ArenaSpec spec, int arenaIndex)
+        {
+            Material metal = Remember(MaterialFactory.CreateLit("Prop metal", Color.Lerp(spec.Ground, Color.gray, 0.35f), 0.75f, 0.58f));
+            Material glow = Remember(MaterialFactory.CreateLit("Prop glow", spec.Neon, 0.25f, 0.9f, spec.Neon * 3.2f));
+            var random = new System.Random(42 + arenaIndex * 83);
+
+            for (int i = 0; i < 16; i++)
+            {
+                float side = i % 2 == 0 ? -1f : 1f;
+                float x = side * (7.2f + (float)random.NextDouble() * 3.7f);
+                float z = -4.2f + (float)random.NextDouble() * 8.4f;
+                float scale = Mathf.Lerp(0.7f, 1.45f, (float)random.NextDouble());
+                CreateBox("Industrial crate", new Vector3(x, 0.45f * scale, z), Vector3.one * 0.9f * scale, metal, true);
+                CreateBox("Crate light", new Vector3(x, 0.47f * scale, z - 0.46f * scale), new Vector3(0.55f * scale, 0.08f, 0.025f), glow, false);
+            }
+        }
+
+        private void CreateAtmosphere(ArenaSpec spec, int arenaIndex)
+        {
+            var root = new GameObject("Atmosphere");
+            root.transform.SetParent(ArenaRoot, false);
+            var particles = root.AddComponent<ParticleSystem>();
+            var main = particles.main;
+            main.loop = true;
+            main.duration = 8f;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(2f, 6f);
+            main.startSpeed = arenaIndex == 0 ? 7f : 0.35f;
+            main.startSize = arenaIndex == 0 ? new ParticleSystem.MinMaxCurve(0.018f, 0.04f) : new ParticleSystem.MinMaxCurve(0.025f, 0.09f);
+            main.startColor = new ParticleSystem.MinMaxGradient(Color.Lerp(spec.Neon, Color.white, 0.45f) * 0.75f);
+            main.maxParticles = 900;
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.gravityModifier = arenaIndex == 0 ? 0.55f : -0.005f;
+
+            var emission = particles.emission;
+            emission.rateOverTime = arenaIndex == 0 ? 180f : 28f;
+            var shape = particles.shape;
+            shape.shapeType = ParticleSystemShapeType.Box;
+            shape.scale = new Vector3(28f, 1f, 15f);
+            root.transform.position = new Vector3(0f, 8f, 0f);
+
+            var renderer = particles.GetComponent<ParticleSystemRenderer>();
+            renderer.renderMode = arenaIndex == 0 ? ParticleSystemRenderMode.Stretch : ParticleSystemRenderMode.Billboard;
+            renderer.lengthScale = arenaIndex == 0 ? 1.1f : 0.1f;
+            renderer.velocityScale = 0.6f;
+            renderer.sharedMaterial = Remember(MaterialFactory.CreateLit("Atmosphere particle", spec.Neon, 0f, 0.8f, spec.Neon * 1.8f));
+        }
+
+        private GameObject CreateBox(string name, Vector3 position, Vector3 scale, Material material, bool collider)
+        {
+            GameObject item = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            item.name = name;
+            item.transform.SetParent(ArenaRoot, false);
+            item.transform.position = position;
+            item.transform.localScale = scale;
+            item.GetComponent<Renderer>().sharedMaterial = material;
+            if (!collider) Destroy(item.GetComponent<Collider>());
+            return item;
+        }
+
+        private GameObject CreateCylinder(string name, Vector3 position, Vector3 scale, Material material, bool collider)
+        {
+            GameObject item = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            item.name = name;
+            item.transform.SetParent(ArenaRoot, false);
+            item.transform.position = position;
+            item.transform.localScale = scale;
+            item.GetComponent<Renderer>().sharedMaterial = material;
+            if (!collider) Destroy(item.GetComponent<Collider>());
+            return item;
+        }
+
+        private Material Remember(Material material)
+        {
+            _materials.Add(material);
+            return material;
+        }
+
+        private void OnDestroy()
+        {
+            foreach (Material material in _materials)
+            {
+                if (material != null) Destroy(material);
+            }
+            _materials.Clear();
+        }
+    }
+}

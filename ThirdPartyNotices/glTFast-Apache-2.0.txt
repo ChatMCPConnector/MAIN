@@ -1,0 +1,4 @@
+glTFast is Copyright Unity Technologies and the glTFast authors and is licensed
+under the Apache License, Version 2.0. The package is pinned by Git commit in
+Packages/manifest.json. Full license text:
+https://www.apache.org/licenses/LICENSE-2.0
