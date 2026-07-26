@@ -800,6 +800,8 @@ func run_smoke_test() -> void:
 		get_tree().quit(1)
 		return
 	var dummy: Dictionary = fighters[1]
+	p.pos = dummy.pos - Vector2(45, 0)
+	p.facing = 1.0
 	var before: float = dummy.hp
 	perform_attack(p,"light")
 	var ok: bool = screen=="game" and fighters.size()>=2 and dummy.hp < before and p.pos.x >= ARENA.position.x
