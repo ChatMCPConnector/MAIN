@@ -62,15 +62,15 @@ jobs:
           set -euo pipefail
           mkdir -p .tools "${TEMPLATE_DIR}"
           if [[ ! -x "${GODOT_BIN}" ]]; then
-            curl --fail-with-body --location --retry 4 --output /tmp/godot.zip \
-              "https://downloads.godotengine.org/?flavor=stable&platform=linux.64&slug=linux.x86_64.zip&version=${GODOT_VERSION}"
+            curl --fail-with-body --location --retry 4 --connect-timeout 30 --max-time 600 --output /tmp/godot.zip \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
             unzip -q /tmp/godot.zip -d .tools
             mv ".tools/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64" "${GODOT_BIN}"
             chmod +x "${GODOT_BIN}"
           fi
           if [[ ! -f "${TEMPLATE_DIR}/android_debug.apk" ]]; then
-            curl --fail-with-body --location --retry 4 --output /tmp/templates.tpz \
-              "https://downloads.godotengine.org/?flavor=stable&platform=templates&slug=export_templates.tpz&version=${GODOT_VERSION}"
+            curl --fail-with-body --location --retry 4 --connect-timeout 30 --max-time 900 --output /tmp/templates.tpz \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_export_templates.tpz"
             rm -rf /tmp/godot-template-unpack
             mkdir -p /tmp/godot-template-unpack
             unzip -q /tmp/templates.tpz -d /tmp/godot-template-unpack
