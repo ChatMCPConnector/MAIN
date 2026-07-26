@@ -149,8 +149,8 @@ if [[ -z "${PID}" ]]; then
   exit 1
 fi
 
-# Godot imports and compiles the first Compatibility shaders on initial launch.
-sleep 12
+# Allow initial resource import and Compatibility shader compilation to settle.
+sleep 8
 
 # Fallback for emulator images that still show Android's first immersive-mode hint.
 if [[ "$(current_focus)" != *"${PACKAGE}"* ]]; then
@@ -158,23 +158,21 @@ if [[ "$(current_focus)" != *"${PACKAGE}"* ]]; then
   sleep 2
 fi
 
+# Validate that the tutorial is visible, then leave it through its dedicated button.
+# All four swipe directions are exercised in actual gameplay below.
 capture_screen "01-tutorial"
-adb -s "${SERIAL}" shell input swipe 820 360 360 360 300
-sleep 1
-adb -s "${SERIAL}" shell input swipe 360 360 820 360 300
-sleep 1
-adb -s "${SERIAL}" shell input swipe 640 520 640 220 300
-sleep 1
-adb -s "${SERIAL}" shell input swipe 640 220 640 520 300
+adb -s "${SERIAL}" shell input tap 640 565
 sleep 2
 capture_screen "02-main-menu"
 adb -s "${SERIAL}" shell input tap 640 330
-sleep 5
+sleep 4
+
+# Exercise lane changes, jump, and slide while the runner is active.
 adb -s "${SERIAL}" shell input swipe 640 400 350 400 300
 adb -s "${SERIAL}" shell input swipe 350 400 850 400 300
 adb -s "${SERIAL}" shell input swipe 640 500 640 230 300
 adb -s "${SERIAL}" shell input swipe 640 250 640 540 300
-sleep 3
+sleep 2
 capture_screen "03-gameplay"
 adb -s "${SERIAL}" shell input keyevent 111
 sleep 2
@@ -185,7 +183,7 @@ adb -s "${SERIAL}" shell input keyevent 35
 sleep 2
 capture_screen "05-game-over"
 adb -s "${SERIAL}" shell input tap 640 445
-sleep 4
+sleep 3
 capture_screen "06-restart"
 
 collect_diagnostics
