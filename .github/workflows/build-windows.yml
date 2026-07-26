@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   GODOT_VERSION: 4.7.1
@@ -16,33 +16,8 @@ env:
   GAME_NAME: NeonRift
 
 jobs:
-  source-normalize:
-    name: Apply one-shot source normalization
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
-      - name: Apply exact capture coroutine fix
-        if: github.event_name == 'pull_request'
-        run: python tools/apply_source_fix.py
-      - name: Commit normalization to candidate branch
-        if: github.event_name == 'pull_request'
-        run: |
-          if git diff --quiet; then
-            echo "No source normalization required."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add game/main.gd
-          git commit -m "Normalize capture coroutine syntax"
-          git push origin HEAD:${{ github.head_ref }}
-
   validate:
     name: Validate source and licenses
-    needs: source-normalize
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -60,7 +35,6 @@ jobs:
 
   godot-tests:
     name: Godot headless tests
-    needs: source-normalize
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -89,7 +63,6 @@ jobs:
 
   screenshots:
     name: Render visual smoke gallery
-    needs: source-normalize
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -123,7 +96,7 @@ jobs:
 
   windows-build:
     name: Windows export and launch check
-    needs: [source-normalize, validate, godot-tests]
+    needs: [validate, godot-tests]
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
