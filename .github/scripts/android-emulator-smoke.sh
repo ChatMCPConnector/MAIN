@@ -89,7 +89,7 @@ adb start-server
   -avd "${AVD_NAME}" \
   -port 5554 \
   -no-window \
-  -gpu swangle \
+  -gpu lavapipe \
   -no-snapshot \
   -noaudio \
   -no-boot-anim \
