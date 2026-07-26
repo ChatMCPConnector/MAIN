@@ -124,8 +124,8 @@ for _ in $(seq 1 180); do
     cat test-artifacts/emulator.log
     exit 1
   fi
-  BOOT_COMPLETED="$(adb -s "${SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
-  BOOT_ANIM="$(adb -s "${SERIAL}" shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r')"
+  BOOT_COMPLETED="$(adb -s "${SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+  BOOT_ANIM="$(adb -s "${SERIAL}" shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r' || true)"
   if [[ "${BOOT_COMPLETED}" == "1" && "${BOOT_ANIM}" == "stopped" ]]; then
     BOOTED=1
     break
