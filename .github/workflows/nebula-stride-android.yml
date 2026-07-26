@@ -17,14 +17,14 @@ concurrency:
 env:
   GODOT_VERSION: 4.7.1
   GODOT_STATUS: stable
-  GODOT_BIN: ${{ github.workspace }}/.tools/godot
-  TEMPLATE_DIR: ${{ runner.temp }}/godot-templates
+  GODOT_BIN: .tools/godot
+  TEMPLATE_DIR: .godot-ci-templates
 
 jobs:
   build-test-emulator-upload:
     name: Build, test, emulate, and publish
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
 
     steps:
       - name: Check out repository
@@ -145,6 +145,7 @@ jobs:
           "$AAPT" dump permissions build/NebulaStride-release.apk | tee apk-permissions.txt
           "$APKSIGNER" verify --verbose --print-certs build/NebulaStride-release.apk | tee apk-signature.txt
           grep -q "package: name='com.chatmcpconnector.nebulastride'" apk-badging.txt
+          grep -q "uses-feature: name='android.hardware.screen.landscape'" apk-badging.txt
           if grep -q "android.permission.INTERNET" apk-permissions.txt; then
             echo "Unexpected INTERNET permission"
             exit 1
@@ -155,6 +156,18 @@ jobs:
             echo "Release APK unexpectedly contains x86_64"
             exit 1
           fi
+          unzip -l build/NebulaStride-debug.apk | tee apk-debug-files.txt
+          grep -q "lib/x86_64/" apk-debug-files.txt
+
+      - name: Enable KVM acceleration
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -e /dev/kvm
+          ls -l /dev/kvm
 
       - name: Run Android emulator smoke test
         uses: reactivecircus/android-emulator-runner@v2
@@ -163,21 +176,48 @@ jobs:
           arch: x86_64
           target: google_apis
           profile: pixel_6
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
+          disk-size: 4096M
+          emulator-boot-timeout: 900
+          disable-linux-hw-accel: false
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: |
             set -euo pipefail
             mkdir -p test-artifacts/screenshots
+            collect_diagnostics() {
+              adb logcat -d > test-artifacts/logcat.txt 2>/dev/null || true
+              adb shell dumpsys window > test-artifacts/window-dump.txt 2>/dev/null || true
+              adb shell dumpsys activity activities > test-artifacts/activity-dump.txt 2>/dev/null || true
+              adb exec-out screencap -p > test-artifacts/screenshots/99-final-state.png 2>/dev/null || true
+            }
+            trap collect_diagnostics EXIT
+            adb wait-for-device
             adb shell wm size 1280x720
             adb shell wm density 320
             adb shell settings put system accelerometer_rotation 0
             adb shell settings put system user_rotation 1
             adb logcat -c
             adb install -r build/NebulaStride-debug.apk
+            adb shell am force-stop com.chatmcpconnector.nebulastride
             adb shell monkey -p com.chatmcpconnector.nebulastride 1
-            sleep 5
+            for _ in $(seq 1 30); do
+              PID="$(adb shell pidof com.chatmcpconnector.nebulastride | tr -d '\r')"
+              [[ -n "$PID" ]] && break
+              sleep 1
+            done
+            test -n "${PID:-}"
+            sleep 4
             adb exec-out screencap -p > test-artifacts/screenshots/01-tutorial.png
-            adb shell input tap 640 625
+            adb shell input swipe 820 360 360 360 300
+            sleep 1
+            adb shell input swipe 360 360 820 360 300
+            sleep 1
+            adb shell input swipe 640 520 640 220 300
+            sleep 1
+            adb shell input swipe 640 220 640 520 300
             sleep 2
             adb exec-out screencap -p > test-artifacts/screenshots/02-main-menu.png
             adb shell input tap 640 330
@@ -186,17 +226,26 @@ jobs:
             adb shell input swipe 350 400 850 400 300
             adb shell input swipe 640 500 640 230 300
             adb shell input swipe 640 250 640 540 300
-            sleep 4
+            sleep 3
             adb exec-out screencap -p > test-artifacts/screenshots/03-gameplay.png
-            adb shell input keyevent 34
+            adb shell input keyevent 111
             sleep 2
-            adb exec-out screencap -p > test-artifacts/screenshots/04-game-over.png
+            adb exec-out screencap -p > test-artifacts/screenshots/04-pause.png
+            adb shell input tap 640 300
+            sleep 2
+            adb shell input keyevent 35
+            sleep 2
+            adb exec-out screencap -p > test-artifacts/screenshots/05-game-over.png
+            adb shell input tap 640 445
+            sleep 4
+            adb exec-out screencap -p > test-artifacts/screenshots/06-restart.png
             PID="$(adb shell pidof com.chatmcpconnector.nebulastride | tr -d '\r')"
             test -n "$PID"
-            adb logcat -d > test-artifacts/logcat.txt
+            collect_diagnostics
             if grep -E "FATAL EXCEPTION|ANR in com.chatmcpconnector.nebulastride|Process com.chatmcpconnector.nebulastride.*has died" test-artifacts/logcat.txt; then
               exit 1
             fi
+            trap - EXIT
 
       - name: Validate screenshots
         shell: bash
@@ -205,9 +254,9 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import struct
-          paths=sorted(Path('test-artifacts/screenshots').glob('*.png'))
-          if len(paths) < 4:
-              raise SystemExit(f'Expected four screenshots, found {len(paths)}')
+          paths=sorted(p for p in Path('test-artifacts/screenshots').glob('*.png') if not p.name.startswith('99-'))
+          if len(paths) < 6:
+              raise SystemExit(f'Expected six screenshots, found {len(paths)}')
           for path in paths:
               data=path.read_bytes()
               if len(data) < 20000 or data[:8] != b'\x89PNG\r\n\x1a\n':
@@ -233,7 +282,7 @@ jobs:
           retention-days: 14
 
       - name: Upload release APK to Sauce Labs Europe
-        if: success()
+        if: success() && github.event_name == 'push'
         shell: bash
         env:
           SAUCE_USERNAME: ${{ secrets.SAUCE_USERNAME }}
