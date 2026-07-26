@@ -1,0 +1,237 @@
+name: Verify Unity port and portable Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UNITY_VERSION: 6000.3.17f1
+
+jobs:
+  validate:
+    name: Validate Unity source and asset licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python tools/validate_project.py
+      - name: Reject tracked downloaded binary assets
+        shell: bash
+        run: |
+          if find Assets/Resources/Community/KayKit Assets/Resources/Community/Kenney -type f \( -name '*.glb' -o -name '*.fbx' -o -name '*.obj' \) 2>/dev/null | grep -q .; then
+            echo "Downloaded community binaries must remain reproducible and untracked."
+            exit 1
+          fi
+
+  unity-license:
+    name: Detect Unity CI license
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      available: ${{ steps.detect.outputs.available }}
+    env:
+      UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+      UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+      UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+      UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+    steps:
+      - id: detect
+        shell: bash
+        run: |
+          if [[ -n "$UNITY_LICENSE" || ( -n "$UNITY_SERIAL" && -n "$UNITY_EMAIL" && -n "$UNITY_PASSWORD" ) ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "A Unity activation route is configured."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Unity-dependent jobs will be skipped until UNITY_LICENSE or UNITY_SERIAL is configured."
+          fi
+
+  unity-tests:
+    name: Unity EditMode tests
+    needs: [validate, unity-license]
+    if: needs.unity-license.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: game-ci/unity-test-runner@v4
+        id: tests
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          testMode: editmode
+          artifactsPath: unity-test-artifacts
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: NeonRift-Unity-Test-Results
+          path: unity-test-artifacts
+          if-no-files-found: warn
+          retention-days: 14
+
+  unity-build:
+    name: Build Windows x86_64 player
+    needs: [validate, unity-license]
+    if: needs.unity-license.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: game-ci/unity-builder@v5
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          targetPlatform: StandaloneWindows64
+          projectPath: .
+          buildMethod: NeonRift.Editor.BuildAutomation.BuildWindows
+          buildsPath: build
+          buildName: NeonRift
+      - name: Verify exported files
+        shell: bash
+        run: |
+          test -f build/StandaloneWindows64/NeonRift/NeonRift.exe
+          test -d build/StandaloneWindows64/NeonRift/NeonRift_Data
+          find build/StandaloneWindows64/NeonRift -maxdepth 2 -type f -printf '%P\t%s bytes\n' | sort > build/windows-manifest.txt
+          cat build/windows-manifest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeonRift-Unity-Windows-Unverified
+          path: |
+            build/StandaloneWindows64/NeonRift
+            build/windows-manifest.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-visual:
+    name: Render and verify Windows visual gallery
+    needs: [unity-build]
+    if: needs.unity-build.result == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: NeonRift-Unity-Windows-Unverified
+          path: artifact
+      - name: Capture eight real player states
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem artifact -Recurse -Filter NeonRift.exe | Select-Object -First 1
+          if (-not $exe) { throw "NeonRift.exe was not found" }
+          $directory = $exe.Directory.FullName
+          $gallery = Join-Path (Resolve-Path artifact).Path "visual-gallery"
+          New-Item -ItemType Directory -Force -Path $gallery | Out-Null
+          $stdout = Join-Path $gallery "capture-stdout.log"
+          $stderr = Join-Path $gallery "capture-stderr.log"
+          $arguments = @("-batchmode", "-screen-width", "1280", "-screen-height", "720", "--capture-ci", "--capture-dir=$gallery")
+          $process = Start-Process -FilePath $exe.FullName -WorkingDirectory $directory -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          if (-not $process.WaitForExit(90000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Unity visual capture timed out"
+          }
+          if ($process.ExitCode -ne 0) {
+            Get-Content $stdout -ErrorAction SilentlyContinue
+            Get-Content $stderr -ErrorAction SilentlyContinue
+            throw "Unity visual capture exited with code $($process.ExitCode)"
+          }
+          $images = @(Get-ChildItem $gallery -Filter *.png)
+          if ($images.Count -lt 8) { throw "Expected eight screenshots, found $($images.Count)" }
+          Get-Content (Join-Path $gallery "capture.log")
+          $images | Sort-Object Name | Select-Object Name,Length | Format-Table
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: NeonRift-Unity-Visual-Gallery
+          path: artifact/visual-gallery
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-smoke:
+    name: Launch packaged Unity player and package ZIP
+    needs: [unity-build, windows-visual]
+    if: needs.unity-build.result == 'success' && needs.windows-visual.result == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: NeonRift-Unity-Windows-Unverified
+          path: artifact
+      - name: Run real player smoke test
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem artifact -Recurse -Filter NeonRift.exe | Select-Object -First 1
+          if (-not $exe) { throw "NeonRift.exe was not found" }
+          $directory = $exe.Directory.FullName
+          $stdout = Join-Path $directory "player-stdout.log"
+          $stderr = Join-Path $directory "player-stderr.log"
+          $process = Start-Process -FilePath $exe.FullName -WorkingDirectory $directory -ArgumentList @("-batchmode", "-nographics", "--smoke-test") -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          if (-not $process.WaitForExit(45000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Unity player smoke test timed out"
+          }
+          if ($process.ExitCode -ne 0) {
+            Get-Content $stdout -ErrorAction SilentlyContinue
+            Get-Content $stderr -ErrorAction SilentlyContinue
+            throw "Unity player exited with code $($process.ExitCode)"
+          }
+          $smoke = Join-Path $directory "smoke-test.log"
+          if (-not (Test-Path $smoke)) { throw "smoke-test.log is missing" }
+          Get-Content $smoke
+          Select-String -Path $smoke -Pattern "PASS"
+      - name: Safety inspection, checksums and portable archive
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem artifact -Recurse -Filter NeonRift.exe | Select-Object -First 1
+          $directory = $exe.Directory.FullName
+          $unexpected = Get-ChildItem $directory -Recurse -Include *.bat,*.cmd,*.ps1,*.vbs,*.msi
+          if ($unexpected) { throw "Unexpected helper executables found: $($unexpected.FullName -join ', ')" }
+          $zip = Join-Path artifact "NeonRift-Unity-Windows-Portable.zip"
+          Compress-Archive -Path "$directory\*" -DestinationPath $zip -CompressionLevel Optimal
+          $targets = @($zip, $exe.FullName, (Join-Path $directory "smoke-test.log"))
+          $lines = foreach ($target in $targets) {
+            $hash = Get-FileHash $target -Algorithm SHA256
+            "$($hash.Hash.ToLower())  $($target.Replace((Resolve-Path artifact).Path + '\', ''))"
+          }
+          $lines | Set-Content (Join-Path artifact "SHA256SUMS.txt")
+          Get-Content (Join-Path artifact "SHA256SUMS.txt")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeonRift-Unity-Windows-Portable
+          path: |
+            artifact/NeonRift-Unity-Windows-Portable.zip
+            artifact/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  license-summary:
+    name: Unity build availability summary
+    needs: [validate, unity-license, unity-tests, unity-build, windows-visual, windows-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - shell: bash
+        run: |
+          if [[ "${{ needs.unity-license.outputs.available }}" == "true" ]]; then
+            echo "Unity license detected. Tests/build result: ${{ needs.unity-tests.result }}/${{ needs.unity-build.result }}/${{ needs.windows-visual.result }}/${{ needs.windows-smoke.result }}"
+          else
+            echo "Source validation passed, but Unity build jobs were skipped because no Unity CI license is configured."
+          fi
