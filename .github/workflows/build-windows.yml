@@ -1,0 +1,141 @@
+name: Build and verify portable Windows game
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: 4.7.1
+  GODOT_STATUS: stable
+  GAME_NAME: NeonRift
+
+jobs:
+  validate:
+    name: Validate source and licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python tools/validate_project.py
+      - name: Verify documentation references
+        run: |
+          grep -q "No external game assets" ASSET_LICENSES.md
+          grep -q "Godot 4.7.1" BUILDING.md
+
+  godot-tests:
+    name: Godot headless tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download official Godot editor
+        run: |
+          curl --fail --location --retry 3 -o godot.zip "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
+          unzip -q godot.zip -d .godot-bin
+          chmod +x .godot-bin/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64
+      - name: Import and run tests
+        run: |
+          GODOT=.godot-bin/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64
+          "$GODOT" --headless --editor --path . --quit-after 3
+          "$GODOT" --headless --path . --script tests/test_runner.gd
+
+  screenshots:
+    name: Render visual smoke gallery
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install virtual display
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+      - name: Download official Godot editor
+        run: |
+          curl --fail --location --retry 3 -o godot.zip "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
+          unzip -q godot.zip -d .godot-bin
+          chmod +x .godot-bin/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64
+      - name: Capture gallery
+        run: |
+          GODOT=.godot-bin/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64
+          "$GODOT" --headless --editor --path . --quit-after 3
+          timeout 30s xvfb-run -a "$GODOT" --path . -- --capture-ci
+          test "$(find artifacts/screenshots -name '*.png' | wc -l)" -ge 8
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: NeonRift-Visual-Smoke-Gallery
+          path: artifacts/screenshots
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-build:
+    name: Windows export and launch check
+    needs: [validate, godot-tests]
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download official Godot editor and export templates
+        shell: pwsh
+        run: |
+          $base = "https://github.com/godotengine/godot-builds/releases/download/$env:GODOT_VERSION-$env:GODOT_STATUS"
+          Invoke-WebRequest "$base/Godot_v$env:GODOT_VERSION-$env:GODOT_STATUS`_win64.exe.zip" -OutFile godot.zip
+          Invoke-WebRequest "$base/Godot_v$env:GODOT_VERSION-$env:GODOT_STATUS`_export_templates.tpz" -OutFile templates.zip
+          Expand-Archive godot.zip -DestinationPath .godot-bin
+          Expand-Archive templates.zip -DestinationPath .godot-templates
+          $dest = Join-Path $env:APPDATA "Godot/export_templates/$env:GODOT_VERSION.stable"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item ".godot-templates/templates/*" $dest -Recurse -Force
+      - name: Import and export release
+        shell: pwsh
+        run: |
+          $godot = Resolve-Path ".godot-bin/Godot_v$env:GODOT_VERSION-$env:GODOT_STATUS`_win64.exe"
+          & $godot --headless --editor --path . --quit-after 3
+          New-Item -ItemType Directory -Force -Path dist/NeonRift-Windows-Portable | Out-Null
+          & $godot --headless --path . --export-release "Windows Desktop" "dist/NeonRift-Windows-Portable/NeonRift.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Assemble portable package
+        shell: pwsh
+        run: |
+          Copy-Item README.md dist/NeonRift-Windows-Portable/README.txt
+          Copy-Item CONTROLS.md dist/NeonRift-Windows-Portable/CONTROLS.txt
+          Copy-Item ASSET_LICENSES.md dist/NeonRift-Windows-Portable/LICENSES.txt
+          Copy-Item LICENSE dist/NeonRift-Windows-Portable/LICENSE.txt
+          "Version 1.0.0`nGodot 4.7.1 stable`nPortable x86_64 build" | Set-Content dist/NeonRift-Windows-Portable/VERSION.txt
+          Get-ChildItem dist/NeonRift-Windows-Portable | Select-Object Name,Length | Format-Table | Out-String | Set-Content dist/binary-manifest.txt
+      - name: Launch exported EXE in headless smoke mode
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "dist/NeonRift-Windows-Portable/NeonRift.exe" -ArgumentList "--headless --smoke-test" -Wait -PassThru -NoNewWindow
+          if ($process.ExitCode -ne 0) { throw "Smoke process exited with $($process.ExitCode)" }
+          if (!(Test-Path "dist/NeonRift-Windows-Portable/smoke-test.log")) { throw "Smoke log missing" }
+          Get-Content "dist/NeonRift-Windows-Portable/smoke-test.log"
+          Select-String -Path "dist/NeonRift-Windows-Portable/smoke-test.log" -Pattern "PASS"
+      - name: Package and checksums
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/NeonRift-Windows-Portable -DestinationPath dist/NeonRift-Windows-Portable.zip -CompressionLevel Optimal
+          $files = @("dist/NeonRift-Windows-Portable.zip", "dist/NeonRift-Windows-Portable/NeonRift.exe", "dist/NeonRift-Windows-Portable/NeonRift.pck")
+          $lines = foreach ($file in $files) { $h = Get-FileHash $file -Algorithm SHA256; "$($h.Hash.ToLower())  $file" }
+          $lines | Set-Content dist/SHA256SUMS.txt
+          Get-Content dist/SHA256SUMS.txt
+      - name: Basic binary safety inspection
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/NeonRift-Windows-Portable -Recurse | Select-Object FullName,Length | Format-Table
+          if (Get-ChildItem dist/NeonRift-Windows-Portable -Recurse -Include *.bat,*.cmd,*.ps1,*.vbs,*.msi) { throw "Unexpected executable helper found" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeonRift-Windows-Portable
+          path: |
+            dist/NeonRift-Windows-Portable.zip
+            dist/SHA256SUMS.txt
+            dist/binary-manifest.txt
+            dist/NeonRift-Windows-Portable/smoke-test.log
+          if-no-files-found: error
+          retention-days: 30
