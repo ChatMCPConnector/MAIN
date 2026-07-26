@@ -24,4 +24,4 @@
 - Back / pause: Escape
 - Fullscreen: F11
 - Menus: Arrow keys; character select also supports Q/E for Player 2
-- Gamepads: first and second connected controllers provide analog movement. Keyboard attack bindings remain available.
+- Gamepads: first and second connected controllers provide analog movement; A = light, X = heavy, Y = special, B = jump, and left shoulder = dash.
