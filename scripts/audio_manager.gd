@@ -82,9 +82,10 @@ func _make_music() -> AudioStreamWAV:
     stream.mix_rate = sample_rate
     stream.stereo = false
     stream.data = bytes
-    stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
-    stream.loop_begin = 0
-    stream.loop_end = frames
+    # Let the decoder reach the normal end of the buffer. The player's finished
+    # signal restarts the music without defining an end-exclusive loop point at
+    # the first sample beyond the generated PCM data.
+    stream.loop_mode = AudioStreamWAV.LOOP_DISABLED
     return stream
 
 func _make_tone(frequency: float, duration: float, strength: float) -> AudioStreamWAV:
