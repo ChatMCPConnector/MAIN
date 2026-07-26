@@ -44,9 +44,18 @@ jobs:
           chmod +x .godot-bin/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64
       - name: Import and run tests
         run: |
+          mkdir -p artifacts/test-logs
+          set -o pipefail
           GODOT=.godot-bin/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64
-          "$GODOT" --headless --editor --path . --quit-after 3
-          "$GODOT" --headless --path . --script tests/test_runner.gd
+          timeout 90s "$GODOT" --headless --editor --path . --quit-after 3 2>&1 | tee artifacts/test-logs/import.log
+          timeout 90s "$GODOT" --headless --path . --script tests/test_runner.gd 2>&1 | tee artifacts/test-logs/tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: NeonRift-Godot-Test-Logs
+          path: artifacts/test-logs
+          if-no-files-found: warn
+          retention-days: 14
 
   screenshots:
     name: Render visual smoke gallery
@@ -55,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install virtual display
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xauth
       - name: Download official Godot editor
         run: |
           curl --fail --location --retry 3 -o godot.zip "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
@@ -63,15 +72,19 @@ jobs:
           chmod +x .godot-bin/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64
       - name: Capture gallery
         run: |
+          mkdir -p artifacts/screenshots artifacts/capture-logs
+          set -o pipefail
           GODOT=.godot-bin/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64
-          "$GODOT" --headless --editor --path . --quit-after 3
-          timeout 30s xvfb-run -a "$GODOT" --path . -- --capture-ci
+          timeout 90s "$GODOT" --headless --editor --path . --quit-after 3 2>&1 | tee artifacts/capture-logs/import.log
+          timeout 60s xvfb-run -a "$GODOT" --path . -- --capture-ci 2>&1 | tee artifacts/capture-logs/capture.log
           test "$(find artifacts/screenshots -name '*.png' | wc -l)" -ge 8
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: NeonRift-Visual-Smoke-Gallery
-          path: artifacts/screenshots
+          path: |
+            artifacts/screenshots
+            artifacts/capture-logs
           if-no-files-found: warn
           retention-days: 14
 
