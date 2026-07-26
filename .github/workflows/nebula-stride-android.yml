@@ -24,7 +24,7 @@ jobs:
   build-test-emulator-upload:
     name: Build, test, emulate, and publish
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 65
 
     steps:
       - name: Check out repository
@@ -181,6 +181,48 @@ jobs:
         shell: bash
         timeout-minutes: 18
         run: bash .github/scripts/android-emulator-smoke.sh
+
+      - name: Symbolicate Android native crash
+        if: failure()
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -euo pipefail
+          CRASH_LOG="test-artifacts/native-crash-dropbox.txt"
+          OUTPUT="test-artifacts/symbolicated-crash.txt"
+          if [[ ! -s "${CRASH_LOG}" ]] || ! grep -q "libgodot_android.so" "${CRASH_LOG}"; then
+            echo "No Godot native crash found to symbolicate." | tee "${OUTPUT}"
+            exit 0
+          fi
+
+          SYMBOL_ARCHIVE="/tmp/godot-android-symbols.zip"
+          SYMBOL_ROOT="/tmp/godot-android-symbols"
+          curl --fail-with-body --location --retry 4 --connect-timeout 30 --max-time 1200 \
+            --output "${SYMBOL_ARCHIVE}" \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_native_debug_symbols.${GODOT_VERSION}.${GODOT_STATUS}.template_release.android.zip"
+          rm -rf "${SYMBOL_ROOT}"
+          mkdir -p "${SYMBOL_ROOT}"
+          unzip -q "${SYMBOL_ARCHIVE}" -d "${SYMBOL_ROOT}"
+          find "${SYMBOL_ROOT}" -type f | sort > test-artifacts/native-symbol-files.txt
+
+          SYMBOL_FILE="$(find "${SYMBOL_ROOT}" -type f -path '*/x86_64/*' \
+            \( -name 'libgodot_android.so' -o -name 'libgodot_android.so.debug' \) | head -n 1)"
+          if [[ -z "${SYMBOL_FILE}" ]]; then
+            echo "Matching x86_64 libgodot_android symbol file was not found." | tee "${OUTPUT}"
+            exit 1
+          fi
+          mkdir -p /tmp/ndk-symbols
+          cp "${SYMBOL_FILE}" /tmp/ndk-symbols/libgodot_android.so
+
+          NDK_STACK="$(find "${ANDROID_SDK_ROOT}/ndk" -type f -name ndk-stack 2>/dev/null | sort | tail -n 1 || true)"
+          if [[ -z "${NDK_STACK}" ]]; then
+            sdkmanager "ndk;27.2.12479018"
+            NDK_STACK="${ANDROID_SDK_ROOT}/ndk/27.2.12479018/ndk-stack"
+          fi
+          test -x "${NDK_STACK}"
+
+          awk 'found || /^\*\*\* \*\*\*/ { found=1; print }' "${CRASH_LOG}" > /tmp/godot-crash.txt
+          "${NDK_STACK}" -sym /tmp/ndk-symbols -dump /tmp/godot-crash.txt | tee "${OUTPUT}"
 
       - name: Validate screenshots
         shell: bash
