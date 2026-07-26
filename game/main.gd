@@ -105,7 +105,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		queue_redraw()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		var key := event.keycode
+		var key: Key = event.keycode
 		if key == KEY_F11:
 			fullscreen = not fullscreen
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED)
@@ -229,8 +229,8 @@ func handle_game_key(key: Key) -> void:
 		elif key == KEY_R: get_tree().paused = false; start_match(selected_mode)
 		elif key == KEY_Q: get_tree().paused = false; screen = "main_menu"; message = ""
 		return
-	var p1 := get_player(0)
-	var p2 := get_player(1)
+	var p1 = get_player(0)
+	var p2 = get_player(1)
 	if p1:
 		if key == KEY_Z: perform_attack(p1, "light")
 		elif key == KEY_X: perform_attack(p1, "heavy")
@@ -286,7 +286,7 @@ func make_fighter(char_idx: int, pos: Vector2, team: int, player: int, enemy_typ
 	return f
 
 func spawn_enemy(kind: String, pos: Vector2) -> void:
-	var char_idx := {"brawler":1, "runner":0, "ranger":3, "elite":2, "boss":1}.get(kind, 1)
+	var char_idx: int = int({"brawler":1, "runner":0, "ranger":3, "elite":2, "boss":1}.get(kind, 1))
 	var f := make_fighter(char_idx, pos, 2, -1, kind)
 	match kind:
 		"runner": f.speed *= 1.18; f.hp *= 0.72; f.max_hp = f.hp; f.name = "Flux Raider"
@@ -366,7 +366,7 @@ func update_player_control(f: Dictionary, delta: float) -> void:
 
 func update_ai(f: Dictionary, delta: float) -> void:
 	f.ai_clock -= delta
-	var target := nearest_target(f)
+	var target = nearest_target(f)
 	if not target: f.ai_state = "search"; return
 	var offset: Vector2 = target.pos - f.pos
 	var distance := offset.length()
@@ -409,7 +409,7 @@ func get_player(index: int):
 
 func perform_attack(f: Dictionary, kind: String) -> bool:
 	if f.dead or f.stun > 0.0 or f.cooldown > 0.0: return false
-	var damage := 42.0 * f.power
+	var damage: float = 42.0 * float(f.power)
 	var range_x := 92.0; var range_y := 48.0; var cost := 0.0; var knock := 105.0
 	match kind:
 		"light": f.cooldown = 0.26; f.attack_timer = 0.18; damage *= 0.74
@@ -539,7 +539,7 @@ func update_music(delta: float) -> void:
 
 func play_sound(kind: String) -> void:
 	if sfx_volume <= 0.01: return
-	var params := {
+	var params: Array = {
 		"menu":[520.0,0.06], "start":[330.0,0.18], "attack":[190.0,0.05], "hit":[82.0,0.09],
 		"block":[720.0,0.05], "special":[880.0,0.16], "jump":[420.0,0.08], "dash":[260.0,0.06],
 		"pickup":[660.0,0.12], "ko":[70.0,0.28], "victory":[990.0,0.30]
@@ -613,17 +613,17 @@ func draw_main_menu() -> void:
 	draw_string(ThemeDB.fallback_font, Vector2(34,690), "v%s  •  Arrow keys + Enter  •  F11 Fullscreen" % VERSION, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1,1,1,0.55))
 
 func draw_menu_button(label: String, rect: Rect2, active: bool) -> void:
-	draw_style_box(rect, Color("4c2d78") if active else Color(0.05,0.08,0.16,0.82), Color("6ff2ff") if active else Color(1,1,1,0.16), 3.0)
+	draw_panel(rect, Color("4c2d78") if active else Color(0.05,0.08,0.16,0.82), Color("6ff2ff") if active else Color(1,1,1,0.16), 3.0)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(26,36), ("▶  " if active else "   ") + label, HORIZONTAL_ALIGNMENT_LEFT, -1, 23, Color.WHITE if active else Color(1,1,1,0.72))
 
-func draw_style_box(rect: Rect2, fill: Color, border: Color, width := 2.0) -> void:
+func draw_panel(rect: Rect2, fill: Color, border: Color, width: float = 2.0) -> void:
 	draw_rect(rect, fill, true); draw_rect(rect, border, false, width)
 
 func draw_mode_select() -> void:
 	draw_background([Color("080b20"), Color("243b70"), Color("6f5cff")]); title("SELECT MODE", 92, 46)
 	for i in MODES.size():
 		var rect := Rect2(175, 145 + i * 92, 930, 72); var active := i == menu_index
-		draw_style_box(rect, Color(0.19,0.10,0.36,0.95) if active else Color(0.03,0.05,0.12,0.82), Color("63eaff") if active else Color(1,1,1,0.12), 3)
+		draw_panel(rect, Color(0.19,0.10,0.36,0.95) if active else Color(0.03,0.05,0.12,0.82), Color("63eaff") if active else Color(1,1,1,0.12), 3)
 		draw_string(ThemeDB.fallback_font, rect.position + Vector2(26,30), MODES[i].name, HORIZONTAL_ALIGNMENT_LEFT, -1, 23, Color.WHITE)
 		draw_string(ThemeDB.fallback_font, rect.position + Vector2(26,56), MODES[i].desc, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("a9c8ef"))
 
@@ -631,7 +631,7 @@ func draw_character_select() -> void:
 	draw_background([Color("0b0d1d"), Color("2a2754"), Color("d449a7")]); title("CHOOSE YOUR BREAKER", 85, 44)
 	for i in CHARACTERS.size():
 		var rect := Rect2(82 + i * 300, 155, 260, 440); var active := i == p1_character; var p2 := i == p2_character and selected_mode in ["versus","team"]
-		draw_style_box(rect, Color(0.05,0.06,0.13,0.93), CHARACTERS[i].color if active else (Color("ffcf62") if p2 else Color(1,1,1,0.12)), 5 if active or p2 else 2)
+		draw_panel(rect, Color(0.05,0.06,0.13,0.93), CHARACTERS[i].color if active else (Color("ffcf62") if p2 else Color(1,1,1,0.12)), 5 if active or p2 else 2)
 		draw_character_portrait(i, rect.position + Vector2(130,145), 1.55)
 		draw_string(ThemeDB.fallback_font, rect.position + Vector2(18,278), CHARACTERS[i].name, HORIZONTAL_ALIGNMENT_LEFT, -1, 25, Color.WHITE)
 		draw_string(ThemeDB.fallback_font, rect.position + Vector2(18,308), CHARACTERS[i].tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, CHARACTERS[i].color)
@@ -659,7 +659,7 @@ func draw_stage_select() -> void:
 	draw_background([Color("050716"), Color("1e3156"), Color("5de6ff")]); title("SELECT ARENA", 95, 46)
 	var stage = STAGES[selected_stage]
 	draw_stage_preview(selected_stage, Rect2(175,150,930,400))
-	draw_style_box(Rect2(175,565,930,85), Color(0.02,0.04,0.1,0.93), stage.palette[2], 3)
+	draw_panel(Rect2(175,565,930,85), Color(0.02,0.04,0.1,0.93), stage.palette[2], 3)
 	draw_string(ThemeDB.fallback_font, Vector2(205,602), "◀  %s  ▶" % stage.name, HORIZONTAL_ALIGNMENT_LEFT, -1, 28, Color.WHITE)
 	draw_string(ThemeDB.fallback_font, Vector2(205,630), stage.subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("b8d9f4"))
 
@@ -681,15 +681,15 @@ func draw_options() -> void:
 	var labels := ["Music Volume", "Effects Volume", "Fullscreen"]
 	var values := ["%d%%" % int(music_volume*100), "%d%%" % int(sfx_volume*100), "ON" if fullscreen else "OFF"]
 	for i in 3:
-		var rect := Rect2(320,190+i*105,640,72); draw_style_box(rect,Color(0.03,0.05,0.13,0.9),Color("63eaff") if i==menu_index else Color(1,1,1,0.14),3)
+		var rect := Rect2(320,190+i*105,640,72); draw_panel(rect,Color(0.03,0.05,0.13,0.9),Color("63eaff") if i==menu_index else Color(1,1,1,0.14),3)
 		draw_string(ThemeDB.fallback_font,rect.position+Vector2(24,44),labels[i],HORIZONTAL_ALIGNMENT_LEFT,-1,22,Color.WHITE)
 		draw_string(ThemeDB.fallback_font,rect.position+Vector2(480,44),values[i],HORIZONTAL_ALIGNMENT_LEFT,-1,22,Color("83f7dd"))
 	draw_string(ThemeDB.fallback_font,Vector2(350,580),"Arrow keys adjust • Esc returns • Settings save beside the portable EXE",HORIZONTAL_ALIGNMENT_LEFT,-1,17,Color("b8d9f4"))
 
 func draw_controls() -> void:
 	draw_background([Color("080a19"),Color("222f58"),Color("ef4b8f")]); title("CONTROLS", 90, 48)
-	draw_style_box(Rect2(90,135,520,475),Color(0.03,0.05,0.12,0.9),Color("63eaff"),3)
-	draw_style_box(Rect2(670,135,520,475),Color(0.03,0.05,0.12,0.9),Color("ffcf62"),3)
+	draw_panel(Rect2(90,135,520,475),Color(0.03,0.05,0.12,0.9),Color("63eaff"),3)
+	draw_panel(Rect2(670,135,520,475),Color(0.03,0.05,0.12,0.9),Color("ffcf62"),3)
 	draw_string(ThemeDB.fallback_font,Vector2(125,185),"PLAYER 1",HORIZONTAL_ALIGNMENT_LEFT,-1,28,Color("63eaff"))
 	draw_string(ThemeDB.fallback_font,Vector2(705,185),"PLAYER 2",HORIZONTAL_ALIGNMENT_LEFT,-1,28,Color("ffcf62"))
 	var p1 := ["Move: Arrow keys","Light: Z","Heavy: X","Special: C","Jump: V","Dash / Guard: B","Pause: Esc"]
@@ -723,7 +723,7 @@ func draw_arena() -> void:
 	else:
 		draw_circle(Vector2(1010,145),105,Color("d9e4ff")); draw_circle(Vector2(1042,125),88,p[0])
 		for i in 8: draw_circle(Vector2(110+i*155,235-(i%2)*40),18,p[2],false,4)
-	var floor_color := p[1].darkened(0.38)
+	var floor_color: Color = p[1].darkened(0.38)
 	draw_polygon(PackedVector2Array([Vector2(50,265),Vector2(1230,265),Vector2(1190,630),Vector2(90,630)]),PackedColorArray([floor_color]))
 	for y in range(300,630,55): draw_line(Vector2(75,y),Vector2(1205,y),Color(1,1,1,0.08),2)
 	for x in range(100,1200,100): draw_line(Vector2(x,285),Vector2(640+(x-640)*0.92,630),Color(1,1,1,0.06),2)
@@ -738,7 +738,7 @@ func draw_object(obj: Dictionary) -> void:
 		draw_rect(Rect2(pos-Vector2(28,54),Vector2(56,54)),Color("75513d")); draw_rect(Rect2(pos-Vector2(28,54),Vector2(56,54)),Color("d49a62"),false,4); draw_line(pos-Vector2(24,50),pos+Vector2(24,-4),Color("d49a62"),4)
 
 func draw_pickup(item: Dictionary) -> void:
-	var pos: Vector2 = item.pos + Vector2(0, sin(item.bob)*8-28); var color := {"health":Color("ff657a"),"energy":Color("62dfff"),"weapon":Color("ffd45c")}.get(item.kind,Color.WHITE)
+	var pos: Vector2 = item.pos + Vector2(0, sin(item.bob)*8-28); var color: Color = {"health":Color("ff657a"),"energy":Color("62dfff"),"weapon":Color("ffd45c")}.get(item.kind,Color.WHITE)
 	draw_circle(pos,18,Color(0,0,0,0.35)); draw_circle(pos,14,color); draw_circle(pos,14,Color.WHITE,false,3)
 
 func draw_fighter(f: Dictionary) -> void:
@@ -780,7 +780,7 @@ func draw_hud() -> void:
 	var players := fighters.filter(func(f): return f.player >= 0)
 	for i in players.size():
 		var f = players[i]; var x := 35.0 if i==0 else 765.0
-		draw_style_box(Rect2(x,24,480,82),Color(0.02,0.03,0.08,0.88),f.color,3)
+		draw_panel(Rect2(x,24,480,82),Color(0.02,0.03,0.08,0.88),f.color,3)
 		draw_string(ThemeDB.fallback_font,Vector2(x+18,50),"P%d  %s"%[i+1,f.name],HORIZONTAL_ALIGNMENT_LEFT,-1,19,Color.WHITE)
 		draw_rect(Rect2(x+18,62,440,15),Color("251d2d")); draw_rect(Rect2(x+18,62,440*clamp(f.hp/f.max_hp,0,1),15),Color("ff5b75"))
 		draw_rect(Rect2(x+18,82,440,9),Color("16243c")); draw_rect(Rect2(x+18,82,440*clamp(f.energy/f.max_energy,0,1),9),Color("55dfff"))
@@ -795,10 +795,14 @@ func draw_result() -> void:
 
 func run_smoke_test() -> void:
 	start_match("training")
-	var p := get_player(0); var dummy = fighters[1]
+	var p = get_player(0)
+	if p == null:
+		get_tree().quit(1)
+		return
+	var dummy: Dictionary = fighters[1]
 	var before: float = dummy.hp
 	perform_attack(p,"light")
-	var ok := screen=="game" and fighters.size()>=2 and dummy.hp < before and p.pos.x >= ARENA.position.x
+	var ok: bool = screen=="game" and fighters.size()>=2 and dummy.hp < before and p.pos.x >= ARENA.position.x
 	var log_path := OS.get_executable_path().get_base_dir().path_join("smoke-test.log") if not OS.has_feature("editor") else "user://smoke-test.log"
 	var file := FileAccess.open(log_path,FileAccess.WRITE)
 	if file: file.store_line("Neon Rift smoke test: %s"%("PASS" if ok else "FAIL")); file.store_line("fighters=%d damage=%s"%[fighters.size(),str(dummy.hp<before)])
