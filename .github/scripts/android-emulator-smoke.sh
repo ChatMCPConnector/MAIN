@@ -126,8 +126,7 @@ adb -s "${SERIAL}" shell settings put system accelerometer_rotation 0
 adb -s "${SERIAL}" shell settings put system user_rotation 1
 adb -s "${SERIAL}" shell settings put secure immersive_mode_confirmations confirmed || true
 
-# Incremental APK installation caused native executable mappings to become invalid
-# in the API-35 x86_64 emulator. Install the APK completely before launching it.
+# Use a complete APK installation so CI does not depend on incremental package mappings.
 adb -s "${SERIAL}" install --no-incremental -r build/NebulaStride-debug.apk
 adb -s "${SERIAL}" shell am force-stop "${PACKAGE}"
 adb -s "${SERIAL}" logcat -c
@@ -149,7 +148,9 @@ if [[ -z "${PID}" ]]; then
   echo "App process did not become active."
   exit 1
 fi
-sleep 5
+
+# Godot imports and compiles the first Compatibility shaders on initial launch.
+sleep 12
 
 # Fallback for emulator images that still show Android's first immersive-mode hint.
 if [[ "$(current_focus)" != *"${PACKAGE}"* ]]; then
@@ -188,8 +189,8 @@ sleep 4
 capture_screen "06-restart"
 
 collect_diagnostics
-if grep -E "FATAL EXCEPTION|Fatal signal [0-9]+|ANR in ${PACKAGE}|Process ${PACKAGE}.*has died|App crashed on incremental package ${PACKAGE}" test-artifacts/logcat.txt; then
-  echo "Crash or ANR marker found in logcat."
+if grep -E "FATAL EXCEPTION|Fatal signal [0-9]+|ANR in ${PACKAGE}|Process ${PACKAGE}.*has died|App crashed on incremental package ${PACKAGE}|Program linking failed|shader failed to compile" test-artifacts/logcat.txt; then
+  echo "Crash, ANR, or shader failure marker found in logcat."
   exit 1
 fi
 trap - EXIT
