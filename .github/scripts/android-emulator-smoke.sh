@@ -4,6 +4,7 @@ set -euo pipefail
 PACKAGE="com.chatmcpconnector.nebulastride"
 AVD_NAME="nebula-stride-ci"
 SERIAL="emulator-5554"
+EMULATOR_APK="build/NebulaStride-emulator-x86_64.apk"
 
 mkdir -p test-artifacts/screenshots "${RUNNER_TEMP}/avd"
 : > test-artifacts/foreground-checks.txt
@@ -29,6 +30,7 @@ collect_diagnostics() {
   adb -s "${SERIAL}" logcat -d > test-artifacts/logcat.txt 2>/dev/null || true
   adb -s "${SERIAL}" shell dumpsys window > test-artifacts/window-dump.txt 2>/dev/null || true
   adb -s "${SERIAL}" shell dumpsys activity activities > test-artifacts/activity-dump.txt 2>/dev/null || true
+  adb -s "${SERIAL}" shell dumpsys dropbox --print data_app_native_crash > test-artifacts/native-crash-dropbox.txt 2>/dev/null || true
   adb -s "${SERIAL}" exec-out screencap -p > test-artifacts/screenshots/99-final-state.png 2>/dev/null || true
 }
 
@@ -148,18 +150,7 @@ adb -s "${SERIAL}" shell wm density 320
 adb -s "${SERIAL}" shell settings put system accelerometer_rotation 0
 adb -s "${SERIAL}" shell settings put system user_rotation 1
 adb -s "${SERIAL}" shell settings put secure immersive_mode_confirmations confirmed || true
-
-# sys.boot_completed is published before Google services and the launcher have
-# completely settled. Wait for pending broadcasts and a stable launcher so
-# Godot does not compete with first-boot work for the software renderer.
 adb -s "${SERIAL}" shell am wait-for-broadcast-idle >/dev/null 2>&1 || true
-for _ in $(seq 1 12); do
-  FOCUS="$(current_focus)"
-  if [[ -n "${FOCUS}" && "${FOCUS}" != *"Application Not Responding"* ]]; then
-    break
-  fi
-  sleep 5
-done
 sleep 45
 
 if current_focus | grep -q "Application Not Responding"; then
@@ -168,8 +159,8 @@ if current_focus | grep -q "Application Not Responding"; then
   exit 1
 fi
 
-# Use a complete APK installation so CI does not depend on incremental package mappings.
-adb -s "${SERIAL}" install --no-incremental -r build/NebulaStride-debug.apk
+test -s "${EMULATOR_APK}"
+adb -s "${SERIAL}" install --no-incremental -r "${EMULATOR_APK}"
 adb -s "${SERIAL}" shell am force-stop "${PACKAGE}"
 adb -s "${SERIAL}" logcat -c
 
@@ -180,18 +171,13 @@ if [[ "${COMPONENT}" != */* ]]; then
 fi
 adb -s "${SERIAL}" shell am start -W -n "${COMPONENT}"
 wait_for_app_foreground 60
-
-# Allow initial resource upload and Compatibility shader compilation to settle.
 sleep 10
 
-# Fallback for emulator images that still show Android's first immersive-mode hint.
 if [[ "$(current_focus)" != *"${PACKAGE}"* ]]; then
   adb -s "${SERIAL}" shell input tap 1040 390 || true
   wait_for_app_foreground 10
 fi
 
-# Validate that the tutorial is visible, then leave it through its dedicated button.
-# All four swipe directions are exercised in actual gameplay below.
 capture_screen "01-tutorial"
 adb -s "${SERIAL}" shell input tap 640 565
 sleep 2
@@ -199,7 +185,6 @@ capture_screen "02-main-menu"
 adb -s "${SERIAL}" shell input tap 640 330
 sleep 4
 
-# Exercise lane changes, jump, and slide while the runner is active.
 adb -s "${SERIAL}" shell input swipe 640 400 350 400 300
 adb -s "${SERIAL}" shell input swipe 350 400 850 400 300
 adb -s "${SERIAL}" shell input swipe 640 500 640 230 300
@@ -219,8 +204,8 @@ sleep 3
 capture_screen "06-restart"
 
 collect_diagnostics
-if grep -E "FATAL EXCEPTION|Fatal signal [0-9]+|ANR in ${PACKAGE}|Process ${PACKAGE}.*has died|App crashed on incremental package ${PACKAGE}|Program linking failed|shader failed to compile" test-artifacts/logcat.txt; then
-  echo "Crash, ANR, or shader failure marker found in logcat."
+if grep -E "FATAL EXCEPTION|Fatal signal [0-9]+|ANR in ${PACKAGE}|Process ${PACKAGE}.*has died|Program linking failed|shader failed to compile|Couldn't present to Vulkan queue" test-artifacts/logcat.txt; then
+  echo "Crash, ANR, or renderer failure marker found in logcat."
   exit 1
 fi
 trap - EXIT
