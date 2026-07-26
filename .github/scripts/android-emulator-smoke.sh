@@ -38,6 +38,7 @@ adb start-server
   -camera-back none \
   -memory 2048 \
   -cores 2 \
+  -no-metrics \
   > test-artifacts/emulator.log 2>&1 &
 EMULATOR_PID=$!
 
@@ -71,13 +72,16 @@ adb -s "${SERIAL}" shell am force-stop com.chatmcpconnector.nebulastride
 adb -s "${SERIAL}" shell monkey -p com.chatmcpconnector.nebulastride 1
 
 PID=""
-for _ in $(seq 1 30); do
-  PID="$(adb -s "${SERIAL}" shell pidof com.chatmcpconnector.nebulastride | tr -d '\r')"
+for _ in $(seq 1 45); do
+  PID="$(adb -s "${SERIAL}" shell pidof com.chatmcpconnector.nebulastride 2>/dev/null | tr -d '\r' || true)"
   [[ -n "${PID}" ]] && break
   sleep 1
 done
-test -n "${PID}"
-sleep 4
+if [[ -z "${PID}" ]]; then
+  echo "App process did not become active."
+  exit 1
+fi
+sleep 6
 
 adb -s "${SERIAL}" exec-out screencap -p > test-artifacts/screenshots/01-tutorial.png
 adb -s "${SERIAL}" shell input swipe 820 360 360 360 300
@@ -109,7 +113,7 @@ adb -s "${SERIAL}" shell input tap 640 445
 sleep 4
 adb -s "${SERIAL}" exec-out screencap -p > test-artifacts/screenshots/06-restart.png
 
-PID="$(adb -s "${SERIAL}" shell pidof com.chatmcpconnector.nebulastride | tr -d '\r')"
+PID="$(adb -s "${SERIAL}" shell pidof com.chatmcpconnector.nebulastride 2>/dev/null | tr -d '\r' || true)"
 test -n "${PID}"
 collect_diagnostics
 if grep -E "FATAL EXCEPTION|ANR in com.chatmcpconnector.nebulastride|Process com.chatmcpconnector.nebulastride.*has died" test-artifacts/logcat.txt; then
