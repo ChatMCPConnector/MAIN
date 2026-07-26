@@ -71,6 +71,23 @@ assert_app_active() {
   fi
 }
 
+wait_for_app_foreground() {
+  local attempts="${1:-60}"
+  local pid focus resumed
+  for _ in $(seq 1 "${attempts}"); do
+    pid="$(app_pid)"
+    focus="$(current_focus)"
+    resumed="$(top_resumed_activity)"
+    if [[ -n "${pid}" && "${focus}" == *"${PACKAGE}"* && "${resumed}" == *"${PACKAGE}"* ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "App did not reach a stable foreground state."
+  assert_app_active "foreground-timeout" || true
+  return 1
+}
+
 capture_screen() {
   local name="$1"
   assert_app_active "${name}"
@@ -94,7 +111,7 @@ adb start-server
   -noaudio \
   -no-boot-anim \
   -camera-back none \
-  -memory 2048 \
+  -memory 3072 \
   -cores 2 \
   -no-metrics \
   > test-artifacts/emulator.log 2>&1 &
@@ -107,7 +124,9 @@ for _ in $(seq 1 180); do
     cat test-artifacts/emulator.log
     exit 1
   fi
-  if [[ "$(adb -s "${SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; then
+  BOOT_COMPLETED="$(adb -s "${SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+  BOOT_ANIM="$(adb -s "${SERIAL}" shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r')"
+  if [[ "${BOOT_COMPLETED}" == "1" && "${BOOT_ANIM}" == "stopped" ]]; then
     BOOTED=1
     break
   fi
@@ -119,12 +138,35 @@ if [[ "${BOOTED}" != "1" ]]; then
   exit 1
 fi
 
+adb -s "${SERIAL}" wait-for-device
 adb -s "${SERIAL}" shell input keyevent 82 || true
+adb -s "${SERIAL}" shell settings put global window_animation_scale 0
+adb -s "${SERIAL}" shell settings put global transition_animation_scale 0
+adb -s "${SERIAL}" shell settings put global animator_duration_scale 0
 adb -s "${SERIAL}" shell wm size 1280x720
 adb -s "${SERIAL}" shell wm density 320
 adb -s "${SERIAL}" shell settings put system accelerometer_rotation 0
 adb -s "${SERIAL}" shell settings put system user_rotation 1
 adb -s "${SERIAL}" shell settings put secure immersive_mode_confirmations confirmed || true
+
+# sys.boot_completed is published before Google services and the launcher have
+# completely settled. Wait for pending broadcasts and a stable launcher so
+# Godot does not compete with first-boot work for the software renderer.
+adb -s "${SERIAL}" shell am wait-for-broadcast-idle >/dev/null 2>&1 || true
+for _ in $(seq 1 12); do
+  FOCUS="$(current_focus)"
+  if [[ -n "${FOCUS}" && "${FOCUS}" != *"Application Not Responding"* ]]; then
+    break
+  fi
+  sleep 5
+done
+sleep 45
+
+if current_focus | grep -q "Application Not Responding"; then
+  echo "Android launcher remained in ANR after boot stabilization."
+  collect_diagnostics
+  exit 1
+fi
 
 # Use a complete APK installation so CI does not depend on incremental package mappings.
 adb -s "${SERIAL}" install --no-incremental -r build/NebulaStride-debug.apk
@@ -137,25 +179,15 @@ if [[ "${COMPONENT}" != */* ]]; then
   exit 1
 fi
 adb -s "${SERIAL}" shell am start -W -n "${COMPONENT}"
+wait_for_app_foreground 60
 
-PID=""
-for _ in $(seq 1 45); do
-  PID="$(app_pid)"
-  [[ -n "${PID}" ]] && break
-  sleep 1
-done
-if [[ -z "${PID}" ]]; then
-  echo "App process did not become active."
-  exit 1
-fi
-
-# Allow initial resource import and Compatibility shader compilation to settle.
-sleep 8
+# Allow initial resource upload and Compatibility shader compilation to settle.
+sleep 10
 
 # Fallback for emulator images that still show Android's first immersive-mode hint.
 if [[ "$(current_focus)" != *"${PACKAGE}"* ]]; then
   adb -s "${SERIAL}" shell input tap 1040 390 || true
-  sleep 2
+  wait_for_app_foreground 10
 fi
 
 # Validate that the tutorial is visible, then leave it through its dedicated button.
