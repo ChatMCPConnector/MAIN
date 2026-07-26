@@ -3,6 +3,8 @@ name: Build and verify portable Windows game
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -111,7 +113,7 @@ jobs:
       - name: Launch exported EXE in headless smoke mode
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath "dist/NeonRift-Windows-Portable/NeonRift.exe" -ArgumentList "--headless --smoke-test" -Wait -PassThru -NoNewWindow
+          $process = Start-Process -FilePath "dist/NeonRift-Windows-Portable/NeonRift.exe" -ArgumentList "--headless -- --smoke-test" -Wait -PassThru -NoNewWindow
           if ($process.ExitCode -ne 0) { throw "Smoke process exited with $($process.ExitCode)" }
           if (!(Test-Path "dist/NeonRift-Windows-Portable/smoke-test.log")) { throw "Smoke log missing" }
           Get-Content "dist/NeonRift-Windows-Portable/smoke-test.log"
