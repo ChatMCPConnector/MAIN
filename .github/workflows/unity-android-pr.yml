@@ -47,7 +47,7 @@ jobs:
 
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          sudo rm -rf /usr/local/lib/android /opt/ghc || true
           df -h
 
       - name: Restore Unity Library cache
