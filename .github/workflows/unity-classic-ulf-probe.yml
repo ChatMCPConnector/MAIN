@@ -1,4 +1,4 @@
-name: Diagnose classic Unity ULF activation
+name: Diagnose classic Unity ULF activation and build
 
 on:
   pull_request:
@@ -13,10 +13,10 @@ env:
   UNITY_SERIAL: F4-9QCB-A9YM-9MHS-CQR2-WKN2
 
 jobs:
-  activation-probe:
-    name: Probe classic Unity Personal activation
+  activation-build-probe:
+    name: Activate Unity Personal and build Neon Rift
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 
@@ -31,8 +31,8 @@ jobs:
         shell: bash
         run: docker pull "$UNITY_IMAGE"
 
-      - name: Activate exactly like GameCI
-        id: activate
+      - name: Activate and build directly in Unity
+        id: unity
         continue-on-error: true
         shell: bash
         env:
@@ -74,23 +74,39 @@ jobs:
               activation_exit=$?
               echo "$activation_exit" > /github/workspace/ci-diagnostics/activation-exit-code.txt
 
+              if [[ $activation_exit -eq 0 ]]; then
+                "$UNITY_BIN" \
+                  -batchmode -nographics -quit \
+                  -projectPath /github/workspace \
+                  -executeMethod NeonRift.Editor.BuildAutomation.BuildWindows \
+                  -logFile /github/workspace/ci-diagnostics/build.log
+                build_exit=$?
+              else
+                build_exit=99
+              fi
+              echo "$build_exit" > /github/workspace/ci-diagnostics/build-exit-code.txt
+
               "$UNITY_BIN" \
                 -batchmode -nographics -quit -returnlicense \
                 -username "$UNITY_EMAIL" \
                 -password "$UNITY_PASSWORD" \
                 -logFile /github/workspace/ci-diagnostics/return-license.log >/dev/null 2>&1 || true
-              exit "$activation_exit"
+
+              if [[ $activation_exit -ne 0 ]]; then
+                exit "$activation_exit"
+              fi
+              exit "$build_exit"
             '
           exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           exit "$exit_code"
 
-      - name: Create activation report
+      - name: Create activation and build report
         if: always()
         shell: bash
         env:
-          STEP_OUTCOME: ${{ steps.activate.outcome }}
-          ACTIVATION_EXIT_CODE: ${{ steps.activate.outputs.exit_code }}
+          STEP_OUTCOME: ${{ steps.unity.outcome }}
+          UNITY_EXIT_CODE: ${{ steps.unity.outputs.exit_code }}
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         run: |
@@ -101,13 +117,14 @@ jobs:
 
           root = Path('ci-diagnostics')
           root.mkdir(exist_ok=True)
-          report = root / 'classic-ulf-activation-summary.txt'
+          report = root / 'classic-ulf-build-summary.txt'
           secrets = [os.environ.get('UNITY_EMAIL', ''), os.environ.get('UNITY_PASSWORD', '')]
           secrets = [value for value in secrets if value]
           pattern = re.compile(
               r'error|exception|fail(?:ed|ure)?|licen[cs]e|activat|serial|'
               r'unauthori[sz]ed|invalid|denied|entitlement|machine|binding|token|'
-              r'request|response|status|return code|exit code',
+              r'request|response|status|return code|exit code|compiler|\bCS\d{4}\b|'
+              r'package|assembly|build failed|aborting|cannot|not found',
               re.IGNORECASE,
           )
 
@@ -118,24 +135,24 @@ jobs:
               return text
 
           sections = [
-              'Classic Unity ULF activation probe',
+              'Classic Unity ULF activation and build probe',
               'serial=F4-9QCB-A9YM-9MHS-CQR2-WKN2',
               f"step_outcome={os.environ.get('STEP_OUTCOME', '')}",
-              f"action_exit_code={os.environ.get('ACTIVATION_EXIT_CODE', '')}",
+              f"unity_exit_code={os.environ.get('UNITY_EXIT_CODE', '')}",
           ]
-          for small in ['probe.txt', 'activation-exit-code.txt']:
+          for small in ['probe.txt', 'activation-exit-code.txt', 'build-exit-code.txt']:
               path = root / small
               if path.exists():
                   sections.extend(['', f'===== {small} =====', redact(path.read_text(errors='replace'))])
 
-          for name in ['activation.log', 'return-license.log']:
+          for name in ['activation.log', 'build.log', 'return-license.log']:
               path = root / name
               lines = path.read_text(encoding='utf-8', errors='replace').splitlines() if path.exists() else []
               sections.extend(['', f'===== {name} (exists={path.exists()}, lines={len(lines)}) ====='])
-              selected = set(range(max(0, len(lines) - 260), len(lines)))
+              selected = set(range(max(0, len(lines) - 320), len(lines)))
               for index, line in enumerate(lines):
                   if pattern.search(line):
-                      selected.update(range(max(0, index - 5), min(len(lines), index + 6)))
+                      selected.update(range(max(0, index - 6), min(len(lines), index + 7)))
               previous = -2
               for index in sorted(selected):
                   if index > previous + 1:
@@ -143,20 +160,36 @@ jobs:
                   sections.append(f'{index + 1}: {redact(lines[index])}')
                   previous = index
 
+          build_root = Path('build/StandaloneWindows64/NeonRift')
+          sections.extend(['', f'build_directory_exists={build_root.exists()}'])
+          if build_root.exists():
+              for path in sorted(build_root.rglob('*')):
+                  if path.is_file():
+                      sections.append(f'build_file={path} size={path.stat().st_size}')
+
           report.write_text('\n'.join(sections) + '\n', encoding='utf-8')
           print(report.read_text(encoding='utf-8'))
           PY
 
-      - name: Upload activation diagnostics
+      - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: NeonRift-Classic-ULF-Activation-Diagnostics
-          path: ci-diagnostics/classic-ulf-activation-summary.txt
+          name: NeonRift-Classic-ULF-Build-Diagnostics
+          path: ci-diagnostics/classic-ulf-build-summary.txt
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail when activation failed
-        if: steps.activate.outcome != 'success'
+      - name: Upload successful Windows build
+        if: steps.unity.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeonRift-Windows-x86_64-Probe
+          path: build/StandaloneWindows64/NeonRift
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail when activation or build failed
+        if: steps.unity.outcome != 'success'
         shell: bash
         run: exit 1
