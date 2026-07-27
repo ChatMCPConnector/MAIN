@@ -28,7 +28,7 @@ Agents should read the root `AGENTS.md` before changing assets. GitHub Copilot r
 6. Unity verifies declared sizes and MD5 hashes when available, safely extracts ZIP files and imports the results.
 7. The normal Neon Rift build continues. Procedural fallback art remains available if a host is temporarily unavailable.
 
-Binary files and caches stay out of Git. The provider registry, asset requests, lock file and license/source documentation remain reviewable.
+Binary files and caches stay out of Git. The provider registry, asset requests, lock file and license/source documentation remain reviewable. `open-assets.lock.json` is generated automatically and should not be edited by hand.
 
 ## Request manifest
 
