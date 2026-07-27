@@ -5,6 +5,7 @@ namespace Riftbound
     public enum EnemyKind { Grunt, Ranged, Elite, Boss }
     public enum RoomKind { Combat, Treasure, Merchant, Healing, Elite, Boss }
     public enum ItemKind { Weapon, Armor }
+    public enum ItemRarity { Common, Uncommon, Rare, Epic, Legendary, Cursed }
 
     [Serializable]
     public sealed class RoomDefinition
@@ -51,10 +52,27 @@ namespace Riftbound
     }
 
     [Serializable]
-    public sealed class ShopOffer
+    public sealed class ItemInstance
     {
+        public string instanceId;
         public ItemKind kind;
         public int catalogIndex;
+        public ItemRarity rarity;
+        public float powerMultiplier = 1f;
+        public int sellValue;
+        public int salvageValue;
+        public bool locked;
+
+        public ItemInstance Clone()
+        {
+            return (ItemInstance)MemberwiseClone();
+        }
+    }
+
+    [Serializable]
+    public sealed class ShopOffer
+    {
+        public ItemInstance item;
         public int price;
         public string title;
         public string description;
@@ -81,6 +99,79 @@ namespace Riftbound
             incomingDamageMultiplier = 1f,
             damageReduction = 0f
         };
+    }
+
+    public static class RarityUtility
+    {
+        public static int Rank(ItemRarity rarity)
+        {
+            return rarity switch
+            {
+                ItemRarity.Common => 0,
+                ItemRarity.Uncommon => 1,
+                ItemRarity.Rare => 2,
+                ItemRarity.Epic => 3,
+                ItemRarity.Legendary => 4,
+                ItemRarity.Cursed => 5,
+                _ => 0
+            };
+        }
+
+        public static float PowerMultiplier(ItemRarity rarity)
+        {
+            return rarity switch
+            {
+                ItemRarity.Common => 1f,
+                ItemRarity.Uncommon => 1.12f,
+                ItemRarity.Rare => 1.28f,
+                ItemRarity.Epic => 1.48f,
+                ItemRarity.Legendary => 1.75f,
+                ItemRarity.Cursed => 1.9f,
+                _ => 1f
+            };
+        }
+
+        public static float PriceMultiplier(ItemRarity rarity)
+        {
+            return rarity switch
+            {
+                ItemRarity.Common => 1f,
+                ItemRarity.Uncommon => 1.3f,
+                ItemRarity.Rare => 1.75f,
+                ItemRarity.Epic => 2.4f,
+                ItemRarity.Legendary => 3.4f,
+                ItemRarity.Cursed => 2.8f,
+                _ => 1f
+            };
+        }
+
+        public static string DisplayName(ItemRarity rarity)
+        {
+            return rarity switch
+            {
+                ItemRarity.Common => "Gewöhnlich",
+                ItemRarity.Uncommon => "Ungewöhnlich",
+                ItemRarity.Rare => "Selten",
+                ItemRarity.Epic => "Episch",
+                ItemRarity.Legendary => "Legendär",
+                ItemRarity.Cursed => "Verflucht",
+                _ => rarity.ToString()
+            };
+        }
+
+        public static string Hex(ItemRarity rarity)
+        {
+            return rarity switch
+            {
+                ItemRarity.Common => "#D6D6D6",
+                ItemRarity.Uncommon => "#71E38B",
+                ItemRarity.Rare => "#69A7FF",
+                ItemRarity.Epic => "#C481FF",
+                ItemRarity.Legendary => "#FFBE4A",
+                ItemRarity.Cursed => "#FF5B72",
+                _ => "#FFFFFF"
+            };
+        }
     }
 
     public static class GameCatalog
@@ -135,6 +226,14 @@ namespace Riftbound
         {
             if (index < 0 || index >= Rooms.Length) throw new ArgumentOutOfRangeException(nameof(index));
             return Rooms[index];
+        }
+
+        public static string GetItemTitle(ItemInstance item)
+        {
+            if (item == null) return "Unbekannt";
+            return item.kind == ItemKind.Weapon
+                ? Weapons[item.catalogIndex].title
+                : Armors[item.catalogIndex].title;
         }
 
         private static RoomDefinition Room(int index, string title, RoomKind kind, int difficulty, int obstacles)
