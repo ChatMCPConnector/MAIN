@@ -1,0 +1,87 @@
+name: Temporary PR18 Source Fix
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-pr-branch:
+    if: github.event.issue.title == 'Apply Android source fixes PR 18'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/android-release-build
+          fetch-depth: 0
+
+      - name: Apply exact compiler fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          combat_path = Path("Assets/Game/Coop/CoopCombatWorld.cs")
+          combat = combat_path.read_text()
+          old_find = "FindObjectsByType<EnemyController>(FindObjectsSortMode.None)"
+          new_find = "UnityEngine.Object.FindObjectsByType<EnemyController>(FindObjectsSortMode.None)"
+          old_count = combat.count(old_find)
+          new_count = combat.count(new_find)
+          if old_count == 4:
+              combat_path.write_text(combat.replace(old_find, new_find))
+          elif new_count != 4:
+              raise SystemExit(f"Unexpected enemy search counts: old={old_count}, new={new_count}")
+
+          lan_path = Path("Assets/Game/Coop/CoopLanController.cs")
+          lan = lan_path.read_text()
+          old_welcome = """            if (Role == CoopRole.Client &&
+                CoopProtocol.TryDecodeWelcome(payload, out var code, out var hostToken, out var hostSeed, out var hostRoom))
+            {
+                if (code != sessionCode || !EndpointsEqual(sender, remoteEndpoint)) return;"""
+          new_welcome = """            if (Role == CoopRole.Client &&
+                CoopProtocol.TryDecodeWelcome(payload, out var welcomeCode, out var hostToken, out var hostSeed, out var hostRoom))
+            {
+                if (welcomeCode != sessionCode || !EndpointsEqual(sender, remoteEndpoint)) return;"""
+          if lan.count(old_welcome) == 1:
+              lan_path.write_text(lan.replace(old_welcome, new_welcome))
+          elif lan.count(new_welcome) != 1:
+              raise SystemExit("Unexpected welcome packet block")
+
+          quality_path = Path("Assets/Game/Core/ReleaseQualityRuntime.cs")
+          quality = quality_path.read_text()
+          old_shadows = """            QualitySettings.shadows = memory >= 4000 && cores >= 6
+                ? ShadowQuality.HardOnly
+                : ShadowQuality.Disable;"""
+          new_shadows = """            QualitySettings.shadows = memory >= 4000 && cores >= 6
+                ? UnityEngine.ShadowQuality.HardOnly
+                : UnityEngine.ShadowQuality.Disable;"""
+          if quality.count(old_shadows) == 1:
+              quality_path.write_text(quality.replace(old_shadows, new_shadows))
+          elif quality.count(new_shadows) != 1:
+              raise SystemExit("Unexpected shadow quality block")
+
+          branch_helper = Path(".github/workflows/apply-android-source-fixes.yml")
+          if branch_helper.exists():
+              branch_helper.unlink()
+
+      - name: Commit corrected PR sources
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if ! git diff --cached --quiet; then
+            git commit -m "Fix remaining Android compiler errors"
+            git push origin HEAD:fix/android-release-build
+          fi
+
+      - name: Remove temporary workflow from main
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B main origin/main
+          git rm .github/workflows/temporary-pr18-source-fix.yml
+          git commit -m "[skip ci] Remove temporary PR 18 source fixer"
+          git push origin HEAD:main
