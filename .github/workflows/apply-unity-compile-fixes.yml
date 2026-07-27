@@ -1,0 +1,84 @@
+name: Apply Unity Compile Fixes
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-build-branch:
+    if: github.head_ref == 'build/riftbound-1.0.0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Apply exact Unity compiler fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          replacements = {
+              Path('Assets/Game/Coop/CoopCombatWorld.cs'): [
+                  (
+                      'FindObjectsByType<EnemyController>(FindObjectsSortMode.None)',
+                      'UnityEngine.Object.FindObjectsByType<EnemyController>(FindObjectsSortMode.None)',
+                  ),
+              ],
+              Path('Assets/Game/Coop/CoopLanController.cs'): [
+                  (
+                      'CoopProtocol.TryDecodeWelcome(payload, out var code, out var hostToken, out var hostSeed, out var hostRoom)',
+                      'CoopProtocol.TryDecodeWelcome(payload, out var welcomeCode, out var hostToken, out var hostSeed, out var hostRoom)',
+                  ),
+                  (
+                      'if (code != sessionCode || !EndpointsEqual(sender, remoteEndpoint)) return;',
+                      'if (welcomeCode != sessionCode || !EndpointsEqual(sender, remoteEndpoint)) return;',
+                  ),
+              ],
+              Path('Assets/Game/Core/ReleaseQualityRuntime.cs'): [
+                  ('? ShadowQuality.HardOnly', '? UnityEngine.ShadowQuality.HardOnly'),
+                  (': ShadowQuality.Disable;', ': UnityEngine.ShadowQuality.Disable;'),
+              ],
+          }
+
+          changed = False
+          for path, pairs in replacements.items():
+              text = path.read_text(encoding='utf-8')
+              original = text
+              for old, new in pairs:
+                  if old in text:
+                      text = text.replace(old, new)
+                  elif new not in text:
+                      raise SystemExit(f'Expected source pattern missing in {path}: {old}')
+              if text != original:
+                  path.write_text(text, encoding='utf-8')
+                  changed = True
+
+          Path('.github/unity-fixes-applied').write_text(
+              'Unity compile fixes applied for Riftbound 1.0.0.\n',
+              encoding='utf-8',
+          )
+          print('changed=' + str(changed))
+
+      - name: Commit fixes to build branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Assets/Game/Coop/CoopCombatWorld.cs \
+                  Assets/Game/Coop/CoopLanController.cs \
+                  Assets/Game/Core/ReleaseQualityRuntime.cs \
+                  .github/unity-fixes-applied
+          if git diff --cached --quiet; then
+            echo "No compile fixes needed"
+            exit 0
+          fi
+          git commit -m "Fix Unity compiler errors found by CI"
+          git push origin HEAD:${{ github.head_ref }}
