@@ -1,0 +1,155 @@
+name: Diagnose Unity CI activation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UNITY_VERSION: 6000.3.17f1
+
+jobs:
+  diagnose-unity:
+    name: Diagnose Unity activation and editor failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare diagnostic directory
+        run: mkdir -p ci-diagnostics
+
+      - name: Run Unity builder with captured editor log
+        id: unity
+        continue-on-error: true
+        uses: game-ci/unity-builder@v5
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          targetPlatform: StandaloneWindows64
+          projectPath: .
+          buildMethod: NeonRift.Editor.BuildAutomation.BuildWindows
+          buildsPath: diagnostic-build
+          buildName: NeonRiftDiagnostic
+          customParameters: -logFile /github/workspace/ci-diagnostics/Editor.log
+
+      - name: Create sanitized diagnostic report
+        if: always()
+        shell: bash
+        env:
+          STEP_OUTCOME: ${{ steps.unity.outcome }}
+          ENGINE_EXIT_CODE: ${{ steps.unity.outputs.engineExitCode }}
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          output_dir = Path('ci-diagnostics')
+          output_dir.mkdir(exist_ok=True)
+          report = output_dir / 'diagnostic-summary.txt'
+
+          secrets = [
+              os.environ.get('UNITY_LICENSE', ''),
+              os.environ.get('UNITY_EMAIL', ''),
+              os.environ.get('UNITY_PASSWORD', ''),
+              os.environ.get('UNITY_SERIAL', ''),
+          ]
+          secrets = [value for value in secrets if value]
+
+          patterns = re.compile(
+              r'error|exception|fail(?:ed|ure)?|licen[cs]e|activat|aborting|'
+              r'exit code|not found|invalid|compiler|\bCS\d{4}\b|package manager|'
+              r'cannot|denied|unauthori[sz]ed',
+              re.IGNORECASE,
+          )
+
+          def redact(text: str) -> str:
+              for value in secrets:
+                  text = text.replace(value, '[REDACTED_SECRET]')
+              text = re.sub(r'<SignatureValue>.*?</SignatureValue>',
+                            '<SignatureValue>[REDACTED]</SignatureValue>',
+                            text, flags=re.IGNORECASE | re.DOTALL)
+              text = re.sub(r'(?i)(password\s*[=:]\s*)\S+', r'\1[REDACTED]', text)
+              return text
+
+          roots = [
+              Path('ci-diagnostics'), Path('Logs'), Path('Library'),
+              Path('unity-test-artifacts'), Path('diagnostic-build'),
+              Path('_activate-license'),
+          ]
+          allowed_suffixes = {'.log', '.txt', '.json', '.xml', '.yaml', '.yml'}
+          excluded_suffixes = {'.ulf', '.alf', '.lic'}
+          files = []
+          for root in roots:
+              if not root.exists():
+                  continue
+              candidates = [root] if root.is_file() else root.rglob('*')
+              for path in candidates:
+                  if not path.is_file() or path == report:
+                      continue
+                  if path.suffix.lower() in excluded_suffixes:
+                      continue
+                  if path.suffix.lower() not in allowed_suffixes:
+                      continue
+                  try:
+                      if path.stat().st_size > 8_000_000:
+                          continue
+                  except OSError:
+                      continue
+                  files.append(path)
+
+          sections = [
+              'Unity CI diagnostic summary',
+              f"step_outcome={os.environ.get('STEP_OUTCOME', '')}",
+              f"engine_exit_code={os.environ.get('ENGINE_EXIT_CODE', '')}",
+              '', 'Candidate diagnostic files:',
+          ]
+          sections.extend(f'- {path}' for path in sorted(files, key=str))
+
+          for path in sorted(files, key=str):
+              try:
+                  text = path.read_text(encoding='utf-8', errors='replace')
+              except OSError as exc:
+                  sections.extend(['', f'===== {path} =====', f'Could not read: {exc}'])
+                  continue
+              lines = text.splitlines()
+              selected = set()
+              for index, line in enumerate(lines):
+                  if patterns.search(line):
+                      selected.update(range(max(0, index - 3), min(len(lines), index + 4)))
+              if not selected and path.name.lower() == 'editor.log':
+                  selected.update(range(max(0, len(lines) - 160), len(lines)))
+              if not selected:
+                  continue
+              sections.extend(['', f'===== {path} ====='])
+              previous = -2
+              for index in sorted(selected):
+                  if index > previous + 1:
+                      sections.append('...')
+                  sections.append(f'{index + 1}: {redact(lines[index])}')
+                  previous = index
+
+          report.write_text('\n'.join(sections) + '\n', encoding='utf-8')
+          print(report.read_text(encoding='utf-8'))
+          PY
+
+      - name: Upload sanitized Unity diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeonRift-Unity-CI-Diagnostics
+          path: ci-diagnostics
+          if-no-files-found: error
+          retention-days: 7
