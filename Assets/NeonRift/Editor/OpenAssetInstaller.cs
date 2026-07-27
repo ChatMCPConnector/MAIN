@@ -14,6 +14,10 @@ namespace NeonRift.Editor
         private const string DestinationRelativePath = "Resources/Community/OpenAssets";
         private const string CacheDirectoryName = "OpenAssetCache";
         private const string UserAgent = "NeonRift-Unity-Open-Asset-Installer/1.0";
+        private const int MaximumArchiveEntries = 4096;
+        private const long MaximumSingleExtractedBytes = 134_217_728;
+        private const long MaximumTotalExtractedBytes = 536_870_912;
+        private const double MaximumCompressionRatio = 200d;
 
         [Serializable]
         private sealed class AssetLock
@@ -136,10 +140,15 @@ namespace NeonRift.Editor
                     {
                         Directory.Delete(targetDirectory, true);
                     }
-                    else if (File.Exists(markerPath))
+                    else if (File.Exists(markerPath) && VerifyInstalledAsset(asset, targetDirectory))
                     {
                         fileIndex += asset.files?.Length ?? 0;
                         continue;
+                    }
+                    else if (File.Exists(markerPath))
+                    {
+                        File.Delete(markerPath);
+                        Debug.LogWarning($"Repairing incomplete or corrupted open asset {asset.provider}/{asset.id}.");
                     }
 
                     Directory.CreateDirectory(targetDirectory);
@@ -179,6 +188,46 @@ namespace NeonRift.Editor
 
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
             return success;
+        }
+
+        private static bool VerifyInstalledAsset(AssetEntry asset, string targetDirectory)
+        {
+            try
+            {
+                DownloadEntry[] files = asset.files ?? Array.Empty<DownloadEntry>();
+                if (files.Length == 0) return false;
+
+                foreach (DownloadEntry file in files)
+                {
+                    if (file == null) return false;
+                    if (file.extract)
+                    {
+                        bool hasPayload = false;
+                        if (Directory.Exists(targetDirectory))
+                        {
+                            foreach (string installedFile in Directory.EnumerateFiles(targetDirectory, "*", SearchOption.AllDirectories))
+                            {
+                                if (!string.Equals(Path.GetFileName(installedFile), ".open-asset.json", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    hasPayload = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!hasPayload) return false;
+                        continue;
+                    }
+
+                    string destination = SafeChildPath(targetDirectory, file.path, false);
+                    if (!VerifyExisting(destination, file)) return false;
+                }
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Open asset verification failed ({asset.provider}/{asset.id}): {exception.Message}");
+                return false;
+            }
         }
 
         private static bool TryInstallFile(
@@ -232,38 +281,45 @@ namespace NeonRift.Editor
             string temporary = destination + ".download";
             if (File.Exists(temporary)) File.Delete(temporary);
 
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
-            using HttpResponseMessage response = client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead)
-                .GetAwaiter()
-                .GetResult();
-            response.EnsureSuccessStatusCode();
-            long? contentLength = response.Content.Headers.ContentLength;
-            if (contentLength.HasValue && contentLength.Value > maximumBytes)
+            try
             {
-                throw new InvalidDataException($"Remote file is {contentLength.Value} bytes; limit is {maximumBytes}.");
-            }
-
-            using Stream source = response.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
-            using (var destinationStream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            {
-                var buffer = new byte[81_920];
-                long total = 0;
-                while (true)
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
+                using HttpResponseMessage response = client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead)
+                    .GetAwaiter()
+                    .GetResult();
+                response.EnsureSuccessStatusCode();
+                long? contentLength = response.Content.Headers.ContentLength;
+                if (contentLength.HasValue && contentLength.Value > maximumBytes)
                 {
-                    int read = source.Read(buffer, 0, buffer.Length);
-                    if (read <= 0) break;
-                    total += read;
-                    if (total > maximumBytes)
-                    {
-                        throw new InvalidDataException($"Download exceeded limit of {maximumBytes} bytes.");
-                    }
-                    destinationStream.Write(buffer, 0, read);
+                    throw new InvalidDataException($"Remote file is {contentLength.Value} bytes; limit is {maximumBytes}.");
                 }
-            }
 
-            if (File.Exists(destination)) File.Delete(destination);
-            File.Move(temporary, destination);
+                using Stream source = response.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+                using (var destinationStream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    var buffer = new byte[81_920];
+                    long total = 0;
+                    while (true)
+                    {
+                        int read = source.Read(buffer, 0, buffer.Length);
+                        if (read <= 0) break;
+                        total += read;
+                        if (total > maximumBytes)
+                        {
+                            throw new InvalidDataException($"Download exceeded limit of {maximumBytes} bytes.");
+                        }
+                        destinationStream.Write(buffer, 0, read);
+                    }
+                }
+
+                if (File.Exists(destination)) File.Delete(destination);
+                File.Move(temporary, destination);
+            }
+            finally
+            {
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
         }
 
         private static bool VerifyExisting(string path, DownloadEntry file)
@@ -346,8 +402,37 @@ namespace NeonRift.Editor
             string fullTarget = Path.GetFullPath(targetDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                                 + Path.DirectorySeparatorChar;
             using ZipArchive archive = ZipFile.OpenRead(archivePath);
+            if (archive.Entries.Count > MaximumArchiveEntries)
+            {
+                throw new InvalidDataException($"Archive contains {archive.Entries.Count} entries; limit is {MaximumArchiveEntries}.");
+            }
+
+            long totalExtractedBytes = 0;
             foreach (ZipArchiveEntry entry in archive.Entries)
             {
+                int unixType = (entry.ExternalAttributes >> 16) & 0xF000;
+                if (unixType == 0xA000)
+                {
+                    throw new InvalidDataException("Archive contains a symbolic link, which is not permitted.");
+                }
+                if (entry.Length > MaximumSingleExtractedBytes)
+                {
+                    throw new InvalidDataException($"Archive entry {entry.FullName} is too large ({entry.Length} bytes).");
+                }
+                if (entry.Length > 0 && entry.CompressedLength == 0)
+                {
+                    throw new InvalidDataException($"Archive entry {entry.FullName} has an invalid compression size.");
+                }
+                if (entry.CompressedLength > 0 && entry.Length / (double)entry.CompressedLength > MaximumCompressionRatio)
+                {
+                    throw new InvalidDataException($"Archive entry {entry.FullName} exceeds the compression-ratio limit.");
+                }
+                if (entry.Length > MaximumTotalExtractedBytes - totalExtractedBytes)
+                {
+                    throw new InvalidDataException($"Archive expands beyond {MaximumTotalExtractedBytes} bytes.");
+                }
+                totalExtractedBytes += entry.Length;
+
                 string destination = Path.GetFullPath(Path.Combine(targetDirectory, entry.FullName));
                 if (!destination.StartsWith(fullTarget, StringComparison.Ordinal))
                 {
