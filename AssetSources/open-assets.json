@@ -1,4 +1,21 @@
 {
   "schemaVersion": 1,
-  "assets": []
+  "assets": [
+    {
+      "provider": "polyhaven",
+      "id": "concrete_floor_01",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "jpg",
+      "target": "IntegrationTests/PolyHaven/concrete_floor_01"
+    },
+    {
+      "provider": "ambientcg",
+      "id": "PavingStones036",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "jpg",
+      "target": "IntegrationTests/AmbientCG/PavingStones036"
+    }
+  ]
 }
