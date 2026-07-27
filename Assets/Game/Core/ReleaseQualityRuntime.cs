@@ -158,8 +158,8 @@ namespace Riftbound
             var memory = SystemInfo.systemMemorySize;
             var cores = SystemInfo.processorCount;
             QualitySettings.shadows = memory >= 4000 && cores >= 6
-                ? ShadowQuality.HardOnly
-                : ShadowQuality.Disable;
+                ? UnityEngine.ShadowQuality.HardOnly
+                : UnityEngine.ShadowQuality.Disable;
             QualitySettings.shadowDistance = memory >= 4000 ? 18f : 0f;
             QualitySettings.antiAliasing = memory >= 6000 ? 4 : memory >= 3500 ? 2 : 0;
             pipeline = QualitySettings.renderPipeline as UniversalRenderPipelineAsset;
