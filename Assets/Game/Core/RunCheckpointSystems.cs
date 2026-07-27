@@ -124,6 +124,7 @@ namespace Riftbound
         private GameBootstrap game;
         private float nextSave;
         private bool encounterRestoreChecked;
+        private bool restoredEncounterActive;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void EnsureRuntime()
@@ -141,6 +142,20 @@ namespace Riftbound
             {
                 encounterRestoreChecked = true;
                 RestoreEncounterIfNeeded();
+            }
+
+            if (restoredEncounterActive && game != null && game.Player != null && game.Player.CombatEnabled)
+            {
+                var enemies = FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
+                var alive = 0;
+                for (var i = 0; i < enemies.Length; i++)
+                    if (enemies[i] != null && !enemies[i].IsDead)
+                        alive++;
+                if (alive == 0)
+                {
+                    restoredEncounterActive = false;
+                    game.SendMessage("CompleteCombatRoom", SendMessageOptions.DontRequireReceiver);
+                }
             }
 
             if (Time.unscaledTime < nextSave) return;
@@ -205,7 +220,7 @@ namespace Riftbound
                 if (alive.Contains(pair.Key) || pair.Value == null) continue;
                 Destroy(pair.Value.gameObject);
             }
-            game.SendMessage("PruneDestroyedEnemies", SendMessageOptions.DontRequireReceiver);
+            restoredEncounterActive = true;
         }
 
         private void OnApplicationPause(bool paused)
