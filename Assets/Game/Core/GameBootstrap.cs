@@ -12,6 +12,7 @@ namespace Riftbound
     {
         private readonly List<EnemyController> enemies = new List<EnemyController>();
         private readonly List<GameObject> roomObjects = new List<GameObject>();
+        private readonly RunInventory inventory = new RunInventory(10);
         private System.Random rng;
         private int[] roomPlan;
         private int roomIndex;
@@ -19,6 +20,7 @@ namespace Riftbound
         private int runGold;
         private PlayerController player;
         private TouchHud hud;
+        private InventoryView inventoryView;
         private SaveData saveData;
         private bool transitioning;
 
@@ -26,6 +28,7 @@ namespace Riftbound
         public int RoomIndex => roomIndex;
         public int Seed => seed;
         public int RunGold => runGold;
+        public RunInventory Inventory => inventory;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void EnsureBootstrap()
@@ -94,7 +97,8 @@ namespace Riftbound
             var playerObject = GameObject.CreatePrimitive(PrimitiveType.Capsule);
             playerObject.name = "Player";
             playerObject.transform.position = new Vector3(0f, 1f, -2f);
-            playerObject.GetComponent<Renderer>().material = WorldFactory.CreateMaterial(new Color(.12f, .82f, 1f));
+            playerObject.GetComponent<Renderer>().material =
+                WorldFactory.CreateMaterial(new Color(.12f, .82f, 1f));
             Destroy(playerObject.GetComponent<CapsuleCollider>());
             player = playerObject.AddComponent<PlayerController>();
             player.Initialize(this);
@@ -105,15 +109,26 @@ namespace Riftbound
 
         public void NewRun()
         {
+            if (inventoryView != null)
+            {
+                Destroy(inventoryView.gameObject);
+                inventoryView = null;
+            }
+
             seed = unchecked((int)DateTime.UtcNow.Ticks);
             roomPlan = GenerateValidRun(ref seed);
             rng = new System.Random(seed);
             roomIndex = 0;
             runGold = 25;
-            player.ResetForNewRun();
+            inventory.Reset();
+
+            var starter = LootGenerator.CreateStarterWeapon();
+            inventory.AddStarter(starter);
+            player.ResetForNewRun(starter);
+
             saveData.lastSeed = seed;
             SaveService.Save(saveData);
-            ReportGold();
+            ReportCurrencies();
             ReportEquipment(player.CurrentWeapon, player.CurrentArmor);
             LoadCurrentRoom();
         }
@@ -147,21 +162,30 @@ namespace Riftbound
                 case RoomKind.Boss:
                     player.SetCombatEnabled(true);
                     SpawnWave(room);
-                    hud.ShowMessage(room.kind == RoomKind.Boss ? "BOSSRAUM" :
-                        room.kind == RoomKind.Elite ? "ELITE-RAUM" : "RAUM VERSIEGELT", 1.5f);
+                    hud.ShowMessage(
+                        room.kind == RoomKind.Boss ? "BOSSRAUM" :
+                        room.kind == RoomKind.Elite ? "ELITE-RAUM" :
+                        "RAUM VERSIEGELT",
+                        1.5f);
                     break;
+
                 case RoomKind.Treasure:
                     player.SetCombatEnabled(false);
-                    hud.ShowTreasure(ShopGenerator.GenerateTreasure(seed, roomIndex), ChooseTreasure);
+                    hud.ShowTreasure(
+                        ShopGenerator.GenerateTreasure(seed, roomIndex),
+                        ChooseTreasure);
                     break;
+
                 case RoomKind.Merchant:
                     player.SetCombatEnabled(false);
                     hud.ShowMerchant(
                         ShopGenerator.Generate(seed, roomIndex),
                         runGold,
                         TryBuyOffer,
+                        () => OpenInventory(AdvanceRoom),
                         AdvanceRoom);
                     break;
+
                 case RoomKind.Healing:
                     player.SetCombatEnabled(false);
                     var healed = player.Heal(player.MaxHealth * .35f);
@@ -170,6 +194,7 @@ namespace Riftbound
                         $"Du regenerierst {Mathf.CeilToInt(healed)} Leben.",
                         AdvanceRoom);
                     break;
+
                 default:
                     throw new ArgumentOutOfRangeException();
             }
@@ -234,7 +259,12 @@ namespace Riftbound
 
         private void CreateWall(Vector3 position, Vector3 scale)
         {
-            roomObjects.Add(WorldFactory.CreateCube("Wall", position, scale, new Color(.18f, .19f, .25f)));
+            roomObjects.Add(
+                WorldFactory.CreateCube(
+                    "Wall",
+                    position,
+                    scale,
+                    new Color(.18f, .19f, .25f)));
         }
 
         private void SpawnWave(RoomDefinition room)
@@ -251,7 +281,10 @@ namespace Riftbound
             for (var i = 0; i < count; i++)
             {
                 var angle = i * Mathf.PI * 2f / count;
-                var position = new Vector3(Mathf.Sin(angle) * 2.8f, 1f, 1.5f + Mathf.Cos(angle) * 1.8f);
+                var position = new Vector3(
+                    Mathf.Sin(angle) * 2.8f,
+                    1f,
+                    1.5f + Mathf.Cos(angle) * 1.8f);
                 var kind = room.kind == RoomKind.Elite && i == 0
                     ? EnemyKind.Elite
                     : i % 3 == 2 ? EnemyKind.Ranged : EnemyKind.Grunt;
@@ -261,7 +294,9 @@ namespace Riftbound
 
         private void SpawnEnemy(EnemyKind kind, Vector3 position)
         {
-            var primitive = kind == EnemyKind.Boss ? PrimitiveType.Cylinder : PrimitiveType.Capsule;
+            var primitive = kind == EnemyKind.Boss
+                ? PrimitiveType.Cylinder
+                : PrimitiveType.Capsule;
             var color = kind switch
             {
                 EnemyKind.Boss => new Color(.9f, .1f, .32f),
@@ -274,8 +309,14 @@ namespace Riftbound
                 ? new Vector3(1.5f, 1.4f, 1.5f)
                 : kind == EnemyKind.Elite ? Vector3.one * 1.25f : Vector3.one;
 
-            var go = WorldFactory.CreatePrimitive(kind.ToString(), primitive, position, scale, color);
+            var go = WorldFactory.CreatePrimitive(
+                kind.ToString(),
+                primitive,
+                position,
+                scale,
+                color);
             Destroy(go.GetComponent<Collider>());
+
             var enemy = go.AddComponent<EnemyController>();
             enemy.Initialize(this, kind, 1f + roomIndex * .12f);
             enemies.Add(enemy);
@@ -294,9 +335,10 @@ namespace Riftbound
 
             runGold += reward;
             saveData.lifetimeGold += reward;
-            ReportGold();
+            ReportCurrencies();
 
-            if (enemies.Count == 0 && !transitioning) CompleteCombatRoom();
+            if (enemies.Count == 0 && !transitioning)
+                CompleteCombatRoom();
         }
 
         private void CompleteCombatRoom()
@@ -310,8 +352,15 @@ namespace Riftbound
             if (room.kind == RoomKind.Boss)
             {
                 saveData.completedRuns++;
+                var earnedShards = MetaProgression.CompleteRun(saveData, runGold);
                 SaveService.Save(saveData);
-                hud.ShowRunComplete(saveData.completedRuns, runGold, NewRun);
+                ReportCurrencies();
+                hud.ShowRunComplete(
+                    saveData.completedRuns,
+                    runGold,
+                    earnedShards,
+                    saveData.metaShards,
+                    NewRun);
                 return;
             }
 
@@ -319,7 +368,7 @@ namespace Riftbound
             hud.ShowRewards(rewards, card =>
             {
                 player.ApplyCard(card);
-                AdvanceRoom();
+                OpenInventory(AdvanceRoom);
             });
         }
 
@@ -330,7 +379,8 @@ namespace Riftbound
             for (var i = 0; i < rewards.Length; i++)
             {
                 int cardIndex;
-                do cardIndex = rng.Next(GameCatalog.Cards.Length); while (!selected.Add(cardIndex));
+                do cardIndex = rng.Next(GameCatalog.Cards.Length);
+                while (!selected.Add(cardIndex));
                 rewards[i] = GameCatalog.Cards[cardIndex];
             }
 
@@ -339,28 +389,81 @@ namespace Riftbound
 
         private void ChooseTreasure(ShopOffer offer)
         {
-            ApplyOffer(offer);
-            AdvanceRoom();
+            AcquireItem(offer?.item);
+            OpenInventory(AdvanceRoom);
         }
 
         private bool TryBuyOffer(ShopOffer offer)
         {
-            if (offer == null || runGold < offer.price) return false;
+            if (offer?.item == null || runGold < offer.price) return false;
             runGold -= offer.price;
-            ApplyOffer(offer);
-            ReportGold();
+            AcquireItem(offer.item);
+            ReportCurrencies();
             return true;
         }
 
-        private void ApplyOffer(ShopOffer offer)
+        private void AcquireItem(ItemInstance item)
         {
-            if (offer.kind == ItemKind.Weapon)
-                player.EquipWeapon(GameCatalog.Weapons[offer.catalogIndex]);
-            else
-                player.EquipArmor(GameCatalog.Armors[offer.catalogIndex]);
+            if (item == null) return;
 
-            ReportEquipment(player.CurrentWeapon, player.CurrentArmor);
-            hud.ShowMessage($"AUSGERÜSTET: {offer.title}", 1.4f);
+            var result = inventory.TryAdd(item);
+            if (result == InventoryAddResult.Added)
+            {
+                MetaProgression.RecordDiscovery(saveData, item);
+                SaveService.Save(saveData);
+                hud.ShowMessage($"GEFUNDEN: {ItemText.PlainTitle(item)}", 1.4f);
+            }
+            else
+            {
+                runGold += item.salvageValue;
+                var reason = result == InventoryAddResult.Filtered
+                    ? "LOOTFILTER"
+                    : "INVENTAR VOLL";
+                hud.ShowMessage(
+                    $"{reason}: automatisch zerlegt (+{item.salvageValue} Gold)",
+                    1.8f);
+            }
+
+            ReportCurrencies();
+        }
+
+        public void OpenInventoryFromHud()
+        {
+            if (player == null || player.CombatEnabled || transitioning)
+            {
+                hud?.ShowMessage("INVENTAR NUR ZWISCHEN KÄMPFEN", 1.2f);
+                return;
+            }
+
+            OpenInventory(null);
+        }
+
+        private void OpenInventory(Action closeAction)
+        {
+            if (inventoryView != null) return;
+
+            inventoryView = InventoryView.Show(
+                inventory,
+                player,
+                SalvageItem,
+                inventory.CycleFilter,
+                () =>
+                {
+                    inventoryView = null;
+                    closeAction?.Invoke();
+                });
+        }
+
+        private int SalvageItem(ItemInstance item)
+        {
+            if (item == null || item.locked || player.IsEquipped(item.instanceId))
+                return 0;
+            if (!inventory.Remove(item.instanceId))
+                return 0;
+
+            runGold += item.salvageValue;
+            ReportCurrencies();
+            return item.salvageValue;
         }
 
         private void AdvanceRoom()
@@ -374,12 +477,32 @@ namespace Riftbound
         public void PlayerDied()
         {
             player.SetCombatEnabled(false);
-            hud.ShowGameOver(roomIndex + 1, seed, runGold, NewRun);
+            var earnedShards = MetaProgression.RecordDefeat(saveData, roomIndex + 1);
+            SaveService.Save(saveData);
+            ReportCurrencies();
+            hud.ShowGameOver(
+                roomIndex + 1,
+                seed,
+                runGold,
+                earnedShards,
+                saveData.metaShards,
+                NewRun);
         }
 
-        public void ReportHealth(float current, float max) => hud?.SetHealth(current, max);
-        public void ReportGold() => hud?.SetGold(runGold);
-        public void ReportEquipment(string weapon, string armor) => hud?.SetEquipment(weapon, armor);
+        public void ReportHealth(float current, float max)
+        {
+            hud?.SetHealth(current, max);
+        }
+
+        public void ReportCurrencies()
+        {
+            hud?.SetCurrencies(runGold, saveData?.metaShards ?? 0);
+        }
+
+        public void ReportEquipment(string weapon, string armor)
+        {
+            hud?.SetEquipment(weapon, armor);
+        }
 
         private void ClearRoom()
         {
@@ -401,7 +524,11 @@ namespace Riftbound
         private static readonly Dictionary<Color, Material> UnlitMaterials =
             new Dictionary<Color, Material>();
 
-        public static GameObject CreateCube(string name, Vector3 position, Vector3 scale, Color color)
+        public static GameObject CreateCube(
+            string name,
+            Vector3 position,
+            Vector3 scale,
+            Color color)
         {
             return CreatePrimitive(name, PrimitiveType.Cube, position, scale, color);
         }
