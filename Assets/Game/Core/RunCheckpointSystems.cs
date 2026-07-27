@@ -23,6 +23,23 @@ namespace Riftbound
         public List<CoopEnemySnapshot> enemies = new List<CoopEnemySnapshot>();
     }
 
+    public static class RunCheckpointPolicy
+    {
+        public static bool ShouldSave(RoomKind kind, bool combatEnabled, bool inventoryOpen)
+        {
+            return kind switch
+            {
+                RoomKind.Combat => combatEnabled,
+                RoomKind.Elite => combatEnabled,
+                RoomKind.Boss => combatEnabled,
+                RoomKind.Treasure => !inventoryOpen,
+                RoomKind.Merchant => !inventoryOpen,
+                RoomKind.Healing => false,
+                _ => false
+            };
+        }
+    }
+
     public static class RunCheckpointService
     {
         public const int CurrentVersion = 2;
@@ -170,18 +187,9 @@ namespace Riftbound
             if (game == null) game = FindFirstObjectByType<GameBootstrap>();
             if (game == null || game.Player == null) return;
             var currentRoom = GameCatalog.GetRoom(RunPlanner.Generate(game.Seed)[game.RoomIndex]);
-            var combatRoom = currentRoom.kind == RoomKind.Combat ||
-                             currentRoom.kind == RoomKind.Elite ||
-                             currentRoom.kind == RoomKind.Boss;
-            if (combatRoom && !game.Player.CombatEnabled)
+            var inventoryOpen = FindFirstObjectByType<InventoryView>() != null;
+            if (!RunCheckpointPolicy.ShouldSave(currentRoom.kind, game.Player.CombatEnabled, inventoryOpen))
                 return;
-            if (!combatRoom)
-            {
-                var resumableChoice = currentRoom.kind == RoomKind.Treasure ||
-                                      currentRoom.kind == RoomKind.Merchant;
-                if (!resumableChoice || FindFirstObjectByType<InventoryView>() != null)
-                    return;
-            }
 
             var checkpoint = game.CaptureCheckpoint();
             if (checkpoint == null) return;
