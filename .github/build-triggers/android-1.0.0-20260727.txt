@@ -1,0 +1,2 @@
+Riftbound Android 1.0.0 release build trigger
+Triggered on 2026-07-27 for Unity EditMode tests and Android APK build.
