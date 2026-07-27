@@ -153,11 +153,15 @@ namespace Riftbound
             if (game == null) game = FindFirstObjectByType<GameBootstrap>();
             var checkpoint = game?.CaptureCheckpoint();
             if (checkpoint == null) return;
-            if (!CoopRuntimeState.Connected || CoopRuntimeState.Role != CoopRole.Client)
+            checkpoint.enemies.Clear();
+            var enemies = FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
+            for (var i = 0; i < enemies.Length; i++)
             {
-                var snapshots = CoopCombatWorld.CaptureEnemySnapshots(game.RoomIndex);
-                checkpoint.enemies = new List<CoopEnemySnapshot>(snapshots);
+                var enemy = enemies[i];
+                if (enemy == null || enemy.IsDead || enemy.NetworkId <= 0) continue;
+                checkpoint.enemies.Add(enemy.CreateSnapshot());
             }
+            checkpoint.enemies.Sort((first, second) => first.networkId.CompareTo(second.networkId));
             RunCheckpointService.Save(checkpoint);
         }
 
@@ -184,14 +188,24 @@ namespace Riftbound
                 if (local[i] != null && local[i].NetworkId > 0 && !byId.ContainsKey(local[i].NetworkId))
                     byId.Add(local[i].NetworkId, local[i]);
 
+            var alive = new HashSet<int>();
             for (var i = 0; i < checkpoint.enemies.Count; i++)
             {
                 var snapshot = checkpoint.enemies[i];
-                if (snapshot == null || !byId.TryGetValue(snapshot.networkId, out var enemy)) continue;
+                if (snapshot == null || snapshot.networkId <= 0 || !alive.Add(snapshot.networkId)) continue;
+                if (!byId.TryGetValue(snapshot.networkId, out var enemy)) continue;
                 enemy.transform.position = new Vector3(snapshot.x, snapshot.y, snapshot.z);
+                enemy.transform.rotation = Quaternion.Euler(0f, snapshot.yaw, 0f);
                 var damage = Mathf.Max(0f, enemy.MaxHealth - snapshot.health);
                 if (damage > 0f && snapshot.health > 0f) enemy.TakeDamage(damage);
             }
+
+            foreach (var pair in byId)
+            {
+                if (alive.Contains(pair.Key) || pair.Value == null) continue;
+                Destroy(pair.Value.gameObject);
+            }
+            game.SendMessage("PruneDestroyedEnemies", SendMessageOptions.DontRequireReceiver);
         }
 
         private void OnApplicationPause(bool paused)
