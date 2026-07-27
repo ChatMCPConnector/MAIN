@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace NeonRift
@@ -10,6 +11,7 @@ namespace NeonRift
     public sealed class CommunityModel : MonoBehaviour
     {
         private GameObject _visual;
+        private readonly List<Material> _ownedMaterials = new();
 
         public void Configure(string resourcePath, Color primary, Color accent, float scale = 1f)
         {
@@ -51,7 +53,7 @@ namespace NeonRift
             }
         }
 
-        private static GameObject CreateFallback(Color primary, Color accent)
+        private GameObject CreateFallback(Color primary, Color accent)
         {
             var root = new GameObject("Stylized fallback fighter");
             var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
@@ -59,7 +61,7 @@ namespace NeonRift
             body.transform.SetParent(root.transform, false);
             body.transform.localPosition = new Vector3(0f, 0.95f, 0f);
             body.transform.localScale = new Vector3(0.72f, 0.9f, 0.72f);
-            body.GetComponent<Renderer>().sharedMaterial = MaterialFactory.CreateLit("Fallback Body", primary, 0.15f, 0.5f);
+            body.GetComponent<Renderer>().sharedMaterial = Own(MaterialFactory.CreateLit("Fallback Body", primary, 0.15f, 0.5f));
             Object.Destroy(body.GetComponent<Collider>());
 
             var head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -67,7 +69,7 @@ namespace NeonRift
             head.transform.SetParent(root.transform, false);
             head.transform.localPosition = new Vector3(0f, 1.95f, 0f);
             head.transform.localScale = Vector3.one * 0.58f;
-            head.GetComponent<Renderer>().sharedMaterial = MaterialFactory.CreateLit("Fallback Head", accent, 0.05f, 0.55f);
+            head.GetComponent<Renderer>().sharedMaterial = Own(MaterialFactory.CreateLit("Fallback Head", accent, 0.05f, 0.55f));
             Object.Destroy(head.GetComponent<Collider>());
 
             var weapon = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -75,9 +77,24 @@ namespace NeonRift
             weapon.transform.SetParent(root.transform, false);
             weapon.transform.localPosition = new Vector3(0.58f, 1.05f, 0f);
             weapon.transform.localScale = new Vector3(0.09f, 1.25f, 0.09f);
-            weapon.GetComponent<Renderer>().sharedMaterial = MaterialFactory.CreateLit("Fallback Weapon", accent, 0.35f, 0.9f, accent * 2.6f);
+            weapon.GetComponent<Renderer>().sharedMaterial = Own(MaterialFactory.CreateLit("Fallback Weapon", accent, 0.35f, 0.9f, accent * 2.6f));
             Object.Destroy(weapon.GetComponent<Collider>());
             return root;
+        }
+
+        private Material Own(Material material)
+        {
+            _ownedMaterials.Add(material);
+            return material;
+        }
+
+        private void OnDestroy()
+        {
+            foreach (Material material in _ownedMaterials)
+            {
+                if (material != null) Destroy(material);
+            }
+            _ownedMaterials.Clear();
         }
     }
 }
