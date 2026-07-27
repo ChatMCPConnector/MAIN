@@ -1,0 +1,89 @@
+name: Riftbound Android PR Build
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: riftbound-pr-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Unity release inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f ProjectSettings/ProjectVersion.txt
+          test -f Packages/manifest.json
+          test -f Assets/Game/Editor/BuildAutomation.cs
+          test -f Assets/Plugins/Android/AndroidManifest.xml
+          grep -q '6000.3.20f1' ProjectSettings/ProjectVersion.txt
+          grep -q 'bundleVersion = "1.0.0"' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'bundleVersionCode = 100' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'BuildOptions.None' Assets/Game/Editor/BuildAutomation.cs
+          ! grep -q 'BuildOptions.Development' Assets/Game/Editor/BuildAutomation.cs
+
+  build-android:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+      UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+      UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h
+
+      - name: Restore Unity Library cache
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-${{ runner.os }}-6000.3.20f1-${{ hashFiles('Packages/**', 'ProjectSettings/**', 'Assets/**/*.cs', 'Assets/Plugins/Android/**') }}
+          restore-keys: |
+            Library-${{ runner.os }}-6000.3.20f1-
+
+      - name: Run all EditMode tests
+        uses: game-ci/unity-test-runner@v4
+        id: tests
+        with:
+          projectPath: .
+          unityVersion: 6000.3.20f1
+          testMode: EditMode
+          artifactsPath: test-artifacts
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Android release APK
+        uses: game-ci/unity-builder@v4
+        with:
+          projectPath: .
+          unityVersion: 6000.3.20f1
+          targetPlatform: Android
+          buildMethod: Riftbound.Editor.BuildAutomation.BuildAndroid
+          customParameters: -customBuildPath Builds/Android/Riftbound.apk
+
+      - name: Upload APK and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: riftbound-android-1.0.0-pr-${{ github.event.pull_request.number }}
+          path: |
+            Builds/Android/Riftbound.apk
+            test-artifacts
+          if-no-files-found: warn
+          retention-days: 30
