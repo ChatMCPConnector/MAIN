@@ -175,6 +175,13 @@ namespace Riftbound
                              currentRoom.kind == RoomKind.Boss;
             if (combatRoom && !game.Player.CombatEnabled)
                 return;
+            if (!combatRoom)
+            {
+                var resumableChoice = currentRoom.kind == RoomKind.Treasure ||
+                                      currentRoom.kind == RoomKind.Merchant;
+                if (!resumableChoice || FindFirstObjectByType<InventoryView>() != null)
+                    return;
+            }
 
             var checkpoint = game.CaptureCheckpoint();
             if (checkpoint == null) return;
