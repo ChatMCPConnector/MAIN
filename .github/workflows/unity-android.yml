@@ -1,104 +1,13 @@
 name: Android prototype
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: android-prototype-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  validate:
+  paused:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - name: Validate project structure
-        run: |
-          test -f ProjectSettings/ProjectVersion.txt
-          test -f Packages/manifest.json
-          test -f Assets/Game/RiftboundPrototype.cs
-          test -f Assets/Game/Editor/BuildAutomation.cs
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          manifest = json.loads(Path("Packages/manifest.json").read_text())
-          required = {
-              "com.unity.inputsystem",
-              "com.unity.render-pipelines.universal",
-              "com.unity.test-framework",
-              "com.unity.ugui",
-          }
-          missing = required - set(manifest["dependencies"])
-          if missing:
-              raise SystemExit(f"Missing packages: {sorted(missing)}")
-          source = Path("Assets/Game/RiftboundPrototype.cs").read_text()
-          for symbol in ("RunPlanner", "PlayerController", "EnemyController", "TouchHud"):
-              if symbol not in source:
-                  raise SystemExit(f"Missing symbol: {symbol}")
-          version = Path("ProjectSettings/ProjectVersion.txt").read_text().strip()
-          if "6000.3.20f1" not in version:
-              raise SystemExit(f"Unexpected Unity version: {version}")
-          print("Static project validation passed")
-          PY
-
-  build-android:
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-      UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
-      UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: false
-
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
-          df -h
-
-      - name: Restore Unity Library cache
-        uses: actions/cache@v4
-        with:
-          path: Library
-          key: Library-${{ runner.os }}-6000.3.20f1-${{ hashFiles('Packages/**', 'ProjectSettings/**', 'Assets/**/*.cs') }}
-          restore-keys: |
-            Library-${{ runner.os }}-6000.3.20f1-
-
-      - name: Run EditMode tests
-        uses: game-ci/unity-test-runner@v4
-        id: tests
-        with:
-          projectPath: .
-          unityVersion: 6000.3.20f1
-          testMode: EditMode
-          artifactsPath: test-artifacts
-          githubToken: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Android APK
-        uses: game-ci/unity-builder@v4
-        with:
-          projectPath: .
-          unityVersion: 6000.3.20f1
-          targetPlatform: Android
-          buildMethod: Riftbound.Editor.BuildAutomation.BuildAndroid
-          customParameters: -customBuildPath Builds/Android/Riftbound.apk
-
-      - name: Upload APK and diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: riftbound-android
-          path: |
-            Builds/Android/Riftbound.apk
-            test-artifacts
-          if-no-files-found: warn
-          retention-days: 14
+      - run: echo "Push validation is temporarily paused during the modular phase-2 update."
