@@ -10,18 +10,18 @@ permissions:
 
 jobs:
   extract:
-    if: github.head_ref == 'build/riftbound-1.0.0'
+    if: github.head_ref == 'fix/android-release-build'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Download previous Android builder job log
+      - name: Download current Android builder job log
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh api --method GET \
             -H 'Accept: application/vnd.github+json' \
-            /repos/${GITHUB_REPOSITORY}/actions/jobs/90112967826/logs \
+            /repos/${GITHUB_REPOSITORY}/actions/jobs/90125887031/logs \
             > unity-builder-job.log
 
       - name: Extract actionable error context
