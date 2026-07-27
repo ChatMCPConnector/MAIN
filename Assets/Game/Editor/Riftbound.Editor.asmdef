@@ -2,7 +2,8 @@
   "name": "Riftbound.Editor",
   "rootNamespace": "Riftbound.Editor",
   "references": [
-    "Riftbound.Game"
+    "Riftbound.Game",
+    "Unity.RenderPipelines.Universal.Runtime"
   ],
   "includePlatforms": [
     "Editor"
