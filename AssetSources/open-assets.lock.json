@@ -1,5 +1,143 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-27T12:37:17Z",
-  "assets": []
+  "generatedAtUtc": "2026-07-27T13:19:42Z",
+  "assets": [
+    {
+      "provider": "polyhaven",
+      "id": "metal_plate",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "png",
+      "target": "polyhaven/materials/metal_plate",
+      "maxDownloadBytes": 52428800,
+      "source": "https://polyhaven.com/a/metal_plate",
+      "license": "CC0-1.0",
+      "credit": "Powered by Poly Haven",
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/metal_plate/metal_plate_diff_1k.png",
+          "path": "metal_plate_diff.png",
+          "extract": false,
+          "size": 5362786,
+          "md5": "a507a35fb1b0cfb8fea92682fb36e3a1"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/metal_plate/metal_plate_nor_gl_1k.png",
+          "path": "metal_plate_normal.png",
+          "extract": false,
+          "size": 5359071,
+          "md5": "970b1bfeb59ec31a165341e05757dfc3"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/metal_plate/metal_plate_rough_1k.png",
+          "path": "metal_plate_rough.png",
+          "extract": false,
+          "size": 1913334,
+          "md5": "cd6e9d5693a7efdac715e15072dde2a9"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/metal_plate/metal_plate_ao_1k.png",
+          "path": "metal_plate_ao.png",
+          "extract": false,
+          "size": 1817601,
+          "md5": "56f4440908f2878a1101aa05b26fd222"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/metal_plate/metal_plate_disp_1k.png",
+          "path": "metal_plate_metal.png",
+          "extract": false,
+          "size": 1700688,
+          "md5": "ec8c2ea0e05928cbf1239f920a5980ad"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/metal_plate/metal_plate_arm_1k.png",
+          "path": "metal_plate_arm.png",
+          "extract": false,
+          "size": 5698757,
+          "md5": "e89e239172608a8399fcdaead1731c79"
+        }
+      ]
+    },
+    {
+      "provider": "polyhaven",
+      "id": "industrial_workshop_foundry",
+      "kind": "hdri",
+      "resolution": "1k",
+      "format": "hdr",
+      "target": "polyhaven/lighting/industrial_workshop_foundry",
+      "maxDownloadBytes": 26214400,
+      "source": "https://polyhaven.com/a/industrial_workshop_foundry",
+      "license": "CC0-1.0",
+      "credit": "Powered by Poly Haven",
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/industrial_workshop_foundry_1k.hdr",
+          "path": "industrial_workshop_foundry_1k.hdr",
+          "extract": false,
+          "size": 1701301,
+          "md5": "d65e13e0b4aff7fd0a2fa32a7c0fd4e3"
+        }
+      ]
+    },
+    {
+      "provider": "ambientcg",
+      "id": "MetalPlates015A",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "jpg",
+      "target": "ambientcg/materials/MetalPlates015A",
+      "maxDownloadBytes": 20971520,
+      "source": "https://ambientcg.com/a/MetalPlates015A",
+      "license": "CC0-1.0",
+      "credit": "ambientCG",
+      "files": [
+        {
+          "url": "https://ambientcg.com/get?file=MetalPlates015A_1K-JPG.zip",
+          "path": "get",
+          "extract": true,
+          "size": 5282007
+        }
+      ]
+    },
+    {
+      "provider": "ambientcg",
+      "id": "Concrete023",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "jpg",
+      "target": "ambientcg/materials/Concrete023",
+      "maxDownloadBytes": 20971520,
+      "source": "https://ambientcg.com/a/Concrete023",
+      "license": "CC0-1.0",
+      "credit": "ambientCG",
+      "files": [
+        {
+          "url": "https://ambientcg.com/get?file=Concrete023_1K-JPG.zip",
+          "path": "get",
+          "extract": true,
+          "size": 7944070
+        }
+      ]
+    },
+    {
+      "provider": "ambientcg",
+      "id": "Facade019C",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "jpg",
+      "target": "ambientcg/materials/Facade019C",
+      "maxDownloadBytes": 20971520,
+      "source": "https://ambientcg.com/a/Facade019C",
+      "license": "CC0-1.0",
+      "credit": "ambientCG",
+      "files": [
+        {
+          "url": "https://ambientcg.com/get?file=Facade019C_1K-JPG.zip",
+          "path": "get",
+          "extract": true,
+          "size": 7483747
+        }
+      ]
+    }
+  ]
 }
