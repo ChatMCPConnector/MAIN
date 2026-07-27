@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
       - name: Validate Python tools, manifests and project structure
@@ -80,8 +80,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
-      - uses: game-ci/unity-test-runner@v4
+      - uses: actions/checkout@v6
+      # GameCI has merged its Node 24 runtime fix, but has not tagged a new stable major yet.
+      # Pin the immutable upstream commit instead of following the mutable main branch.
+      - uses: game-ci/unity-test-runner@08fd329f00a18efa297140b14ac28ebce742759e
         id: tests
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -93,7 +95,7 @@ jobs:
           testMode: editmode
           artifactsPath: unity-test-artifacts
           githubToken: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: NeonRift-Unity-Test-Results
@@ -108,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: game-ci/unity-builder@v5
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -129,7 +131,7 @@ jobs:
           test -d build/StandaloneWindows64/NeonRift/NeonRift_Data
           find build/StandaloneWindows64/NeonRift -maxdepth 2 -type f -printf '%P\t%s bytes\n' | sort > build/windows-manifest.txt
           cat build/windows-manifest.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: NeonRift-Unity-Windows-Unverified
           path: |
@@ -145,7 +147,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: NeonRift-Unity-Windows-Unverified
           path: artifact
@@ -188,7 +190,7 @@ jobs:
           }
           Get-Content (Join-Path $gallery "capture.log")
           $images | Sort-Object Name | Select-Object Name,Length | Format-Table
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: NeonRift-Unity-Visual-Gallery
@@ -203,7 +205,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: NeonRift-Unity-Windows-Unverified
           path: artifact
@@ -245,7 +247,7 @@ jobs:
           }
           $lines | Set-Content (Join-Path artifact "SHA256SUMS.txt")
           Get-Content (Join-Path artifact "SHA256SUMS.txt")
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: NeonRift-Unity-Windows-Portable
           path: |
