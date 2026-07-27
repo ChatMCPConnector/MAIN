@@ -1,8 +1,4 @@
 {
   "schemaVersion": 1,
-  "defaults": {
-    "resolution": "2k",
-    "maxDownloadBytes": 104857600
-  },
   "assets": []
 }
