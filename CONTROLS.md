@@ -35,4 +35,5 @@ If a newly selected key is already assigned to another action for the same playe
 
 - Confirm: Enter or Space
 - Back / pause: Escape
+- Return to the main menu while paused: Backspace or the on-screen button
 - Toggle fullscreen: F11
