@@ -25,6 +25,7 @@ namespace NeonRift
         private Transform _visualRoot;
         private Vector3 _velocity;
         private Vector3 _knockback;
+        private Vector3 _facingDirection;
         private float _attackCooldown;
         private float _invulnerability;
         private float _dashCooldown;
@@ -42,6 +43,7 @@ namespace NeonRift
             Health = spec.MaxHealth;
             Energy = role == FighterRole.TrainingDummy ? 100f : 45f;
             _accent = spec.Accent;
+            _facingDirection = teamId == 0 ? Vector3.right : Vector3.left;
 
             name = $"{role} - {spec.Name}";
             _controller = GetComponent<CharacterController>();
@@ -53,7 +55,7 @@ namespace NeonRift
 
             _visualRoot = new GameObject("Character Visual").transform;
             _visualRoot.SetParent(transform, false);
-            _visualRoot.localRotation = Quaternion.Euler(0f, teamId == 0 ? 90f : -90f, 0f);
+            _visualRoot.localRotation = Quaternion.LookRotation(_facingDirection, Vector3.up);
             _baseVisualY = 0f;
             var model = _visualRoot.gameObject.AddComponent<CommunityModel>();
             string file = string.IsNullOrWhiteSpace(modelFile) ? spec.ModelFile : modelFile;
@@ -137,6 +139,8 @@ namespace NeonRift
             _velocity.y += Physics.gravity.y * delta * 1.65f;
             Vector3 planar = new Vector3(move.x, 0f, move.y);
             if (planar.sqrMagnitude > 1f) planar.Normalize();
+            if (Role == FighterRole.Player) UpdateFacing(planar);
+
             float speed = Spec.Speed * (Role == FighterRole.Boss ? 0.86f : 1f);
             Vector3 motion = planar * speed + _knockback;
             motion.y = _velocity.y;
@@ -146,10 +150,7 @@ namespace NeonRift
             ClampToArena();
             AnimateVisual(planar, delta);
 
-            if (planar.x > 0.05f) _visualRoot.localRotation = Quaternion.Euler(0f, 90f, 0f);
-            if (planar.x < -0.05f) _visualRoot.localRotation = Quaternion.Euler(0f, -90f, 0f);
-
-            if (_attackCooldown <= 0f)
+            if (_attackCooldown <= 0f && !IsGuarding)
             {
                 if (special && Energy >= 35f) PerformAttack(false, true);
                 else if (heavy) PerformAttack(true, false);
@@ -205,6 +206,7 @@ namespace NeonRift
             if (target == null) return;
 
             Vector3 delta = target.transform.position - transform.position;
+            UpdateFacing(delta);
             float distance = new Vector2(delta.x, delta.z).magnitude;
             float desiredRange = Role == FighterRole.Boss ? 2.1f : 1.35f;
             if (distance > desiredRange)
@@ -238,22 +240,25 @@ namespace NeonRift
             if (special) SynthAudio.Instance?.Special();
             else SynthAudio.Instance?.Attack(heavy);
 
+            bool miraSpecial = special && Spec.Name.Contains("Mira", StringComparison.OrdinalIgnoreCase);
             if (special)
             {
                 Energy -= 35f;
-                if (Spec.Name.Contains("Mira", StringComparison.OrdinalIgnoreCase))
+                if (miraSpecial)
                 {
                     Health = Mathf.Min(Spec.MaxHealth, Health + 16f);
                     CombatEffects.Instance?.Shockwave(transform.position, Spec.Accent, 3.8f);
                 }
                 else
                 {
-                    EnergyProjectile.Spawn(this, damage, Spec.Accent, _visualRoot.forward, 10.5f);
+                    EnergyProjectile.Spawn(this, damage, Spec.Accent, _facingDirection, 10.5f);
                     CombatEffects.Instance?.Shockwave(transform.position, Spec.Accent, 2.6f);
+                    NeonRiftGame.Instance.CameraRig?.AddShake(0.12f);
+                    return;
                 }
             }
 
-            Vector3 center = transform.position + Vector3.up * 1.0f + _visualRoot.forward * (range * 0.36f);
+            Vector3 center = transform.position + Vector3.up * 1.0f + _facingDirection * (range * 0.36f);
             Collider[] hits = Physics.OverlapSphere(center, range * 0.62f, ~0, QueryTriggerInteraction.Collide);
             var processed = new HashSet<FighterController>();
             foreach (Collider hit in hits)
@@ -301,6 +306,15 @@ namespace NeonRift
             Energy = 100f;
             transform.rotation = Quaternion.identity;
             if (_controller != null) _controller.enabled = true;
+        }
+
+        private void UpdateFacing(Vector3 direction)
+        {
+            Vector3 planar = new Vector3(direction.x, 0f, direction.z);
+            if (planar.sqrMagnitude <= 0.01f || _visualRoot == null) return;
+
+            _facingDirection = planar.normalized;
+            _visualRoot.localRotation = Quaternion.LookRotation(_facingDirection, Vector3.up);
         }
 
         private void ClampToArena()
