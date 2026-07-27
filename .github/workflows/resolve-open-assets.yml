@@ -18,9 +18,9 @@ concurrency:
 
 jobs:
   resolve:
-    name: Apply hardening and resolve open assets
+    name: Validate and resolve Poly Haven and ambientCG requests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - name: Check out requested branch
@@ -33,28 +33,32 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Apply targeted repository hardening
-        run: python tools/apply_repository_hardening.py
-
-      - name: Validate global providers and asset requests
-        run: python tools/asset_pipeline.py validate
+      - name: Validate Python tools and asset requests
+        run: |
+          python -m compileall -q tools
+          python tools/asset_pipeline.py validate
 
       - name: Resolve provider IDs to audited download metadata
         run: python tools/asset_pipeline.py resolve
 
+      - name: Validate resolved repository state
+        run: |
+          python tools/validate_project.py
+          git diff --check
+
       - name: Show resolved catalog
         run: cat AssetSources/open-assets.lock.json
 
-      - name: Commit hardened repository
+      - name: Commit updated lock file
         shell: bash
         run: |
-          if git diff --quiet; then
-            echo "The repository is already current."
+          if git diff --quiet -- AssetSources/open-assets.lock.json; then
+            echo "The lock file is already current."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Fix gameplay lifecycle, assets and CI verification"
+          git add AssetSources/open-assets.lock.json
+          git commit -m "Resolve configured CC0 asset downloads"
           git push
