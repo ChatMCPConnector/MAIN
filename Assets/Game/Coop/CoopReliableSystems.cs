@@ -245,7 +245,7 @@ namespace Riftbound
         private const float HeartbeatInterval = 1f;
         private const float Timeout = 4f;
         private const double ResendInterval = .22d;
-        private const int MaxAttempts = 60;
+        private const int MaxAttempts = 180;
         private const string TokenKey = "riftbound-coop-device-token";
 
         private readonly CoopReliableLedger ledger = new CoopReliableLedger();
