@@ -142,6 +142,8 @@ namespace Riftbound
             {
                 encounterRestoreChecked = true;
                 RestoreEncounterIfNeeded();
+                nextSave = Time.unscaledTime + SaveInterval;
+                return;
             }
 
             if (restoredEncounterActive && game != null && game.Player != null && game.Player.CombatEnabled)
@@ -211,8 +213,12 @@ namespace Riftbound
                 if (!byId.TryGetValue(snapshot.networkId, out var enemy)) continue;
                 enemy.transform.position = new Vector3(snapshot.x, snapshot.y, snapshot.z);
                 enemy.transform.rotation = Quaternion.Euler(0f, snapshot.yaw, 0f);
-                var damage = Mathf.Max(0f, enemy.MaxHealth - snapshot.health);
-                if (damage > 0f && snapshot.health > 0f) enemy.TakeDamage(damage);
+                var ratio = snapshot.maxHealth <= 0f
+                    ? 1f
+                    : Mathf.Clamp01(snapshot.health / snapshot.maxHealth);
+                var restoredHealth = Mathf.Max(.1f, enemy.MaxHealth * ratio);
+                var damage = Mathf.Max(0f, enemy.MaxHealth - restoredHealth);
+                if (damage > 0f) enemy.TakeDamage(damage);
             }
 
             foreach (var pair in byId)
