@@ -10,12 +10,13 @@ permissions:
 
 env:
   UNITY_VERSION: 6000.3.17f1
+  UNITY_IMAGE: unityci/editor:ubuntu-6000.3.17f1-windows-mono-3
 
 jobs:
-  direct-license-import:
-    name: Test direct Unity Personal license import
+  direct-docker-license:
+    name: Run Unity Editor directly with Personal license
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 
@@ -40,30 +41,69 @@ jobs:
           print('DeveloperData present:', '<DeveloperData ' in text)
           PY
 
-      - name: Run Unity with direct manual license import
+      - name: Pull official UnityCI image
+        shell: bash
+        run: docker pull "$UNITY_IMAGE"
+
+      - name: Activate and build with Unity directly
         id: unity
         continue-on-error: true
-        uses: game-ci/unity-builder@v5
-        env:
-          UNITY_SERIAL: CI-DIRECT-ULF-BYPASS
-        with:
-          unityVersion: ${{ env.UNITY_VERSION }}
-          targetPlatform: StandaloneWindows64
-          projectPath: .
-          buildMethod: NeonRift.Editor.BuildAutomation.BuildWindows
-          buildsPath: diagnostic-build
-          buildName: NeonRiftDiagnostic
-          skipActivation: true
-          customParameters: >-
-            -manualLicenseFile /github/workspace/ci-license/Unity_lic.ulf
-            -logFile /github/workspace/ci-diagnostics/Editor.log
+        shell: bash
+        run: |
+          set +e
+          docker run --rm \
+            --workdir /github/workspace \
+            --volume "$GITHUB_WORKSPACE:/github/workspace" \
+            "$UNITY_IMAGE" \
+            bash -lc '
+              set +e
+              UNITY_BIN="$(command -v unity-editor 2>/dev/null || true)"
+              if [[ -z "$UNITY_BIN" && -n "${UNITY_PATH:-}" && -x "$UNITY_PATH/Editor/Unity" ]]; then
+                UNITY_BIN="$UNITY_PATH/Editor/Unity"
+              fi
+              if [[ -z "$UNITY_BIN" && -x /opt/unity/Editor/Unity ]]; then
+                UNITY_BIN=/opt/unity/Editor/Unity
+              fi
+              if [[ -z "$UNITY_BIN" ]]; then
+                UNITY_BIN="$(find /opt/unity -type f -path "*/Editor/Unity" -perm -111 2>/dev/null | head -n 1)"
+              fi
+              echo "unity_bin=${UNITY_BIN:-missing}" > /github/workspace/ci-diagnostics/container-probe.txt
+              echo "unity_path=${UNITY_PATH:-unset}" >> /github/workspace/ci-diagnostics/container-probe.txt
+              if [[ -z "$UNITY_BIN" ]]; then
+                echo "Unity executable not found" >> /github/workspace/ci-diagnostics/container-probe.txt
+                exit 90
+              fi
+
+              "$UNITY_BIN" \
+                -batchmode -nographics -quit \
+                -manualLicenseFile /github/workspace/ci-license/Unity_lic.ulf \
+                -logFile /github/workspace/ci-diagnostics/activation.log
+              activation_exit=$?
+              echo "$activation_exit" > /github/workspace/ci-diagnostics/activation-exit-code.txt
+
+              if [[ $activation_exit -ne 0 ]]; then
+                exit $activation_exit
+              fi
+
+              "$UNITY_BIN" \
+                -batchmode -nographics -quit \
+                -projectPath /github/workspace \
+                -executeMethod NeonRift.Editor.BuildAutomation.BuildWindows \
+                -logFile /github/workspace/ci-diagnostics/build.log
+              build_exit=$?
+              echo "$build_exit" > /github/workspace/ci-diagnostics/build-exit-code.txt
+              exit $build_exit
+            '
+          exit_code=$?
+          echo "docker_exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit $exit_code
 
       - name: Create sanitized diagnostic report
         if: always()
         shell: bash
         env:
           STEP_OUTCOME: ${{ steps.unity.outcome }}
-          ENGINE_EXIT_CODE: ${{ steps.unity.outputs.engineExitCode }}
+          DOCKER_EXIT_CODE: ${{ steps.unity.outputs.docker_exit_code }}
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         run: |
@@ -72,15 +112,17 @@ jobs:
           import re
           from pathlib import Path
 
-          output_dir = Path('ci-diagnostics')
-          output_dir.mkdir(exist_ok=True)
-          report = output_dir / 'direct-import-summary.txt'
+          root = Path('ci-diagnostics')
+          root.mkdir(exist_ok=True)
+          report = root / 'direct-docker-summary.txt'
           secrets = [os.environ.get('UNITY_EMAIL', ''), os.environ.get('UNITY_PASSWORD', '')]
           secrets = [value for value in secrets if value]
-          patterns = re.compile(
+          pattern = re.compile(
               r'error|exception|fail(?:ed|ure)?|licen[cs]e|activat|aborting|'
               r'exit code|not found|invalid|compiler|\bCS\d{4}\b|cannot|denied|'
-              r'unauthori[sz]ed|machine|binding|signature', re.IGNORECASE)
+              r'unauthori[sz]ed|machine|binding|signature|entitlement|token',
+              re.IGNORECASE,
+          )
 
           def redact(text: str) -> str:
               for value in secrets:
@@ -88,23 +130,25 @@ jobs:
               text = re.sub(r'(?i)(password\s*[=:]\s*)\S+', r'\1[REDACTED]', text)
               return text
 
-          editor_log = output_dir / 'Editor.log'
-          lines = editor_log.read_text(encoding='utf-8', errors='replace').splitlines() if editor_log.exists() else []
-          selected = set()
-          for index, line in enumerate(lines):
-              if patterns.search(line):
-                  selected.update(range(max(0, index - 4), min(len(lines), index + 5)))
-          selected.update(range(max(0, len(lines) - 180), len(lines)))
-
           sections = [
-              'Direct Unity Personal license import diagnostic',
+              'Direct Docker Unity Personal license diagnostic',
               f"step_outcome={os.environ.get('STEP_OUTCOME', '')}",
-              f"engine_exit_code={os.environ.get('ENGINE_EXIT_CODE', '')}",
-              f"editor_log_exists={editor_log.exists()}",
-              f"editor_log_lines={len(lines)}",
+              f"docker_exit_code={os.environ.get('DOCKER_EXIT_CODE', '')}",
           ]
-          if lines:
-              sections.extend(['', '===== sanitized Editor.log excerpts ====='])
+
+          for small in ['container-probe.txt', 'activation-exit-code.txt', 'build-exit-code.txt']:
+              path = root / small
+              if path.exists():
+                  sections.extend(['', f'===== {small} =====', redact(path.read_text(errors='replace'))])
+
+          for name in ['activation.log', 'build.log']:
+              path = root / name
+              lines = path.read_text(encoding='utf-8', errors='replace').splitlines() if path.exists() else []
+              sections.extend(['', f'===== {name} (exists={path.exists()}, lines={len(lines)}) ====='])
+              selected = set(range(max(0, len(lines) - 220), len(lines)))
+              for index, line in enumerate(lines):
+                  if pattern.search(line):
+                      selected.update(range(max(0, index - 5), min(len(lines), index + 6)))
               previous = -2
               for index in sorted(selected):
                   if index > previous + 1:
@@ -121,16 +165,20 @@ jobs:
         shell: bash
         run: rm -rf ci-license
 
-      - name: Upload sanitized direct-import diagnostics
+      - name: Upload sanitized direct Docker diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: NeonRift-Unity-Direct-License-Diagnostics
-          path: ci-diagnostics
-          if-no-files-found: error
+          name: NeonRift-Unity-Direct-Docker-Diagnostics
+          path: |
+            ci-diagnostics/direct-docker-summary.txt
+            ci-diagnostics/container-probe.txt
+            ci-diagnostics/activation-exit-code.txt
+            ci-diagnostics/build-exit-code.txt
+          if-no-files-found: warn
           retention-days: 7
 
-      - name: Fail when Unity did not build
+      - name: Fail when direct Unity run failed
         if: steps.unity.outcome != 'success'
         shell: bash
         run: exit 1
