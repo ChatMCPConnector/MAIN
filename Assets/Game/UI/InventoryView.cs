@@ -55,8 +55,7 @@ namespace Riftbound
 
         private void Refresh()
         {
-            foreach (Transform child in safeRoot)
-                Destroy(child.gameObject);
+            ClearSafeRoot();
 
             var background = CreatePanel(
                 "Background",
@@ -111,6 +110,16 @@ namespace Riftbound
                 new Vector2(.63f, .18f),
                 CycleFilter);
             CreateButton("WEITER", background, new Vector2(.67f, .08f), new Vector2(.92f, .18f), Close);
+        }
+
+        private void ClearSafeRoot()
+        {
+            for (var i = safeRoot.childCount - 1; i >= 0; i--)
+            {
+                var child = safeRoot.GetChild(i);
+                child.SetParent(null, false);
+                Destroy(child.gameObject);
+            }
         }
 
         private void Previous()
