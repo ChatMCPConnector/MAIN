@@ -116,6 +116,18 @@ namespace Riftbound.Tests
         }
 
         [Test]
+        public void CheckpointPolicyPreventsDuplicateRewardsAndHealing()
+        {
+            Assert.That(RunCheckpointPolicy.ShouldSave(RoomKind.Combat, true, false), Is.True);
+            Assert.That(RunCheckpointPolicy.ShouldSave(RoomKind.Combat, false, true), Is.False);
+            Assert.That(RunCheckpointPolicy.ShouldSave(RoomKind.Treasure, false, false), Is.True);
+            Assert.That(RunCheckpointPolicy.ShouldSave(RoomKind.Treasure, false, true), Is.False);
+            Assert.That(RunCheckpointPolicy.ShouldSave(RoomKind.Merchant, false, false), Is.True);
+            Assert.That(RunCheckpointPolicy.ShouldSave(RoomKind.Merchant, false, true), Is.False);
+            Assert.That(RunCheckpointPolicy.ShouldSave(RoomKind.Healing, false, false), Is.False);
+        }
+
+        [Test]
         public void InventoryRestoreClonesValidItemsAndHonorsCapacity()
         {
             var inventory = new RunInventory(2);
