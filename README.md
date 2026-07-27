@@ -20,13 +20,16 @@ Riftbound ist ein vollständig per Touch bedienbarer Unity-6.3-Prototyp für And
 - Gold, Händlerpreise, Schatzwahl und farbcodierte Gegenstandsanzeige
 - persistente Entdeckungen, höchste gefundene Seltenheit und Risssplitter
 - lokaler, versionierter Spielstand mit Backup und Migration auf Version 3
-- lokaler Zwei-Spieler-Koop als LAN-/Hotspot-Grundlage ohne externen Server oder Benutzerkonto
-- automatische Sitzungserkennung, vierstelliger Sitzungscode, Host-Client-Verbindung und Wiederverbindung
+- lokaler Zwei-Spieler-Koop über gemeinsames LAN oder mobilen Hotspot
+- automatische Sitzungserkennung, Sitzungscode, Host-Client-Verbindung und Wiederverbindung
 - synchronisierte Spielerposition, Lebenspunkte, Seed, Raum, Bereitschaft und Gefallenenstatus
+- host-autoritatives Gegnerleben, Gegnerpositionen und Bossphasen über 10-Hz-Snapshots
+- deterministische Gegner-IDs und geglättete Client-Replikate ohne lokale KI
+- Client-Nahkampf und Fähigkeiten werden vom Host geprüft und auf Host-Gegner angewendet
 - gemeinsamer Raumwechsel, Wiederbelebung und Solo-Fortsetzung nach Verbindungsabbruch
 - nichtlineare Koop-Skalierung mit mehr Gegnern, moderat höheren Werten und erweiterten Bossmustern
 - Safe Area, 9:16-Touch-HUD und Editor-Tastatursteuerung
-- EditMode-Tests für Runs, Biome, Anomalien, Händler, Seltenheiten, Inventar, Meta-Fortschritt und Koop-Protokoll
+- EditMode-Tests für Runs, Biome, Loot, Inventar, Meta-Fortschritt sowie Sitzungs- und Kampfprotokoll
 
 ## Steuerung
 
@@ -40,8 +43,8 @@ Das Inventar lässt sich nur außerhalb aktiver Kämpfe öffnen. Nach Karten-, S
 
 Beide Geräte müssen im selben lokalen WLAN oder mobilen Hotspot sein. Ein Spieler startet den Host in einem sicheren Raum. Das zweite Gerät findet die Sitzung automatisch und tritt über den angezeigten Code bei.
 
-Die Phase-5A-Grundlage synchronisiert Spieler- und Run-Zustände. Vollständige host-autoritative Gegner-, Projektil-, Karten- und Loot-Replikation sowie native Wi-Fi-Direct- oder Bluetooth-Transporte sind noch nicht abgeschlossen. Technische Details stehen in `docs/COOP.md`.
+Phase 5B repliziert Gegnerzustände und bestätigt Client-Angriffe auf dem Host. Gegnerische Projektile und Schaden am Client, persönliche Lootzustände, gemeinsame Karten-/Händlerentscheidungen und native Wi-Fi-Direct- oder Bluetooth-Transporte sind noch nicht vollständig abgeschlossen. Technische Details stehen in `docs/COOP.md`.
 
 ## Android-Build
 
-Die Android-Version ist `0.5.0`. Der Workflow `.github/workflows/unity-android.yml` führt statische Prüfung, EditMode-Tests und den APK-Build aus.
+Die Android-Version ist `0.6.0`. Der Workflow `.github/workflows/unity-android.yml` führt statische Prüfung, EditMode-Tests und den APK-Build aus.
