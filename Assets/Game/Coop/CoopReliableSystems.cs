@@ -33,28 +33,26 @@ namespace Riftbound
         public static string EncodeHello(string sessionCode, string token) =>
             Join(Prefix, "HELLO", Version, Clean(sessionCode), Clean(token));
 
-        public static bool TryDecodeHello(string payload, out string sessionCode, out string token)
-        {
-            sessionCode = token = null;
-            var parts = Split(payload, "HELLO", 5);
-            if (!HasVersion(parts)) return false;
-            sessionCode = parts[3];
-            token = parts[4];
-            return !string.IsNullOrWhiteSpace(sessionCode) && !string.IsNullOrWhiteSpace(token);
-        }
+        public static bool TryDecodeHello(string payload, out string sessionCode, out string token) =>
+            TryDecodeControl(payload, "HELLO", out sessionCode, out token);
 
         public static string EncodeWelcome(string sessionCode, string token) =>
             Join(Prefix, "WELCOME", Version, Clean(sessionCode), Clean(token));
 
-        public static bool TryDecodeWelcome(string payload, out string sessionCode, out string token)
-        {
-            sessionCode = token = null;
-            var parts = Split(payload, "WELCOME", 5);
-            if (!HasVersion(parts)) return false;
-            sessionCode = parts[3];
-            token = parts[4];
-            return !string.IsNullOrWhiteSpace(sessionCode) && !string.IsNullOrWhiteSpace(token);
-        }
+        public static bool TryDecodeWelcome(string payload, out string sessionCode, out string token) =>
+            TryDecodeControl(payload, "WELCOME", out sessionCode, out token);
+
+        public static string EncodePing(string sessionCode, string token) =>
+            Join(Prefix, "PING", Version, Clean(sessionCode), Clean(token));
+
+        public static bool TryDecodePing(string payload, out string sessionCode, out string token) =>
+            TryDecodeControl(payload, "PING", out sessionCode, out token);
+
+        public static string EncodePong(string sessionCode, string token) =>
+            Join(Prefix, "PONG", Version, Clean(sessionCode), Clean(token));
+
+        public static bool TryDecodePong(string payload, out string sessionCode, out string token) =>
+            TryDecodeControl(payload, "PONG", out sessionCode, out token);
 
         public static string EncodeMessage(
             string sessionCode,
@@ -128,6 +126,20 @@ namespace Riftbound
                 !long.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out id) ||
                 id <= 0)
                 return false;
+            sessionCode = parts[3];
+            token = parts[4];
+            return !string.IsNullOrWhiteSpace(sessionCode) && !string.IsNullOrWhiteSpace(token);
+        }
+
+        private static bool TryDecodeControl(
+            string payload,
+            string type,
+            out string sessionCode,
+            out string token)
+        {
+            sessionCode = token = null;
+            var parts = Split(payload, type, 5);
+            if (!HasVersion(parts)) return false;
             sessionCode = parts[3];
             token = parts[4];
             return !string.IsNullOrWhiteSpace(sessionCode) && !string.IsNullOrWhiteSpace(token);
@@ -230,6 +242,7 @@ namespace Riftbound
     {
         private const int ReliablePort = 47830;
         private const float HelloInterval = .5f;
+        private const float HeartbeatInterval = 1f;
         private const float Timeout = 4f;
         private const double ResendInterval = .22d;
         private const int MaxAttempts = 60;
@@ -244,6 +257,7 @@ namespace Riftbound
         private string localToken;
         private string remoteToken;
         private float nextHello;
+        private float nextHeartbeat;
         private float lastPacketAt;
         private bool channelConnected;
 
@@ -290,6 +304,12 @@ namespace Riftbound
                 nextHello = Time.unscaledTime + HelloInterval;
                 ResolveHost(session);
                 Send(remoteEndpoint, CoopReliableProtocol.EncodeHello(sessionCode, localToken));
+            }
+
+            if (role == CoopRole.Client && channelConnected && Time.unscaledTime >= nextHeartbeat)
+            {
+                nextHeartbeat = Time.unscaledTime + HeartbeatInterval;
+                Send(remoteEndpoint, CoopReliableProtocol.EncodePing(sessionCode, localToken));
             }
 
             if (channelConnected)
@@ -342,7 +362,7 @@ namespace Riftbound
                 socket.Client.Blocking = false;
                 socket.Client.ReceiveBufferSize = 64 * 1024;
                 socket.Client.SendBufferSize = 64 * 1024;
-                nextHello = 0f;
+                nextHello = nextHeartbeat = 0f;
                 lastPacketAt = Time.unscaledTime;
             }
             catch (Exception exception)
@@ -397,6 +417,24 @@ namespace Riftbound
                     return;
                 remoteToken = welcomeToken;
                 channelConnected = true;
+                lastPacketAt = Time.unscaledTime;
+                nextHeartbeat = 0f;
+                return;
+            }
+
+            if (role == CoopRole.Host &&
+                CoopReliableProtocol.TryDecodePing(payload, out var pingCode, out var pingToken))
+            {
+                if (!AcceptPinned(pingCode, pingToken, sender)) return;
+                lastPacketAt = Time.unscaledTime;
+                Send(sender, CoopReliableProtocol.EncodePong(sessionCode, localToken));
+                return;
+            }
+
+            if (role == CoopRole.Client &&
+                CoopReliableProtocol.TryDecodePong(payload, out var pongCode, out var pongToken))
+            {
+                if (!AcceptPinned(pongCode, pongToken, sender)) return;
                 lastPacketAt = Time.unscaledTime;
                 return;
             }
