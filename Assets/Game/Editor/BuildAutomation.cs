@@ -30,7 +30,8 @@ namespace Riftbound.Editor
                 outputPath = Path.Combine(outputPath, "Riftbound.apk");
 
             var directory = Path.GetDirectoryName(outputPath);
-            if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
 
             var options = new BuildPlayerOptions
             {
@@ -53,30 +54,38 @@ namespace Riftbound.Editor
         {
             PlayerSettings.companyName = "Riftbound Studio";
             PlayerSettings.productName = "Riftbound";
-            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, "com.chatmcpconnector.riftbound");
-            PlayerSettings.bundleVersion = "0.1.0";
-            PlayerSettings.Android.bundleVersionCode = 1;
+            PlayerSettings.SetApplicationIdentifier(
+                BuildTargetGroup.Android,
+                "com.chatmcpconnector.riftbound");
+            PlayerSettings.bundleVersion = "0.2.0";
+            PlayerSettings.Android.bundleVersionCode = 2;
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel26;
             PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
-            PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.IL2CPP);
+            PlayerSettings.SetScriptingBackend(
+                BuildTargetGroup.Android,
+                ScriptingImplementation.IL2CPP);
             PlayerSettings.defaultInterfaceOrientation = UIOrientation.Portrait;
             PlayerSettings.allowedAutorotateToLandscapeLeft = false;
             PlayerSettings.allowedAutorotateToLandscapeRight = false;
             PlayerSettings.allowedAutorotateToPortrait = true;
             PlayerSettings.allowedAutorotateToPortraitUpsideDown = false;
             PlayerSettings.colorSpace = ColorSpace.Linear;
-            PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { GraphicsDeviceType.OpenGLES3 });
+            PlayerSettings.SetGraphicsAPIs(
+                BuildTarget.Android,
+                new[] { GraphicsDeviceType.OpenGLES3 });
             EditorUserBuildSettings.buildAppBundle = false;
             EnableBothInputBackends();
         }
 
         private static void EnableBothInputBackends()
         {
-            var settingsAssets = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/ProjectSettings.asset");
+            var settingsAssets = AssetDatabase.LoadAllAssetsAtPath(
+                "ProjectSettings/ProjectSettings.asset");
             if (settingsAssets == null || settingsAssets.Length == 0)
             {
-                Debug.LogWarning("ProjectSettings.asset was not available; input backend was not changed.");
+                Debug.LogWarning(
+                    "ProjectSettings.asset was not available; input backend was not changed.");
                 return;
             }
 
@@ -84,7 +93,8 @@ namespace Riftbound.Editor
             var activeInputHandler = serializedSettings.FindProperty("activeInputHandler");
             if (activeInputHandler == null)
             {
-                Debug.LogWarning("activeInputHandler was not found in ProjectSettings.asset.");
+                Debug.LogWarning(
+                    "activeInputHandler was not found in ProjectSettings.asset.");
                 return;
             }
 
@@ -120,7 +130,8 @@ namespace Riftbound.Editor
             }
 
             var defaultRenderer = serialized.FindProperty("m_DefaultRendererIndex");
-            if (defaultRenderer != null) defaultRenderer.intValue = 0;
+            if (defaultRenderer != null)
+                defaultRenderer.intValue = 0;
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
             GraphicsSettings.defaultRenderPipeline = pipeline;
@@ -135,14 +146,19 @@ namespace Riftbound.Editor
             Directory.CreateDirectory("Assets/Game/Scenes");
             Scene scene;
             if (File.Exists(ScenePath))
+            {
                 scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            }
             else
             {
-                scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                scene = EditorSceneManager.NewScene(
+                    NewSceneSetup.EmptyScene,
+                    NewSceneMode.Single);
                 EditorSceneManager.SaveScene(scene, ScenePath);
             }
 
-            EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
+            EditorBuildSettings.scenes =
+                new[] { new EditorBuildSettingsScene(ScenePath, true) };
             AssetDatabase.SaveAssets();
         }
 
@@ -150,7 +166,10 @@ namespace Riftbound.Editor
         {
             var args = Environment.GetCommandLineArgs();
             for (var i = 0; i < args.Length - 1; i++)
-                if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(
+                        args[i],
+                        name,
+                        StringComparison.OrdinalIgnoreCase))
                     return args[i + 1];
             return null;
         }
