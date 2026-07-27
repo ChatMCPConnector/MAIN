@@ -37,15 +37,20 @@ namespace Riftbound
             IReadOnlyList<CoopEnemySnapshot> snapshots)
         {
             if (game == null || snapshots == null || game.RoomIndex != roomIndex) return;
-            var existing = FindObjectsByType<EnemyController>(FindObjectsSortMode.None)
-                .Where(enemy => enemy != null)
-                .ToDictionary(enemy => enemy.NetworkId, enemy => enemy);
-            var alive = new HashSet<int>();
+            var existing = new Dictionary<int, EnemyController>();
+            var localEnemies = FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
+            foreach (var enemy in localEnemies)
+            {
+                if (enemy == null || enemy.NetworkId <= 0) continue;
+                if (!existing.ContainsKey(enemy.NetworkId))
+                    existing.Add(enemy.NetworkId, enemy);
+            }
 
+            var alive = new HashSet<int>();
             for (var i = 0; i < snapshots.Count; i++)
             {
                 var snapshot = snapshots[i];
-                alive.Add(snapshot.networkId);
+                if (snapshot == null || !alive.Add(snapshot.networkId)) continue;
                 if (existing.TryGetValue(snapshot.networkId, out var enemy))
                 {
                     enemy.SetReplicaMode(true);
