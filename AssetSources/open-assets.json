@@ -1,4 +1,50 @@
 {
   "schemaVersion": 1,
-  "assets": []
+  "assets": [
+    {
+      "provider": "polyhaven",
+      "id": "metal_plate",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "png",
+      "target": "polyhaven/materials/metal_plate",
+      "maxDownloadBytes": 52428800
+    },
+    {
+      "provider": "polyhaven",
+      "id": "industrial_workshop_foundry",
+      "kind": "hdri",
+      "resolution": "1k",
+      "format": "hdr",
+      "target": "polyhaven/lighting/industrial_workshop_foundry",
+      "maxDownloadBytes": 26214400
+    },
+    {
+      "provider": "ambientcg",
+      "id": "MetalPlates015A",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "jpg",
+      "target": "ambientcg/materials/MetalPlates015A",
+      "maxDownloadBytes": 20971520
+    },
+    {
+      "provider": "ambientcg",
+      "id": "Concrete023",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "jpg",
+      "target": "ambientcg/materials/Concrete023",
+      "maxDownloadBytes": 20971520
+    },
+    {
+      "provider": "ambientcg",
+      "id": "Facade019C",
+      "kind": "material",
+      "resolution": "1k",
+      "format": "jpg",
+      "target": "ambientcg/materials/Facade019C",
+      "maxDownloadBytes": 20971520
+    }
+  ]
 }
