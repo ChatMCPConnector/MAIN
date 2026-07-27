@@ -12,6 +12,7 @@ Riftbound verbindet genau zwei Android-Geräte ohne externen Server, Konto oder 
 - anonymes persistentes Gerätetoken
 - 20 Sekunden reservierte Wiederverbindungsfrist
 - Beitritt eines neuen Geräts nur in sicheren Räumen
+- Android-Multicast-Sperre gegen aggressive WLAN-Energiesparmodi
 
 Native Wi-Fi-Direct- und Bluetooth-Transporte gehören nicht zur Transportmatrix von Version 1.0. Auf Android wird stattdessen ein lokales WLAN oder der Hotspot eines der beiden Geräte verwendet.
 
@@ -61,6 +62,8 @@ Kritische Ereignisse verwenden das Protokollpräfix `RB5R`:
 
 Jede Nachricht besitzt eine eindeutige ID. Sie wird in kurzen Abständen erneut gesendet, bis die Gegenseite ein ACK zurückgibt. Bereits verarbeitete IDs werden dedupliziert. Dadurch wird eine Nachricht bei Paketverlust nicht vergessen und bei Wiederholung nicht doppelt angewendet.
 
+Ein PING/PONG-Heartbeat hält den zuverlässigen Kanal auch ohne laufende Transaktionen aktiv und erkennt eine tatsächlich abgebrochene Verbindung.
+
 Der normale Sitzungs- beziehungsweise Kampfkanal bleibt für schnelle Rückmeldung erhalten. Der zuverlässige Kanal ist die bestätigte Absicherung.
 
 ## Gemeinsame Entscheidungen und Lootschutz
@@ -69,6 +72,8 @@ Der Host wählt Karten, Schätze und Händleraktionen. Der Client rekonstruiert 
 
 Transaktionsschlüssel verhindern doppelte Anwendung. Die Host-Währung besitzt eine monotone Revision und wird nach jeder Entscheidung erneut als endgültiger Stand angewendet. Dadurch bleiben Gold und Belohnungen auch bei vertauschter Paketreihenfolge konsistent.
 
+Bricht die Verbindung ab, während der Client auf eine Hostentscheidung wartet, wird die Wartemaske entfernt und derselbe Raum sofort als Solo-Entscheidung neu geöffnet.
+
 Beide Spieler erhalten in Version 1.0 dieselbe gemeinsame Karten- und Gegenstandsentscheidung. Persönlich getrennte Lootinstanzen sind bewusst nicht Teil des Spielmodells.
 
 ## Raumwechsel, Tod und Wiederbelebung
@@ -76,6 +81,7 @@ Beide Spieler erhalten in Version 1.0 dieselbe gemeinsame Karten- und Gegenstand
 - Beide Spieler markieren ihre Bereitschaft.
 - Der Host autorisiert den nächsten Raum.
 - Der schnelle `ADVANCE`-Befehl wird durch einen zuverlässigen Zielraum abgesichert.
+- Veraltete wartende Raumaktionen werden nach einer Host-Synchronisierung verworfen.
 - Wiederbelebung wird schnell gesendet und zusätzlich per ACK/Retry bestätigt.
 - Ein gefallener Spieler kehrt mit 35 Prozent Leben zurück.
 - Fallen beide Spieler, endet der Run.
@@ -90,9 +96,11 @@ Ein atomarer Checkpoint mit Backup wird regelmäßig sowie bei Pause, Fokusverlu
 - Inventar, Lootfilter und Ausrüstung
 - gewählte Karten und abgeleiteter Build
 - lebende Gegner mit Position, Leben und Bossphase
-- Status, ob der Kampf oder bereits die Belohnungsphase aktiv war
+- Status eines aktiven Kampfs
 
-Checkpoints sind höchstens 24 Stunden gültig. Beschädigte, veraltete oder unplausible Daten werden verworfen. Bewegte Projektile werden nicht restauriert, damit nach dem Start kein unsichtbarer Soforttreffer entsteht; Gegner und Gefahren starten dagegen konsistent aus dem gespeicherten Raumzustand.
+Checkpoints werden nur an duplikationssicheren Punkten geschrieben: während eines aktiven Kampfs sowie beim unveränderten Eintritt in Schatz- und Händlerräume. Bereits aufgelöste Karten-, Schatz-, Händler- und Heilphasen überschreiben den letzten sicheren Checkpoint nicht. Dadurch kann eine Belohnung oder Heilung nach einem Neustart nicht erneut ausgelöst werden.
+
+Checkpoints sind höchstens 24 Stunden gültig. Beschädigte, veraltete oder unplausible Daten werden verworfen. Bewegte Projektile werden nicht restauriert, damit nach dem Start kein unsichtbarer Soforttreffer entsteht; lebende Gegner werden mit Position, relativem Leben und Bossphase wiederhergestellt. Gefahren werden aus Seed und Raum deterministisch neu aufgebaut.
 
 ## Grenzen der Veröffentlichung
 
