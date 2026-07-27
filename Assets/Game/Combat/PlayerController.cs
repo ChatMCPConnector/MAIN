@@ -191,6 +191,16 @@ namespace Riftbound
             return health - before;
         }
 
+        public void Revive(float healthFraction)
+        {
+            health = Mathf.Max(1f, build.maxHealth * Mathf.Clamp01(healthFraction));
+            combatEnabled = true;
+            invulnerable = true;
+            dashUntil = Time.time + .8f;
+            game.ReportHealth(health, build.maxHealth);
+            Pulse(new Color(.2f, 1f, .62f), transform.position, .8f, 1.8f);
+        }
+
         public void TakeDamage(float amount)
         {
             if (!combatEnabled || invulnerable || health <= 0f) return;
