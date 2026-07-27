@@ -13,6 +13,7 @@ namespace Riftbound
         private GameObject overlay;
         private Font font;
         private float nextRefresh;
+        private bool overlayDirty;
 
         public static CoopView Create(CoopLanController controller)
         {
@@ -64,12 +65,17 @@ namespace Riftbound
             if (Time.unscaledTime < nextRefresh) return;
             nextRefresh = Time.unscaledTime + .45f;
             RefreshStatus();
-            if (overlay != null) RefreshOverlay();
+            if (overlay != null && overlayDirty)
+            {
+                overlayDirty = false;
+                RefreshOverlay();
+            }
         }
 
         public void RefreshSoon()
         {
             nextRefresh = 0f;
+            overlayDirty = true;
         }
 
         private void RefreshStatus()
@@ -104,6 +110,7 @@ namespace Riftbound
             rect.anchorMax = Vector2.one;
             rect.offsetMin = rect.offsetMax = Vector2.zero;
             overlay.GetComponent<Image>().color = new Color(.02f, .025f, .055f, .97f);
+            overlayDirty = false;
             RefreshOverlay();
         }
 
@@ -152,7 +159,7 @@ namespace Riftbound
             if (controller.Role == CoopRole.Offline)
             {
                 labels[count] = controller.GameSafe ? "HOST STARTEN" : "HOST NUR IM SICHEREN RAUM";
-                actions[count++] = controller.StartHost;
+                actions[count++] = () => controller.StartHost();
 
                 var shown = 0;
                 for (var i = 0; i < controller.Sessions.Count && shown < 3; i++)
