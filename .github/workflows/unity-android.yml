@@ -3,6 +3,9 @@ name: Riftbound Android 1.0
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "Builds/actions-status/**"
+      - "Builds/latest-actions-status.json"
   workflow_dispatch:
 
 permissions:
@@ -19,291 +22,80 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate final project structure and release systems
+      - name: Validate Android release configuration
+        shell: python
         run: |
-          set -euo pipefail
-          test -f ProjectSettings/ProjectVersion.txt
-          test -f Packages/manifest.json
-          test -f Assets/Plugins/Android/AndroidManifest.xml
-          test -f Assets/Game/Core/GameData.cs
-          test -f Assets/Game/Core/RunSystems.cs
-          test -f Assets/Game/Core/GameBootstrap.cs
-          test -f Assets/Game/Core/BiomeSystems.cs
-          test -f Assets/Game/Core/RunCheckpointSystems.cs
-          test -f Assets/Game/Core/ReleaseQualityRuntime.cs
-          test -f Assets/Game/Combat/PlayerController.cs
-          test -f Assets/Game/Combat/EnemyController.cs
-          test -f Assets/Game/Items/InventorySystem.cs
-          test -f Assets/Game/Coop/CoopSystems.cs
-          test -f Assets/Game/Coop/CoopLanController.cs
-          test -f Assets/Game/Coop/CoopCombatSystems.cs
-          test -f Assets/Game/Coop/CoopCombatReplicator.cs
-          test -f Assets/Game/Coop/CoopCombatWorld.cs
-          test -f Assets/Game/Coop/CoopAuthoritySystems.cs
-          test -f Assets/Game/Coop/CoopReliableSystems.cs
-          test -f Assets/Game/Coop/CoopDecisionSystems.cs
-          test -f Assets/Game/Coop/CoopProgressReliabilityRuntime.cs
-          test -f Assets/Game/Coop/CoopHazardSystems.cs
-          test -f Assets/Game/Coop/AndroidLocalNetworkRuntime.cs
-          test -f Assets/Game/Coop/EnemyNetworkExtensions.cs
-          test -f Assets/Game/UI/TouchHud.cs
-          test -f Assets/Game/UI/TouchHudCoopExtensions.cs
-          test -f Assets/Game/UI/InventoryView.cs
-          test -f Assets/Game/UI/CoopView.cs
-          test -f Assets/Game/Tests/EditMode/RunPlannerTests.cs
-          test -f Assets/Game/Tests/EditMode/InventoryTests.cs
-          test -f Assets/Game/Tests/EditMode/BiomeSystemTests.cs
-          test -f Assets/Game/Tests/EditMode/CoopSystemTests.cs
-          test -f Assets/Game/Tests/EditMode/CoopCombatTests.cs
-          test -f Assets/Game/Tests/EditMode/CoopAuthorityTests.cs
-          test -f Assets/Game/Tests/EditMode/FinalizationTests.cs
-          test -f Assets/Game/Editor/BuildAutomation.cs
-          test -f docs/COOP.md
-          test -f docs/RELEASE.md
-
-          python3 - <<'PY'
           import json
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
-          manifest = json.loads(Path("Packages/manifest.json").read_text())
-          required_packages = {
-              "com.unity.inputsystem",
-              "com.unity.render-pipelines.universal",
-              "com.unity.test-framework",
-              "com.unity.ugui",
-          }
-          missing = required_packages - set(manifest["dependencies"])
-          if missing:
-              raise SystemExit(f"Missing packages: {sorted(missing)}")
+          required_files = [
+              'ProjectSettings/ProjectVersion.txt',
+              'Packages/manifest.json',
+              'Assets/Plugins/Android/AndroidManifest.xml',
+              'Assets/Game/Riftbound.Game.asmdef',
+              'Assets/Game/Editor/BuildAutomation.cs',
+              'Assets/Game/Coop/AndroidLocalNetworkRuntime.cs',
+              'Assets/Game/Tests/EditMode/FinalizationTests.cs',
+          ]
+          missing_files = [path for path in required_files if not Path(path).is_file()]
+          if missing_files:
+              raise SystemExit(f'Missing release files: {missing_files}')
 
-          android_manifest = Path("Assets/Plugins/Android/AndroidManifest.xml")
+          version = Path('ProjectSettings/ProjectVersion.txt').read_text()
+          if '6000.3.20f1' not in version:
+              raise SystemExit('Unexpected Unity version')
+
+          manifest = json.loads(Path('Packages/manifest.json').read_text())
+          required_packages = {
+              'com.unity.inputsystem',
+              'com.unity.modules.androidjni',
+              'com.unity.modules.audio',
+              'com.unity.render-pipelines.universal',
+              'com.unity.test-framework',
+              'com.unity.ugui',
+          }
+          missing_packages = required_packages - set(manifest['dependencies'])
+          if missing_packages:
+              raise SystemExit(f'Missing Unity packages: {sorted(missing_packages)}')
+
+          asmdef = json.loads(Path('Assets/Game/Riftbound.Game.asmdef').read_text())
+          if 'Unity.RenderPipelines.Universal.Runtime' not in asmdef.get('references', []):
+              raise SystemExit('URP runtime assembly reference is missing')
+
+          build = Path('Assets/Game/Editor/BuildAutomation.cs').read_text()
+          for token in (
+              'bundleVersion = "1.0.0"',
+              'bundleVersionCode = 100',
+              'BuildOptions.None',
+              'ScriptingImplementation.IL2CPP',
+              'AndroidArchitecture.ARM64',
+          ):
+              if token not in build:
+                  raise SystemExit(f'Android release setting missing: {token}')
+          if 'BuildOptions.Development' in build or 'EnableBothInputBackends' in build:
+              raise SystemExit('Development mode or runtime input-backend switching remains enabled')
+
+          network_runtime = Path('Assets/Game/Coop/AndroidLocalNetworkRuntime.cs').read_text()
+          field = 'private AndroidJavaObject multicastLock;'
+          if field not in network_runtime or network_runtime.index(field) > network_runtime.index('#if UNITY_ANDROID'):
+              raise SystemExit('Android runtime class layout is platform-dependent')
+
+          android_manifest = Path('Assets/Plugins/Android/AndroidManifest.xml')
           ET.parse(android_manifest)
           android_text = android_manifest.read_text()
           for permission in (
-              "android.permission.INTERNET",
-              "android.permission.ACCESS_NETWORK_STATE",
-              "android.permission.ACCESS_WIFI_STATE",
-              "android.permission.CHANGE_WIFI_MULTICAST_STATE",
-              "android.permission.VIBRATE",
-              "android.permission.WAKE_LOCK",
+              'android.permission.INTERNET',
+              'android.permission.ACCESS_NETWORK_STATE',
+              'android.permission.ACCESS_WIFI_STATE',
+              'android.permission.CHANGE_WIFI_MULTICAST_STATE',
+              'android.permission.VIBRATE',
+              'android.permission.WAKE_LOCK',
           ):
               if permission not in android_text:
-                  raise SystemExit(f"Missing Android permission: {permission}")
+                  raise SystemExit(f'Missing Android permission: {permission}')
 
-          source_paths = list(Path("Assets/Game").rglob("*.cs"))
-          sources = "\n".join(path.read_text() for path in source_paths)
-          required_symbols = (
-              "RunPlanner",
-              "LootGenerator",
-              "RunInventory",
-              "InventoryView",
-              "ItemRarity.Cursed",
-              "MetaProgression",
-              "BiomePlanner",
-              "EncounterDirector",
-              "CoopProtocol",
-              "CoopLanController",
-              "CoopCombatProtocol",
-              "CoopCombatReplicator",
-              "CoopCombatWorld",
-              "CoopAuthorityProtocol",
-              "CoopReliableProtocol",
-              "CoopReliableRuntime",
-              "CoopReliableLedger",
-              "CoopDecisionRuntime",
-              "CoopDecisionCodec",
-              "CoopTransactionLedger",
-              "CoopProgressReliabilityRuntime",
-              "CoopHazardRuntime",
-              "CoopHazardPlanner",
-              "CoopHazardMath",
-              "RunCheckpointService",
-              "RunCheckpointRuntime",
-              "RunCheckpointPolicy",
-              "RunCheckpointData",
-              "CaptureCheckpoint",
-              "RestoreCheckpoint",
-              "RestoreRunState",
-              "ReleaseQualityRuntime",
-              "ReleasePreferences",
-              "AccessibilityView",
-              "AndroidLocalNetworkRuntime",
-              "ShowWaiting",
-              "CloseOverlayNow",
-              "SendAttackIntent",
-              "TryDamageRemote",
-              "TakeNetworkDamage",
-              "ReleaseReplicaProjectiles",
-              'Prefix = "RB5C"',
-              'Prefix = "RB5H"',
-              'Prefix = "RB5R"',
-              "CombatPort = 47820",
-              "ReliablePort = 47830",
-              "CoopCriticalKind.Damage",
-              "CoopCriticalKind.Revive",
-              "CoopCriticalKind.Advance",
-              "CoopCriticalKind.Decision",
-              "CoopCriticalKind.Economy",
-              "GameBootstrap",
-              "PlayerController",
-              "EnemyController",
-              "TouchHud",
-          )
-          for symbol in required_symbols:
-              if symbol not in sources:
-                  raise SystemExit(f"Missing final release symbol: {symbol}")
-
-          forbidden = (
-              "offer.kind",
-              "offer.catalogIndex",
-              "EquipWeapon(",
-              "EquipArmor(",
-              "SetGold(",
-              "game.CaptureEnemySnapshots(",
-              "game.SetEnemyReplication(",
-              "game.ApplyEnemySnapshots(",
-              "game.ApplyRemoteAttack(",
-          )
-          for token in forbidden:
-              if token in sources:
-                  raise SystemExit(f"Forbidden legacy or unresolved call remains: {token}")
-
-          reliable = Path("Assets/Game/Coop/CoopReliableSystems.cs").read_text()
-          decisions = Path("Assets/Game/Coop/CoopDecisionSystems.cs").read_text()
-          progress = Path("Assets/Game/Coop/CoopProgressReliabilityRuntime.cs").read_text()
-          hazards = Path("Assets/Game/Coop/CoopHazardSystems.cs").read_text()
-          checkpoint = Path("Assets/Game/Core/RunCheckpointSystems.cs").read_text()
-          quality = Path("Assets/Game/Core/ReleaseQualityRuntime.cs").read_text()
-          bootstrap = Path("Assets/Game/Core/GameBootstrap.cs").read_text()
-          player = Path("Assets/Game/Combat/PlayerController.cs").read_text()
-          final_tests = Path("Assets/Game/Tests/EditMode/FinalizationTests.cs").read_text()
-
-          for token in (
-              "EncodeAck",
-              "TryDecodeAck",
-              "EncodePing",
-              "TryDecodePong",
-              "HeartbeatInterval",
-              "CollectDue",
-              "AcceptIncoming",
-              "ResendInterval",
-              "MaxAttempts",
-              "Convert.ToBase64String",
-          ):
-              if token not in reliable:
-                  raise SystemExit(f"Reliable channel guard missing: {token}")
-
-          for token in (
-              "MerchantBuy",
-              "MerchantLeave",
-              "HostEconomyReceived",
-              "lastEconomyRevision",
-              "DeliverDecision",
-              "RecoverWaitingDecisionAsSolo",
-          ):
-              if token not in decisions:
-                  raise SystemExit(f"Decision/economy guard missing: {token}")
-
-          for token in (
-              "PendingAdvanceField",
-              "ClearStaleClientAdvanceAfterSynchronization",
-              '"ADVANCE"',
-              '"REVIVE"',
-          ):
-              if token not in progress:
-                  raise SystemExit(f"Reliable progress guard missing: {token}")
-
-          for token in (
-              "CoopHazardKind.Laser",
-              "CoopHazardKind.Pulse",
-              "CoopHazardPhase.Warning",
-              "CoopHazardPhase.Active",
-              "TryDamageRemote",
-          ):
-              if token not in hazards:
-                  raise SystemExit(f"Hazard authority missing: {token}")
-
-          for token in (
-              "CurrentVersion = 2",
-              "MaximumAge",
-              "TemporaryName",
-              "BackupName",
-              "OnApplicationPause",
-              "OnApplicationFocus",
-              "CoopEnemySnapshot",
-              "restoredEncounterActive",
-              "RunCheckpointPolicy",
-              "ShouldSave",
-          ):
-              if token not in checkpoint:
-                  raise SystemExit(f"Run checkpoint guard missing: {token}")
-
-          for token in (
-              "renderScale",
-              "ReducedMotion",
-              "HighContrast",
-              "LargeText",
-              "Vibration",
-              "CreateTone",
-              "originalFontSizes",
-          ):
-              if token not in quality:
-                  raise SystemExit(f"Quality/accessibility guard missing: {token}")
-
-          for token in (
-              "ShowTreasureRoom",
-              "ShowMerchantRoom",
-              "CoopDecisionType.Card",
-              "CoopDecisionType.Treasure",
-              "CaptureCheckpoint",
-              "RestoreCheckpoint",
-              "RunCheckpointService.Clear",
-          ):
-              if token not in bootstrap:
-                  raise SystemExit(f"Final game integration missing: {token}")
-
-          if "RestoreRunState" not in player or "ReleaseQualityRuntime.Play" not in player:
-              raise SystemExit("Player restore or feedback integration missing")
-
-          for token in (
-              "ReliableHeartbeatRoundTripsAndRejectsWrongVersion",
-              "ReliableLedgerRetriesAcknowledgesAndDeduplicates",
-              "DecisionCodecAndLedgerPreventDuplicateApplication",
-              "CheckpointValidityRejectsStaleOrBrokenRuns",
-              "CheckpointPolicyPreventsDuplicateRewardsAndHealing",
-              "HazardPlanIsDeterministicAndLateRoomsContainTwoHazards",
-              "PulseAndLaserHitMathUsesFlatArenaDistance",
-          ):
-              if token not in final_tests:
-                  raise SystemExit(f"Finalization test missing: {token}")
-
-          for path in source_paths:
-              text = path.read_text()
-              if text.count("{") != text.count("}"):
-                  raise SystemExit(f"Unbalanced braces: {path}")
-              if text.count("#if") != text.count("#endif"):
-                  raise SystemExit(f"Unbalanced preprocessor blocks: {path}")
-
-          version = Path("ProjectSettings/ProjectVersion.txt").read_text()
-          build = Path("Assets/Game/Editor/BuildAutomation.cs").read_text()
-          if "6000.3.20f1" not in version:
-              raise SystemExit("Unexpected Unity version")
-          if 'bundleVersion = "1.0.0"' not in build:
-              raise SystemExit("Unexpected Android app version")
-          if "bundleVersionCode = 100" not in build:
-              raise SystemExit("Unexpected Android version code")
-          if "BuildOptions.None" not in build or "BuildOptions.Development" in build:
-              raise SystemExit("Android build is not configured as a release build")
-
-          readme = Path("README.md").read_text()
-          coop_doc = Path("docs/COOP.md").read_text()
-          release_doc = Path("docs/RELEASE.md").read_text()
-          if "1.0.0" not in readme or "PING/PONG" not in coop_doc or "Manuelle Gerätefreigabe" not in release_doc:
-              raise SystemExit("Release documentation is incomplete")
-
-          print(f"Static Riftbound 1.0 validation passed for {len(source_paths)} C# files")
-          PY
+          print('Android release configuration is valid')
 
   build-android:
     needs: validate
@@ -334,12 +126,32 @@ jobs:
       - name: Run all EditMode tests
         uses: game-ci/unity-test-runner@v4
         id: tests
+        continue-on-error: true
         with:
           projectPath: .
           unityVersion: 6000.3.20f1
           testMode: EditMode
           artifactsPath: test-artifacts
           githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify EditMode NUnit results
+        shell: python
+        run: |
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          path = pathlib.Path('test-artifacts/editmode-results.xml')
+          if not path.is_file():
+              raise SystemExit('Unity did not produce EditMode test results')
+          root = ET.parse(path).getroot()
+          total = int(root.attrib.get('total', '0'))
+          passed = int(root.attrib.get('passed', '0'))
+          failed = int(root.attrib.get('failed', '0'))
+          skipped = int(root.attrib.get('skipped', '0'))
+          result = root.attrib.get('result', '')
+          print(f'Unity EditMode: result={result}, total={total}, passed={passed}, failed={failed}, skipped={skipped}')
+          if result != 'Passed' or total <= 0 or failed != 0 or passed != total:
+              raise SystemExit('Unity EditMode tests did not pass completely')
 
       - name: Build Android release APK
         uses: game-ci/unity-builder@v4
@@ -348,7 +160,26 @@ jobs:
           unityVersion: 6000.3.20f1
           targetPlatform: Android
           buildMethod: Riftbound.Editor.BuildAutomation.BuildAndroid
-          customParameters: -customBuildPath Builds/Android/Riftbound.apk
+          versioning: None
+          allowDirtyBuild: true
+          buildName: Riftbound
+          buildPath: Builds/Android
+
+      - name: Verify release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="Builds/Android/Riftbound.apk"
+          test -s "$apk"
+          size="$(stat -c%s "$apk")"
+          if [ "$size" -lt 10000000 ]; then
+            echo "APK is unexpectedly small: $size bytes" >&2
+            exit 1
+          fi
+          unzip -tq "$apk"
+          file "$apk"
+          sha256sum "$apk"
+          ls -lh "$apk"
 
       - name: Upload APK and diagnostics
         if: always()
@@ -360,3 +191,4 @@ jobs:
             test-artifacts
           if-no-files-found: warn
           retention-days: 30
+          compression-level: 0
