@@ -38,6 +38,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       available: ${{ steps.detect.outputs.available }}
+      route: ${{ steps.detect.outputs.route }}
     env:
       UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
       UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
@@ -47,12 +48,24 @@ jobs:
       - id: detect
         shell: bash
         run: |
-          if [[ -n "$UNITY_LICENSE" || ( -n "$UNITY_SERIAL" && -n "$UNITY_EMAIL" && -n "$UNITY_PASSWORD" ) ]]; then
+          if [[ -n "$UNITY_SERIAL" && -n "$UNITY_EMAIL" && -n "$UNITY_PASSWORD" ]]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
-            echo "A Unity activation route is configured."
+            echo "route=serial" >> "$GITHUB_OUTPUT"
+            echo "A Unity serial activation route is configured."
+          elif [[ -n "$UNITY_LICENSE" && -n "$UNITY_EMAIL" && -n "$UNITY_PASSWORD" ]]; then
+            if [[ "$UNITY_LICENSE" == *'<DeveloperData Value="'* ]]; then
+              echo "available=true" >> "$GITHUB_OUTPUT"
+              echo "route=classic-ulf" >> "$GITHUB_OUTPUT"
+              echo "A classic Unity ULF activation route is configured."
+            else
+              echo "available=false" >> "$GITHUB_OUTPUT"
+              echo "route=invalid-ulf" >> "$GITHUB_OUTPUT"
+              echo "::warning::UNITY_LICENSE is present but is not a classic ULF containing DeveloperData. Replace the old entitlement XML with the newly generated .ulf file."
+            fi
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "Unity-dependent jobs will be skipped until UNITY_LICENSE or UNITY_SERIAL is configured."
+            echo "route=missing" >> "$GITHUB_OUTPUT"
+            echo "Unity-dependent jobs require UNITY_EMAIL and UNITY_PASSWORD plus either a classic UNITY_LICENSE ULF or UNITY_SERIAL."
           fi
 
   unity-tests:
@@ -141,19 +154,33 @@ jobs:
           New-Item -ItemType Directory -Force -Path $gallery | Out-Null
           $stdout = Join-Path $gallery "capture-stdout.log"
           $stderr = Join-Path $gallery "capture-stderr.log"
-          $arguments = @("-batchmode", "-screen-width", "1280", "-screen-height", "720", "--capture-ci", "--capture-dir=$gallery")
+          $playerLog = Join-Path $gallery "player.log"
+          $arguments = @(
+            "-force-d3d11",
+            "-screen-fullscreen", "0",
+            "-screen-width", "1280",
+            "-screen-height", "720",
+            "-logFile", "`"$playerLog`"",
+            "--capture-ci",
+            "--capture-dir=$gallery"
+          )
           $process = Start-Process -FilePath $exe.FullName -WorkingDirectory $directory -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
           if (-not $process.WaitForExit(90000)) {
             Stop-Process -Id $process.Id -Force
             throw "Unity visual capture timed out"
           }
           if ($process.ExitCode -ne 0) {
+            Get-Content $playerLog -ErrorAction SilentlyContinue
             Get-Content $stdout -ErrorAction SilentlyContinue
             Get-Content $stderr -ErrorAction SilentlyContinue
             throw "Unity visual capture exited with code $($process.ExitCode)"
           }
           $images = @(Get-ChildItem $gallery -Filter *.png)
-          if ($images.Count -lt 8) { throw "Expected eight screenshots, found $($images.Count)" }
+          if ($images.Count -lt 8) {
+            Get-Content $playerLog -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $gallery "capture.log") -ErrorAction SilentlyContinue
+            throw "Expected eight screenshots, found $($images.Count)"
+          }
           Get-Content (Join-Path $gallery "capture.log")
           $images | Sort-Object Name | Select-Object Name,Length | Format-Table
       - uses: actions/upload-artifact@v4
@@ -231,7 +258,7 @@ jobs:
       - shell: bash
         run: |
           if [[ "${{ needs.unity-license.outputs.available }}" == "true" ]]; then
-            echo "Unity license detected. Tests/build result: ${{ needs.unity-tests.result }}/${{ needs.unity-build.result }}/${{ needs.windows-visual.result }}/${{ needs.windows-smoke.result }}"
+            echo "Unity activation route '${{ needs.unity-license.outputs.route }}' detected. Tests/build result: ${{ needs.unity-tests.result }}/${{ needs.unity-build.result }}/${{ needs.windows-visual.result }}/${{ needs.windows-smoke.result }}"
           else
-            echo "Source validation passed, but Unity build jobs were skipped because no Unity CI license is configured."
+            echo "Source validation passed, but Unity jobs were skipped. Activation route: ${{ needs.unity-license.outputs.route }}."
           fi
