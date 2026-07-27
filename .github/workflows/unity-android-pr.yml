@@ -61,12 +61,32 @@ jobs:
       - name: Run all EditMode tests
         uses: game-ci/unity-test-runner@v4
         id: tests
+        continue-on-error: true
         with:
           projectPath: .
           unityVersion: 6000.3.20f1
           testMode: EditMode
           artifactsPath: test-artifacts
           githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify EditMode NUnit results
+        shell: python
+        run: |
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          path = pathlib.Path('test-artifacts/editmode-results.xml')
+          if not path.is_file():
+              raise SystemExit('Unity did not produce EditMode test results')
+          root = ET.parse(path).getroot()
+          total = int(root.attrib.get('total', '0'))
+          passed = int(root.attrib.get('passed', '0'))
+          failed = int(root.attrib.get('failed', '0'))
+          skipped = int(root.attrib.get('skipped', '0'))
+          result = root.attrib.get('result', '')
+          print(f'Unity EditMode: result={result}, total={total}, passed={passed}, failed={failed}, skipped={skipped}')
+          if result != 'Passed' or total <= 0 or failed != 0 or passed != total:
+              raise SystemExit('Unity EditMode tests did not pass completely')
 
       - name: Build Android release APK
         uses: game-ci/unity-builder@v4
@@ -76,6 +96,15 @@ jobs:
           targetPlatform: Android
           buildMethod: Riftbound.Editor.BuildAutomation.BuildAndroid
           customParameters: -customBuildPath Builds/Android/Riftbound.apk
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s Builds/Android/Riftbound.apk
+          file Builds/Android/Riftbound.apk
+          sha256sum Builds/Android/Riftbound.apk
+          ls -lh Builds/Android/Riftbound.apk
 
       - name: Upload APK and diagnostics
         if: always()
