@@ -149,6 +149,7 @@ namespace Riftbound
                 inventoryView = null;
             }
 
+            var seedChanged = seed != hostSeed;
             CancelInvoke(nameof(LoadCurrentRoom));
             seed = hostSeed;
             roomPlan = candidate;
@@ -156,6 +157,18 @@ namespace Riftbound
             roomIndex = hostRoomIndex;
             transitioning = false;
             coopAdvanceAuthorized = false;
+
+            if (seedChanged)
+            {
+                runGold = 25;
+                inventory.Reset();
+                var starter = LootGenerator.CreateStarterWeapon();
+                inventory.AddStarter(starter);
+                player.ResetForNewRun(starter);
+                ReportCurrencies();
+                ReportEquipment(player.CurrentWeapon, player.CurrentArmor);
+            }
+
             saveData.lastSeed = seed;
             SaveService.Save(saveData);
             LoadCurrentRoom();
