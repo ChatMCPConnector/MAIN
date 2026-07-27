@@ -10,6 +10,7 @@ Neon Rift is an original 2.5D local arena brawler rebuilt for **Unity 6.3 LTS**.
 - KayKit CC0 skeleton models for enemies, elites and bosses.
 - Kenney CC0 Mini Arena and City Kit Industrial environment props.
 - Globally configured Poly Haven and ambientCG source pipeline for additional CC0 models, materials and HDRIs.
+- Five curated 1K CC0 assets provide arena-specific PBR floors, walls, tower facades and panoramic environment lighting.
 - Three arenas: Skyline Foundry, Verdant Metro and Null Observatory.
 - Four-direction arena movement, jumping, dash/guard, light/heavy attacks and energy specials.
 - Local keyboard and two-gamepad support through Unity's Input System.

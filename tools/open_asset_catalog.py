@@ -294,7 +294,7 @@ def select_polyhaven_material_files(candidates: list[DownloadCandidate], request
         "normal": ("nor_gl", "normal_gl", "normal"),
         "rough": ("rough", "roughness"),
         "ao": (" ao ", "_ao", "/ao", "ambientocclusion", "ambient_occlusion"),
-        "metal": ("metal", "metallic"),
+        "metal": ("metallic", "_metal_", "-metal-", "/metal/"),
         "disp": ("disp", "height", "displacement"),
         "arm": (" arm ", "_arm", "/arm"),
     }
@@ -304,6 +304,14 @@ def select_polyhaven_material_files(candidates: list[DownloadCandidate], request
         matching = [item for item in candidates if any(alias in f" {item.haystack} " for alias in aliases)]
         if not matching:
             continue
+        if map_name == "normal":
+            open_gl = [
+                item
+                for item in matching
+                if any(alias in item.haystack for alias in ("nor_gl", "normal_gl", "opengl"))
+            ]
+            if open_gl:
+                matching = open_gl
         best = choose_best(matching, request)
         if best.url in used_urls:
             continue

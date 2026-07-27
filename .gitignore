@@ -9,6 +9,8 @@ MemoryCaptures/
 Recordings/
 .vs/
 .idea/
+__pycache__/
+*.py[cod]
 *.csproj
 *.sln
 *.user

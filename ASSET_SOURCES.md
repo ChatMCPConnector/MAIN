@@ -36,6 +36,21 @@ Specific selected IDs, resolutions, direct files, sizes and hashes are recorded 
 
 Specific selected IDs, resolutions, direct archives, sizes and hashes are recorded in `AssetSources/open-assets.lock.json`.
 
+## Selected arena visual upgrade assets
+
+| Provider | Asset ID | Kind | Requested format | Game use | Runtime target |
+|---|---|---|---|---|---|
+| Poly Haven | `metal_plate` | PBR material | 1K PNG | Worn metal floors and Null Observatory wall surfaces | `polyhaven/materials/metal_plate` |
+| Poly Haven | `industrial_workshop_foundry` | HDRI | 1K HDR | Panoramic skybox, ambient reflections and industrial light character | `polyhaven/lighting/industrial_workshop_foundry` |
+| ambientCG | `MetalPlates015A` | PBR material | 1K JPG archive | Sci-fi floor panels, industrial walls and fallback props | `ambientcg/materials/MetalPlates015A` |
+| ambientCG | `Concrete023` | PBR material | 1K JPG archive | Verdant Metro concrete floor and boundary surfaces | `ambientcg/materials/Concrete023` |
+| ambientCG | `Facade019C` | PBR material | 1K JPG archive | Textured distant skyline and tower facades | `ambientcg/materials/Facade019C` |
+
+- License for every selected asset: Creative Commons CC0 1.0 Universal.
+- Selection and API retrieval date: 2026-07-27.
+- Unity adaptations: maximum 2K import size, mipmaps and streaming, trilinear filtering, OpenGL normal-map import, linear AO/roughness/metal maps, URP Lit materials, arena-specific tint/tiling and a panoramic skybox.
+- Downloaded binaries remain ignored; authoritative URLs, file sizes and checksums are generated in `AssetSources/open-assets.lock.json`.
+
 ## KayKit Character Pack: Adventurers
 
 - Author: Kay Lousberg / KayKit
