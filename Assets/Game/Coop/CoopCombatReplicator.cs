@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -18,6 +19,7 @@ namespace Riftbound
         private UdpClient socket;
         private IPEndPoint remoteEndpoint;
         private GameBootstrap game;
+        private CoopReliableRuntime reliable;
         private CoopRole role = CoopRole.Offline;
         private string sessionCode;
         private string localToken;
@@ -68,6 +70,7 @@ namespace Riftbound
         private void Update()
         {
             if (game == null) game = FindFirstObjectByType<GameBootstrap>();
+            HookReliable();
             var session = CoopLanController.Instance;
             if (session == null || !session.Connected)
             {
@@ -123,25 +126,43 @@ namespace Riftbound
 
         public bool TryDamageRemote(float amount, CoopDamageKind kind)
         {
-            if (!CombatConnected || role != CoopRole.Host || remoteEndpoint == null ||
+            if (!CombatConnected || role != CoopRole.Host ||
                 remoteInvulnerable || !CoopAuthorityValidation.IsValidDamage(amount) ||
                 Time.unscaledTime < nextRemoteDamage)
                 return false;
 
             var peer = CoopLanController.Instance?.RemoteState;
             if (peer == null || peer.health <= 0f || peer.downed) return false;
+            reliable ??= CoopReliableRuntime.Instance;
+            if (reliable == null) return false;
 
             nextRemoteDamage = Time.unscaledTime + .04f;
-            var damageEvent = new CoopDamageEvent
-            {
-                sequence = ++outgoingSequence,
-                amount = Mathf.Clamp(amount, .1f, 500f),
-                kind = kind
-            };
-            Send(
-                remoteEndpoint,
-                CoopAuthorityProtocol.EncodeDamage(sessionCode, localToken, damageEvent));
-            return true;
+            var payload = Mathf.Clamp(amount, .1f, 500f).ToString("0.###", CultureInfo.InvariantCulture) +
+                          "," + ((int)kind).ToString(CultureInfo.InvariantCulture);
+            return reliable.SendCritical(CoopCriticalKind.Damage, payload) > 0;
+        }
+
+        private void HookReliable()
+        {
+            if (reliable == CoopReliableRuntime.Instance) return;
+            if (reliable != null) reliable.Received -= HandleReliable;
+            reliable = CoopReliableRuntime.Instance;
+            if (reliable != null) reliable.Received += HandleReliable;
+        }
+
+        private void HandleReliable(CoopCriticalEnvelope envelope)
+        {
+            if (envelope == null || envelope.kind != CoopCriticalKind.Damage ||
+                CoopRuntimeState.Role != CoopRole.Client)
+                return;
+            var parts = (envelope.payload ?? string.Empty).Split(',');
+            if (parts.Length != 2 ||
+                !float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var amount) ||
+                !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var kind) ||
+                kind < 0 || kind > (int)CoopDamageKind.Hazard ||
+                !CoopAuthorityValidation.IsValidDamage(amount))
+                return;
+            game?.Player?.TakeNetworkDamage(amount);
         }
 
         private void StartChannel(CoopLanController session)
@@ -368,6 +389,7 @@ namespace Riftbound
                 return;
             }
 
+            // Compatibility fallback for older phase-5C clients.
             if (role == CoopRole.Client &&
                 CoopAuthorityProtocol.TryDecodeDamage(
                     payload,
@@ -473,6 +495,7 @@ namespace Riftbound
 
         private void OnDestroy()
         {
+            if (reliable != null) reliable.Received -= HandleReliable;
             if (Instance == this) Instance = null;
             StopChannel();
         }
