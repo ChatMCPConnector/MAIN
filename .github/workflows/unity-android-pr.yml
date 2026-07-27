@@ -97,7 +97,8 @@ jobs:
           buildMethod: Riftbound.Editor.BuildAutomation.BuildAndroid
           versioning: None
           allowDirtyBuild: true
-          customParameters: -customBuildPath Builds/Android/Riftbound.apk
+          buildName: Riftbound
+          buildPath: Builds/Android
 
       - name: Verify APK
         shell: bash
