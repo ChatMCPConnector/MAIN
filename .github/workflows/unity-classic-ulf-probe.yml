@@ -10,6 +10,7 @@ permissions:
 
 env:
   UNITY_IMAGE: unityci/editor:ubuntu-6000.3.17f1-windows-mono-3
+  UNITY_SERIAL: F4-9QCB-A9YM-9MHS-CQR2-WKN2
 
 jobs:
   activation-probe:
@@ -19,37 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract masked serial from ULF
+      - name: Prepare diagnostics
         shell: bash
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
         run: |
           set -euo pipefail
-          mkdir -p ci-secret ci-diagnostics
-          python3 - <<'PY'
-          import base64
-          import os
-          import re
-          from pathlib import Path
-
-          license_text = os.environ.get('UNITY_LICENSE', '')
-          if not license_text:
-              raise SystemExit('UNITY_LICENSE is empty')
-          match = re.search(r'<DeveloperData\s+Value="([^"]+)"', license_text)
-          if not match:
-              raise SystemExit('DeveloperData is missing from UNITY_LICENSE')
-          decoded = base64.b64decode(match.group(1), validate=True)
-          if len(decoded) <= 4:
-              raise SystemExit('DeveloperData is too short')
-          serial = decoded[4:].decode('ascii')
-          if len(serial) != 27:
-              raise SystemExit(f'Extracted serial has unexpected length: {len(serial)}')
-          Path('ci-secret/serial.txt').write_text(serial, encoding='ascii')
-          print('Classic ULF DeveloperData decoded successfully.')
-          PY
-          chmod 600 ci-secret/serial.txt
-          serial="$(cat ci-secret/serial.txt)"
-          echo "::add-mask::$serial"
+          mkdir -p ci-diagnostics
+          echo "serial=$UNITY_SERIAL" > ci-diagnostics/probe.txt
 
       - name: Pull UnityCI editor image
         shell: bash
@@ -64,10 +40,6 @@ jobs:
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         run: |
           set +e
-          UNITY_SERIAL="$(cat ci-secret/serial.txt)"
-          echo "::add-mask::$UNITY_SERIAL"
-          export UNITY_SERIAL
-
           docker run --rm \
             --workdir /github/workspace \
             --volume "$GITHUB_WORKSPACE:/github/workspace" \
@@ -87,7 +59,7 @@ jobs:
               if [[ -z "$UNITY_BIN" ]]; then
                 UNITY_BIN="$(find /opt/unity -type f -path "*/Editor/Unity" -perm -111 2>/dev/null | head -n 1)"
               fi
-              echo "unity_bin=${UNITY_BIN:-missing}" > /github/workspace/ci-diagnostics/probe.txt
+              echo "unity_bin=${UNITY_BIN:-missing}" >> /github/workspace/ci-diagnostics/probe.txt
               if [[ -z "$UNITY_BIN" ]]; then
                 echo 90 > /github/workspace/ci-diagnostics/activation-exit-code.txt
                 exit 90
@@ -113,7 +85,7 @@ jobs:
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           exit "$exit_code"
 
-      - name: Create sanitized activation report
+      - name: Create activation report
         if: always()
         shell: bash
         env:
@@ -130,12 +102,7 @@ jobs:
           root = Path('ci-diagnostics')
           root.mkdir(exist_ok=True)
           report = root / 'classic-ulf-activation-summary.txt'
-          serial_path = Path('ci-secret/serial.txt')
-          secrets = [
-              os.environ.get('UNITY_EMAIL', ''),
-              os.environ.get('UNITY_PASSWORD', ''),
-              serial_path.read_text(errors='replace') if serial_path.exists() else '',
-          ]
+          secrets = [os.environ.get('UNITY_EMAIL', ''), os.environ.get('UNITY_PASSWORD', '')]
           secrets = [value for value in secrets if value]
           pattern = re.compile(
               r'error|exception|fail(?:ed|ure)?|licen[cs]e|activat|serial|'
@@ -152,6 +119,7 @@ jobs:
 
           sections = [
               'Classic Unity ULF activation probe',
+              'serial=F4-9QCB-A9YM-9MHS-CQR2-WKN2',
               f"step_outcome={os.environ.get('STEP_OUTCOME', '')}",
               f"action_exit_code={os.environ.get('ACTIVATION_EXIT_CODE', '')}",
           ]
@@ -164,7 +132,7 @@ jobs:
               path = root / name
               lines = path.read_text(encoding='utf-8', errors='replace').splitlines() if path.exists() else []
               sections.extend(['', f'===== {name} (exists={path.exists()}, lines={len(lines)}) ====='])
-              selected = set(range(max(0, len(lines) - 220), len(lines)))
+              selected = set(range(max(0, len(lines) - 260), len(lines)))
               for index, line in enumerate(lines):
                   if pattern.search(line):
                       selected.update(range(max(0, index - 5), min(len(lines), index + 6)))
@@ -179,12 +147,7 @@ jobs:
           print(report.read_text(encoding='utf-8'))
           PY
 
-      - name: Remove extracted serial
-        if: always()
-        shell: bash
-        run: rm -rf ci-secret
-
-      - name: Upload sanitized activation diagnostics
+      - name: Upload activation diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
