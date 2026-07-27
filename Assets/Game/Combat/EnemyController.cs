@@ -25,9 +25,16 @@ namespace Riftbound
             game = bootstrap;
             kind = enemyKind;
             tuning = EncounterDirector.Create(bootstrap.Seed, bootstrap.RoomIndex);
-            maxHealth = BaseHealth(kind) * scale * tuning.EnemyHealthMultiplier;
+            var players = CoopRuntimeState.ActivePlayerCount;
+            maxHealth = BaseHealth(kind) *
+                        scale *
+                        tuning.EnemyHealthMultiplier *
+                        CoopBalance.EnemyHealthMultiplier(players, kind);
             health = maxHealth;
-            damage = BaseDamage(kind) * scale * tuning.EnemyDamageMultiplier;
+            damage = BaseDamage(kind) *
+                     scale *
+                     tuning.EnemyDamageMultiplier *
+                     CoopBalance.EnemyDamageMultiplier(players);
             baseMoveSpeed = BaseMoveSpeed(kind) * tuning.EnemySpeedMultiplier;
             moveSpeed = baseMoveSpeed;
 
@@ -154,6 +161,7 @@ namespace Riftbound
         private IEnumerator BossPattern()
         {
             specialActive = true;
+            var coop = CoopRuntimeState.ActivePlayerCount > 1;
             var warningColor = bossPhase == 3
                 ? new Color(1f, .05f, .05f)
                 : bossPhase == 2
@@ -175,20 +183,20 @@ namespace Riftbound
 
             if (bossPhase == 1)
             {
-                FireRadial(10, 0f, .65f);
+                FireRadial(coop ? 12 : 10, 0f, .65f);
             }
             else if (bossPhase == 2)
             {
-                FireRadial(14, 0f, .68f);
+                FireRadial(coop ? 17 : 14, 0f, .68f);
                 yield return new WaitForSeconds(.18f);
-                FireAimedFan(5, 16f, .72f);
+                FireAimedFan(coop ? 7 : 5, coop ? 13f : 16f, .72f);
             }
             else
             {
-                FireRadial(18, 0f, .72f);
+                FireRadial(coop ? 22 : 18, 0f, .72f);
                 yield return new WaitForSeconds(.24f);
-                FireRadial(18, 10f, .62f);
-                FireAimedFan(7, 13f, .78f);
+                FireRadial(coop ? 22 : 18, coop ? 8f : 10f, .62f);
+                FireAimedFan(coop ? 9 : 7, coop ? 11f : 13f, .78f);
             }
 
             specialActive = false;
