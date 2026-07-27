@@ -38,12 +38,19 @@ namespace Riftbound
                 data.roomIndex < 0 || data.roomIndex >= RunPlanner.RoomCount ||
                 data.runGold < 0 || data.health <= 0f ||
                 data.items == null || data.cardIndexes == null ||
-                data.savedUtcTicks <= 0)
+                data.savedUtcTicks <= 0 || data.savedUtcTicks > DateTime.MaxValue.Ticks)
                 return false;
 
-            var saved = new DateTime(data.savedUtcTicks, DateTimeKind.Utc);
-            var age = utcNow - saved;
-            return age >= TimeSpan.Zero && age <= MaximumAge;
+            try
+            {
+                var saved = new DateTime(data.savedUtcTicks, DateTimeKind.Utc);
+                var age = utcNow - saved;
+                return age >= TimeSpan.Zero && age <= MaximumAge;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public static RunCheckpointData Load()
