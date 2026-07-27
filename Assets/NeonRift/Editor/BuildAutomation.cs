@@ -51,7 +51,7 @@ namespace NeonRift.Editor
             CopyDistributionFile("ThirdPartyNotices/CC0-1.0.txt", "CC0-1.0.txt");
             CopyDistributionFile("ThirdPartyNotices/glTFast-Apache-2.0.txt", "glTFast-Apache-2.0.txt");
             File.WriteAllText(Path.Combine(BuildDirectory, "VERSION.txt"),
-                $"Neon Rift Arena Breakers Unity Edition\nVersion 2.1.0\nUnity {Application.unityVersion}\nWindows x86_64 portable build\n");
+                $"Neon Rift Arena Breakers Unity Edition\nVersion {PlayerSettings.bundleVersion}\nUnity {Application.unityVersion}\nWindows x86_64 portable build\n");
             File.WriteAllText(Path.Combine(BuildDirectory, "build-manifest.txt"),
                 $"Result: {report.summary.result}\nSize: {report.summary.totalSize}\nDuration: {report.summary.totalTime}\nUnity: {Application.unityVersion}\n");
 
