@@ -1,6 +1,8 @@
 name: Android prototype
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -17,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate project structure and phase 4 systems
+      - name: Validate project structure and phase 5A coop systems
         run: |
           test -f ProjectSettings/ProjectVersion.txt
           test -f Packages/manifest.json
@@ -28,11 +30,16 @@ jobs:
           test -f Assets/Game/Combat/PlayerController.cs
           test -f Assets/Game/Combat/EnemyController.cs
           test -f Assets/Game/Items/InventorySystem.cs
+          test -f Assets/Game/Coop/CoopSystems.cs
+          test -f Assets/Game/Coop/CoopLanController.cs
           test -f Assets/Game/UI/TouchHud.cs
           test -f Assets/Game/UI/InventoryView.cs
+          test -f Assets/Game/UI/CoopView.cs
           test -f Assets/Game/Tests/EditMode/InventoryTests.cs
           test -f Assets/Game/Tests/EditMode/BiomeSystemTests.cs
+          test -f Assets/Game/Tests/EditMode/CoopSystemTests.cs
           test -f Assets/Game/Editor/BuildAutomation.cs
+          test -f docs/COOP.md
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -50,7 +57,7 @@ jobs:
 
           source_paths = list(Path("Assets/Game").rglob("*.cs"))
           sources = "\n".join(path.read_text() for path in source_paths)
-          for symbol in (
+          required_symbols = (
               "RunPlanner",
               "LootGenerator",
               "RunInventory",
@@ -63,13 +70,26 @@ jobs:
               "BiomeRuntimeController",
               "RoomModifierKind.Riftstorm",
               "BossPattern",
+              "CoopProtocol",
+              "CoopLanController",
+              "CoopView",
+              "CoopReconnectPolicy",
+              "CoopReadyGate",
+              "CoopReviveState",
+              "CoopBalance",
+              "CoopRuntimeState",
+              "SynchronizeToHost",
+              'SendCommand("ADVANCE")',
+              'case "ADVANCE"',
+              "forceInternetPermission = true",
               "GameBootstrap",
               "PlayerController",
               "EnemyController",
               "TouchHud",
               "RoomKind.Merchant",
               "RoomKind.Treasure",
-          ):
+          )
+          for symbol in required_symbols:
               if symbol not in sources:
                   raise SystemExit(f"Missing symbol: {symbol}")
 
@@ -84,6 +104,16 @@ jobs:
               if token in sources:
                   raise SystemExit(f"Legacy phase-2 call remains: {token}")
 
+          protocol = Path("Assets/Game/Coop/CoopSystems.cs").read_text()
+          lan = Path("Assets/Game/Coop/CoopLanController.cs").read_text()
+          tests = Path("Assets/Game/Tests/EditMode/CoopSystemTests.cs").read_text()
+          if 'Prefix = "RB5"' not in protocol or "CultureInfo.InvariantCulture" not in protocol:
+              raise SystemExit("Coop protocol versioning or invariant serialization missing")
+          if "IPAddress.Broadcast" not in lan or "CoopReconnectPolicy.GraceSeconds" not in lan:
+              raise SystemExit("LAN discovery or reconnect implementation missing")
+          if 'GetCultureInfo("de-DE")' not in tests:
+              raise SystemExit("Locale-independent protocol test missing")
+
           for path in source_paths:
               text = path.read_text()
               if text.count("{") != text.count("}"):
@@ -93,10 +123,12 @@ jobs:
           build = Path("Assets/Game/Editor/BuildAutomation.cs").read_text()
           if "6000.3.20f1" not in version:
               raise SystemExit("Unexpected Unity version")
-          if 'bundleVersion = "0.4.0"' not in build:
+          if 'bundleVersion = "0.5.0"' not in build:
               raise SystemExit("Unexpected Android app version")
+          if "bundleVersionCode = 5" not in build:
+              raise SystemExit("Unexpected Android version code")
 
-          print("Static phase 4 validation passed")
+          print("Static phase 5A coop validation passed")
           PY
 
   build-android:
@@ -148,7 +180,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riftbound-android-0.4.0
+          name: riftbound-android-0.5.0
           path: |
             Builds/Android/Riftbound.apk
             test-artifacts
