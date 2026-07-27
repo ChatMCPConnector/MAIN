@@ -41,6 +41,9 @@ jobs:
           for symbol in ("RunPlanner", "PlayerController", "EnemyController", "TouchHud"):
               if symbol not in source:
                   raise SystemExit(f"Missing symbol: {symbol}")
+          version = Path("ProjectSettings/ProjectVersion.txt").read_text().strip()
+          if "6000.3.20f1" not in version:
+              raise SystemExit(f"Unexpected Unity version: {version}")
           print("Static project validation passed")
           PY
 
@@ -66,16 +69,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: Library
-          key: Library-${{ runner.os }}-6000.3.16f1-${{ hashFiles('Packages/**', 'ProjectSettings/**', 'Assets/**/*.cs') }}
+          key: Library-${{ runner.os }}-6000.3.20f1-${{ hashFiles('Packages/**', 'ProjectSettings/**', 'Assets/**/*.cs') }}
           restore-keys: |
-            Library-${{ runner.os }}-6000.3.16f1-
+            Library-${{ runner.os }}-6000.3.20f1-
 
       - name: Run EditMode tests
         uses: game-ci/unity-test-runner@v4
         id: tests
         with:
           projectPath: .
-          unityVersion: 6000.3.16f1
+          unityVersion: 6000.3.20f1
           testMode: EditMode
           artifactsPath: test-artifacts
           githubToken: ${{ secrets.GITHUB_TOKEN }}
@@ -84,7 +87,7 @@ jobs:
         uses: game-ci/unity-builder@v4
         with:
           projectPath: .
-          unityVersion: 6000.3.16f1
+          unityVersion: 6000.3.20f1
           targetPlatform: Android
           buildMethod: Riftbound.Editor.BuildAutomation.BuildAndroid
           customParameters: -customBuildPath Builds/Android/Riftbound.apk
