@@ -1,0 +1,1 @@
+Temporary marker used only to trigger the Unity license verification workflow after refreshing the repository activation secret.
