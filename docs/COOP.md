@@ -1,8 +1,8 @@
-# Lokaler Koop – Phase 5B
+# Lokaler Koop – Phase 5C
 
 ## Ziel
 
-Die aktuelle Koop-Grundlage verbindet zwei Android-Geräte ohne externen Server, Internetkonto oder Cloud-Dienst. Unterstützt werden ein gemeinsames lokales WLAN und ein mobiler Hotspot.
+Die aktuelle Koop-Implementierung verbindet zwei Android-Geräte ohne externen Server, Internetkonto oder Cloud-Dienst. Unterstützt werden ein gemeinsames lokales WLAN und ein mobiler Hotspot.
 
 ## Verbindung
 
@@ -12,90 +12,94 @@ Die aktuelle Koop-Grundlage verbindet zwei Android-Geräte ohne externen Server,
 - automatisch erzeugter vierstelliger Sitzungscode
 - ein Host und höchstens ein Client
 - Beitritt nur in sicheren Räumen
-- persistentes anonymes Gerätetoken für kurze Wiederverbindungen
-- Reservierung des getrennten Platzes für 20 Sekunden
+- anonymes Gerätetoken und 20 Sekunden Wiederverbindungsfrist
 
-## Synchronisierte Spieler- und Run-Zustände
+## Spieler- und Run-Zustände
 
-Zehnmal pro Sekunde werden kompakte, kulturunabhängige Statuspakete übertragen:
+Zehnmal pro Sekunde werden kompakte, kulturunabhängige Zustände übertragen:
 
-- laufende Sequenznummer
-- Gerätetoken
-- Run-Seed
-- aktueller Raum
+- Sequenznummer und Gerätetoken
+- Run-Seed und aktueller Raum
 - Spielerposition
 - aktuelle und maximale Lebenspunkte
 - Gefallenenstatus
-- Bereitschaft für den Raumwechsel
+- Bereitschaft für Raumwechsel
 
-Der Host bestätigt beim Beitritt Seed und Raum. Der Client verwirft bei einem anderen Seed seinen lokalen Run-Zustand und beginnt mit frischem Startinventar und Startgold.
+Der Host bestätigt Seed und Raum. Bei einem anderen Seed verwirft der Client seinen lokalen Run-Zustand und startet mit frischem Startinventar und Startgold.
 
-## Host-autoritative Gegnerzustände
+## Gegnerautorität
 
-Der Host ist für Gegnerpositionen, Gegnerleben und Bossphasen maßgeblich.
+Der Host ist für Gegnerpositionen, Gegnerleben, Zielwahl und Bossphasen maßgeblich.
 
-- Jeder Spawn erhält aus Raum, Gegnertyp und Position eine deterministische Netzwerk-ID.
+- Jeder Spawn erhält aus Raum, Typ und Position eine deterministische Netzwerk-ID.
 - Der Host sendet zehnmal pro Sekunde einen vollständigen Snapshot aller lebenden Gegner.
-- Ein Snapshot enthält ID, Typ, Position, Rotation, Leben, maximales Leben und Bossphase.
-- Client-Gegner führen keine eigene KI aus und bewegen sich geglättet zu den Hostpositionen.
-- Fehlt eine Gegner-ID im nächsten Snapshot, wird das Client-Replikat entfernt.
-- Ein leerer Host-Snapshot bestätigt den Abschluss des Kampfraums.
-- Bossphasen und ihre visuelle Kennzeichnung werden aus dem Hostzustand übernommen.
+- Client-Gegner führen keine eigene KI aus.
+- Position und Rotation werden auf dem Client geglättet.
+- Fehlende IDs entfernen das entsprechende Client-Replikat.
+- Ein leerer Gegner-Snapshot bestätigt das Ende des Kampfraums.
+- Bossphasen und ihre visuelle Kennzeichnung stammen aus dem Hostzustand.
 
-## Bestätigte Client-Angriffe
+## Zielwahl
 
-Client-Nahkampf und Client-Fähigkeiten verändern Gegnerleben nicht direkt.
+Gegner berücksichtigen auf dem Host beide lebenden Spieler.
 
-- Der Client sendet eine sequenzierte Angriffsanforderung an den Kampfkanal.
-- Der Host prüft Gerätetoken, Endpunkt, Sequenz, Position, Richtung, Wertebereich und Mindestabstand zwischen Angriffen.
-- Nahkampftreffer werden erst auf den Host-Gegnern berechnet.
-- Fähigkeiten erzeugen erst nach Hostbestätigung ein schadensfähiges Projektil in der Hostwelt.
-- Veraltete oder doppelte Angriffspakete werden verworfen.
+- Normalerweise wird der räumlich nähere Spieler angegriffen.
+- Ist nur ein Spieler aktiv, wird dieser ausgewählt.
+- Bei nahezu gleicher Entfernung verteilt die Gegner-ID die Aggro deterministisch.
+- Nahkampfangriffe gegen den Client lösen ein bestätigtes Schadensereignis aus.
+- Fernkämpfer und gezielte Boss-Fächer richten sich auf den ausgewählten Spieler aus.
 
-## Autorität und Regeln
+## Feindliche Projektile
 
-- Der Host autorisiert gemeinsame Raumwechsel.
+Feindliche Projektile sind host-autoritativ.
+
+- Jedes Projektil erhält eine laufende Netzwerk-ID.
+- Der Host überträgt Position, Schaden und Radius mit zehn Snapshots pro Sekunde.
+- Der Client zeigt geglättete, kollisionslose Replikate.
+- Verschwindet eine Projektil-ID auf dem Host, wird das Client-Replikat entfernt.
+- Projektilkollisionen mit dem Client werden auf dem Host über die bestätigte Clientposition erkannt.
+- Ein angenommenes Projektilereignis wird als Schaden an den Client gesendet.
+
+## Client-Angriffe und Verteidigung
+
+- Client-Nahkampf und Client-Fähigkeiten verändern Gegnerleben nicht direkt.
+- Der Host prüft Endpunkt, Gerätetoken, Sequenz, Position, Richtung, Werte und Angriffstempo.
+- Der Client meldet Dash- und Wiederbelebungs-Unverwundbarkeit zehnmal pro Sekunde.
+- Der Host verwirft Treffer, solange der zuletzt bestätigte Verteidigungsstatus unverwundbar ist.
+- Akzeptierter Schaden wird als sequenziertes Ereignis an den Client gesendet.
+- Rüstung, Schadensreduktion und verfluchte Multiplikatoren werden anschließend beim betroffenen Spieler angewendet.
+
+## Raumwechsel und Wiederbelebung
+
+- Der Host autorisiert Raumwechsel.
 - Beide Spieler müssen bereit sein.
 - Der Host sendet den bestätigten `ADVANCE`-Befehl.
-- Seed- und Raum-Snapshots korrigieren einen verlorenen Raumwechselbefehl.
-- Ein gefallener Spieler kann vom aktiven Partner wiederbelebt werden.
+- Seed- und Raum-Snapshots korrigieren verlorene Wechselbefehle.
+- Ein aktiver Spieler kann den gefallenen Partner wiederbeleben.
 - Sind beide Spieler gefallen, endet der Run.
-- Nach einem Verbindungsabbruch kann der verbleibende Spieler solo fortsetzen.
-- Der getrennte Client versucht innerhalb der Wiederverbindungsfrist automatisch zurückzukehren.
-
-## Koop-Skalierung
-
-Die Schwierigkeit wird nicht nur über Lebenspunkte erhöht:
-
-- zusätzliche normale Gegner
-- zusätzliche Gegner in Elite-Begegnungen
-- moderate Lebens- und Schadensmultiplikatoren
-- mehr Bossgeschosse
-- breitere gezielte Bossangriffe
-- vier Händlerangebote statt drei
+- Nach einem Abbruch kann der verbleibende Spieler solo fortsetzen.
 
 ## Sicherheits- und Robustheitsregeln
 
-- Sitzungs- und Kampfprotokoll besitzen getrennte Präfixe und Versionen.
+- Sitzungs-, Kampf- und Autoritätsprotokoll besitzen getrennte Präfixe und Versionen.
 - Pakete werden nur vom bestätigten Endpunkt und Gerätetoken angenommen.
-- Veraltete Zustände und Angriffe werden über Sequenznummern verworfen.
+- Veraltete Zustände, Angriffe, Verteidigungen und Schadensereignisse werden verworfen.
 - Zahlen werden invariant serialisiert und sind unabhängig von der Gerätesprache.
-- Sitzungscodes, Tokens und Befehle werden vor dem Senden bereinigt.
-- Gegnerpakete sind auf 64 Einträge und die Paketverarbeitung pro Frame ist begrenzt.
-- Angriffswerte und Abstände werden auf dem Host begrenzt und plausibilisiert.
+- Gegnerpakete sind auf 64, Projektilpakete auf 128 Einträge begrenzt.
+- Paketverarbeitung pro Frame und Schadenswerte sind begrenzt.
+- Doppelte Projektil-IDs werden abgelehnt.
 
 ## Noch nicht vollständig umgesetzt
 
-Phase 5B synchronisiert Gegnerzustände und Client-Angriffe. Noch offen sind:
+Phase 5C synchronisiert Spieler, Gegner, feindliche Projektile, Zielwahl und bestätigten Schaden. Noch offen sind:
 
-- host-ausgewählte Zielpriorität zwischen beiden Spielern
-- Replikation gegnerischer Projektile und Gefahrenflächen zum Client
-- Hostbestätigung von Schaden, Ausweichen und Unverwundbarkeit des Clients
-- vollständig synchronisierte Bossangriffs-Zeitpunkte und Projektilbahnen
-- getrennte persönliche Lootzustände und doppelsichere Belohnungsvergabe
+- genaue Zeitkompensation für Paketlaufzeit und sehr schnelle Dash-Fenster
+- Replikation dauerhafter Fallen, Laser und anderer Gefahrenflächen
 - gemeinsame oder getrennte Karten-, Schatz- und Händlerentscheidungen
-- Wiederherstellung des vollständigen Kampfzustands nach längerer App-Pause
+- persönliche Lootzustände und doppelsichere Belohnungsvergabe
+- vollständige Wiederherstellung eines laufenden Kampfes nach längerer App-Pause
 - native Android-Transporte für Wi-Fi Direct, Bluetooth und Bluetooth Low Energy
-- Tests auf zwei echten Android-Geräten inklusive Paketverlust, Hintergrundmodus und Hotspotwechsel
+- Tests auf zwei echten Android-Geräten mit Paketverlust, Hintergrundmodus und Hotspotwechsel
+- Performance-, Qualitäts-, Barrierefreiheits- und Release-Politur aus Phase 6
 
-Diese Punkte bauen auf dem bestehenden Sitzungsprotokoll, dem Kampfkanal und den deterministischen Gegner-IDs auf.
+Diese Punkte bauen auf dem Sitzungsprotokoll, dem Kampfkanal und dem neuen Autoritätsprotokoll auf.
