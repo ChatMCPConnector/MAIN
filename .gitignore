@@ -23,4 +23,6 @@ sysinfo.txt
 Assets/AssetStoreTools*
 Assets/Resources/Community/KayKit/*.glb
 Assets/Resources/Community/Kenney/
+Assets/Resources/Community/OpenAssets/
 CommunityAssetCache/
+OpenAssetCache/
