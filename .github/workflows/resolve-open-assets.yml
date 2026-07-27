@@ -1,0 +1,57 @@
+name: Resolve configured open assets
+
+on:
+  push:
+    paths:
+      - 'AssetSources/open-assets.json'
+      - 'AssetSources/providers.json'
+      - 'tools/asset_pipeline.py'
+      - 'tools/open_asset_catalog.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: open-assets-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    name: Validate and resolve Poly Haven and ambientCG requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out requested branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Validate global providers and asset requests
+        run: python tools/asset_pipeline.py validate
+
+      - name: Resolve provider IDs to audited download metadata
+        run: python tools/asset_pipeline.py resolve
+
+      - name: Show resolved catalog
+        run: cat AssetSources/open-assets.lock.json
+
+      - name: Commit updated lock file
+        shell: bash
+        run: |
+          if git diff --quiet -- AssetSources/open-assets.lock.json; then
+            echo "The lock file is already current."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AssetSources/open-assets.lock.json
+          git commit -m "Resolve configured CC0 asset downloads"
+          git push

@@ -2,6 +2,8 @@
 
 The Unity project keeps third-party binary art out of Git and downloads selected files into ignored directories. This avoids accidentally republishing proprietary Asset Store content and makes each source auditable.
 
+Repository-wide open-asset rules and API endpoints are defined in `AssetSources/providers.json`. Concrete requested assets are listed in `AssetSources/open-assets.json`, while resolved download metadata and hashes are recorded in `AssetSources/open-assets.lock.json`.
+
 ## Official Unity packages
 
 | Package | Version or pin | Purpose | License channel |
@@ -11,6 +13,28 @@ The Unity project keeps third-party binary art out of Git and downloads selected
 | Unity Test Framework | 1.6.0 | EditMode tests | Unity Package Manager |
 | Unity UI | 2.0.0 | Unity runtime UI dependency | Unity Package Manager |
 | glTFast | Commit `66aa58252bafe6f7f48031f4906f807f95a3f396` | Runtime and Editor glTF/GLB import | Apache-2.0 |
+
+## Poly Haven
+
+- Purpose: primary source for CC0 models, PBR materials and HDRIs.
+- License: Creative Commons CC0 1.0 Universal.
+- API authentication: none.
+- API list endpoint: `https://api.polyhaven.com/assets`.
+- API files endpoint: `https://api.polyhaven.com/files/{asset_id}`.
+- Runtime/build destination: `Assets/Resources/Community/OpenAssets/`.
+- Live API credit: **Powered by Poly Haven**.
+
+Specific selected IDs, resolutions, direct files, sizes and hashes are recorded in `AssetSources/open-assets.lock.json` instead of being duplicated here.
+
+## ambientCG
+
+- Purpose: secondary source, especially for CC0 PBR materials, decals, terrain assets, HDRIs and selected models.
+- License: Creative Commons CC0 1.0 Universal.
+- API authentication: none.
+- API endpoint: `https://ambientcg.com/api/v3/assets`.
+- Runtime/build destination: `Assets/Resources/Community/OpenAssets/`.
+
+Specific selected IDs, resolutions, direct archives, sizes and hashes are recorded in `AssetSources/open-assets.lock.json`.
 
 ## KayKit Character Pack: Adventurers
 

@@ -16,6 +16,7 @@ namespace NeonRift.Editor
         public static void BuildWindows()
         {
             CommunityAssetInstaller.EnsureAssets(false);
+            OpenAssetInstaller.EnsureAssets(false);
             ProjectSetup.EnsureProject();
             Directory.CreateDirectory(BuildDirectory);
 
