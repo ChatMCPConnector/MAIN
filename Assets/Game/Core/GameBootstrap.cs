@@ -13,6 +13,7 @@ namespace Riftbound
         private readonly List<EnemyController> enemies = new List<EnemyController>();
         private readonly List<GameObject> roomObjects = new List<GameObject>();
         private readonly RunInventory inventory = new RunInventory(10);
+        private readonly List<int> selectedCards = new List<int>();
         private System.Random rng;
         private int[] roomPlan;
         private int roomIndex;
@@ -22,8 +23,10 @@ namespace Riftbound
         private TouchHud hud;
         private InventoryView inventoryView;
         private SaveData saveData;
+        private CoopDecisionRuntime decisionRuntime;
         private bool transitioning;
         private bool coopAdvanceAuthorized;
+        private bool runFinished;
 
         public PlayerController Player => player;
         public int RoomIndex => roomIndex;
@@ -31,6 +34,7 @@ namespace Riftbound
         public int RunGold => runGold;
         public RunInventory Inventory => inventory;
         public bool IsSafeRoom => player != null && !player.CombatEnabled && !transitioning;
+        public bool HasActiveRun => !runFinished && player != null && player.Health > 0f && roomPlan != null;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void EnsureBootstrap()
@@ -54,7 +58,24 @@ namespace Riftbound
             CreateEventSystem();
             CreateWorld();
             hud = TouchHud.Create(this);
-            NewRun();
+            HookDecisionRuntime();
+            var checkpoint = RunCheckpointService.Load();
+            if (!RestoreCheckpoint(checkpoint)) NewRun();
+        }
+
+        private void Update()
+        {
+            HookDecisionRuntime();
+        }
+
+        private void HookDecisionRuntime()
+        {
+            if (decisionRuntime == CoopDecisionRuntime.Instance) return;
+            if (decisionRuntime != null)
+                decisionRuntime.HostEconomyReceived -= ApplyHostEconomy;
+            decisionRuntime = CoopDecisionRuntime.Instance;
+            if (decisionRuntime != null)
+                decisionRuntime.HostEconomyReceived += ApplyHostEconomy;
         }
 
         private static void CreateEventSystem()
@@ -111,19 +132,19 @@ namespace Riftbound
 
         public void NewRun()
         {
-            if (inventoryView != null)
-            {
-                Destroy(inventoryView.gameObject);
-                inventoryView = null;
-            }
-
+            CloseInventory();
+            RunCheckpointService.Clear();
+            runFinished = false;
             seed = unchecked((int)DateTime.UtcNow.Ticks);
             roomPlan = GenerateValidRun(ref seed);
             rng = new System.Random(seed);
             roomIndex = 0;
             runGold = 25;
             coopAdvanceAuthorized = false;
+            transitioning = false;
             inventory.Reset();
+            selectedCards.Clear();
+            decisionRuntime?.ResetRun();
 
             var starter = LootGenerator.CreateStarterWeapon();
             inventory.AddStarter(starter);
@@ -143,12 +164,7 @@ namespace Riftbound
             if (!RunPlanner.Validate(candidate)) return false;
             if (seed == hostSeed && roomIndex == hostRoomIndex) return true;
 
-            if (inventoryView != null)
-            {
-                Destroy(inventoryView.gameObject);
-                inventoryView = null;
-            }
-
+            CloseInventory();
             var seedChanged = seed != hostSeed;
             CancelInvoke(nameof(LoadCurrentRoom));
             seed = hostSeed;
@@ -157,11 +173,14 @@ namespace Riftbound
             roomIndex = hostRoomIndex;
             transitioning = false;
             coopAdvanceAuthorized = false;
+            runFinished = false;
 
             if (seedChanged)
             {
                 runGold = 25;
                 inventory.Reset();
+                selectedCards.Clear();
+                decisionRuntime?.ResetRun();
                 var starter = LootGenerator.CreateStarterWeapon();
                 inventory.AddStarter(starter);
                 player.ResetForNewRun(starter);
@@ -173,6 +192,78 @@ namespace Riftbound
             SaveService.Save(saveData);
             LoadCurrentRoom();
             hud?.ShowMessage("RUN MIT HOST SYNCHRONISIERT", 1.5f);
+            return true;
+        }
+
+        public RunCheckpointData CaptureCheckpoint()
+        {
+            if (!HasActiveRun) return null;
+            var checkpoint = new RunCheckpointData
+            {
+                seed = seed,
+                roomIndex = roomIndex,
+                runGold = runGold,
+                health = player.Health,
+                equippedWeaponId = player.EquippedWeaponId,
+                equippedArmorId = player.EquippedArmorId,
+                minimumRarity = (int)inventory.MinimumRarity,
+                combatActive = player.CombatEnabled,
+                cardIndexes = new List<int>(selectedCards)
+            };
+            for (var i = 0; i < inventory.Items.Count; i++)
+                if (inventory.Items[i] != null)
+                    checkpoint.items.Add(inventory.Items[i].Clone());
+            return checkpoint;
+        }
+
+        public bool RestoreCheckpoint(RunCheckpointData checkpoint)
+        {
+            if (!RunCheckpointService.IsUsable(checkpoint, DateTime.UtcNow)) return false;
+            var candidate = RunPlanner.Generate(checkpoint.seed);
+            if (!RunPlanner.Validate(candidate)) return false;
+
+            CloseInventory();
+            seed = checkpoint.seed;
+            roomPlan = candidate;
+            rng = new System.Random(seed);
+            roomIndex = checkpoint.roomIndex;
+            runGold = checkpoint.runGold;
+            transitioning = false;
+            coopAdvanceAuthorized = false;
+            runFinished = false;
+            selectedCards.Clear();
+            for (var i = 0; i < checkpoint.cardIndexes.Count; i++)
+            {
+                var index = checkpoint.cardIndexes[i];
+                if (index >= 0 && index < GameCatalog.Cards.Length)
+                    selectedCards.Add(index);
+            }
+
+            var minimum = Enum.IsDefined(typeof(ItemRarity), checkpoint.minimumRarity)
+                ? (ItemRarity)checkpoint.minimumRarity
+                : ItemRarity.Common;
+            inventory.Restore(checkpoint.items, minimum);
+            if (inventory.Items.Count == 0)
+                inventory.AddStarter(LootGenerator.CreateStarterWeapon());
+
+            ItemInstance weapon = null;
+            ItemInstance armor = null;
+            for (var i = 0; i < inventory.Items.Count; i++)
+            {
+                var item = inventory.Items[i];
+                if (item.instanceId == checkpoint.equippedWeaponId) weapon = item;
+                if (item.instanceId == checkpoint.equippedArmorId) armor = item;
+                if (weapon == null && item.kind == ItemKind.Weapon) weapon = item;
+            }
+            weapon ??= LootGenerator.CreateStarterWeapon();
+            player.RestoreRunState(weapon, armor, checkpoint.health, selectedCards);
+            decisionRuntime?.ResetRun();
+            saveData.lastSeed = seed;
+            SaveService.Save(saveData);
+            ReportCurrencies();
+            ReportEquipment(player.CurrentWeapon, player.CurrentArmor);
+            LoadCurrentRoom();
+            hud?.ShowMessage("LAUFENDER RUN WIEDERHERGESTELLT", 2f);
             return true;
         }
 
@@ -214,22 +305,12 @@ namespace Riftbound
 
                 case RoomKind.Treasure:
                     player.SetCombatEnabled(false);
-                    hud.ShowTreasure(
-                        ShopGenerator.GenerateTreasure(seed, roomIndex),
-                        ChooseTreasure);
+                    ShowTreasureRoom();
                     break;
 
                 case RoomKind.Merchant:
                     player.SetCombatEnabled(false);
-                    hud.ShowMerchant(
-                        ShopGenerator.Generate(
-                            seed,
-                            roomIndex,
-                            CoopBalance.LootChoiceCount(CoopRuntimeState.ActivePlayerCount)),
-                        runGold,
-                        TryBuyOffer,
-                        () => OpenInventory(AdvanceRoom),
-                        AdvanceRoom);
+                    ShowMerchantRoom();
                     break;
 
                 case RoomKind.Healing:
@@ -244,6 +325,99 @@ namespace Riftbound
                 default:
                     throw new ArgumentOutOfRangeException();
             }
+        }
+
+        private void ShowTreasureRoom()
+        {
+            var offers = ShopGenerator.GenerateTreasure(seed, roomIndex);
+            if (IsCoopClient())
+            {
+                hud.ShowWaiting("SCHATZKAMMER", "Der Host wählt den gemeinsamen Fund.");
+                decisionRuntime?.WaitFor(seed, roomIndex, CoopDecisionType.Treasure, decision =>
+                {
+                    if (decision.seed != seed || decision.roomIndex != roomIndex ||
+                        decision.optionIndex < 0 || decision.optionIndex >= offers.Length)
+                        return;
+                    ApplyHostGold(decision.hostGold);
+                    AcquireItem(offers[decision.optionIndex].item);
+                    hud.CloseOverlayNow();
+                    OpenInventory(AdvanceRoom);
+                });
+                return;
+            }
+
+            hud.ShowTreasure(offers, offer =>
+            {
+                var index = Array.IndexOf(offers, offer);
+                if (CoopRuntimeState.Connected && CoopRuntimeState.Role == CoopRole.Host)
+                    decisionRuntime?.Publish(new CoopDecision(
+                        seed,
+                        roomIndex,
+                        CoopDecisionType.Treasure,
+                        Mathf.Max(0, index),
+                        runGold));
+                ChooseTreasure(offer);
+            });
+        }
+
+        private void ShowMerchantRoom()
+        {
+            var offers = ShopGenerator.Generate(
+                seed,
+                roomIndex,
+                CoopBalance.LootChoiceCount(CoopRuntimeState.ActivePlayerCount));
+            if (IsCoopClient())
+            {
+                hud.ShowWaiting("RISSHÄNDLER", "Der Host entscheidet über Kauf oder Weiterreise.");
+                decisionRuntime?.WaitFor(seed, roomIndex, CoopDecisionType.MerchantBuy, decision =>
+                {
+                    if (decision.seed != seed || decision.roomIndex != roomIndex ||
+                        decision.optionIndex < 0 || decision.optionIndex >= offers.Length)
+                        return;
+                    runGold = decision.hostGold;
+                    AcquireItem(offers[decision.optionIndex].item);
+                    ReportCurrencies();
+                    hud.CloseOverlayNow();
+                    OpenInventory(AdvanceRoom);
+                });
+                decisionRuntime?.WaitFor(seed, roomIndex, CoopDecisionType.MerchantLeave, decision =>
+                {
+                    if (decision.seed != seed || decision.roomIndex != roomIndex) return;
+                    ApplyHostGold(decision.hostGold);
+                    hud.CloseOverlayNow();
+                    AdvanceRoom();
+                });
+                return;
+            }
+
+            hud.ShowMerchant(
+                offers,
+                runGold,
+                offer =>
+                {
+                    var index = Array.IndexOf(offers, offer);
+                    var bought = TryBuyOffer(offer);
+                    if (bought && CoopRuntimeState.Connected && CoopRuntimeState.Role == CoopRole.Host)
+                        decisionRuntime?.Publish(new CoopDecision(
+                            seed,
+                            roomIndex,
+                            CoopDecisionType.MerchantBuy,
+                            Mathf.Max(0, index),
+                            runGold));
+                    return bought;
+                },
+                () => OpenInventory(AdvanceRoom),
+                () =>
+                {
+                    if (CoopRuntimeState.Connected && CoopRuntimeState.Role == CoopRole.Host)
+                        decisionRuntime?.Publish(new CoopDecision(
+                            seed,
+                            roomIndex,
+                            CoopDecisionType.MerchantLeave,
+                            -1,
+                            runGold));
+                    AdvanceRoom();
+                });
         }
 
         private void BuildRoom(RoomDefinition room)
@@ -386,6 +560,7 @@ namespace Riftbound
             runGold += reward;
             saveData.lifetimeGold += reward;
             ReportCurrencies();
+            ReleaseQualityRuntime.Play(FeedbackCue.Hit);
 
             if (enemies.Count == 0 && !transitioning)
                 CompleteCombatRoom();
@@ -401,10 +576,13 @@ namespace Riftbound
             var room = GameCatalog.GetRoom(roomPlan[roomIndex]);
             if (room.kind == RoomKind.Boss)
             {
+                runFinished = true;
+                RunCheckpointService.Clear();
                 saveData.completedRuns++;
                 var earnedShards = MetaProgression.CompleteRun(saveData, runGold);
                 SaveService.Save(saveData);
                 ReportCurrencies();
+                ReleaseQualityRuntime.Play(FeedbackCue.Reward, true);
                 hud.ShowRunComplete(
                     saveData.completedRuns,
                     runGold,
@@ -415,26 +593,59 @@ namespace Riftbound
             }
 
             var rewards = DrawCards(3);
+            if (IsCoopClient())
+            {
+                hud.ShowWaiting("KARTENWAHL", "Der Host wählt die gemeinsame Karte.");
+                decisionRuntime?.WaitFor(seed, roomIndex, CoopDecisionType.Card, decision =>
+                {
+                    if (decision.seed != seed || decision.roomIndex != roomIndex ||
+                        decision.optionIndex < 0 || decision.optionIndex >= rewards.Length)
+                        return;
+                    ApplyCardChoice(rewards[decision.optionIndex]);
+                    ApplyHostGold(decision.hostGold);
+                    hud.CloseOverlayNow();
+                    OpenInventory(AdvanceRoom);
+                });
+                return;
+            }
+
             hud.ShowRewards(rewards, card =>
             {
-                player.ApplyCard(card);
+                var index = Array.IndexOf(rewards, card);
+                if (CoopRuntimeState.Connected && CoopRuntimeState.Role == CoopRole.Host)
+                    decisionRuntime?.Publish(new CoopDecision(
+                        seed,
+                        roomIndex,
+                        CoopDecisionType.Card,
+                        Mathf.Max(0, index),
+                        runGold));
+                ApplyCardChoice(card);
                 OpenInventory(AdvanceRoom);
             });
         }
 
         private CardDefinition[] DrawCards(int count)
         {
+            var deterministic = new System.Random(unchecked(seed * 486187739 ^ roomIndex * 16777619 ^ 0x51f15e));
             var rewards = new CardDefinition[count];
             var selected = new HashSet<int>();
             for (var i = 0; i < rewards.Length; i++)
             {
                 int cardIndex;
-                do cardIndex = rng.Next(GameCatalog.Cards.Length);
+                do cardIndex = deterministic.Next(GameCatalog.Cards.Length);
                 while (!selected.Add(cardIndex));
                 rewards[i] = GameCatalog.Cards[cardIndex];
             }
-
             return rewards;
+        }
+
+        private void ApplyCardChoice(CardDefinition card)
+        {
+            if (card == null) return;
+            var catalogIndex = Array.IndexOf(GameCatalog.Cards, card);
+            if (catalogIndex >= 0) selectedCards.Add(catalogIndex);
+            player.ApplyCard(card);
+            ReleaseQualityRuntime.Play(FeedbackCue.Reward);
         }
 
         private void ChooseTreasure(ShopOffer offer)
@@ -462,6 +673,7 @@ namespace Riftbound
                 MetaProgression.RecordDiscovery(saveData, item);
                 SaveService.Save(saveData);
                 hud.ShowMessage($"GEFUNDEN: {ItemText.PlainTitle(item)}", 1.4f);
+                ReleaseQualityRuntime.Play(FeedbackCue.Reward);
             }
             else
             {
@@ -502,6 +714,13 @@ namespace Riftbound
                     inventoryView = null;
                     closeAction?.Invoke();
                 });
+        }
+
+        private void CloseInventory()
+        {
+            if (inventoryView == null) return;
+            Destroy(inventoryView.gameObject);
+            inventoryView = null;
         }
 
         private int SalvageItem(ItemInstance item)
@@ -555,6 +774,8 @@ namespace Riftbound
 
         private void FinishGameOver()
         {
+            runFinished = true;
+            RunCheckpointService.Clear();
             player.SetCombatEnabled(false);
             var earnedShards = MetaProgression.RecordDefeat(saveData, roomIndex + 1);
             SaveService.Save(saveData);
@@ -576,12 +797,29 @@ namespace Riftbound
         public void ReportCurrencies()
         {
             hud?.SetCurrencies(runGold, saveData?.metaShards ?? 0);
+            if (CoopRuntimeState.Connected && CoopRuntimeState.Role == CoopRole.Host)
+                decisionRuntime?.PublishEconomy(seed, roomIndex, runGold);
+        }
+
+        private void ApplyHostEconomy(int hostSeed, int hostRoom, int hostGold)
+        {
+            if (!IsCoopClient() || hostSeed != seed || hostRoom != roomIndex) return;
+            ApplyHostGold(hostGold);
+        }
+
+        private void ApplyHostGold(int hostGold)
+        {
+            runGold = Mathf.Max(0, hostGold);
+            hud?.SetCurrencies(runGold, saveData?.metaShards ?? 0);
         }
 
         public void ReportEquipment(string weapon, string armor)
         {
             hud?.SetEquipment(weapon, armor);
         }
+
+        private bool IsCoopClient() =>
+            CoopRuntimeState.Connected && CoopRuntimeState.Role == CoopRole.Client;
 
         private void ClearRoom()
         {
@@ -593,6 +831,12 @@ namespace Riftbound
                 if (item != null) Destroy(item);
             roomObjects.Clear();
             Projectile.ReleaseAllActive();
+        }
+
+        private void OnDestroy()
+        {
+            if (decisionRuntime != null)
+                decisionRuntime.HostEconomyReceived -= ApplyHostEconomy;
         }
     }
 
