@@ -19,19 +19,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate project structure and phase 3 systems
+      - name: Validate project structure and phase 4 systems
         run: |
           test -f ProjectSettings/ProjectVersion.txt
           test -f Packages/manifest.json
           test -f Assets/Game/Core/GameData.cs
           test -f Assets/Game/Core/RunSystems.cs
           test -f Assets/Game/Core/GameBootstrap.cs
+          test -f Assets/Game/Core/BiomeSystems.cs
           test -f Assets/Game/Combat/PlayerController.cs
           test -f Assets/Game/Combat/EnemyController.cs
           test -f Assets/Game/Items/InventorySystem.cs
           test -f Assets/Game/UI/TouchHud.cs
           test -f Assets/Game/UI/InventoryView.cs
           test -f Assets/Game/Tests/EditMode/InventoryTests.cs
+          test -f Assets/Game/Tests/EditMode/BiomeSystemTests.cs
           test -f Assets/Game/Editor/BuildAutomation.cs
           python3 - <<'PY'
           import json
@@ -57,6 +59,12 @@ jobs:
               "InventoryView",
               "ItemRarity.Cursed",
               "MetaProgression",
+              "BiomePlanner",
+              "ModifierPlanner",
+              "EncounterDirector",
+              "BiomeRuntimeController",
+              "RoomModifierKind.Riftstorm",
+              "BossPattern",
               "GameBootstrap",
               "PlayerController",
               "EnemyController",
@@ -87,10 +95,10 @@ jobs:
           build = Path("Assets/Game/Editor/BuildAutomation.cs").read_text()
           if "6000.3.20f1" not in version:
               raise SystemExit("Unexpected Unity version")
-          if 'bundleVersion = "0.3.0"' not in build:
+          if 'bundleVersion = "0.4.0"' not in build:
               raise SystemExit("Unexpected Android app version")
 
-          print("Static phase 3 validation passed")
+          print("Static phase 4 validation passed")
           PY
 
   build-android:
@@ -142,7 +150,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riftbound-android-0.3.0
+          name: riftbound-android-0.4.0
           path: |
             Builds/Android/Riftbound.apk
             test-artifacts
