@@ -6,14 +6,19 @@ on:
     types: [synchronize]
     paths:
       - ".github/workflows/extract-unity-build-log.yml"
+  issues:
+    types: [reopened]
 
 permissions:
   contents: write
   pull-requests: read
+  issues: read
 
 jobs:
   patch-release-workflow:
-    if: github.event.pull_request.number == 18
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.number == 18) ||
+      (github.event_name == 'issues' && github.event.issue.title == 'Apply Android source fixes PR 18')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
