@@ -169,28 +169,15 @@ namespace NeonRift
             Keyboard keyboard = Keyboard.current;
             if (keyboard != null)
             {
-                if (PlayerIndex == 0)
-                {
-                    move.x += ReadAxis(keyboard.leftArrowKey.isPressed, keyboard.rightArrowKey.isPressed);
-                    move.y += ReadAxis(keyboard.downArrowKey.isPressed, keyboard.upArrowKey.isPressed);
-                    light |= keyboard.zKey.wasPressedThisFrame;
-                    heavy |= keyboard.xKey.wasPressedThisFrame;
-                    special |= keyboard.cKey.wasPressedThisFrame;
-                    jump |= keyboard.vKey.wasPressedThisFrame;
-                    dash |= keyboard.bKey.wasPressedThisFrame;
-                    guard |= keyboard.bKey.isPressed;
-                }
-                else
-                {
-                    move.x += ReadAxis(keyboard.aKey.isPressed, keyboard.dKey.isPressed);
-                    move.y += ReadAxis(keyboard.sKey.isPressed, keyboard.wKey.isPressed);
-                    light |= keyboard.fKey.wasPressedThisFrame;
-                    heavy |= keyboard.gKey.wasPressedThisFrame;
-                    special |= keyboard.hKey.wasPressedThisFrame;
-                    jump |= keyboard.rKey.wasPressedThisFrame;
-                    dash |= keyboard.tKey.wasPressedThisFrame;
-                    guard |= keyboard.tKey.isPressed;
-                }
+                int player = Mathf.Clamp(PlayerIndex, 0, 1);
+                move.x += ReadAxis(InputBindings.Held(keyboard, player, PlayerAction.MoveLeft), InputBindings.Held(keyboard, player, PlayerAction.MoveRight));
+                move.y += ReadAxis(InputBindings.Held(keyboard, player, PlayerAction.MoveDown), InputBindings.Held(keyboard, player, PlayerAction.MoveUp));
+                light |= InputBindings.Pressed(keyboard, player, PlayerAction.Light);
+                heavy |= InputBindings.Pressed(keyboard, player, PlayerAction.Heavy);
+                special |= InputBindings.Pressed(keyboard, player, PlayerAction.Special);
+                jump |= InputBindings.Pressed(keyboard, player, PlayerAction.Jump);
+                dash |= InputBindings.Pressed(keyboard, player, PlayerAction.DashGuard);
+                guard |= InputBindings.Held(keyboard, player, PlayerAction.DashGuard);
             }
 
             var pads = Gamepad.all;
