@@ -1,105 +1,99 @@
-# Lokaler Koop – Phase 5C
+# Lokaler Koop – Release 1.0
 
-## Ziel
+## Unterstützte Verbindung
 
-Die aktuelle Koop-Implementierung verbindet zwei Android-Geräte ohne externen Server, Internetkonto oder Cloud-Dienst. Unterstützt werden ein gemeinsames lokales WLAN und ein mobiler Hotspot.
+Riftbound verbindet genau zwei Android-Geräte ohne externen Server, Konto oder Cloud-Dienst. Offiziell unterstützt werden ein gemeinsames lokales WLAN und ein mobiler Hotspot.
 
-## Verbindung
-
-- UDP-Sitzungserkennung über Port `47777`
-- direkter Host-Port aus dem Bereich `47778` bis `47787`
-- separater Kampfkanal über Port `47820`
+- UDP-Sitzungserkennung: Port `47777`
+- direkter Sitzungsport: `47778` bis `47787`
+- Kampf-Snapshots: Port `47820`
+- zuverlässige Ereignisse mit ACK/Retry: Port `47830`
 - automatisch erzeugter vierstelliger Sitzungscode
-- ein Host und höchstens ein Client
-- Beitritt nur in sicheren Räumen
-- anonymes Gerätetoken und 20 Sekunden Wiederverbindungsfrist
+- anonymes persistentes Gerätetoken
+- 20 Sekunden reservierte Wiederverbindungsfrist
+- Beitritt eines neuen Geräts nur in sicheren Räumen
 
-## Spieler- und Run-Zustände
+Native Wi-Fi-Direct- und Bluetooth-Transporte gehören nicht zur Transportmatrix von Version 1.0. Auf Android wird stattdessen ein lokales WLAN oder der Hotspot eines der beiden Geräte verwendet.
+
+## Hochfrequente Zustände
 
 Zehnmal pro Sekunde werden kompakte, kulturunabhängige Zustände übertragen:
 
-- Sequenznummer und Gerätetoken
+- Spielerposition, Lebenspunkte, Gefallenenstatus und Bereitschaft
 - Run-Seed und aktueller Raum
-- Spielerposition
-- aktuelle und maximale Lebenspunkte
-- Gefallenenstatus
-- Bereitschaft für Raumwechsel
+- Gegnerposition, Rotation, Leben, Maximalleben und Bossphase
+- feindliche Projektilposition, Schaden und Radius
+- Dash- und Wiederbelebungs-Unverwundbarkeit
 
-Der Host bestätigt Seed und Raum. Bei einem anderen Seed verwirft der Client seinen lokalen Run-Zustand und startet mit frischem Startinventar und Startgold.
+Pakete werden über Protokollversion, Sitzungscode, Gerätetoken, Endpunkt und Sequenznummer geprüft. Alte oder doppelte Snapshots werden verworfen.
 
-## Gegnerautorität
+## Host-Autorität
 
-Der Host ist für Gegnerpositionen, Gegnerleben, Zielwahl und Bossphasen maßgeblich.
+Der Host ist maßgeblich für:
 
-- Jeder Spawn erhält aus Raum, Typ und Position eine deterministische Netzwerk-ID.
-- Der Host sendet zehnmal pro Sekunde einen vollständigen Snapshot aller lebenden Gegner.
-- Client-Gegner führen keine eigene KI aus.
-- Position und Rotation werden auf dem Client geglättet.
-- Fehlende IDs entfernen das entsprechende Client-Replikat.
-- Ein leerer Gegner-Snapshot bestätigt das Ende des Kampfraums.
-- Bossphasen und ihre visuelle Kennzeichnung stammen aus dem Hostzustand.
+- Gegnerbewegung und Zielwahl
+- Gegnerleben und Tod
+- Bossphasen und Angriffsmuster
+- feindliche Projektile
+- Laser- und Pulsgefahren
+- Client-Schaden
+- gemeinsame Karten-, Schatz- und Händlerentscheidungen
+- gemeinsame Run-Währung
+- Raumwechsel
 
-## Zielwahl
+Client-Nahkampf und Client-Fähigkeiten werden als Anforderung übertragen. Der Host prüft Position, Richtung, Reichweite, Wertebereich, Angriffstempo und Sequenz, bevor Gegnerleben verändert wird.
 
-Gegner berücksichtigen auf dem Host beide lebenden Spieler.
+## Zielwahl und Gefahren
 
-- Normalerweise wird der räumlich nähere Spieler angegriffen.
-- Ist nur ein Spieler aktiv, wird dieser ausgewählt.
-- Bei nahezu gleicher Entfernung verteilt die Gegner-ID die Aggro deterministisch.
-- Nahkampfangriffe gegen den Client lösen ein bestätigtes Schadensereignis aus.
-- Fernkämpfer und gezielte Boss-Fächer richten sich auf den ausgewählten Spieler aus.
+Gegner wählen normalerweise den näheren lebenden Spieler. Bei nahezu gleicher Entfernung verteilt die deterministische Gegner-ID die Aggro zwischen Host und Client.
 
-## Feindliche Projektile
+Laser- und Pulsgefahren werden deterministisch aus Seed und Raum erzeugt. Der Host überträgt zuverlässige Phasenwechsel für Spawn, Warnung, Aktivierung und Deaktivierung. Client-Darstellungen besitzen keine eigene Schadensautorität.
 
-Feindliche Projektile sind host-autoritativ.
+## Zuverlässige Ereignisse
 
-- Jedes Projektil erhält eine laufende Netzwerk-ID.
-- Der Host überträgt Position, Schaden und Radius mit zehn Snapshots pro Sekunde.
-- Der Client zeigt geglättete, kollisionslose Replikate.
-- Verschwindet eine Projektil-ID auf dem Host, wird das Client-Replikat entfernt.
-- Projektilkollisionen mit dem Client werden auf dem Host über die bestätigte Clientposition erkannt.
-- Ein angenommenes Projektilereignis wird als Schaden an den Client gesendet.
+Kritische Ereignisse verwenden das Protokollpräfix `RB5R`:
 
-## Client-Angriffe und Verteidigung
+- Schaden
+- Wiederbelebung
+- Raumwechsel
+- Karten-, Schatz- und Händlerentscheidung
+- Währungsstand
 
-- Client-Nahkampf und Client-Fähigkeiten verändern Gegnerleben nicht direkt.
-- Der Host prüft Endpunkt, Gerätetoken, Sequenz, Position, Richtung, Werte und Angriffstempo.
-- Der Client meldet Dash- und Wiederbelebungs-Unverwundbarkeit zehnmal pro Sekunde.
-- Der Host verwirft Treffer, solange der zuletzt bestätigte Verteidigungsstatus unverwundbar ist.
-- Akzeptierter Schaden wird als sequenziertes Ereignis an den Client gesendet.
-- Rüstung, Schadensreduktion und verfluchte Multiplikatoren werden anschließend beim betroffenen Spieler angewendet.
+Jede Nachricht besitzt eine eindeutige ID. Sie wird in kurzen Abständen erneut gesendet, bis die Gegenseite ein ACK zurückgibt. Bereits verarbeitete IDs werden dedupliziert. Dadurch wird eine Nachricht bei Paketverlust nicht vergessen und bei Wiederholung nicht doppelt angewendet.
 
-## Raumwechsel und Wiederbelebung
+Der normale Sitzungs- beziehungsweise Kampfkanal bleibt für schnelle Rückmeldung erhalten. Der zuverlässige Kanal ist die bestätigte Absicherung.
 
-- Der Host autorisiert Raumwechsel.
-- Beide Spieler müssen bereit sein.
-- Der Host sendet den bestätigten `ADVANCE`-Befehl.
-- Seed- und Raum-Snapshots korrigieren verlorene Wechselbefehle.
-- Ein aktiver Spieler kann den gefallenen Partner wiederbeleben.
-- Sind beide Spieler gefallen, endet der Run.
-- Nach einem Abbruch kann der verbleibende Spieler solo fortsetzen.
+## Gemeinsame Entscheidungen und Lootschutz
 
-## Sicherheits- und Robustheitsregeln
+Der Host wählt Karten, Schätze und Händleraktionen. Der Client rekonstruiert dieselben Optionen deterministisch aus Seed und Raum und erhält nur den bestätigten Optionsindex.
 
-- Sitzungs-, Kampf- und Autoritätsprotokoll besitzen getrennte Präfixe und Versionen.
-- Pakete werden nur vom bestätigten Endpunkt und Gerätetoken angenommen.
-- Veraltete Zustände, Angriffe, Verteidigungen und Schadensereignisse werden verworfen.
-- Zahlen werden invariant serialisiert und sind unabhängig von der Gerätesprache.
-- Gegnerpakete sind auf 64, Projektilpakete auf 128 Einträge begrenzt.
-- Paketverarbeitung pro Frame und Schadenswerte sind begrenzt.
-- Doppelte Projektil-IDs werden abgelehnt.
+Transaktionsschlüssel verhindern doppelte Anwendung. Die Host-Währung besitzt eine monotone Revision und wird nach jeder Entscheidung erneut als endgültiger Stand angewendet. Dadurch bleiben Gold und Belohnungen auch bei vertauschter Paketreihenfolge konsistent.
 
-## Noch nicht vollständig umgesetzt
+Beide Spieler erhalten in Version 1.0 dieselbe gemeinsame Karten- und Gegenstandsentscheidung. Persönlich getrennte Lootinstanzen sind bewusst nicht Teil des Spielmodells.
 
-Phase 5C synchronisiert Spieler, Gegner, feindliche Projektile, Zielwahl und bestätigten Schaden. Noch offen sind:
+## Raumwechsel, Tod und Wiederbelebung
 
-- genaue Zeitkompensation für Paketlaufzeit und sehr schnelle Dash-Fenster
-- Replikation dauerhafter Fallen, Laser und anderer Gefahrenflächen
-- gemeinsame oder getrennte Karten-, Schatz- und Händlerentscheidungen
-- persönliche Lootzustände und doppelsichere Belohnungsvergabe
-- vollständige Wiederherstellung eines laufenden Kampfes nach längerer App-Pause
-- native Android-Transporte für Wi-Fi Direct, Bluetooth und Bluetooth Low Energy
-- Tests auf zwei echten Android-Geräten mit Paketverlust, Hintergrundmodus und Hotspotwechsel
-- Performance-, Qualitäts-, Barrierefreiheits- und Release-Politur aus Phase 6
+- Beide Spieler markieren ihre Bereitschaft.
+- Der Host autorisiert den nächsten Raum.
+- Der schnelle `ADVANCE`-Befehl wird durch einen zuverlässigen Zielraum abgesichert.
+- Wiederbelebung wird schnell gesendet und zusätzlich per ACK/Retry bestätigt.
+- Ein gefallener Spieler kehrt mit 35 Prozent Leben zurück.
+- Fallen beide Spieler, endet der Run.
+- Nach dauerhaftem Verbindungsabbruch kann der verbleibende Spieler solo fortsetzen.
 
-Diese Punkte bauen auf dem Sitzungsprotokoll, dem Kampfkanal und dem neuen Autoritätsprotokoll auf.
+## Run-Wiederherstellung
+
+Ein atomarer Checkpoint mit Backup wird regelmäßig sowie bei Pause, Fokusverlust und App-Ende gespeichert. Enthalten sind:
+
+- Seed und Raum
+- Gold und Lebenspunkte
+- Inventar, Lootfilter und Ausrüstung
+- gewählte Karten und abgeleiteter Build
+- lebende Gegner mit Position, Leben und Bossphase
+- Status, ob der Kampf oder bereits die Belohnungsphase aktiv war
+
+Checkpoints sind höchstens 24 Stunden gültig. Beschädigte, veraltete oder unplausible Daten werden verworfen. Bewegte Projektile werden nicht restauriert, damit nach dem Start kein unsichtbarer Soforttreffer entsteht; Gegner und Gefahren starten dagegen konsistent aus dem gespeicherten Raumzustand.
+
+## Grenzen der Veröffentlichung
+
+Version 1.0 ist auf lokales WLAN und Hotspot ausgelegt. Eine praktische Freigabe sollte zusätzlich auf zwei echten Android-Geräten mit unterschiedlichen Herstellern, Paketverlust, App-Hintergrund, Hotspotwechsel und längeren Läufen geprüft werden. Diese Hardwareprüfung kann nicht durch EditMode-Tests ersetzt werden.
