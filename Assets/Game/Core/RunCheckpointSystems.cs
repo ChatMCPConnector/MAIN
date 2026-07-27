@@ -142,6 +142,8 @@ namespace Riftbound
         private float nextSave;
         private bool encounterRestoreChecked;
         private bool restoredEncounterActive;
+        private int savedSafeSeed = int.MinValue;
+        private int savedSafeRoom = -1;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void EnsureRuntime()
@@ -191,6 +193,11 @@ namespace Riftbound
             if (!RunCheckpointPolicy.ShouldSave(currentRoom.kind, game.Player.CombatEnabled, inventoryOpen))
                 return;
 
+            var safeChoiceRoom = currentRoom.kind == RoomKind.Treasure ||
+                                 currentRoom.kind == RoomKind.Merchant;
+            if (safeChoiceRoom && savedSafeSeed == game.Seed && savedSafeRoom == game.RoomIndex)
+                return;
+
             var checkpoint = game.CaptureCheckpoint();
             if (checkpoint == null) return;
             checkpoint.enemies.Clear();
@@ -203,17 +210,29 @@ namespace Riftbound
             }
             checkpoint.enemies.Sort((first, second) => first.networkId.CompareTo(second.networkId));
             RunCheckpointService.Save(checkpoint);
+            if (safeChoiceRoom)
+            {
+                savedSafeSeed = game.Seed;
+                savedSafeRoom = game.RoomIndex;
+            }
         }
 
         private void RestoreEncounterIfNeeded()
         {
             var checkpoint = RunCheckpointService.Load();
             if (checkpoint == null || game == null || game.Seed != checkpoint.seed ||
-                game.RoomIndex != checkpoint.roomIndex || !game.Player.CombatEnabled)
+                game.RoomIndex != checkpoint.roomIndex)
                 return;
 
             var room = GameCatalog.GetRoom(RunPlanner.Generate(game.Seed)[game.RoomIndex]);
-            if (room.kind != RoomKind.Combat && room.kind != RoomKind.Elite && room.kind != RoomKind.Boss)
+            if (room.kind == RoomKind.Treasure || room.kind == RoomKind.Merchant)
+            {
+                savedSafeSeed = checkpoint.seed;
+                savedSafeRoom = checkpoint.roomIndex;
+                return;
+            }
+            if (!game.Player.CombatEnabled ||
+                (room.kind != RoomKind.Combat && room.kind != RoomKind.Elite && room.kind != RoomKind.Boss))
                 return;
 
             if (!checkpoint.combatActive && checkpoint.enemies.Count == 0)
