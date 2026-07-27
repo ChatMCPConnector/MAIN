@@ -1,0 +1,83 @@
+name: Riftbound Android Release Builder
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: riftbound-android-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'build/riftbound-1.0.0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+      UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+      UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Validate previously tested release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '6000.3.20f1' ProjectSettings/ProjectVersion.txt
+          grep -q 'bundleVersion = "1.0.0"' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'bundleVersionCode = 100' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'BuildOptions.None' Assets/Game/Editor/BuildAutomation.cs
+          ! grep -q 'BuildOptions.Development' Assets/Game/Editor/BuildAutomation.cs
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc || true
+          df -h
+
+      - name: Restore Android Unity cache
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-Android-${{ runner.os }}-6000.3.20f1-${{ hashFiles('Packages/**', 'ProjectSettings/**', 'Assets/**/*.cs', 'Assets/Plugins/Android/**') }}
+          restore-keys: |
+            Library-Android-${{ runner.os }}-6000.3.20f1-
+            Library-${{ runner.os }}-6000.3.20f1-
+
+      - name: Build Android release APK
+        id: build
+        uses: game-ci/unity-builder@v4
+        with:
+          projectPath: .
+          unityVersion: 6000.3.20f1
+          targetPlatform: Android
+          buildMethod: Riftbound.Editor.BuildAutomation.BuildAndroid
+          versioning: None
+          allowDirtyBuild: true
+          customParameters: -customBuildPath Builds/Android/Riftbound.apk
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s Builds/Android/Riftbound.apk
+          file Builds/Android/Riftbound.apk | tee Builds/Android/apk-info.txt
+          sha256sum Builds/Android/Riftbound.apk | tee Builds/Android/Riftbound.apk.sha256
+          ls -lh Builds/Android/Riftbound.apk | tee -a Builds/Android/apk-info.txt
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: riftbound-android-1.0.0
+          path: |
+            Builds/Android/Riftbound.apk
+            Builds/Android/Riftbound.apk.sha256
+            Builds/Android/apk-info.txt
+          if-no-files-found: error
+          retention-days: 30
