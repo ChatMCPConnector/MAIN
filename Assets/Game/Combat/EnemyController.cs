@@ -75,17 +75,17 @@ namespace Riftbound
                 return;
             }
 
-            var player = game.Player;
-            if (player == null || player.Health <= 0f) return;
+            var target = ResolveTarget();
+            if (!target.valid) return;
 
-            var delta = player.transform.position - transform.position;
+            var delta = target.position - transform.position;
             delta.y = 0f;
             var distance = delta.magnitude;
 
             if (kind == EnemyKind.Ranged)
-                UpdateRanged(player, delta, distance);
+                UpdateRanged(delta, distance);
             else
-                UpdateMelee(player, delta, distance);
+                UpdateMelee(delta, distance, target.remote);
 
             if (kind == EnemyKind.Boss &&
                 !specialActive &&
@@ -150,6 +150,32 @@ namespace Riftbound
             Destroy(gameObject);
         }
 
+        private CoopCombatTarget ResolveTarget()
+        {
+            var local = game != null ? game.Player : null;
+            var localAlive = local != null && local.Health > 0f && local.CombatEnabled;
+            var localPosition = local != null ? local.transform.position : transform.position;
+
+            var session = CoopLanController.Instance;
+            var combat = CoopCombatReplicator.Instance;
+            var peer = session?.RemoteState;
+            var remoteAlive = CoopRuntimeState.Connected &&
+                              CoopRuntimeState.Role == CoopRole.Host &&
+                              combat != null && combat.CombatConnected &&
+                              peer != null && peer.health > 0f && !peer.downed;
+            var remotePosition = remoteAlive
+                ? new Vector3(peer.x, peer.y, peer.z)
+                : transform.position;
+
+            return CoopTargeting.SelectNearest(
+                transform.position,
+                localAlive,
+                localPosition,
+                remoteAlive,
+                remotePosition,
+                networkId);
+        }
+
         private void UpdateReplica()
         {
             transform.position = Vector3.Lerp(
@@ -163,7 +189,7 @@ namespace Riftbound
                 16f * Time.unscaledDeltaTime);
         }
 
-        private void UpdateMelee(PlayerController player, Vector3 delta, float distance)
+        private void UpdateMelee(Vector3 delta, float distance, bool targetRemote)
         {
             if (distance > 1.35f)
             {
@@ -174,10 +200,14 @@ namespace Riftbound
             if (Time.time < nextAttack) return;
             var bossAttackRate = bossPhase == 3 ? .82f : bossPhase == 2 ? 1.02f : 1.25f;
             nextAttack = Time.time + (kind == EnemyKind.Boss ? bossAttackRate : 1f);
-            player.TakeDamage(damage * (kind == EnemyKind.Boss && bossPhase == 3 ? 1.12f : 1f));
+            var amount = damage * (kind == EnemyKind.Boss && bossPhase == 3 ? 1.12f : 1f);
+            if (targetRemote)
+                CoopCombatReplicator.Instance?.TryDamageRemote(amount, CoopDamageKind.Melee);
+            else
+                game.Player?.TakeDamage(amount);
         }
 
-        private void UpdateRanged(PlayerController player, Vector3 delta, float distance)
+        private void UpdateRanged(Vector3 delta, float distance)
         {
             if (distance > 5f)
                 Move(delta.normalized);
@@ -304,10 +334,10 @@ namespace Riftbound
 
         private void FireAimedFan(int count, float stepDegrees, float damageScale)
         {
-            var player = game.Player;
-            if (player == null) return;
+            var target = ResolveTarget();
+            if (!target.valid) return;
 
-            var direction = player.transform.position - transform.position;
+            var direction = target.position - transform.position;
             direction.y = 0f;
             if (direction.sqrMagnitude <= .001f) direction = transform.forward;
             direction.Normalize();
@@ -363,20 +393,30 @@ namespace Riftbound
     {
         private static readonly Stack<Projectile> Pool = new Stack<Projectile>();
         private static readonly HashSet<Projectile> Active = new HashSet<Projectile>();
+        private static int nextNetworkId = 1000;
 
         private Vector3 direction;
+        private Vector3 replicaTarget;
         private float damage;
         private float speed;
         private bool fromPlayer;
+        private bool replica;
         private float deathAt;
         private bool consumed;
+        private int networkId;
 
-        public static void Spawn(
+        public int NetworkId => networkId;
+        public bool IsEnemyProjectile => !fromPlayer;
+        public bool IsReplica => replica;
+
+        public static Projectile Spawn(
             Vector3 position,
             Vector3 direction,
             float damage,
             bool fromPlayer,
-            float speedMultiplier = 1f)
+            float speedMultiplier = 1f,
+            int networkId = 0,
+            bool replica = false)
         {
             var projectile = Pool.Count > 0 ? Pool.Pop() : Create();
             projectile.gameObject.SetActive(true);
@@ -384,13 +424,76 @@ namespace Riftbound
             projectile.transform.localScale = Vector3.one * (fromPlayer ? .35f : .28f);
             projectile.GetComponent<Renderer>().sharedMaterial = WorldFactory.GetUnlitMaterial(
                 fromPlayer ? new Color(.1f, .9f, 1f) : new Color(1f, .15f, .15f));
-            projectile.direction = direction.normalized;
-            projectile.damage = damage;
+            projectile.direction = direction.sqrMagnitude > .001f ? direction.normalized : Vector3.forward;
+            projectile.replicaTarget = position;
+            projectile.damage = Mathf.Max(0f, damage);
             projectile.speed = (fromPlayer ? 9f : 5f) * Mathf.Max(.25f, speedMultiplier);
             projectile.fromPlayer = fromPlayer;
+            projectile.replica = replica;
+            projectile.networkId = networkId > 0 ? networkId : NextNetworkId();
             projectile.deathAt = Time.time + 3f;
             projectile.consumed = false;
+            var collider = projectile.GetComponent<SphereCollider>();
+            if (collider != null) collider.enabled = !replica;
             Active.Add(projectile);
+            return projectile;
+        }
+
+        public static CoopProjectileSnapshot[] CaptureEnemySnapshots()
+        {
+            var snapshots = new List<CoopProjectileSnapshot>();
+            foreach (var projectile in Active)
+            {
+                if (projectile == null || !projectile.gameObject.activeSelf ||
+                    projectile.fromPlayer || projectile.replica)
+                    continue;
+                snapshots.Add(projectile.CreateSnapshot());
+            }
+            snapshots.Sort((first, second) => first.networkId.CompareTo(second.networkId));
+            return snapshots.ToArray();
+        }
+
+        public static void ApplyEnemySnapshots(IReadOnlyList<CoopProjectileSnapshot> snapshots)
+        {
+            if (snapshots == null) return;
+            var existing = new Dictionary<int, Projectile>();
+            foreach (var projectile in Active)
+            {
+                if (projectile == null || !projectile.replica || projectile.fromPlayer) continue;
+                if (!existing.ContainsKey(projectile.networkId))
+                    existing.Add(projectile.networkId, projectile);
+            }
+
+            var alive = new HashSet<int>();
+            for (var i = 0; i < snapshots.Count; i++)
+            {
+                var snapshot = snapshots[i];
+                if (snapshot == null || !alive.Add(snapshot.networkId)) continue;
+                if (!existing.TryGetValue(snapshot.networkId, out var projectile))
+                {
+                    projectile = Spawn(
+                        new Vector3(snapshot.x, snapshot.y, snapshot.z),
+                        Vector3.forward,
+                        snapshot.damage,
+                        false,
+                        1f,
+                        snapshot.networkId,
+                        true);
+                }
+                projectile.ApplyReplicaSnapshot(snapshot);
+            }
+
+            foreach (var pair in existing)
+                if (!alive.Contains(pair.Key) && pair.Value != null)
+                    pair.Value.Release();
+        }
+
+        public static void ReleaseReplicaProjectiles()
+        {
+            var snapshot = new List<Projectile>(Active);
+            foreach (var projectile in snapshot)
+                if (projectile != null && projectile.replica)
+                    projectile.Release();
         }
 
         public static void ReleaseAllActive()
@@ -400,6 +503,28 @@ namespace Riftbound
             foreach (var projectile in snapshot)
                 if (projectile != null) projectile.Release();
             Active.Clear();
+        }
+
+        private CoopProjectileSnapshot CreateSnapshot()
+        {
+            return new CoopProjectileSnapshot
+            {
+                networkId = networkId,
+                x = transform.position.x,
+                y = transform.position.y,
+                z = transform.position.z,
+                damage = Mathf.Clamp(damage, .1f, 500f),
+                radius = Mathf.Clamp(transform.localScale.x * .5f, .05f, 1.5f)
+            };
+        }
+
+        private void ApplyReplicaSnapshot(CoopProjectileSnapshot snapshot)
+        {
+            replicaTarget = new Vector3(snapshot.x, snapshot.y, snapshot.z);
+            damage = snapshot.damage;
+            var diameter = Mathf.Clamp(snapshot.radius * 2f, .1f, 3f);
+            transform.localScale = Vector3.one * diameter;
+            deathAt = Time.time + .5f;
         }
 
         private static Projectile Create()
@@ -419,13 +544,44 @@ namespace Riftbound
 
         private void Update()
         {
+            if (replica)
+            {
+                transform.position = Vector3.Lerp(
+                    transform.position,
+                    replicaTarget,
+                    20f * Time.unscaledDeltaTime);
+                if (Time.time >= deathAt) Release();
+                return;
+            }
+
             transform.position += direction * speed * Time.deltaTime;
+            if (!fromPlayer) TryHitRemotePlayer();
             if (Time.time >= deathAt) Release();
+        }
+
+        private void TryHitRemotePlayer()
+        {
+            if (consumed || !CoopRuntimeState.Connected || CoopRuntimeState.Role != CoopRole.Host)
+                return;
+            var session = CoopLanController.Instance;
+            var peer = session?.RemoteState;
+            if (peer == null || peer.health <= 0f || peer.downed) return;
+
+            var remotePosition = new Vector3(peer.x, peer.y, peer.z);
+            var delta = remotePosition - transform.position;
+            delta.y = 0f;
+            var hitRadius = transform.localScale.x * .5f + .45f;
+            if (delta.sqrMagnitude > hitRadius * hitRadius) return;
+            if (CoopCombatReplicator.Instance == null ||
+                !CoopCombatReplicator.Instance.TryDamageRemote(damage, CoopDamageKind.Projectile))
+                return;
+            consumed = true;
+            Release();
         }
 
         private void OnTriggerEnter(Collider other)
         {
-            if (consumed) return;
+            if (consumed || replica) return;
 
             if (fromPlayer)
             {
@@ -450,6 +606,16 @@ namespace Riftbound
             Active.Remove(this);
             gameObject.SetActive(false);
             Pool.Push(this);
+        }
+
+        private static int NextNetworkId()
+        {
+            unchecked
+            {
+                nextNetworkId++;
+                if (nextNetworkId <= 0) nextNetworkId = 1000;
+                return nextNetworkId;
+            }
         }
     }
 }
