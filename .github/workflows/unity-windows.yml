@@ -23,7 +23,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - run: python tools/validate_project.py
+      - name: Validate Python tools, manifests and project structure
+        run: |
+          python -m compileall -q tools
+          python tools/asset_pipeline.py validate
+          python tools/validate_project.py
+          git diff --check
       - name: Reject tracked downloaded binary assets
         shell: bash
         run: |
@@ -249,16 +254,36 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  license-summary:
-    name: Unity build availability summary
+  verification-gate:
+    name: Unity verification gate
     needs: [validate, unity-license, unity-tests, unity-build, windows-visual, windows-smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - shell: bash
+      - name: Require complete verification on main
+        shell: bash
         run: |
-          if [[ "${{ needs.unity-license.outputs.available }}" == "true" ]]; then
-            echo "Unity activation route '${{ needs.unity-license.outputs.route }}' detected. Tests/build result: ${{ needs.unity-tests.result }}/${{ needs.unity-build.result }}/${{ needs.windows-visual.result }}/${{ needs.windows-smoke.result }}"
-          else
-            echo "Source validation passed, but Unity jobs were skipped. Activation route: ${{ needs.unity-license.outputs.route }}."
+          results="${{ needs.unity-tests.result }}/${{ needs.unity-build.result }}/${{ needs.windows-visual.result }}/${{ needs.windows-smoke.result }}"
+          if [[ "${{ needs.validate.result }}" != "success" ]]; then
+            echo "::error::Static project validation failed."
+            exit 1
           fi
+
+          if [[ "${{ needs.unity-license.outputs.available }}" != "true" ]]; then
+            if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+              echo "::error::Unity verification cannot be skipped on main. Configure a valid activation route; detected '${{ needs.unity-license.outputs.route }}'."
+              exit 1
+            fi
+            echo "::warning::Unity jobs were skipped for this review build. Activation route: ${{ needs.unity-license.outputs.route }}."
+            exit 0
+          fi
+
+          if [[ "${{ needs.unity-tests.result }}" != "success" ||
+                "${{ needs.unity-build.result }}" != "success" ||
+                "${{ needs.windows-visual.result }}" != "success" ||
+                "${{ needs.windows-smoke.result }}" != "success" ]]; then
+            echo "::error::One or more required Unity jobs did not succeed: $results"
+            exit 1
+          fi
+
+          echo "Unity activation route '${{ needs.unity-license.outputs.route }}' detected. All required Unity jobs succeeded: $results"
