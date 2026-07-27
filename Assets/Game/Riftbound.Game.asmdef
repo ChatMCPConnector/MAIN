@@ -1,7 +1,10 @@
 {
   "name": "Riftbound.Game",
   "rootNamespace": "Riftbound",
-  "references": [],
+  "references": [
+    "Unity.InputSystem",
+    "UnityEngine.UI"
+  ],
   "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
