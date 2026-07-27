@@ -13,6 +13,7 @@ namespace Riftbound
         private const float HelloInterval = .5f;
         private const float SnapshotInterval = .1f;
         private const float DefenseInterval = .1f;
+        private const float DefenseGrace = .32f;
         private const float ChannelTimeout = 4f;
         private const string TokenKey = "riftbound-coop-device-token";
 
@@ -31,6 +32,7 @@ namespace Riftbound
         private float nextRemoteMelee;
         private float nextRemoteAbility;
         private float nextRemoteDamage;
+        private float remoteInvulnerableUntil;
         private long outgoingSequence;
         private long lastEnemySequence;
         private long lastProjectileSequence;
@@ -38,12 +40,11 @@ namespace Riftbound
         private long lastDefenseSequence;
         private long lastDamageSequence;
         private bool channelConnected;
-        private bool remoteInvulnerable;
 
         public static CoopCombatReplicator Instance { get; private set; }
         public bool CombatConnected => channelConnected && CoopRuntimeState.Connected;
         public bool IsClientReplica => CombatConnected && role == CoopRole.Client;
-        public bool RemoteInvulnerable => remoteInvulnerable;
+        public bool RemoteInvulnerable => Time.unscaledTime < remoteInvulnerableUntil;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void EnsureRuntime()
@@ -127,7 +128,7 @@ namespace Riftbound
         public bool TryDamageRemote(float amount, CoopDamageKind kind)
         {
             if (!CombatConnected || role != CoopRole.Host ||
-                remoteInvulnerable || !CoopAuthorityValidation.IsValidDamage(amount) ||
+                RemoteInvulnerable || !CoopAuthorityValidation.IsValidDamage(amount) ||
                 Time.unscaledTime < nextRemoteDamage)
                 return false;
 
@@ -287,7 +288,7 @@ namespace Riftbound
                 remoteEndpoint = sender;
                 remoteToken = helloToken;
                 channelConnected = true;
-                remoteInvulnerable = false;
+                remoteInvulnerableUntil = 0f;
                 lastPacketAt = Time.unscaledTime;
                 lastAttackSequence = 0;
                 lastDefenseSequence = 0;
@@ -385,7 +386,10 @@ namespace Riftbound
                     !CoopCombatValidation.IsFresh(defense.sequence, ref lastDefenseSequence))
                     return;
                 lastPacketAt = Time.unscaledTime;
-                remoteInvulnerable = defense.invulnerable;
+                if (defense.invulnerable)
+                    remoteInvulnerableUntil = Mathf.Max(
+                        remoteInvulnerableUntil,
+                        Time.unscaledTime + DefenseGrace);
                 return;
             }
 
@@ -457,7 +461,7 @@ namespace Riftbound
             sessionCode = null;
             role = CoopRole.Offline;
             channelConnected = false;
-            remoteInvulnerable = false;
+            remoteInvulnerableUntil = 0f;
             outgoingSequence = 0;
             lastEnemySequence = 0;
             lastProjectileSequence = 0;
