@@ -70,6 +70,7 @@ required_files = [
     "AssetSources/README.md",
     "tools/open_asset_catalog.py",
     "tools/asset_pipeline.py",
+    "tools/prune_open_asset_lock.py",
     ".github/workflows/resolve-open-assets.yml",
     ".github/workflows/unity-windows.yml",
     ".github/copilot-instructions.md",
@@ -128,6 +129,13 @@ require(isinstance(open_assets.get("assets"), list), "Open asset request manifes
 open_lock = read_json("AssetSources/open-assets.lock.json")
 require(open_lock.get("schemaVersion") == 1, "Open asset lock must use schemaVersion 1")
 require(isinstance(open_lock.get("assets"), list), "Open asset lock must contain an assets array")
+for asset in open_lock.get("assets", []):
+    if not isinstance(asset, dict) or asset.get("provider") != "polyhaven" or asset.get("kind") != "material":
+        continue
+    paths = [str(entry.get("path", "")).lower() for entry in asset.get("files", []) if isinstance(entry, dict)]
+    require(bool(paths), f"Poly Haven material has no downloadable maps: {asset.get('id')}")
+    for path in paths:
+        require(any(suffix in path for suffix in ("_diff", "_normal", "_ao")), f"Unused Poly Haven map remains in lock: {path}")
 
 open_installer = read("Assets/NeonRift/Editor/OpenAssetInstaller.cs")
 for token in [
@@ -136,6 +144,12 @@ for token in [
     "Uri.UriSchemeHttps",
     "maxDownloadBytes",
     "MD5.Create",
+    "VerifyInstalledAsset",
+    "MaximumArchiveEntries",
+    "MaximumSingleExtractedBytes",
+    "MaximumTotalExtractedBytes",
+    "MaximumCompressionRatio",
+    "Archive contains a symbolic link",
     "ExtractZipSafely",
     "Path attempted to leave the open-asset directory",
     "NeonRift-Unity-Open-Asset-Installer/1.0",
@@ -152,6 +166,10 @@ for token in [
     "normalized_manifest",
 ]:
     require(token in asset_pipeline, f"Global asset pipeline is missing: {token}")
+
+pruner = read("tools/prune_open_asset_lock.py")
+for token in ["USED_POLYHAVEN_SUFFIXES", '"_diff"', '"_normal"', '"_ao"']:
+    require(token in pruner, f"Open asset lock pruner is missing: {token}")
 
 runtime_source = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "Assets/NeonRift").rglob("*.cs"))
 for symbol in [
@@ -172,6 +190,12 @@ for symbol in [
     "Resources.Load<GameObject>",
     "Gamepad.all",
     "--smoke-test",
+    "MoveSelection",
+    "SynchronizeSelectionPreview",
+    "EnergyProjectile.DestroyAll()",
+    "FindObjectsByType<EnergyProjectile>",
+    "ReleaseRuntimeResources",
+    "VerifyInstalledAsset",
 ]:
     require(symbol in runtime_source, f"Required Unity implementation symbol is missing: {symbol}")
 
@@ -207,6 +231,9 @@ for ignored in [
 ]:
     require(ignored in gitignore, f"Generated open asset path must be ignored: {ignored}")
 
+build_automation = read("Assets/NeonRift/Editor/BuildAutomation.cs")
+require("Version {PlayerSettings.bundleVersion}" in build_automation, "Distribution version must use PlayerSettings.bundleVersion")
+
 workflow = read(".github/workflows/unity-windows.yml")
 for token in [
     "6000.3.17f1",
@@ -217,6 +244,9 @@ for token in [
     "StandaloneWindows64",
     "smoke-test.log",
     "SHA256SUMS.txt",
+    "python -m compileall -q tools",
+    "python tools/asset_pipeline.py validate",
+    "Unity verification cannot be skipped on main",
 ]:
     require(token in workflow, f"Unity workflow is missing: {token}")
 
@@ -226,6 +256,9 @@ for token in [
     "contents: write",
     "python tools/asset_pipeline.py validate",
     "python tools/asset_pipeline.py resolve",
+    "python tools/prune_open_asset_lock.py",
+    "python tools/validate_project.py",
+    "git diff --check",
     "AssetSources/open-assets.lock.json",
 ]:
     require(token in asset_workflow, f"Open asset workflow is missing: {token}")

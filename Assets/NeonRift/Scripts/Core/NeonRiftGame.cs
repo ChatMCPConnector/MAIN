@@ -117,11 +117,10 @@ namespace NeonRift
             }
 
             if (keyboard == null) return;
-            int optionCount = OptionCountForCurrentScreen();
-            if (keyboard.upArrowKey.wasPressedThisFrame) _menuIndex = Wrap(_menuIndex - 1, optionCount);
-            if (keyboard.downArrowKey.wasPressedThisFrame) _menuIndex = Wrap(_menuIndex + 1, optionCount);
-            if (keyboard.leftArrowKey.wasPressedThisFrame) MoveHorizontal(-1);
-            if (keyboard.rightArrowKey.wasPressedThisFrame) MoveHorizontal(1);
+            if (keyboard.upArrowKey.wasPressedThisFrame) MoveSelection(-1);
+            if (keyboard.downArrowKey.wasPressedThisFrame) MoveSelection(1);
+            if (keyboard.leftArrowKey.wasPressedThisFrame) MoveSelection(-1);
+            if (keyboard.rightArrowKey.wasPressedThisFrame) MoveSelection(1);
             if (keyboard.enterKey.wasPressedThisFrame || keyboard.spaceKey.wasPressedThisFrame) ConfirmSelection();
             if (keyboard.escapeKey.wasPressedThisFrame) Back();
         }
@@ -139,24 +138,29 @@ namespace NeonRift
             };
         }
 
-        private void MoveHorizontal(int direction)
+        private void MoveSelection(int direction)
+        {
+            _menuIndex = Wrap(_menuIndex + direction, OptionCountForCurrentScreen());
+            SynchronizeSelectionPreview();
+        }
+
+        private void SynchronizeSelectionPreview()
         {
             if (Screen == GameScreen.CharacterSelect)
             {
-                _selectedCharacter = Wrap(_selectedCharacter + direction, NeonRiftCatalog.Fighters.Count);
-                _menuIndex = _selectedCharacter;
+                _selectedCharacter = _menuIndex;
             }
             else if (Screen == GameScreen.ArenaSelect)
             {
-                _selectedArena = Wrap(_selectedArena + direction, NeonRiftCatalog.Arenas.Count);
-                _menuIndex = _selectedArena;
-                _arenaFactory.Build(NeonRiftCatalog.Arenas[_selectedArena], _selectedArena);
-                CameraRig = _arenaFactory.GameCamera.GetComponent<ArenaCameraRig>();
+                _selectedArena = _menuIndex;
+                RebuildArenaPreview();
             }
-            else if (Screen == GameScreen.ModeSelect)
-            {
-                _menuIndex = Wrap(_menuIndex + direction, NeonRiftCatalog.Modes.Count);
-            }
+        }
+
+        private void RebuildArenaPreview()
+        {
+            _arenaFactory.Build(NeonRiftCatalog.Arenas[_selectedArena], _selectedArena);
+            CameraRig = _arenaFactory.GameCamera.GetComponent<ArenaCameraRig>();
         }
 
         private void ConfirmSelection()
@@ -190,6 +194,7 @@ namespace NeonRift
                     _secondCharacter = (_selectedCharacter + 1) % NeonRiftCatalog.Fighters.Count;
                     Screen = GameScreen.ArenaSelect;
                     _menuIndex = _selectedArena;
+                    RebuildArenaPreview();
                     break;
                 case GameScreen.ArenaSelect:
                     _selectedArena = _menuIndex;
@@ -366,6 +371,8 @@ namespace NeonRift
 
         private void FinishMatch(string message)
         {
+            if (Screen == GameScreen.Result) return;
+            EnergyProjectile.DestroyAll();
             _resultText = message;
             _resultTimer = 0f;
             Screen = GameScreen.Result;
@@ -412,6 +419,7 @@ namespace NeonRift
 
         private void ClearMatch()
         {
+            EnergyProjectile.DestroyAll();
             foreach (FighterController fighter in _fighters)
             {
                 if (fighter != null) Destroy(fighter.gameObject);
@@ -497,7 +505,7 @@ namespace NeonRift
                     _menuIndex = i;
                 }
             }
-            GUI.Label(new Rect(startX, 600f, width, 28f), "← → choose • Enter continue • Player 2 uses the next fighter", _smallStyle);
+            GUI.Label(new Rect(startX, 600f, width, 28f), "Arrow keys choose • Enter continue • Player 2 uses the next fighter", _smallStyle);
         }
 
         private void DrawArenaSelect()
@@ -511,7 +519,7 @@ namespace NeonRift
             {
                 StartMatch();
             }
-            GUI.Label(new Rect(76f, 486f, 410f, 28f), "← → change arena", _smallStyle);
+            GUI.Label(new Rect(76f, 486f, 410f, 28f), "Arrow keys change arena", _smallStyle);
         }
 
         private void DrawHud()
@@ -765,6 +773,7 @@ namespace NeonRift
         {
             if (Instance == this) Instance = null;
             UnityEngine.Time.timeScale = 1f;
+            EnergyProjectile.DestroyAll();
             if (_panelTexture != null) Destroy(_panelTexture);
             if (_activeTexture != null) Destroy(_activeTexture);
             if (_darkTexture != null) Destroy(_darkTexture);

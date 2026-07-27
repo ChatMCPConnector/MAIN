@@ -21,6 +21,8 @@ Output:
 build/StandaloneWindows64/NeonRift/NeonRift.exe
 ```
 
+`VERSION.txt` is generated from `PlayerSettings.bundleVersion`, so the executable metadata and distribution files use the same version source.
+
 ## Command line
 
 Once the Unity editor is installed and activated:
@@ -39,6 +41,8 @@ GameCI receives the standard Unity activation variables. Configure one supported
 ### License file
 
 - `UNITY_LICENSE`
+- `UNITY_EMAIL`
+- `UNITY_PASSWORD`
 
 ### Serial activation
 
@@ -46,4 +50,4 @@ GameCI receives the standard Unity activation variables. Configure one supported
 - `UNITY_PASSWORD`
 - `UNITY_SERIAL`
 
-The workflow never prints these secret values. If neither route exists, source validation still runs and Unity-dependent jobs are marked as skipped.
+The workflow never prints these secret values. Pull requests still run source and asset validation when no activation route exists, while Unity-dependent jobs are marked as skipped with a warning. On pushes to `main`, the final verification gate fails when Unity tests, the Windows build, visual capture or smoke testing could not run.

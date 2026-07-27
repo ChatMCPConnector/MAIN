@@ -7,6 +7,7 @@ on:
       - 'AssetSources/providers.json'
       - 'tools/asset_pipeline.py'
       - 'tools/open_asset_catalog.py'
+      - 'tools/prune_open_asset_lock.py'
   workflow_dispatch:
 
 permissions:
@@ -33,11 +34,20 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Validate global providers and asset requests
-        run: python tools/asset_pipeline.py validate
+      - name: Validate Python tools and asset requests
+        run: |
+          python -m compileall -q tools
+          python tools/asset_pipeline.py validate
 
       - name: Resolve provider IDs to audited download metadata
-        run: python tools/asset_pipeline.py resolve
+        run: |
+          python tools/asset_pipeline.py resolve
+          python tools/prune_open_asset_lock.py
+
+      - name: Validate resolved repository state
+        run: |
+          python tools/validate_project.py
+          git diff --check
 
       - name: Show resolved catalog
         run: cat AssetSources/open-assets.lock.json
