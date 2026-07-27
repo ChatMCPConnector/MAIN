@@ -25,6 +25,29 @@ namespace Riftbound
             MinimumRarity = ItemRarity.Common;
         }
 
+        public void Restore(IEnumerable<ItemInstance> restoredItems, ItemRarity minimumRarity)
+        {
+            items.Clear();
+            MinimumRarity = Enum.IsDefined(typeof(ItemRarity), minimumRarity)
+                ? minimumRarity
+                : ItemRarity.Common;
+            if (restoredItems == null) return;
+            foreach (var item in restoredItems)
+            {
+                if (item == null || items.Count >= Capacity) continue;
+                if (item.kind == ItemKind.Weapon)
+                {
+                    if (item.catalogIndex < 0 || item.catalogIndex >= GameCatalog.Weapons.Length) continue;
+                }
+                else if (item.catalogIndex < 0 || item.catalogIndex >= GameCatalog.Armors.Length)
+                {
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(item.instanceId)) continue;
+                items.Add(item.Clone());
+            }
+        }
+
         public void AddStarter(ItemInstance item)
         {
             if (item == null) return;
