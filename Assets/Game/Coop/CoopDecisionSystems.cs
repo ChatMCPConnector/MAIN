@@ -115,6 +115,9 @@ namespace Riftbound
         private CoopReliableRuntime reliable;
         private long economyRevision;
         private long lastEconomyRevision;
+        private int lastEconomySeed;
+        private int lastEconomyRoom = -1;
+        private int lastEconomyGold;
 
         public static CoopDecisionRuntime Instance { get; private set; }
         public event Action<int, int, int> HostEconomyReceived;
@@ -159,6 +162,9 @@ namespace Riftbound
             ledger.Reset();
             economyRevision = 0;
             lastEconomyRevision = 0;
+            lastEconomySeed = 0;
+            lastEconomyRoom = -1;
+            lastEconomyGold = 0;
         }
 
         public bool Publish(CoopDecision decision)
@@ -229,6 +235,9 @@ namespace Riftbound
                 revision > lastEconomyRevision)
             {
                 lastEconomyRevision = revision;
+                lastEconomySeed = seed;
+                lastEconomyRoom = room;
+                lastEconomyGold = gold;
                 HostEconomyReceived?.Invoke(seed, room, gold);
             }
         }
@@ -236,7 +245,12 @@ namespace Riftbound
         private void DeliverDecision(CoopDecision decision, Action<CoopDecision> callback)
         {
             callback?.Invoke(decision);
-            HostEconomyReceived?.Invoke(decision.seed, decision.roomIndex, decision.hostGold);
+            var gold = lastEconomyRevision > 0 &&
+                       lastEconomySeed == decision.seed &&
+                       lastEconomyRoom == decision.roomIndex
+                ? lastEconomyGold
+                : decision.hostGold;
+            HostEconomyReceived?.Invoke(decision.seed, decision.roomIndex, gold);
         }
 
         private void OnDestroy()
