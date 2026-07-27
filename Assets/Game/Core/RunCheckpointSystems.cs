@@ -168,7 +168,15 @@ namespace Riftbound
         public void SaveNow()
         {
             if (game == null) game = FindFirstObjectByType<GameBootstrap>();
-            var checkpoint = game?.CaptureCheckpoint();
+            if (game == null || game.Player == null) return;
+            var currentRoom = GameCatalog.GetRoom(RunPlanner.Generate(game.Seed)[game.RoomIndex]);
+            var combatRoom = currentRoom.kind == RoomKind.Combat ||
+                             currentRoom.kind == RoomKind.Elite ||
+                             currentRoom.kind == RoomKind.Boss;
+            if (combatRoom && !game.Player.CombatEnabled)
+                return;
+
+            var checkpoint = game.CaptureCheckpoint();
             if (checkpoint == null) return;
             checkpoint.enemies.Clear();
             var enemies = FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
