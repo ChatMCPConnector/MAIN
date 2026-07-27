@@ -2,7 +2,8 @@
   "name": "NeonRift.EditModeTests",
   "rootNamespace": "NeonRift.Tests",
   "references": [
-    "NeonRift.Foundation"
+    "NeonRift.Foundation",
+    "Unity.InputSystem"
   ],
   "includePlatforms": [
     "Editor"

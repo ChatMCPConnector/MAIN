@@ -1,6 +1,10 @@
 # Controls
 
-## Player 1
+All keyboard controls can be changed from **Main Menu → Controls**. Click a displayed key, then press the replacement key. Bindings are stored on the computer and remain active after restarting the game.
+
+If a newly selected key is already assigned to another action for the same player, the two actions swap keys so no action becomes unreachable. Escape cancels remapping, and F11 remains reserved for fullscreen.
+
+## Player 1 defaults
 
 - Move in the arena: Arrow keys
 - Light attack: Z
@@ -9,7 +13,7 @@
 - Jump: V
 - Dash / hold to guard: B
 
-## Player 2
+## Player 2 defaults
 
 - Move in the arena: W, A, S, D
 - Light attack: F

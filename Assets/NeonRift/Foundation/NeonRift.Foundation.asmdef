@@ -1,7 +1,9 @@
 {
   "name": "NeonRift.Foundation",
   "rootNamespace": "NeonRift",
-  "references": [],
+  "references": [
+    "Unity.InputSystem"
+  ],
   "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
