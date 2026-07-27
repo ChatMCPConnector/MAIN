@@ -24,31 +24,17 @@ jobs:
             /repos/${GITHUB_REPOSITORY}/actions/jobs/90128393905/logs \
             > unity-builder-job.log
 
-      - name: Extract actionable error context
+      - name: Extract final raw Unity build section
         shell: python
         run: |
           from pathlib import Path
-          import re
 
-          source = Path('unity-builder-job.log').read_text(encoding='utf-8', errors='replace').splitlines()
-          pattern = re.compile(
-              r'(error|exception|buildfailed|failed|failure|android build failed|gradle|manifest merger|il2cpp|sdk|ndk|class layout)',
-              re.IGNORECASE,
-          )
-          indexes = [i for i, line in enumerate(source) if pattern.search(line)]
-          selected = set()
-          for index in indexes:
-              for current in range(max(0, index - 8), min(len(source), index + 12)):
-                  selected.add(current)
-          output = []
-          previous = -2
-          for index in sorted(selected):
-              if index > previous + 1:
-                  output.append('\n--- context ---')
-              output.append(f'{index + 1}: {source[index]}')
-              previous = index
+          source = Path('unity-builder-job.log').read_text(
+              encoding='utf-8', errors='replace').splitlines()
+          start = max(0, len(source) - 5000)
+          output = [f'{index + 1}: {source[index]}' for index in range(start, len(source))]
           Path('unity-android-build-errors.txt').write_text(
-              '\n'.join(output[-3000:]) + '\n',
+              '\n'.join(output) + '\n',
               encoding='utf-8',
           )
 
