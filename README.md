@@ -9,6 +9,7 @@ Neon Rift is an original 2.5D local arena brawler rebuilt for **Unity 6.3 LTS**.
 - KayKit CC0 adventurer models for the player roster.
 - KayKit CC0 skeleton models for enemies, elites and bosses.
 - Kenney CC0 Mini Arena and City Kit Industrial environment props.
+- Globally configured Poly Haven and ambientCG source pipeline for additional CC0 models, materials and HDRIs.
 - Three arenas: Skyline Foundry, Verdant Metro and Null Observatory.
 - Four-direction arena movement, jumping, dash/guard, light/heavy attacks and energy specials.
 - Local keyboard and two-gamepad support through Unity's Input System.
@@ -24,10 +25,23 @@ The project is pinned to **Unity 6000.3.17f1** and URP 17.3. Install the same ed
 
 1. Open this repository as a Unity project.
 2. Unity automatically creates the main scene and URP assets.
-3. Run **Neon Rift → Download or repair CC0 assets**.
-4. Open `Assets/NeonRift/Scenes/Main.unity` and press Play.
+3. Run **Neon Rift → Download or repair CC0 assets** for the existing KayKit and Kenney packages.
+4. Run **Neon Rift → Download or repair Poly Haven and ambientCG assets** when `AssetSources/open-assets.json` contains requested open assets.
+5. Open `Assets/NeonRift/Scenes/Main.unity` and press Play.
 
 The game remains runnable with generated fallback art if an asset host is temporarily unavailable.
+
+## Browser-managed assets
+
+The repository is configured so ChatGPT can act as the asset worker while GitHub remains the project platform:
+
+1. Repository-wide source rules live in `AssetSources/providers.json`.
+2. Agent behavior is defined in root `AGENTS.md` and `.github/copilot-instructions.md`.
+3. ChatGPT adds selected provider IDs to `AssetSources/open-assets.json`.
+4. GitHub Actions resolves those IDs through the configured APIs and updates `AssetSources/open-assets.lock.json`.
+5. Unity downloads the resolved assets into an ignored project directory during installation or build.
+
+No Poly Haven or ambientCG API key is required. Downloaded binary files and caches are intentionally not committed to Git. See [AssetSources/README.md](AssetSources/README.md) for the complete workflow.
 
 ## Build Windows
 
