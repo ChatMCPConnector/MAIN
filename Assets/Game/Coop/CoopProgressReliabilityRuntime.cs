@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Reflection;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -9,10 +10,17 @@ namespace Riftbound
 
     public sealed class CoopProgressReliabilityRuntime : MonoBehaviour
     {
+        private static readonly FieldInfo PendingAdvanceField =
+            typeof(CoopLanController).GetField(
+                "pendingRoomAdvance",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+
         private GameBootstrap game;
         private CoopReliableRuntime reliable;
         private int lastSeed = int.MinValue;
         private int lastRoom = -1;
+        private int observedClientSeed = int.MinValue;
+        private int observedClientRoom = -1;
         private float nextButtonScan;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -41,6 +49,7 @@ namespace Riftbound
                         lastRoom.ToString(CultureInfo.InvariantCulture)));
             }
 
+            ClearStaleClientAdvanceAfterSynchronization();
             if (Time.unscaledTime >= nextButtonScan)
             {
                 nextButtonScan = Time.unscaledTime + .5f;
@@ -54,6 +63,30 @@ namespace Riftbound
             if (reliable != null) reliable.Received -= HandleReliable;
             reliable = CoopReliableRuntime.Instance;
             if (reliable != null) reliable.Received += HandleReliable;
+        }
+
+        private void ClearStaleClientAdvanceAfterSynchronization()
+        {
+            if (game == null || !CoopRuntimeState.Connected ||
+                CoopRuntimeState.Role != CoopRole.Client)
+            {
+                observedClientSeed = int.MinValue;
+                observedClientRoom = -1;
+                return;
+            }
+
+            var changed = observedClientSeed != int.MinValue &&
+                          (observedClientSeed != game.Seed || observedClientRoom != game.RoomIndex);
+            observedClientSeed = game.Seed;
+            observedClientRoom = game.RoomIndex;
+            if (!changed) return;
+
+            var controller = CoopLanController.Instance;
+            var remote = controller?.RemoteState;
+            if (controller == null || remote == null ||
+                remote.seed != game.Seed || remote.roomIndex != game.RoomIndex)
+                return;
+            PendingAdvanceField?.SetValue(controller, null);
         }
 
         private void AttachReliableReviveButtons()
@@ -103,6 +136,7 @@ namespace Riftbound
                 return;
             }
             game.SynchronizeToHost(seed, room);
+            PendingAdvanceField?.SetValue(CoopLanController.Instance, null);
         }
 
         private void OnDestroy()
