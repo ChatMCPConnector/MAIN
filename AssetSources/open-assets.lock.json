@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-27T13:19:42Z",
+  "generatedAtUtc": "2026-07-27T13:22:06Z",
   "assets": [
     {
       "provider": "polyhaven",
@@ -43,8 +43,15 @@
           "md5": "56f4440908f2878a1101aa05b26fd222"
         },
         {
-          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/metal_plate/metal_plate_disp_1k.png",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/metal_plate/metal_plate_metal_1k.png",
           "path": "metal_plate_metal.png",
+          "extract": false,
+          "size": 1952911,
+          "md5": "1f3433cbac41eb3d2ce7bbe46521d35f"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/metal_plate/metal_plate_disp_1k.png",
+          "path": "metal_plate_disp.png",
           "extract": false,
           "size": 1700688,
           "md5": "ec8c2ea0e05928cbf1239f920a5980ad"
