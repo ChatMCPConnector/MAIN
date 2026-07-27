@@ -68,6 +68,29 @@ namespace Riftbound.Editor
             PlayerSettings.colorSpace = ColorSpace.Linear;
             PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { GraphicsDeviceType.OpenGLES3 });
             EditorUserBuildSettings.buildAppBundle = false;
+            EnableBothInputBackends();
+        }
+
+        private static void EnableBothInputBackends()
+        {
+            var settingsAssets = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/ProjectSettings.asset");
+            if (settingsAssets == null || settingsAssets.Length == 0)
+            {
+                Debug.LogWarning("ProjectSettings.asset was not available; input backend was not changed.");
+                return;
+            }
+
+            var serializedSettings = new SerializedObject(settingsAssets[0]);
+            var activeInputHandler = serializedSettings.FindProperty("activeInputHandler");
+            if (activeInputHandler == null)
+            {
+                Debug.LogWarning("activeInputHandler was not found in ProjectSettings.asset.");
+                return;
+            }
+
+            activeInputHandler.intValue = 2;
+            serializedSettings.ApplyModifiedPropertiesWithoutUndo();
+            AssetDatabase.SaveAssets();
         }
 
         private static void EnsurePipeline()
