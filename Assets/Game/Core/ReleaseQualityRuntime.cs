@@ -49,13 +49,17 @@ namespace Riftbound
     public sealed class ReleaseQualityRuntime : MonoBehaviour
     {
         private const float SampleWindow = 2f;
+        private readonly Dictionary<FeedbackCue, AudioClip> clips = new Dictionary<FeedbackCue, AudioClip>();
+        private readonly Dictionary<int, int> originalFontSizes = new Dictionary<int, int>();
+        private readonly Dictionary<int, Color> originalTextColors = new Dictionary<int, Color>();
         private UniversalRenderPipelineAsset pipeline;
         private float sampleTime;
         private int sampleFrames;
         private float nextUiRefresh;
         private AudioSource audioSource;
-        private readonly Dictionary<FeedbackCue, AudioClip> clips = new Dictionary<FeedbackCue, AudioClip>();
         private float nextVibration;
+        private bool cameraColorCaptured;
+        private Color originalCameraColor;
 
         public static ReleaseQualityRuntime Instance { get; private set; }
 
@@ -123,17 +127,30 @@ namespace Riftbound
             {
                 var text = texts[i];
                 if (text == null) continue;
-                var baseSize = Mathf.Clamp(text.fontSize, 18, 46);
+                var id = text.GetInstanceID();
+                if (!originalFontSizes.ContainsKey(id))
+                    originalFontSizes[id] = Mathf.Clamp(text.fontSize, 12, 64);
+                if (!originalTextColors.ContainsKey(id))
+                    originalTextColors[id] = text.color;
+                var originalSize = originalFontSizes[id];
                 text.fontSize = ReleasePreferences.LargeText
-                    ? Mathf.Clamp(Mathf.RoundToInt(baseSize * 1.12f), 20, 52)
-                    : Mathf.Clamp(baseSize, 18, 46);
-                if (ReleasePreferences.HighContrast)
-                    text.color = Color.white;
+                    ? Mathf.Clamp(Mathf.RoundToInt(originalSize * 1.12f), 14, 68)
+                    : originalSize;
+                text.color = ReleasePreferences.HighContrast
+                    ? Color.white
+                    : originalTextColors[id];
             }
 
             var camera = Camera.main;
-            if (camera != null && ReleasePreferences.HighContrast)
-                camera.backgroundColor = new Color(.008f, .01f, .018f);
+            if (camera == null) return;
+            if (!cameraColorCaptured)
+            {
+                originalCameraColor = camera.backgroundColor;
+                cameraColorCaptured = true;
+            }
+            camera.backgroundColor = ReleasePreferences.HighContrast
+                ? new Color(.008f, .01f, .018f)
+                : originalCameraColor;
         }
 
         private void ConfigureInitialQuality()
@@ -236,7 +253,7 @@ namespace Riftbound
             scaler.matchWidthOrHeight = .55f;
             safeRoot = CreateRect("SafeArea", transform, Vector2.zero, Vector2.one);
             safeRoot.gameObject.AddComponent<SafeAreaFitter>();
-            CreateButton("⚙", safeRoot, new Vector2(.88f, .775f), new Vector2(.97f, .835f), Open);
+            CreateButton("OPT", safeRoot, new Vector2(.88f, .775f), new Vector2(.97f, .835f), Open);
         }
 
         private void Open()
