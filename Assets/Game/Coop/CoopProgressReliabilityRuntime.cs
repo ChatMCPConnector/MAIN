@@ -92,8 +92,17 @@ namespace Riftbound
                 !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var room) ||
                 room < 0 || room >= RunPlanner.RoomCount)
                 return;
-            if (game.Seed != seed || game.RoomIndex < room)
-                game.SynchronizeToHost(seed, room);
+
+            if (game.Seed == seed && game.RoomIndex == room) return;
+            if (game.Seed == seed && game.RoomIndex + 1 == room)
+            {
+                CoopLanController.Instance?.SendMessage(
+                    "HandleCommand",
+                    "ADVANCE",
+                    SendMessageOptions.DontRequireReceiver);
+                return;
+            }
+            game.SynchronizeToHost(seed, room);
         }
 
         private void OnDestroy()
