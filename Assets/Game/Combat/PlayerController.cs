@@ -10,7 +10,10 @@ namespace Riftbound
     {
         private GameBootstrap game;
         private CharacterController controller;
+        private PlayerBuild cardBuild;
         private PlayerBuild build;
+        private ItemInstance equippedWeapon;
+        private ItemInstance equippedArmor;
         private Vector2 touchMove;
         private float health;
         private float nextAttack;
@@ -24,8 +27,13 @@ namespace Riftbound
 
         public float Health => health;
         public float MaxHealth => build.maxHealth;
-        public string CurrentWeapon { get; private set; } = "Eisenklinge";
-        public string CurrentArmor { get; private set; } = "Keine";
+        public bool CombatEnabled => combatEnabled;
+        public string CurrentWeapon => ItemText.PlainTitle(equippedWeapon);
+        public string CurrentArmor => equippedArmor == null
+            ? "Keine Rüstung"
+            : ItemText.PlainTitle(equippedArmor);
+        public string EquippedWeaponId => equippedWeapon?.instanceId;
+        public string EquippedArmorId => equippedArmor?.instanceId;
 
         public void Initialize(GameBootstrap bootstrap)
         {
@@ -34,21 +42,23 @@ namespace Riftbound
             controller.radius = .45f;
             controller.height = 1.8f;
             controller.center = new Vector3(0f, .9f, 0f);
-            build = PlayerBuild.Default;
+            cardBuild = PlayerBuild.Default;
+            build = cardBuild;
             health = build.maxHealth;
         }
 
-        public void ResetForNewRun()
+        public void ResetForNewRun(ItemInstance starterWeapon)
         {
-            build = PlayerBuild.Default;
-            weaponRange = GameCatalog.Weapons[0].range;
-            CurrentWeapon = GameCatalog.Weapons[0].title;
-            CurrentArmor = "Keine";
-            health = build.maxHealth;
+            cardBuild = PlayerBuild.Default;
+            equippedWeapon = starterWeapon?.Clone() ?? LootGenerator.CreateStarterWeapon();
+            equippedArmor = null;
             nextAttack = nextAbility = nextDash = dashUntil = 0f;
             invulnerable = false;
             combatEnabled = true;
+            RebuildDerivedStats(false);
+            health = build.maxHealth;
             game.ReportHealth(health, build.maxHealth);
+            game.ReportEquipment(CurrentWeapon, CurrentArmor);
         }
 
         public void SetCombatEnabled(bool value)
@@ -79,6 +89,7 @@ namespace Riftbound
                 if (Keyboard.current.spaceKey.wasPressedThisFrame) Attack();
                 if (Keyboard.current.leftShiftKey.wasPressedThisFrame) Dash();
                 if (Keyboard.current.eKey.wasPressedThisFrame) Ability();
+                if (Keyboard.current.iKey.wasPressedThisFrame) game.OpenInventoryFromHud();
             }
 #endif
 
@@ -142,31 +153,30 @@ namespace Riftbound
 
         public void ApplyCard(CardDefinition card)
         {
-            var oldMax = build.maxHealth;
-            build = RunPlanner.ApplyCard(build, card);
-            health = Mathf.Clamp(health + build.maxHealth - oldMax, 1f, build.maxHealth);
-            game.ReportHealth(health, build.maxHealth);
+            if (card == null) return;
+            cardBuild = RunPlanner.ApplyCard(cardBuild, card);
+            RebuildDerivedStats(true);
         }
 
-        public void EquipWeapon(WeaponDefinition weapon)
+        public bool EquipItem(ItemInstance item)
         {
-            if (weapon == null) return;
-            build.damage = Mathf.Max(build.damage, weapon.damage);
-            build.attackRate = Mathf.Min(build.attackRate, weapon.attackRate);
-            weaponRange = weapon.range;
-            CurrentWeapon = weapon.title;
+            if (item == null) return false;
+
+            if (item.kind == ItemKind.Weapon)
+                equippedWeapon = item.Clone();
+            else
+                equippedArmor = item.Clone();
+
+            RebuildDerivedStats(true);
             game.ReportEquipment(CurrentWeapon, CurrentArmor);
+            return true;
         }
 
-        public void EquipArmor(ArmorDefinition armor)
+        public bool IsEquipped(string instanceId)
         {
-            if (armor == null) return;
-            build.maxHealth += armor.maxHealth;
-            build.damageReduction = Mathf.Clamp01(build.damageReduction + armor.damageReduction);
-            health = Mathf.Min(build.maxHealth, health + armor.maxHealth);
-            CurrentArmor = armor.title;
-            game.ReportHealth(health, build.maxHealth);
-            game.ReportEquipment(CurrentWeapon, CurrentArmor);
+            if (string.IsNullOrEmpty(instanceId)) return false;
+            return equippedWeapon?.instanceId == instanceId ||
+                   equippedArmor?.instanceId == instanceId;
         }
 
         public float Heal(float amount)
@@ -185,6 +195,40 @@ namespace Riftbound
             health = Mathf.Max(0f, health - final);
             game.ReportHealth(health, build.maxHealth);
             if (health <= 0f) game.PlayerDied();
+        }
+
+        private void RebuildDerivedStats(bool preserveMissingHealth)
+        {
+            var previousMax = build.maxHealth <= 0f ? cardBuild.maxHealth : build.maxHealth;
+            var missingHealth = Mathf.Max(0f, previousMax - health);
+            build = cardBuild;
+
+            if (equippedWeapon != null)
+            {
+                var weapon = GameCatalog.Weapons[equippedWeapon.catalogIndex];
+                var cardDamageMultiplier = cardBuild.damage / PlayerBuild.Default.damage;
+                var cardAttackRateMultiplier = cardBuild.attackRate / PlayerBuild.Default.attackRate;
+                build.damage = weapon.damage * equippedWeapon.powerMultiplier * cardDamageMultiplier;
+                build.attackRate = Mathf.Max(.12f, weapon.attackRate * cardAttackRateMultiplier);
+                weaponRange = weapon.range * (1f + (equippedWeapon.powerMultiplier - 1f) * .15f);
+                if (equippedWeapon.rarity == ItemRarity.Cursed)
+                    build.incomingDamageMultiplier *= 1.12f;
+            }
+
+            if (equippedArmor != null)
+            {
+                var armor = GameCatalog.Armors[equippedArmor.catalogIndex];
+                build.maxHealth += armor.maxHealth * equippedArmor.powerMultiplier;
+                build.damageReduction = Mathf.Clamp01(
+                    build.damageReduction + armor.damageReduction * equippedArmor.powerMultiplier);
+                if (equippedArmor.rarity == ItemRarity.Cursed)
+                    build.incomingDamageMultiplier *= 1.12f;
+            }
+
+            if (preserveMissingHealth)
+                health = Mathf.Clamp(build.maxHealth - missingHealth, 1f, build.maxHealth);
+
+            game?.ReportHealth(health, build.maxHealth);
         }
 
         private void ClampToArena()
