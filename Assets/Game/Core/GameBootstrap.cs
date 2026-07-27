@@ -23,12 +23,14 @@ namespace Riftbound
         private InventoryView inventoryView;
         private SaveData saveData;
         private bool transitioning;
+        private bool coopAdvanceAuthorized;
 
         public PlayerController Player => player;
         public int RoomIndex => roomIndex;
         public int Seed => seed;
         public int RunGold => runGold;
         public RunInventory Inventory => inventory;
+        public bool IsSafeRoom => player != null && !player.CombatEnabled && !transitioning;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void EnsureBootstrap()
@@ -120,6 +122,7 @@ namespace Riftbound
             rng = new System.Random(seed);
             roomIndex = 0;
             runGold = 25;
+            coopAdvanceAuthorized = false;
             inventory.Reset();
 
             var starter = LootGenerator.CreateStarterWeapon();
@@ -131,6 +134,33 @@ namespace Riftbound
             ReportCurrencies();
             ReportEquipment(player.CurrentWeapon, player.CurrentArmor);
             LoadCurrentRoom();
+        }
+
+        public bool SynchronizeToHost(int hostSeed, int hostRoomIndex)
+        {
+            if (hostRoomIndex < 0 || hostRoomIndex >= RunPlanner.RoomCount) return false;
+            var candidate = RunPlanner.Generate(hostSeed);
+            if (!RunPlanner.Validate(candidate)) return false;
+            if (seed == hostSeed && roomIndex == hostRoomIndex) return true;
+
+            if (inventoryView != null)
+            {
+                Destroy(inventoryView.gameObject);
+                inventoryView = null;
+            }
+
+            CancelInvoke(nameof(LoadCurrentRoom));
+            seed = hostSeed;
+            roomPlan = candidate;
+            rng = new System.Random(seed);
+            roomIndex = hostRoomIndex;
+            transitioning = false;
+            coopAdvanceAuthorized = false;
+            saveData.lastSeed = seed;
+            SaveService.Save(saveData);
+            LoadCurrentRoom();
+            hud?.ShowMessage("RUN MIT HOST SYNCHRONISIERT", 1.5f);
+            return true;
         }
 
         private static int[] GenerateValidRun(ref int runSeed)
@@ -179,7 +209,10 @@ namespace Riftbound
                 case RoomKind.Merchant:
                     player.SetCombatEnabled(false);
                     hud.ShowMerchant(
-                        ShopGenerator.Generate(seed, roomIndex),
+                        ShopGenerator.Generate(
+                            seed,
+                            roomIndex,
+                            CoopBalance.LootChoiceCount(CoopRuntimeState.ActivePlayerCount)),
                         runGold,
                         TryBuyOffer,
                         () => OpenInventory(AdvanceRoom),
@@ -277,7 +310,11 @@ namespace Riftbound
                 return;
             }
 
-            var count = room.kind == RoomKind.Elite ? 4 : 2 + roomIndex + room.difficulty / 2;
+            var baseCount = room.kind == RoomKind.Elite ? 4 : 2 + roomIndex + room.difficulty / 2;
+            var count = CoopBalance.ScaleEnemyCount(
+                baseCount,
+                CoopRuntimeState.ActivePlayerCount,
+                room.kind);
             for (var i = 0; i < count; i++)
             {
                 var angle = i * Mathf.PI * 2f / count;
@@ -468,6 +505,17 @@ namespace Riftbound
 
         private void AdvanceRoom()
         {
+            if (!coopAdvanceAuthorized && CoopRuntimeState.Connected && CoopLanController.Instance != null)
+            {
+                CoopLanController.Instance.RequestRoomAdvance(() =>
+                {
+                    coopAdvanceAuthorized = true;
+                    AdvanceRoom();
+                });
+                return;
+            }
+
+            coopAdvanceAuthorized = false;
             if (IsInvoking(nameof(LoadCurrentRoom))) return;
             transitioning = true;
             roomIndex++;
@@ -475,6 +523,24 @@ namespace Riftbound
         }
 
         public void PlayerDied()
+        {
+            player.SetCombatEnabled(false);
+            if (CoopRuntimeState.Connected && CoopLanController.Instance != null)
+            {
+                CoopLanController.Instance.MarkLocalDowned(
+                    () =>
+                    {
+                        player.Revive(.35f);
+                        hud.ShowMessage("PARTNER HAT DICH WIEDERBELEBT", 1.8f);
+                    },
+                    FinishGameOver);
+                return;
+            }
+
+            FinishGameOver();
+        }
+
+        private void FinishGameOver()
         {
             player.SetCombatEnabled(false);
             var earnedShards = MetaProgression.RecordDefeat(saveData, roomIndex + 1);
