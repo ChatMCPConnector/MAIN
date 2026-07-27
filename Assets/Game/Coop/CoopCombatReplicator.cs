@@ -11,6 +11,7 @@ namespace Riftbound
         private const int CombatPort = 47820;
         private const float HelloInterval = .5f;
         private const float SnapshotInterval = .1f;
+        private const float DefenseInterval = .1f;
         private const float ChannelTimeout = 4f;
         private const string TokenKey = "riftbound-coop-device-token";
 
@@ -23,17 +24,24 @@ namespace Riftbound
         private string remoteToken;
         private float nextHello;
         private float nextSnapshot;
+        private float nextDefense;
         private float lastPacketAt;
         private float nextRemoteMelee;
         private float nextRemoteAbility;
+        private float nextRemoteDamage;
         private long outgoingSequence;
         private long lastEnemySequence;
+        private long lastProjectileSequence;
         private long lastAttackSequence;
+        private long lastDefenseSequence;
+        private long lastDamageSequence;
         private bool channelConnected;
+        private bool remoteInvulnerable;
 
         public static CoopCombatReplicator Instance { get; private set; }
         public bool CombatConnected => channelConnected && CoopRuntimeState.Connected;
         public bool IsClientReplica => CombatConnected && role == CoopRole.Client;
+        public bool RemoteInvulnerable => remoteInvulnerable;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void EnsureRuntime()
@@ -83,7 +91,10 @@ namespace Riftbound
                 channelConnected = false;
                 remoteToken = null;
                 lastEnemySequence = 0;
+                lastProjectileSequence = 0;
+                lastDamageSequence = 0;
                 nextHello = 0f;
+                Projectile.ReleaseReplicaProjectiles();
             }
         }
 
@@ -107,6 +118,29 @@ namespace Riftbound
                 range = Mathf.Clamp(range, .5f, 4f)
             };
             Send(remoteEndpoint, CoopCombatProtocol.EncodeAttack(sessionCode, localToken, intent));
+            return true;
+        }
+
+        public bool TryDamageRemote(float amount, CoopDamageKind kind)
+        {
+            if (!CombatConnected || role != CoopRole.Host || remoteEndpoint == null ||
+                remoteInvulnerable || !CoopAuthorityValidation.IsValidDamage(amount) ||
+                Time.unscaledTime < nextRemoteDamage)
+                return false;
+
+            var peer = CoopLanController.Instance?.RemoteState;
+            if (peer == null || peer.health <= 0f || peer.downed) return false;
+
+            nextRemoteDamage = Time.unscaledTime + .04f;
+            var damageEvent = new CoopDamageEvent
+            {
+                sequence = ++outgoingSequence,
+                amount = Mathf.Clamp(amount, .1f, 500f),
+                kind = kind
+            };
+            Send(
+                remoteEndpoint,
+                CoopAuthorityProtocol.EncodeDamage(sessionCode, localToken, damageEvent));
             return true;
         }
 
@@ -138,7 +172,7 @@ namespace Riftbound
                 }
 
                 ConfigureNonBlocking(socket);
-                nextHello = nextSnapshot = 0f;
+                nextHello = nextSnapshot = nextDefense = 0f;
                 lastPacketAt = Time.unscaledTime;
             }
             catch (Exception exception)
@@ -151,9 +185,26 @@ namespace Riftbound
         private void TickClient(CoopLanController session)
         {
             if (remoteEndpoint == null) ResolveHostEndpoint(session);
-            if (remoteEndpoint == null || channelConnected || Time.unscaledTime < nextHello) return;
-            nextHello = Time.unscaledTime + HelloInterval;
-            Send(remoteEndpoint, CoopCombatProtocol.EncodeHello(sessionCode, localToken));
+            if (remoteEndpoint == null) return;
+
+            if (!channelConnected)
+            {
+                if (Time.unscaledTime < nextHello) return;
+                nextHello = Time.unscaledTime + HelloInterval;
+                Send(remoteEndpoint, CoopCombatProtocol.EncodeHello(sessionCode, localToken));
+                return;
+            }
+
+            if (Time.unscaledTime < nextDefense || game?.Player == null) return;
+            nextDefense = Time.unscaledTime + DefenseInterval;
+            var defense = new CoopDefenseState
+            {
+                sequence = ++outgoingSequence,
+                invulnerable = game.Player.IsNetworkInvulnerable
+            };
+            Send(
+                remoteEndpoint,
+                CoopAuthorityProtocol.EncodeDefense(sessionCode, localToken, defense));
         }
 
         private void TickHost()
@@ -161,20 +212,32 @@ namespace Riftbound
             if (!channelConnected || remoteEndpoint == null || game == null || Time.unscaledTime < nextSnapshot)
                 return;
             nextSnapshot = Time.unscaledTime + SnapshotInterval;
-            var snapshots = CoopCombatWorld.CaptureEnemySnapshots(game.RoomIndex);
-            var payload = CoopCombatProtocol.EncodeEnemies(
-                sessionCode,
-                localToken,
-                ++outgoingSequence,
-                game.RoomIndex,
-                snapshots);
-            Send(remoteEndpoint, payload);
+
+            var enemies = CoopCombatWorld.CaptureEnemySnapshots(game.RoomIndex);
+            Send(
+                remoteEndpoint,
+                CoopCombatProtocol.EncodeEnemies(
+                    sessionCode,
+                    localToken,
+                    ++outgoingSequence,
+                    game.RoomIndex,
+                    enemies));
+
+            var projectiles = Projectile.CaptureEnemySnapshots();
+            Send(
+                remoteEndpoint,
+                CoopAuthorityProtocol.EncodeProjectiles(
+                    sessionCode,
+                    localToken,
+                    ++outgoingSequence,
+                    game.RoomIndex,
+                    projectiles));
         }
 
         private void PollSocket(CoopLanController session)
         {
             if (socket == null) return;
-            for (var i = 0; i < 48 && socket.Available > 0; i++)
+            for (var i = 0; i < 64 && socket.Available > 0; i++)
             {
                 try
                 {
@@ -203,8 +266,10 @@ namespace Riftbound
                 remoteEndpoint = sender;
                 remoteToken = helloToken;
                 channelConnected = true;
+                remoteInvulnerable = false;
                 lastPacketAt = Time.unscaledTime;
                 lastAttackSequence = 0;
+                lastDefenseSequence = 0;
                 Send(sender, CoopCombatProtocol.EncodeWelcome(sessionCode, localToken));
                 return;
             }
@@ -219,7 +284,10 @@ namespace Riftbound
                 channelConnected = true;
                 lastPacketAt = Time.unscaledTime;
                 lastEnemySequence = 0;
+                lastProjectileSequence = 0;
+                lastDamageSequence = 0;
                 CoopCombatWorld.SetReplication(true);
+                Projectile.ReleaseReplicaProjectiles();
                 return;
             }
 
@@ -237,6 +305,24 @@ namespace Riftbound
                     return;
                 lastPacketAt = Time.unscaledTime;
                 CoopCombatWorld.ApplyEnemySnapshots(game, roomIndex, snapshots);
+                return;
+            }
+
+            if (role == CoopRole.Client &&
+                CoopAuthorityProtocol.TryDecodeProjectiles(
+                    payload,
+                    out var projectileCode,
+                    out var projectileToken,
+                    out var projectileSequence,
+                    out var projectileRoom,
+                    out var projectileSnapshots))
+            {
+                if (!AcceptPinned(projectileCode, projectileToken, sender) ||
+                    !CoopCombatValidation.IsFresh(projectileSequence, ref lastProjectileSequence) ||
+                    game == null || projectileRoom != game.RoomIndex)
+                    return;
+                lastPacketAt = Time.unscaledTime;
+                Projectile.ApplyEnemySnapshots(projectileSnapshots);
                 return;
             }
 
@@ -264,6 +350,36 @@ namespace Riftbound
 
                 lastPacketAt = Time.unscaledTime;
                 CoopCombatWorld.ApplyRemoteAttack(game, intent);
+                return;
+            }
+
+            if (role == CoopRole.Host &&
+                CoopAuthorityProtocol.TryDecodeDefense(
+                    payload,
+                    out var defenseCode,
+                    out var defenseToken,
+                    out var defense))
+            {
+                if (!AcceptPinned(defenseCode, defenseToken, sender) ||
+                    !CoopCombatValidation.IsFresh(defense.sequence, ref lastDefenseSequence))
+                    return;
+                lastPacketAt = Time.unscaledTime;
+                remoteInvulnerable = defense.invulnerable;
+                return;
+            }
+
+            if (role == CoopRole.Client &&
+                CoopAuthorityProtocol.TryDecodeDamage(
+                    payload,
+                    out var damageCode,
+                    out var damageToken,
+                    out var damageEvent))
+            {
+                if (!AcceptPinned(damageCode, damageToken, sender) ||
+                    !CoopCombatValidation.IsFresh(damageEvent.sequence, ref lastDamageSequence))
+                    return;
+                lastPacketAt = Time.unscaledTime;
+                game?.Player?.TakeNetworkDamage(damageEvent.amount);
             }
         }
 
@@ -319,11 +435,19 @@ namespace Riftbound
             sessionCode = null;
             role = CoopRole.Offline;
             channelConnected = false;
+            remoteInvulnerable = false;
             outgoingSequence = 0;
             lastEnemySequence = 0;
+            lastProjectileSequence = 0;
             lastAttackSequence = 0;
-            nextRemoteMelee = nextRemoteAbility = 0f;
-            if (wasClient) CoopCombatWorld.SetReplication(false);
+            lastDefenseSequence = 0;
+            lastDamageSequence = 0;
+            nextRemoteMelee = nextRemoteAbility = nextRemoteDamage = 0f;
+            if (wasClient)
+            {
+                CoopCombatWorld.SetReplication(false);
+                Projectile.ReleaseReplicaProjectiles();
+            }
         }
 
         private static void ConfigureNonBlocking(UdpClient client)
