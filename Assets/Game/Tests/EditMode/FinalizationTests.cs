@@ -42,6 +42,22 @@ namespace Riftbound.Tests
         }
 
         [Test]
+        public void ReliableHeartbeatRoundTripsAndRejectsWrongVersion()
+        {
+            var ping = CoopReliableProtocol.EncodePing("5555", "client");
+            Assert.That(CoopReliableProtocol.TryDecodePing(ping, out var code, out var token), Is.True);
+            Assert.That(code, Is.EqualTo("5555"));
+            Assert.That(token, Is.EqualTo("client"));
+
+            var pong = CoopReliableProtocol.EncodePong("5555", "host");
+            Assert.That(CoopReliableProtocol.TryDecodePong(pong, out code, out token), Is.True);
+            Assert.That(token, Is.EqualTo("host"));
+            Assert.That(
+                CoopReliableProtocol.TryDecodePong("RB5R|PONG|99|5555|host", out _, out _),
+                Is.False);
+        }
+
+        [Test]
         public void ReliableLedgerRetriesAcknowledgesAndDeduplicates()
         {
             var ledger = new CoopReliableLedger();
