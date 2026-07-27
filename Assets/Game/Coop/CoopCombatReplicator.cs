@@ -76,14 +76,14 @@ namespace Riftbound
             else if (role == CoopRole.Host)
                 TickHost();
 
-            if (channelConnected && Time.unscaledTime - lastPacketAt > ChannelTimeout)
+            if (channelConnected &&
+                role == CoopRole.Client &&
+                Time.unscaledTime - lastPacketAt > ChannelTimeout)
             {
                 channelConnected = false;
-                remoteEndpoint = role == CoopRole.Client ? remoteEndpoint : null;
                 remoteToken = null;
                 lastEnemySequence = 0;
-                lastAttackSequence = 0;
-                if (role == CoopRole.Client) CoopCombatWorld.SetReplication(false);
+                nextHello = 0f;
             }
         }
 
