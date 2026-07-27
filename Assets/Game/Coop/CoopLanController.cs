@@ -350,6 +350,9 @@ namespace Riftbound
                 lastPacketAt = Time.unscaledTime;
                 readyGate.SetRemote(state.ready);
                 reviveState.SetRemoteDowned(state.downed);
+                if (Role == CoopRole.Client && game != null &&
+                    (game.Seed != state.seed || game.RoomIndex != state.roomIndex))
+                    game.SynchronizeToHost(state.seed, state.roomIndex);
                 TryCompleteReadyGate();
                 EvaluatePartyDefeat();
                 if (readyChanged || downedChanged || Time.unscaledTime >= nextPeerUi)
@@ -442,12 +445,20 @@ namespace Riftbound
                     if (!reviveState.LocalDowned) return;
                     reviveState.SetLocalDowned(false);
                     partyDefeatRaised = false;
-                    var callback = localRevived;
+                    var reviveCallback = localRevived;
                     localRevived = null;
-                    callback?.Invoke();
+                    reviveCallback?.Invoke();
                     SendStateNow();
                     ShowMessage("WIEDERBELEBT");
                     NotifyChanged();
+                    break;
+                case "ADVANCE":
+                    if (Role != CoopRole.Client) return;
+                    readyGate.Reset();
+                    var roomCallback = pendingRoomAdvance;
+                    pendingRoomAdvance = null;
+                    SendStateNow();
+                    roomCallback?.Invoke();
                     break;
                 case "BYE":
                     ContinueSoloAndStop("PARTNER HAT DIE SITZUNG VERLASSEN");
@@ -457,7 +468,9 @@ namespace Riftbound
 
         private void TryCompleteReadyGate()
         {
+            if (Role != CoopRole.Host || pendingRoomAdvance == null) return;
             if (!readyGate.TryConsume()) return;
+            SendCommand("ADVANCE");
             var callback = pendingRoomAdvance;
             pendingRoomAdvance = null;
             SendStateNow();
@@ -596,7 +609,14 @@ namespace Riftbound
             try
             {
                 discoverySocket = new UdpClient();
-                discoverySocket.Client.ExclusiveAddressUse = false;
+                try
+                {
+                    discoverySocket.Client.ExclusiveAddressUse = false;
+                }
+                catch
+                {
+                    // Some Android socket backends do not expose this option.
+                }
                 discoverySocket.Client.SetSocketOption(
                     SocketOptionLevel.Socket,
                     SocketOptionName.ReuseAddress,
