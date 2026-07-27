@@ -33,8 +33,8 @@ When the project needs a model, material, texture, decal, terrain asset or HDRI:
 6. Prefer glTF/GLB for 3D models, JPG/PNG for ordinary PBR textures and HDR/EXR for environment lighting.
 7. Add provider IDs and target paths to `AssetSources/open-assets.json`; do not commit downloaded binary assets.
 8. Keep target paths relative to `Assets/Resources/Community/OpenAssets/` and organize them by provider and purpose.
-9. Run `python tools/open_asset_catalog.py validate` after editing the manifest.
-10. When network access is available, run `python tools/open_asset_catalog.py resolve` and inspect the resolved size, files, source and license.
+9. Run `python tools/asset_pipeline.py validate` after editing the manifest.
+10. When network access is available, run `python tools/asset_pipeline.py resolve` and inspect the resolved size, files, source and license.
 11. Preserve source and license records in `ASSET_SOURCES.md` and the generated lock file.
 12. Never place API secrets in the repository. Poly Haven and ambientCG require no API key.
 
@@ -59,12 +59,12 @@ When the project needs a model, material, texture, decal, terrain asset or HDRI:
 Before finishing a change, run or update the applicable checks:
 
 ```bash
-python tools/open_asset_catalog.py validate
+python tools/asset_pipeline.py validate
 python tools/validate_project.py
 ```
 
 If network access is available and the manifest is non-empty:
 
 ```bash
-python tools/open_asset_catalog.py resolve
+python tools/asset_pipeline.py resolve
 ```
