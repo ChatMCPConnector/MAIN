@@ -81,7 +81,7 @@ namespace Riftbound
                 sessionCode = parts[3],
                 seed = seed,
                 roomIndex = Math.Max(0, roomIndex),
-                playerCount = Math.Clamp(playerCount, 1, 2),
+                playerCount = Math.Max(1, Math.Min(2, playerCount)),
                 joinable = joinable != 0
             };
             return true;
