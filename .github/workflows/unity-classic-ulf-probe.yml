@@ -1,4 +1,4 @@
-name: Diagnose classic Unity ULF activation and build
+name: Verify classic Unity ULF end to end
 
 on:
   pull_request:
@@ -13,10 +13,10 @@ env:
   UNITY_SERIAL: F4-9QCB-A9YM-9MHS-CQR2-WKN2
 
 jobs:
-  activation-build-probe:
-    name: Activate Unity Personal and build Neon Rift
+  unity-verify:
+    name: Activate, test and build Neon Rift
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: docker pull "$UNITY_IMAGE"
 
-      - name: Activate and build directly in Unity
+      - name: Activate, run EditMode tests and build
         id: unity
         continue-on-error: true
         shell: bash
@@ -62,6 +62,8 @@ jobs:
               echo "unity_bin=${UNITY_BIN:-missing}" >> /github/workspace/ci-diagnostics/probe.txt
               if [[ -z "$UNITY_BIN" ]]; then
                 echo 90 > /github/workspace/ci-diagnostics/activation-exit-code.txt
+                echo 99 > /github/workspace/ci-diagnostics/tests-exit-code.txt
+                echo 99 > /github/workspace/ci-diagnostics/build-exit-code.txt
                 exit 90
               fi
 
@@ -73,6 +75,20 @@ jobs:
                 -logFile /github/workspace/ci-diagnostics/activation.log
               activation_exit=$?
               echo "$activation_exit" > /github/workspace/ci-diagnostics/activation-exit-code.txt
+
+              if [[ $activation_exit -eq 0 ]]; then
+                "$UNITY_BIN" \
+                  -batchmode -nographics \
+                  -projectPath /github/workspace \
+                  -runTests \
+                  -testPlatform editmode \
+                  -testResults /github/workspace/ci-diagnostics/test-results.xml \
+                  -logFile /github/workspace/ci-diagnostics/tests.log
+                tests_exit=$?
+              else
+                tests_exit=99
+              fi
+              echo "$tests_exit" > /github/workspace/ci-diagnostics/tests-exit-code.txt
 
               if [[ $activation_exit -eq 0 ]]; then
                 "$UNITY_BIN" \
@@ -95,13 +111,27 @@ jobs:
               if [[ $activation_exit -ne 0 ]]; then
                 exit "$activation_exit"
               fi
+              if [[ $tests_exit -ne 0 ]]; then
+                exit "$tests_exit"
+              fi
               exit "$build_exit"
             '
           exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           exit "$exit_code"
 
-      - name: Create activation and build report
+      - name: Check generated build
+        id: build_check
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f build/StandaloneWindows64/NeonRift/NeonRift.exe && -f ci-diagnostics/build-exit-code.txt && "$(cat ci-diagnostics/build-exit-code.txt)" == "0" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create verification report
         if: always()
         shell: bash
         env:
@@ -117,14 +147,14 @@ jobs:
 
           root = Path('ci-diagnostics')
           root.mkdir(exist_ok=True)
-          report = root / 'classic-ulf-build-summary.txt'
+          report = root / 'classic-ulf-verification-summary.txt'
           secrets = [os.environ.get('UNITY_EMAIL', ''), os.environ.get('UNITY_PASSWORD', '')]
           secrets = [value for value in secrets if value]
           pattern = re.compile(
               r'error|exception|fail(?:ed|ure)?|licen[cs]e|activat|serial|'
               r'unauthori[sz]ed|invalid|denied|entitlement|machine|binding|token|'
               r'request|response|status|return code|exit code|compiler|\bCS\d{4}\b|'
-              r'package|assembly|build failed|aborting|cannot|not found',
+              r'package|assembly|build failed|aborting|cannot|not found|test result|passed|failed',
               re.IGNORECASE,
           )
 
@@ -135,21 +165,21 @@ jobs:
               return text
 
           sections = [
-              'Classic Unity ULF activation and build probe',
+              'Classic Unity ULF end-to-end verification',
               'serial=F4-9QCB-A9YM-9MHS-CQR2-WKN2',
               f"step_outcome={os.environ.get('STEP_OUTCOME', '')}",
               f"unity_exit_code={os.environ.get('UNITY_EXIT_CODE', '')}",
           ]
-          for small in ['probe.txt', 'activation-exit-code.txt', 'build-exit-code.txt']:
+          for small in ['probe.txt', 'activation-exit-code.txt', 'tests-exit-code.txt', 'build-exit-code.txt']:
               path = root / small
               if path.exists():
                   sections.extend(['', f'===== {small} =====', redact(path.read_text(errors='replace'))])
 
-          for name in ['activation.log', 'build.log', 'return-license.log']:
+          for name in ['activation.log', 'tests.log', 'build.log', 'return-license.log']:
               path = root / name
               lines = path.read_text(encoding='utf-8', errors='replace').splitlines() if path.exists() else []
               sections.extend(['', f'===== {name} (exists={path.exists()}, lines={len(lines)}) ====='])
-              selected = set(range(max(0, len(lines) - 320), len(lines)))
+              selected = set(range(max(0, len(lines) - 360), len(lines)))
               for index, line in enumerate(lines):
                   if pattern.search(line):
                       selected.update(range(max(0, index - 6), min(len(lines), index + 7)))
@@ -160,36 +190,148 @@ jobs:
                   sections.append(f'{index + 1}: {redact(lines[index])}')
                   previous = index
 
+          results = root / 'test-results.xml'
+          sections.extend(['', f'test_results_exists={results.exists()}'])
+          if results.exists():
+              text = results.read_text(encoding='utf-8', errors='replace')
+              match = re.search(r'<test-run[^>]*\bresult="([^"]+)"[^>]*\btotal="([^"]+)"[^>]*\bpassed="([^"]+)"[^>]*\bfailed="([^"]+)"', text)
+              if match:
+                  sections.append(f'test_result={match.group(1)} total={match.group(2)} passed={match.group(3)} failed={match.group(4)}')
+
           build_root = Path('build/StandaloneWindows64/NeonRift')
           sections.extend(['', f'build_directory_exists={build_root.exists()}'])
           if build_root.exists():
-              for path in sorted(build_root.rglob('*')):
-                  if path.is_file():
-                      sections.append(f'build_file={path} size={path.stat().st_size}')
+              files = [path for path in build_root.rglob('*') if path.is_file()]
+              sections.append(f'build_file_count={len(files)}')
+              sections.append(f'build_total_bytes={sum(path.stat().st_size for path in files)}')
 
           report.write_text('\n'.join(sections) + '\n', encoding='utf-8')
           print(report.read_text(encoding='utf-8'))
           PY
 
-      - name: Upload build diagnostics
+      - name: Upload verification diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: NeonRift-Classic-ULF-Build-Diagnostics
-          path: ci-diagnostics/classic-ulf-build-summary.txt
-          if-no-files-found: error
+          name: NeonRift-Classic-ULF-Verification
+          path: |
+            ci-diagnostics/classic-ulf-verification-summary.txt
+            ci-diagnostics/test-results.xml
+          if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload successful Windows build
-        if: steps.unity.outcome == 'success'
+      - name: Upload verified Windows build
+        if: steps.build_check.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: NeonRift-Windows-x86_64-Probe
+          name: NeonRift-Windows-x86_64-Verified-Probe
           path: build/StandaloneWindows64/NeonRift
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail when activation or build failed
+      - name: Fail when activation, tests or build failed
         if: steps.unity.outcome != 'success'
         shell: bash
         run: exit 1
+
+  windows-visual:
+    name: Capture and verify eight player states
+    needs: [unity-verify]
+    if: needs.unity-verify.result == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: NeonRift-Windows-x86_64-Verified-Probe
+          path: artifact
+      - name: Capture real player screenshots
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem artifact -Recurse -Filter NeonRift.exe | Select-Object -First 1
+          if (-not $exe) { throw "NeonRift.exe was not found" }
+          $directory = $exe.Directory.FullName
+          $gallery = Join-Path (Resolve-Path artifact).Path "visual-gallery"
+          New-Item -ItemType Directory -Force -Path $gallery | Out-Null
+          $stdout = Join-Path $gallery "capture-stdout.log"
+          $stderr = Join-Path $gallery "capture-stderr.log"
+          $arguments = @("-batchmode", "-screen-width", "1280", "-screen-height", "720", "--capture-ci", "--capture-dir=$gallery")
+          $process = Start-Process -FilePath $exe.FullName -WorkingDirectory $directory -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          if (-not $process.WaitForExit(90000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Unity visual capture timed out"
+          }
+          if ($process.ExitCode -ne 0) {
+            Get-Content $stdout -ErrorAction SilentlyContinue
+            Get-Content $stderr -ErrorAction SilentlyContinue
+            throw "Unity visual capture exited with code $($process.ExitCode)"
+          }
+          $images = @(Get-ChildItem $gallery -Filter *.png)
+          if ($images.Count -lt 8) { throw "Expected eight screenshots, found $($images.Count)" }
+          Get-Content (Join-Path $gallery "capture.log")
+          $images | Sort-Object Name | Select-Object Name,Length | Format-Table
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: NeonRift-Visual-Gallery-Probe
+          path: artifact/visual-gallery
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-smoke:
+    name: Run player smoke test and package ZIP
+    needs: [unity-verify, windows-visual]
+    if: needs.unity-verify.result == 'success' && needs.windows-visual.result == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: NeonRift-Windows-x86_64-Verified-Probe
+          path: artifact
+      - name: Run real player smoke test
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem artifact -Recurse -Filter NeonRift.exe | Select-Object -First 1
+          if (-not $exe) { throw "NeonRift.exe was not found" }
+          $directory = $exe.Directory.FullName
+          $stdout = Join-Path $directory "player-stdout.log"
+          $stderr = Join-Path $directory "player-stderr.log"
+          $process = Start-Process -FilePath $exe.FullName -WorkingDirectory $directory -ArgumentList @("-batchmode", "-nographics", "--smoke-test") -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          if (-not $process.WaitForExit(45000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Unity player smoke test timed out"
+          }
+          if ($process.ExitCode -ne 0) {
+            Get-Content $stdout -ErrorAction SilentlyContinue
+            Get-Content $stderr -ErrorAction SilentlyContinue
+            throw "Unity player exited with code $($process.ExitCode)"
+          }
+          $smoke = Join-Path $directory "smoke-test.log"
+          if (-not (Test-Path $smoke)) { throw "smoke-test.log is missing" }
+          Get-Content $smoke
+          Select-String -Path $smoke -Pattern "PASS"
+      - name: Create checksums and portable archive
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem artifact -Recurse -Filter NeonRift.exe | Select-Object -First 1
+          $directory = $exe.Directory.FullName
+          $unexpected = Get-ChildItem $directory -Recurse -Include *.bat,*.cmd,*.ps1,*.vbs,*.msi
+          if ($unexpected) { throw "Unexpected helper executables found: $($unexpected.FullName -join ', ')" }
+          $zip = Join-Path artifact "NeonRift-Unity-Windows-Portable.zip"
+          Compress-Archive -Path "$directory\*" -DestinationPath $zip -CompressionLevel Optimal
+          $targets = @($zip, $exe.FullName, (Join-Path $directory "smoke-test.log"))
+          $lines = foreach ($target in $targets) {
+            $hash = Get-FileHash $target -Algorithm SHA256
+            "$($hash.Hash.ToLower())  $($target.Replace((Resolve-Path artifact).Path + '\', ''))"
+          }
+          $lines | Set-Content (Join-Path artifact "SHA256SUMS.txt")
+          Get-Content (Join-Path artifact "SHA256SUMS.txt")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeonRift-Windows-Portable-Probe
+          path: |
+            artifact/NeonRift-Unity-Windows-Portable.zip
+            artifact/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
