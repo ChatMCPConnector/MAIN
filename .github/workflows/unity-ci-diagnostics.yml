@@ -8,177 +8,57 @@ on:
 permissions:
   contents: read
 
-env:
-  UNITY_VERSION: 6000.3.17f1
-  UNITY_IMAGE: unityci/editor:ubuntu-6000.3.17f1-windows-mono-3
-
 jobs:
-  direct-docker-license:
-    name: Run Unity Editor directly with Personal license
+  unity-cli-license-probe:
+    name: Inspect official Unity CLI licensing support
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare secret license and diagnostics
+      - name: Install official Unity CLI beta
         shell: bash
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
         run: |
           set -euo pipefail
-          test -n "$UNITY_LICENSE"
-          mkdir -p ci-license ci-diagnostics
-          printf '%s' "$UNITY_LICENSE" > ci-license/Unity_lic.ulf
-          chmod 600 ci-license/Unity_lic.ulf
-          python3 - <<'PY'
-          from pathlib import Path
-          text = Path('ci-license/Unity_lic.ulf').read_text(encoding='utf-8', errors='replace')
-          required = ['<License ', 'Product="Unity Personal"', '<Signature']
-          missing = [item for item in required if item not in text]
-          if missing:
-              raise SystemExit(f'UNITY_LICENSE is missing expected markers: {missing}')
-          print('Secret contains a signed Unity Personal XML license.')
-          print('DeveloperData present:', '<DeveloperData ' in text)
-          PY
+          curl -fsSL https://public-cdn.cloud.unity3d.com/hub/prod/cli/install.sh \
+            | UNITY_CLI_CHANNEL=beta bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Pull official UnityCI image
-        shell: bash
-        run: docker pull "$UNITY_IMAGE"
-
-      - name: Activate and build with Unity directly
-        id: unity
-        continue-on-error: true
+      - name: Capture CLI version and licensing help
         shell: bash
         run: |
-          set +e
-          docker run --rm \
-            --workdir /github/workspace \
-            --volume "$GITHUB_WORKSPACE:/github/workspace" \
-            "$UNITY_IMAGE" \
-            bash -lc '
-              set +e
-              UNITY_BIN="$(command -v unity-editor 2>/dev/null || true)"
-              if [[ -z "$UNITY_BIN" && -n "${UNITY_PATH:-}" && -x "$UNITY_PATH/Editor/Unity" ]]; then
-                UNITY_BIN="$UNITY_PATH/Editor/Unity"
-              fi
-              if [[ -z "$UNITY_BIN" && -x /opt/unity/Editor/Unity ]]; then
-                UNITY_BIN=/opt/unity/Editor/Unity
-              fi
-              if [[ -z "$UNITY_BIN" ]]; then
-                UNITY_BIN="$(find /opt/unity -type f -path "*/Editor/Unity" -perm -111 2>/dev/null | head -n 1)"
-              fi
-              echo "unity_bin=${UNITY_BIN:-missing}" > /github/workspace/ci-diagnostics/container-probe.txt
-              echo "unity_path=${UNITY_PATH:-unset}" >> /github/workspace/ci-diagnostics/container-probe.txt
-              if [[ -z "$UNITY_BIN" ]]; then
-                echo "Unity executable not found" >> /github/workspace/ci-diagnostics/container-probe.txt
-                exit 90
-              fi
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          UNITY_BIN="$(command -v unity || true)"
+          if [[ -z "$UNITY_BIN" ]]; then
+            UNITY_BIN="$(find "$HOME" -type f -name unity -perm -111 2>/dev/null | head -n 1)"
+          fi
+          if [[ -z "$UNITY_BIN" ]]; then
+            echo 'Unity CLI binary not found after installation.' | tee ci-diagnostics/unity-cli-help.txt
+            exit 1
+          fi
+          {
+            echo "unity_bin=$UNITY_BIN"
+            echo '===== version ====='
+            "$UNITY_BIN" --version
+            echo '===== top-level help ====='
+            "$UNITY_BIN" --help
+            echo '===== auth login help ====='
+            "$UNITY_BIN" auth login --help || true
+            echo '===== license help ====='
+            "$UNITY_BIN" license --help || true
+            echo '===== license activate help ====='
+            "$UNITY_BIN" license activate --help || true
+            echo '===== license status help ====='
+            "$UNITY_BIN" license status --help || true
+          } > ci-diagnostics/unity-cli-help.txt 2>&1
+          cat ci-diagnostics/unity-cli-help.txt
 
-              "$UNITY_BIN" \
-                -batchmode -nographics -quit \
-                -manualLicenseFile /github/workspace/ci-license/Unity_lic.ulf \
-                -logFile /github/workspace/ci-diagnostics/activation.log
-              activation_exit=$?
-              echo "$activation_exit" > /github/workspace/ci-diagnostics/activation-exit-code.txt
-
-              if [[ $activation_exit -ne 0 ]]; then
-                exit $activation_exit
-              fi
-
-              "$UNITY_BIN" \
-                -batchmode -nographics -quit \
-                -projectPath /github/workspace \
-                -executeMethod NeonRift.Editor.BuildAutomation.BuildWindows \
-                -logFile /github/workspace/ci-diagnostics/build.log
-              build_exit=$?
-              echo "$build_exit" > /github/workspace/ci-diagnostics/build-exit-code.txt
-              exit $build_exit
-            '
-          exit_code=$?
-          echo "docker_exit_code=$exit_code" >> "$GITHUB_OUTPUT"
-          exit $exit_code
-
-      - name: Create sanitized diagnostic report
-        if: always()
-        shell: bash
-        env:
-          STEP_OUTCOME: ${{ steps.unity.outcome }}
-          DOCKER_EXIT_CODE: ${{ steps.unity.outputs.docker_exit_code }}
-          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
-          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-        run: |
-          python3 - <<'PY'
-          import os
-          import re
-          from pathlib import Path
-
-          root = Path('ci-diagnostics')
-          root.mkdir(exist_ok=True)
-          report = root / 'direct-docker-summary.txt'
-          secrets = [os.environ.get('UNITY_EMAIL', ''), os.environ.get('UNITY_PASSWORD', '')]
-          secrets = [value for value in secrets if value]
-          pattern = re.compile(
-              r'error|exception|fail(?:ed|ure)?|licen[cs]e|activat|aborting|'
-              r'exit code|not found|invalid|compiler|\bCS\d{4}\b|cannot|denied|'
-              r'unauthori[sz]ed|machine|binding|signature|entitlement|token',
-              re.IGNORECASE,
-          )
-
-          def redact(text: str) -> str:
-              for value in secrets:
-                  text = text.replace(value, '[REDACTED_SECRET]')
-              text = re.sub(r'(?i)(password\s*[=:]\s*)\S+', r'\1[REDACTED]', text)
-              return text
-
-          sections = [
-              'Direct Docker Unity Personal license diagnostic',
-              f"step_outcome={os.environ.get('STEP_OUTCOME', '')}",
-              f"docker_exit_code={os.environ.get('DOCKER_EXIT_CODE', '')}",
-          ]
-
-          for small in ['container-probe.txt', 'activation-exit-code.txt', 'build-exit-code.txt']:
-              path = root / small
-              if path.exists():
-                  sections.extend(['', f'===== {small} =====', redact(path.read_text(errors='replace'))])
-
-          for name in ['activation.log', 'build.log']:
-              path = root / name
-              lines = path.read_text(encoding='utf-8', errors='replace').splitlines() if path.exists() else []
-              sections.extend(['', f'===== {name} (exists={path.exists()}, lines={len(lines)}) ====='])
-              selected = set(range(max(0, len(lines) - 220), len(lines)))
-              for index, line in enumerate(lines):
-                  if pattern.search(line):
-                      selected.update(range(max(0, index - 5), min(len(lines), index + 6)))
-              previous = -2
-              for index in sorted(selected):
-                  if index > previous + 1:
-                      sections.append('...')
-                  sections.append(f'{index + 1}: {redact(lines[index])}')
-                  previous = index
-
-          report.write_text('\n'.join(sections) + '\n', encoding='utf-8')
-          print(report.read_text(encoding='utf-8'))
-          PY
-
-      - name: Remove secret license file
-        if: always()
-        shell: bash
-        run: rm -rf ci-license
-
-      - name: Upload sanitized direct Docker diagnostics
-        if: always()
+      - name: Upload Unity CLI licensing help
         uses: actions/upload-artifact@v4
         with:
-          name: NeonRift-Unity-Direct-Docker-Diagnostics
-          path: |
-            ci-diagnostics/direct-docker-summary.txt
-            ci-diagnostics/container-probe.txt
-            ci-diagnostics/activation-exit-code.txt
-            ci-diagnostics/build-exit-code.txt
-          if-no-files-found: warn
+          name: Unity-CLI-Licensing-Help
+          path: ci-diagnostics/unity-cli-help.txt
+          if-no-files-found: error
           retention-days: 7
-
-      - name: Fail when direct Unity run failed
-        if: steps.unity.outcome != 'success'
-        shell: bash
-        run: exit 1
