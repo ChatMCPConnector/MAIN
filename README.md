@@ -8,19 +8,25 @@ Riftbound ist ein vollständig per Touch bedienbarer Unity-6.3-Prototyp für And
 - drei Kampfräume, Schatzkammer, Händler, Heilraum, Elite und Boss
 - Nahkampf, Projektilfähigkeit und unverwundbarer Dash
 - normale Nah- und Fernkämpfer, Elitegegner und Boss mit angekündigtem Flächenangriff
-- zehn Karten mit Vor- und Nachteilen
-- fünf Waffen und fünf Rüstungsteile
-- Gold, Händlerpreise, Schatzwahl und Ausrüstungsanzeige
-- lokaler, versionierter Spielstand mit Backup
+- zehn Karten mit deutlich sichtbaren Vor- und Nachteilen
+- fünf Waffen und fünf Rüstungsteile mit zufälligen Seltenheiten und Stärke-Rolls
+- Seltenheiten: gewöhnlich, ungewöhnlich, selten, episch, legendär und verflucht
+- Touch-Inventar mit zehn Plätzen, Ausrüsten, Vergleichen und Zerlegen
+- einstellbarer Aufhebefilter; gefilterter oder überzähliger Loot wird automatisch verwertet
+- Gold, Händlerpreise, Schatzwahl und farbcodierte Gegenstandsanzeige
+- persistente Entdeckungen, höchste gefundene Seltenheit und Risssplitter
+- lokaler, versionierter Spielstand mit Backup und Migration auf Version 3
 - Safe Area, 9:16-Touch-HUD und Editor-Tastatursteuerung
-- EditMode-Tests für 10.000 Seeds und deterministische Händlerangebote
+- EditMode-Tests für 10.000 Seeds, Händler, Seltenheiten, Inventar und Meta-Fortschritt
 
 ## Steuerung
 
-Touch: virtueller Stick, Angriff, Dash und Fähigkeit.
+Touch: virtueller Stick, Inventar, Angriff, Dash und Fähigkeit.
 
-Editor: WASD/Pfeiltasten, Leertaste, linke Umschalttaste und E.
+Editor: WASD/Pfeiltasten, Leertaste, linke Umschalttaste, E und I für das Inventar.
+
+Das Inventar lässt sich nur außerhalb aktiver Kämpfe öffnen. Nach Karten-, Schatz- und Händlerauswahl wird es automatisch angeboten.
 
 ## Android-Build
 
-Der Workflow `.github/workflows/unity-android.yml` führt EditMode-Tests aus und erstellt `Riftbound.apk`.
+Die Android-Version ist `0.3.0`. Der Workflow `.github/workflows/unity-android.yml` führt statische Prüfung, EditMode-Tests und den APK-Build aus.
