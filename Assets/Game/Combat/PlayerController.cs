@@ -121,6 +121,18 @@ namespace Riftbound
             nextAttack = Time.time + Mathf.Max(.12f, build.attackRate);
 
             var center = transform.position + transform.forward * (weaponRange * .65f);
+            if (IsNetworkClient())
+            {
+                CoopCombatReplicator.Instance?.SendAttackIntent(
+                    CoopAttackKind.Melee,
+                    transform.position,
+                    transform.forward,
+                    build.damage,
+                    weaponRange);
+                Pulse(new Color(.2f, .95f, 1f), center, .35f, .4f);
+                return;
+            }
+
             var hits = Physics.OverlapSphere(center, weaponRange, ~0, QueryTriggerInteraction.Collide);
             var damaged = new HashSet<EnemyController>();
             foreach (var hit in hits)
@@ -136,6 +148,14 @@ namespace Riftbound
         {
             if (!combatEnabled || Time.time < nextAbility) return;
             nextAbility = Time.time + Mathf.Max(.5f, build.abilityCooldown);
+            if (IsNetworkClient())
+                CoopCombatReplicator.Instance?.SendAttackIntent(
+                    CoopAttackKind.Ability,
+                    transform.position,
+                    transform.forward,
+                    build.damage * 1.8f,
+                    1f);
+
             Projectile.Spawn(
                 transform.position + Vector3.up * .7f + transform.forward * .7f,
                 transform.forward,
@@ -208,6 +228,11 @@ namespace Riftbound
             health = Mathf.Max(0f, health - final);
             game.ReportHealth(health, build.maxHealth);
             if (health <= 0f) game.PlayerDied();
+        }
+
+        private bool IsNetworkClient()
+        {
+            return CoopRuntimeState.Connected && CoopRuntimeState.Role == CoopRole.Client;
         }
 
         private void RebuildDerivedStats(bool preserveMissingHealth)
