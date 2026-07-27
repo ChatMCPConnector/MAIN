@@ -79,75 +79,65 @@ namespace Riftbound
         }
     }
 
-    public static class ShopGenerator
-    {
-        public static ShopOffer[] Generate(int seed, int roomIndex, int count = 3)
-        {
-            if (count <= 0) return Array.Empty<ShopOffer>();
-            count = Math.Min(count, GameCatalog.Weapons.Length + GameCatalog.Armors.Length);
-
-            var rng = new System.Random(unchecked(seed * 397) ^ roomIndex);
-            var offers = new ShopOffer[count];
-            var used = new HashSet<string>();
-
-            for (var i = 0; i < offers.Length; i++)
-            {
-                ShopOffer offer;
-                do
-                {
-                    offer = rng.Next(0, 2) == 0
-                        ? WeaponOffer(rng.Next(GameCatalog.Weapons.Length))
-                        : ArmorOffer(rng.Next(GameCatalog.Armors.Length));
-                } while (!used.Add($"{offer.kind}:{offer.catalogIndex}"));
-
-                offers[i] = offer;
-            }
-
-            return offers;
-        }
-
-        public static ShopOffer[] GenerateTreasure(int seed, int roomIndex)
-        {
-            var offers = Generate(seed ^ 0x5f3759df, roomIndex, 3);
-            foreach (var offer in offers) offer.price = 0;
-            return offers;
-        }
-
-        private static ShopOffer WeaponOffer(int index)
-        {
-            var weapon = GameCatalog.Weapons[index];
-            return new ShopOffer
-            {
-                kind = ItemKind.Weapon,
-                catalogIndex = index,
-                price = Mathf.RoundToInt(18f + weapon.damage * 1.7f + weapon.range * 4f),
-                title = weapon.title,
-                description = $"Waffe · {weapon.damage:0} Schaden · {weapon.range:0.0} Reichweite"
-            };
-        }
-
-        private static ShopOffer ArmorOffer(int index)
-        {
-            var armor = GameCatalog.Armors[index];
-            return new ShopOffer
-            {
-                kind = ItemKind.Armor,
-                catalogIndex = index,
-                price = Mathf.RoundToInt(20f + armor.maxHealth * 1.6f + armor.damageReduction * 220f),
-                title = armor.title,
-                description = $"Rüstung · +{armor.maxHealth:0} Leben · {armor.damageReduction * 100f:0}% Schutz"
-            };
-        }
-    }
-
     [Serializable]
     public sealed class SaveData
     {
-        public int version = 2;
+        public int version = 3;
         public int bestRoom;
         public int completedRuns;
         public int lastSeed;
         public int lifetimeGold;
+        public int metaShards;
+        public int highestRaritySeen;
+        public List<string> discoveredWeapons = new List<string>();
+        public List<string> discoveredArmors = new List<string>();
+    }
+
+    public static class MetaProgression
+    {
+        public static void RecordDiscovery(SaveData data, ItemInstance item)
+        {
+            if (data == null || item == null) return;
+
+            var definitionId = item.kind == ItemKind.Weapon
+                ? GameCatalog.Weapons[item.catalogIndex].id
+                : GameCatalog.Armors[item.catalogIndex].id;
+            var discoveries = item.kind == ItemKind.Weapon
+                ? data.discoveredWeapons
+                : data.discoveredArmors;
+
+            if (!discoveries.Contains(definitionId))
+                discoveries.Add(definitionId);
+
+            data.highestRaritySeen = Mathf.Max(
+                data.highestRaritySeen,
+                RarityUtility.Rank(item.rarity));
+        }
+
+        public static int CompleteRun(SaveData data, int runGold)
+        {
+            if (data == null) return 0;
+            var earned = 3 + Mathf.Clamp(runGold / 75, 0, 5);
+            data.metaShards += earned;
+            return earned;
+        }
+
+        public static int RecordDefeat(SaveData data, int reachedRoom)
+        {
+            if (data == null || reachedRoom < 5) return 0;
+            data.metaShards += 1;
+            return 1;
+        }
+
+        public static ItemRarity HighestSeen(SaveData data)
+        {
+            if (data == null) return ItemRarity.Common;
+            var rank = Mathf.Clamp(
+                data.highestRaritySeen,
+                0,
+                RarityUtility.Rank(ItemRarity.Cursed));
+            return (ItemRarity)rank;
+        }
     }
 
     public static class SaveService
@@ -159,7 +149,7 @@ namespace Riftbound
         {
             try
             {
-                if (!File.Exists(PathName)) return new SaveData();
+                if (!File.Exists(PathName)) return Upgrade(new SaveData());
                 var data = JsonUtility.FromJson<SaveData>(File.ReadAllText(PathName));
                 return Upgrade(data);
             }
@@ -167,12 +157,12 @@ namespace Riftbound
             {
                 try
                 {
-                    if (!File.Exists(BackupName)) return new SaveData();
+                    if (!File.Exists(BackupName)) return Upgrade(new SaveData());
                     return Upgrade(JsonUtility.FromJson<SaveData>(File.ReadAllText(BackupName)));
                 }
                 catch
                 {
-                    return new SaveData();
+                    return Upgrade(new SaveData());
                 }
             }
         }
@@ -195,7 +185,13 @@ namespace Riftbound
         private static SaveData Upgrade(SaveData data)
         {
             data ??= new SaveData();
-            data.version = 2;
+            data.version = 3;
+            data.discoveredWeapons ??= new List<string>();
+            data.discoveredArmors ??= new List<string>();
+
+            if (!data.discoveredWeapons.Contains(GameCatalog.Weapons[0].id))
+                data.discoveredWeapons.Add(GameCatalog.Weapons[0].id);
+
             return data;
         }
     }
