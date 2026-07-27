@@ -11,7 +11,7 @@ namespace Riftbound
         private RectTransform safeRoot;
         private Text healthText;
         private Text roomText;
-        private Text goldText;
+        private Text currencyText;
         private Text equipmentText;
         private Text messageText;
         private Image healthFill;
@@ -67,20 +67,20 @@ namespace Riftbound
                 new Vector2(.43f, .58f),
                 new Vector2(.96f, .96f));
 
-            goldText = CreateText(
-                "Gold 0",
+            currencyText = CreateText(
+                "Gold 0 · Splitter 0",
                 top,
-                24,
+                23,
                 TextAnchor.MiddleLeft,
                 new Vector2(.04f, .36f),
-                new Vector2(.34f, .58f));
+                new Vector2(.42f, .58f));
 
             equipmentText = CreateText(
                 "Eisenklinge · Keine Rüstung",
                 top,
-                22,
+                21,
                 TextAnchor.MiddleRight,
-                new Vector2(.30f, .36f),
+                new Vector2(.36f, .36f),
                 new Vector2(.96f, .58f));
 
             var healthBack = CreatePanel(
@@ -125,6 +125,12 @@ namespace Riftbound
             stick.knob = knob;
 
             CreateActionButton(
+                "INVENTAR",
+                new Vector2(.39f, .04f),
+                new Vector2(.63f, .13f),
+                game.OpenInventoryFromHud);
+
+            CreateActionButton(
                 "ANGRIFF",
                 new Vector2(.66f, .04f),
                 new Vector2(.96f, .16f),
@@ -162,9 +168,10 @@ namespace Riftbound
             roomText.text = $"{current}/{total}  {roomName}\nSeed {seed}";
         }
 
-        public void SetGold(int gold)
+        public void SetCurrencies(int gold, int shards)
         {
-            if (goldText != null) goldText.text = $"Gold {gold}";
+            if (currencyText != null)
+                currencyText.text = $"Gold {gold} · Splitter {shards}";
         }
 
         public void SetEquipment(string weapon, string armor)
@@ -175,6 +182,7 @@ namespace Riftbound
 
         public void ShowMessage(string text, float seconds)
         {
+            if (messageText == null) return;
             messageText.text = text;
             messageUntil = Time.unscaledTime + seconds;
         }
@@ -204,13 +212,14 @@ namespace Riftbound
                     selected(offers[i]);
                     CloseOverlay();
                 },
-                i => $"{offers[i].title}\n\n{offers[i].description}");
+                i => $"{offers[i].title}\n{offers[i].description}");
         }
 
         public void ShowMerchant(
             ShopOffer[] offers,
             int gold,
             Func<ShopOffer, bool> purchase,
+            Action afterPurchase,
             Action leave)
         {
             ShowOverlay(
@@ -228,6 +237,7 @@ namespace Riftbound
                     if (purchase(offers[i]))
                     {
                         CloseOverlay();
+                        afterPurchase?.Invoke();
                     }
                     else
                     {
@@ -252,10 +262,16 @@ namespace Riftbound
                 _ => $"{body}\n\nWEITER");
         }
 
-        public void ShowRunComplete(int completedRuns, int gold, Action restart)
+        public void ShowRunComplete(
+            int completedRuns,
+            int gold,
+            int earnedShards,
+            int totalShards,
+            Action restart)
         {
             ShowOverlay(
-                $"RUN ABGESCHLOSSEN\nSiege: {completedRuns}\nGold: {gold}",
+                $"RUN ABGESCHLOSSEN\nSiege: {completedRuns}\nGold: {gold}\n" +
+                $"Risssplitter: +{earnedShards} · Gesamt {totalShards}",
                 1,
                 _ =>
                 {
@@ -265,10 +281,17 @@ namespace Riftbound
                 _ => "NEUER RUN");
         }
 
-        public void ShowGameOver(int room, int seed, int gold, Action restart)
+        public void ShowGameOver(
+            int room,
+            int seed,
+            int gold,
+            int earnedShards,
+            int totalShards,
+            Action restart)
         {
             ShowOverlay(
-                $"RUN BEENDET\nRaum {room} · Seed {seed}\nGold: {gold}",
+                $"RUN BEENDET\nRaum {room} · Seed {seed}\nGold: {gold}\n" +
+                $"Risssplitter: +{earnedShards} · Gesamt {totalShards}",
                 1,
                 _ =>
                 {
