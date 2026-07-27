@@ -120,6 +120,7 @@ jobs:
               "CoopHazardMath",
               "RunCheckpointService",
               "RunCheckpointRuntime",
+              "RunCheckpointPolicy",
               "RunCheckpointData",
               "CaptureCheckpoint",
               "RestoreCheckpoint",
@@ -170,6 +171,7 @@ jobs:
 
           reliable = Path("Assets/Game/Coop/CoopReliableSystems.cs").read_text()
           decisions = Path("Assets/Game/Coop/CoopDecisionSystems.cs").read_text()
+          progress = Path("Assets/Game/Coop/CoopProgressReliabilityRuntime.cs").read_text()
           hazards = Path("Assets/Game/Coop/CoopHazardSystems.cs").read_text()
           checkpoint = Path("Assets/Game/Core/RunCheckpointSystems.cs").read_text()
           quality = Path("Assets/Game/Core/ReleaseQualityRuntime.cs").read_text()
@@ -180,6 +182,9 @@ jobs:
           for token in (
               "EncodeAck",
               "TryDecodeAck",
+              "EncodePing",
+              "TryDecodePong",
+              "HeartbeatInterval",
               "CollectDue",
               "AcceptIncoming",
               "ResendInterval",
@@ -195,9 +200,19 @@ jobs:
               "HostEconomyReceived",
               "lastEconomyRevision",
               "DeliverDecision",
+              "RecoverWaitingDecisionAsSolo",
           ):
               if token not in decisions:
                   raise SystemExit(f"Decision/economy guard missing: {token}")
+
+          for token in (
+              "PendingAdvanceField",
+              "ClearStaleClientAdvanceAfterSynchronization",
+              '"ADVANCE"',
+              '"REVIVE"',
+          ):
+              if token not in progress:
+                  raise SystemExit(f"Reliable progress guard missing: {token}")
 
           for token in (
               "CoopHazardKind.Laser",
@@ -218,6 +233,8 @@ jobs:
               "OnApplicationFocus",
               "CoopEnemySnapshot",
               "restoredEncounterActive",
+              "RunCheckpointPolicy",
+              "ShouldSave",
           ):
               if token not in checkpoint:
                   raise SystemExit(f"Run checkpoint guard missing: {token}")
@@ -250,9 +267,11 @@ jobs:
               raise SystemExit("Player restore or feedback integration missing")
 
           for token in (
+              "ReliableHeartbeatRoundTripsAndRejectsWrongVersion",
               "ReliableLedgerRetriesAcknowledgesAndDeduplicates",
               "DecisionCodecAndLedgerPreventDuplicateApplication",
               "CheckpointValidityRejectsStaleOrBrokenRuns",
+              "CheckpointPolicyPreventsDuplicateRewardsAndHealing",
               "HazardPlanIsDeterministicAndLateRoomsContainTwoHazards",
               "PulseAndLaserHitMathUsesFlatArenaDistance",
           ):
@@ -280,7 +299,7 @@ jobs:
           readme = Path("README.md").read_text()
           coop_doc = Path("docs/COOP.md").read_text()
           release_doc = Path("docs/RELEASE.md").read_text()
-          if "1.0.0" not in readme or "ACK/Retry" not in coop_doc or "Manuelle Gerätefreigabe" not in release_doc:
+          if "1.0.0" not in readme or "PING/PONG" not in coop_doc or "Manuelle Gerätefreigabe" not in release_doc:
               raise SystemExit("Release documentation is incomplete")
 
           print(f"Static Riftbound 1.0 validation passed for {len(source_paths)} C# files")
