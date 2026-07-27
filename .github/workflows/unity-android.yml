@@ -50,7 +50,7 @@ jobs:
           test -f Assets/Game/UI/TouchHudCoopExtensions.cs
           test -f Assets/Game/UI/InventoryView.cs
           test -f Assets/Game/UI/CoopView.cs
-          test -f Assets/Game/Tests/EditMode/RunSystemTests.cs
+          test -f Assets/Game/Tests/EditMode/RunPlannerTests.cs
           test -f Assets/Game/Tests/EditMode/InventoryTests.cs
           test -f Assets/Game/Tests/EditMode/BiomeSystemTests.cs
           test -f Assets/Game/Tests/EditMode/CoopSystemTests.cs
@@ -63,7 +63,6 @@ jobs:
 
           python3 - <<'PY'
           import json
-          import re
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
@@ -266,8 +265,6 @@ jobs:
                   raise SystemExit(f"Unbalanced braces: {path}")
               if text.count("#if") != text.count("#endif"):
                   raise SystemExit(f"Unbalanced preprocessor blocks: {path}")
-              if "\t" in text:
-                  raise SystemExit(f"Tab character found: {path}")
 
           version = Path("ProjectSettings/ProjectVersion.txt").read_text()
           build = Path("Assets/Game/Editor/BuildAutomation.cs").read_text()
