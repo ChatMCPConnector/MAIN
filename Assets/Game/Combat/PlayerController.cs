@@ -62,6 +62,34 @@ namespace Riftbound
             game.ReportEquipment(CurrentWeapon, CurrentArmor);
         }
 
+        public void RestoreRunState(
+            ItemInstance weapon,
+            ItemInstance armor,
+            float restoredHealth,
+            IReadOnlyList<int> cardIndexes)
+        {
+            cardBuild = PlayerBuild.Default;
+            if (cardIndexes != null)
+            {
+                for (var i = 0; i < cardIndexes.Count; i++)
+                {
+                    var index = cardIndexes[i];
+                    if (index >= 0 && index < GameCatalog.Cards.Length)
+                        cardBuild = RunPlanner.ApplyCard(cardBuild, GameCatalog.Cards[index]);
+                }
+            }
+            equippedWeapon = weapon?.Clone() ?? LootGenerator.CreateStarterWeapon();
+            equippedArmor = armor?.Clone();
+            nextAttack = nextAbility = nextDash = dashUntil = 0f;
+            invulnerable = false;
+            combatEnabled = true;
+            build = cardBuild;
+            RebuildDerivedStats(false);
+            health = Mathf.Clamp(restoredHealth, 1f, build.maxHealth);
+            game.ReportHealth(health, build.maxHealth);
+            game.ReportEquipment(CurrentWeapon, CurrentArmor);
+        }
+
         public void SetCombatEnabled(bool value)
         {
             combatEnabled = value;
@@ -120,6 +148,7 @@ namespace Riftbound
         {
             if (!combatEnabled || Time.time < nextAttack) return;
             nextAttack = Time.time + Mathf.Max(.12f, build.attackRate);
+            ReleaseQualityRuntime.Play(FeedbackCue.Attack);
 
             var center = transform.position + transform.forward * (weaponRange * .65f);
             if (IsNetworkClient())
@@ -149,6 +178,7 @@ namespace Riftbound
         {
             if (!combatEnabled || Time.time < nextAbility) return;
             nextAbility = Time.time + Mathf.Max(.5f, build.abilityCooldown);
+            ReleaseQualityRuntime.Play(FeedbackCue.Ability);
             if (IsNetworkClient())
                 CoopCombatReplicator.Instance?.SendAttackIntent(
                     CoopAttackKind.Ability,
@@ -173,6 +203,7 @@ namespace Riftbound
             if (touchMove.sqrMagnitude > .1f)
                 dashDirection = new Vector3(touchMove.x, 0f, touchMove.y).normalized;
             invulnerable = true;
+            ReleaseQualityRuntime.Play(FeedbackCue.Dash);
         }
 
         public void ApplyCard(CardDefinition card)
@@ -219,6 +250,7 @@ namespace Riftbound
             invulnerable = true;
             dashUntil = Time.time + .8f;
             game.ReportHealth(health, build.maxHealth);
+            ReleaseQualityRuntime.Play(FeedbackCue.Revive, true);
             Pulse(new Color(.2f, 1f, .62f), transform.position, .8f, 1.8f);
         }
 
@@ -239,6 +271,7 @@ namespace Riftbound
             var final = amount * build.incomingDamageMultiplier * (1f - build.damageReduction);
             health = Mathf.Max(0f, health - final);
             game.ReportHealth(health, build.maxHealth);
+            ReleaseQualityRuntime.Play(FeedbackCue.Damage, true);
             if (health <= 0f) game.PlayerDied();
         }
 
@@ -292,6 +325,7 @@ namespace Riftbound
 
         public static void Pulse(Color color, Vector3 position, float lifetime, float scale)
         {
+            if (ReleasePreferences.ReducedMotion) return;
             var pulse = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             pulse.name = "CombatPulse";
             pulse.transform.position = position;
