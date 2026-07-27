@@ -4,6 +4,8 @@
     "defaultResolution": "2k",
     "maximumResolution": "2k",
     "defaultMaxDownloadBytes": 104857600,
+    "resolverUserAgent": "NeonRift-GitHub-Open-Asset-Resolver/1.0",
+    "installerUserAgent": "NeonRift-Unity-Open-Asset-Installer/1.0",
     "allowCommercialUse": true,
     "requireRedistributionFriendlyLicense": true,
     "commitBinaryAssets": false,
