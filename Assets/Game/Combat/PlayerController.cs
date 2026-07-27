@@ -74,6 +74,10 @@ namespace Riftbound
 
         private void Update()
         {
+#if ENABLE_INPUT_SYSTEM
+            if (Keyboard.current != null && Keyboard.current.iKey.wasPressedThisFrame)
+                game.OpenInventoryFromHud();
+#endif
             if (!combatEnabled) return;
 
             var input = touchMove;
@@ -89,7 +93,6 @@ namespace Riftbound
                 if (Keyboard.current.spaceKey.wasPressedThisFrame) Attack();
                 if (Keyboard.current.leftShiftKey.wasPressedThisFrame) Dash();
                 if (Keyboard.current.eKey.wasPressedThisFrame) Ability();
-                if (Keyboard.current.iKey.wasPressedThisFrame) game.OpenInventoryFromHud();
             }
 #endif
 
