@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.0 — CC0 arena visual upgrade
+
+- Added curated Poly Haven and ambientCG PBR materials for arena floors, walls, props and skyline facades.
+- Added a Poly Haven panoramic HDRI for environment lighting and reflections.
+- Added deterministic Unity import settings for normal, mask, color and HDR textures.
+- Reduced atmospheric particle load while preserving the neon arena mood.
+- Kept all procedural fallbacks active when external assets are unavailable.
+
 ## 2.0.0 — Unity conversion
 
 - Rebuilt the game as a Unity 6.3 LTS project.
