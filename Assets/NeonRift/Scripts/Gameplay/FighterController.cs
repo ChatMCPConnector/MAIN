@@ -139,7 +139,7 @@ namespace NeonRift
             _velocity.y += Physics.gravity.y * delta * 1.65f;
             Vector3 planar = new Vector3(move.x, 0f, move.y);
             if (planar.sqrMagnitude > 1f) planar.Normalize();
-            UpdateFacing(planar);
+            if (Role == FighterRole.Player) UpdateFacing(planar);
 
             float speed = Spec.Speed * (Role == FighterRole.Boss ? 0.86f : 1f);
             Vector3 motion = planar * speed + _knockback;
