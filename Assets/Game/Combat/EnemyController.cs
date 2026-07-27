@@ -16,14 +16,32 @@ namespace Riftbound
         private float baseMoveSpeed;
         private float nextAttack;
         private float nextSpecial;
+        private int networkId;
         private int bossPhase = 1;
         private bool specialActive;
+        private bool replica;
         private bool dead;
+        private Vector3 replicaTarget;
+        private float replicaYaw;
 
-        public void Initialize(GameBootstrap bootstrap, EnemyKind enemyKind, float scale)
+        public int NetworkId => networkId;
+        public EnemyKind Kind => kind;
+        public float Health => health;
+        public float MaxHealth => maxHealth;
+        public int BossPhase => bossPhase;
+        public bool IsReplica => replica;
+        public bool IsDead => dead;
+
+        public void Initialize(
+            GameBootstrap bootstrap,
+            EnemyKind enemyKind,
+            float scale,
+            int id,
+            bool forceReplica = false)
         {
             game = bootstrap;
             kind = enemyKind;
+            networkId = id;
             tuning = EncounterDirector.Create(bootstrap.Seed, bootstrap.RoomIndex);
             var players = CoopRuntimeState.ActivePlayerCount;
             maxHealth = BaseHealth(kind) *
@@ -37,6 +55,10 @@ namespace Riftbound
                      CoopBalance.EnemyDamageMultiplier(players);
             baseMoveSpeed = BaseMoveSpeed(kind) * tuning.EnemySpeedMultiplier;
             moveSpeed = baseMoveSpeed;
+            replica = forceReplica ||
+                      (CoopRuntimeState.Connected && CoopRuntimeState.Role == CoopRole.Client);
+            replicaTarget = transform.position;
+            replicaYaw = transform.eulerAngles.y;
 
             var hitCollider = gameObject.AddComponent<CapsuleCollider>();
             hitCollider.isTrigger = false;
@@ -47,6 +69,12 @@ namespace Riftbound
         private void Update()
         {
             if (dead) return;
+            if (replica)
+            {
+                UpdateReplica();
+                return;
+            }
+
             var player = game.Player;
             if (player == null || player.Health <= 0f) return;
 
@@ -68,9 +96,47 @@ namespace Riftbound
             }
         }
 
+        public CoopEnemySnapshot CreateSnapshot()
+        {
+            return new CoopEnemySnapshot
+            {
+                networkId = networkId,
+                kind = kind,
+                x = transform.position.x,
+                y = transform.position.y,
+                z = transform.position.z,
+                yaw = transform.eulerAngles.y,
+                health = Mathf.Max(0f, health),
+                maxHealth = Mathf.Max(1f, maxHealth),
+                bossPhase = Mathf.Clamp(bossPhase, 1, 3)
+            };
+        }
+
+        public void ApplyReplicaSnapshot(CoopEnemySnapshot snapshot)
+        {
+            if (snapshot == null || snapshot.networkId != networkId || !replica) return;
+            replicaTarget = new Vector3(snapshot.x, snapshot.y, snapshot.z);
+            replicaYaw = snapshot.yaw;
+            maxHealth = Mathf.Max(1f, snapshot.maxHealth);
+            health = Mathf.Clamp(snapshot.health, 0f, maxHealth);
+            SetBossPhase(Mathf.Clamp(snapshot.bossPhase, 1, 3), true);
+        }
+
+        public void SetReplicaMode(bool value)
+        {
+            if (replica == value) return;
+            replica = value;
+            replicaTarget = transform.position;
+            replicaYaw = transform.eulerAngles.y;
+            specialActive = false;
+            StopAllCoroutines();
+            if (!replica && kind == EnemyKind.Boss)
+                nextSpecial = Time.time + 1f;
+        }
+
         public void TakeDamage(float amount)
         {
-            if (dead || amount <= 0f) return;
+            if (replica || dead || amount <= 0f) return;
             health -= amount;
             transform.localScale *= .992f;
 
@@ -82,6 +148,19 @@ namespace Riftbound
             StopAllCoroutines();
             game.NotifyEnemyDefeated(this, kind);
             Destroy(gameObject);
+        }
+
+        private void UpdateReplica()
+        {
+            transform.position = Vector3.Lerp(
+                transform.position,
+                replicaTarget,
+                16f * Time.unscaledDeltaTime);
+            var targetRotation = Quaternion.Euler(0f, replicaYaw, 0f);
+            transform.rotation = Quaternion.Slerp(
+                transform.rotation,
+                targetRotation,
+                16f * Time.unscaledDeltaTime);
         }
 
         private void UpdateMelee(PlayerController player, Vector3 delta, float distance)
@@ -134,9 +213,13 @@ namespace Riftbound
         {
             var ratio = maxHealth <= 0f ? 0f : health / maxHealth;
             var nextPhase = ratio <= .33f ? 3 : ratio <= .66f ? 2 : 1;
-            if (nextPhase <= bossPhase) return;
+            SetBossPhase(nextPhase, true);
+        }
 
-            bossPhase = nextPhase;
+        private void SetBossPhase(int value, bool announce)
+        {
+            if (kind != EnemyKind.Boss || value <= bossPhase) return;
+            bossPhase = value;
             moveSpeed = baseMoveSpeed * (bossPhase == 3 ? 1.28f : 1.14f);
             var color = bossPhase == 3
                 ? new Color(1f, .16f, .1f)
@@ -145,10 +228,13 @@ namespace Riftbound
             if (renderer != null)
                 renderer.sharedMaterial = WorldFactory.GetLitMaterial(color);
 
-            FindFirstObjectByType<TouchHud>()?.ShowMessage(
-                $"BOSS-PHASE {bossPhase}\nANGRIFFSMUSTER VERÄNDERT",
-                1.6f);
-            PlayerController.Pulse(color, transform.position, .7f, 2.8f);
+            if (announce)
+            {
+                FindFirstObjectByType<TouchHud>()?.ShowMessage(
+                    $"BOSS-PHASE {bossPhase}\nANGRIFFSMUSTER VERÄNDERT",
+                    1.6f);
+                PlayerController.Pulse(color, transform.position, .7f, 2.8f);
+            }
             nextSpecial = Mathf.Min(nextSpecial, Time.time + .55f);
         }
 
