@@ -33,24 +33,26 @@ jobs:
           if old_alias not in text:
               raise SystemExit('Metal-map alias anchor not found')
           text = text.replace(old_alias, new_alias, 1)
-          old_normal = '''        matching = [item for item in candidates if any(alias in f" {item.haystack} " for alias in aliases)]
-          if not matching:
-              continue
-          best = choose_best(matching, request)
-          '''
-          new_normal = '''        matching = [item for item in candidates if any(alias in f" {item.haystack} " for alias in aliases)]
-          if not matching:
-              continue
-          if map_name == "normal":
-              open_gl = [
-                  item
-                  for item in matching
-                  if any(alias in item.haystack for alias in ("nor_gl", "normal_gl", "opengl"))
-              ]
-              if open_gl:
-                  matching = open_gl
-          best = choose_best(matching, request)
-          '''
+          old_normal = (
+              '        matching = [item for item in candidates if any(alias in f" {item.haystack} " for alias in aliases)]\n'
+              '        if not matching:\n'
+              '            continue\n'
+              '        best = choose_best(matching, request)\n'
+          )
+          new_normal = (
+              '        matching = [item for item in candidates if any(alias in f" {item.haystack} " for alias in aliases)]\n'
+              '        if not matching:\n'
+              '            continue\n'
+              '        if map_name == "normal":\n'
+              '            open_gl = [\n'
+              '                item\n'
+              '                for item in matching\n'
+              '                if any(alias in item.haystack for alias in ("nor_gl", "normal_gl", "opengl"))\n'
+              '            ]\n'
+              '            if open_gl:\n'
+              '                matching = open_gl\n'
+              '        best = choose_best(matching, request)\n'
+          )
           if old_normal not in text:
               raise SystemExit('Normal-map selection anchor not found')
           path.write_text(text.replace(old_normal, new_normal, 1), encoding='utf-8')
