@@ -111,6 +111,8 @@ namespace Riftbound
             new Dictionary<string, Action<CoopDecision>>(StringComparer.Ordinal);
         private readonly Dictionary<string, CoopDecision> buffered =
             new Dictionary<string, CoopDecision>(StringComparer.Ordinal);
+        private readonly Dictionary<string, long> economyRevisions =
+            new Dictionary<string, long>(StringComparer.Ordinal);
         private readonly CoopTransactionLedger ledger = new CoopTransactionLedger();
         private CoopReliableRuntime reliable;
         private long economyRevision;
@@ -165,6 +167,7 @@ namespace Riftbound
         {
             waiters.Clear();
             buffered.Clear();
+            economyRevisions.Clear();
             ledger.Reset();
             economyRevision = 0;
             lastEconomyRevision = 0;
@@ -237,9 +240,13 @@ namespace Riftbound
                     out var seed,
                     out var room,
                     out var gold,
-                    out var revision) &&
-                revision > lastEconomyRevision)
+                    out var revision))
             {
+                var key = $"{seed}:{room}";
+                if (economyRevisions.TryGetValue(key, out var knownRevision) &&
+                    revision <= knownRevision)
+                    return;
+                economyRevisions[key] = revision;
                 lastEconomyRevision = revision;
                 lastEconomySeed = seed;
                 lastEconomyRoom = room;
