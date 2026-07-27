@@ -1,0 +1,60 @@
+name: Extract Unity Android Build Error
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  extract:
+    if: github.head_ref == 'build/riftbound-1.0.0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download previous Android builder job log
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            /repos/${GITHUB_REPOSITORY}/actions/jobs/90110248697/logs \
+            > unity-builder-job.log
+
+      - name: Extract actionable error context
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          source = Path('unity-builder-job.log').read_text(encoding='utf-8', errors='replace').splitlines()
+          pattern = re.compile(
+              r'(error|exception|buildfailed|failed|failure|android build failed|gradle|manifest merger|il2cpp|sdk|ndk)',
+              re.IGNORECASE,
+          )
+          indexes = [i for i, line in enumerate(source) if pattern.search(line)]
+          selected = set()
+          for index in indexes:
+              for current in range(max(0, index - 5), min(len(source), index + 9)):
+                  selected.add(current)
+          output = []
+          previous = -2
+          for index in sorted(selected):
+              if index > previous + 1:
+                  output.append('\n--- context ---')
+              output.append(f'{index + 1}: {source[index]}')
+              previous = index
+          Path('unity-android-build-errors.txt').write_text(
+              '\n'.join(output[-2500:]) + '\n',
+              encoding='utf-8',
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unity-android-build-errors
+          path: unity-android-build-errors.txt
+          if-no-files-found: error
+          retention-days: 7
