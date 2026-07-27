@@ -83,7 +83,7 @@ namespace Riftbound
                 remoteToken = null;
                 lastEnemySequence = 0;
                 lastAttackSequence = 0;
-                if (role == CoopRole.Client) game?.SetEnemyReplication(false);
+                if (role == CoopRole.Client) CoopCombatWorld.SetReplication(false);
             }
         }
 
@@ -161,7 +161,7 @@ namespace Riftbound
             if (!channelConnected || remoteEndpoint == null || game == null || Time.unscaledTime < nextSnapshot)
                 return;
             nextSnapshot = Time.unscaledTime + SnapshotInterval;
-            var snapshots = game.CaptureEnemySnapshots();
+            var snapshots = CoopCombatWorld.CaptureEnemySnapshots(game.RoomIndex);
             var payload = CoopCombatProtocol.EncodeEnemies(
                 sessionCode,
                 localToken,
@@ -219,7 +219,7 @@ namespace Riftbound
                 channelConnected = true;
                 lastPacketAt = Time.unscaledTime;
                 lastEnemySequence = 0;
-                game?.SetEnemyReplication(true);
+                CoopCombatWorld.SetReplication(true);
                 return;
             }
 
@@ -236,7 +236,7 @@ namespace Riftbound
                     !CoopCombatValidation.IsFresh(enemySequence, ref lastEnemySequence))
                     return;
                 lastPacketAt = Time.unscaledTime;
-                game?.ApplyEnemySnapshots(roomIndex, snapshots);
+                CoopCombatWorld.ApplyEnemySnapshots(game, roomIndex, snapshots);
                 return;
             }
 
@@ -263,7 +263,7 @@ namespace Riftbound
                     return;
 
                 lastPacketAt = Time.unscaledTime;
-                game?.ApplyRemoteAttack(intent);
+                CoopCombatWorld.ApplyRemoteAttack(game, intent);
             }
         }
 
@@ -323,7 +323,7 @@ namespace Riftbound
             lastEnemySequence = 0;
             lastAttackSequence = 0;
             nextRemoteMelee = nextRemoteAbility = 0f;
-            if (wasClient) game?.SetEnemyReplication(false);
+            if (wasClient) CoopCombatWorld.SetReplication(false);
         }
 
         private static void ConfigureNonBlocking(UdpClient client)
