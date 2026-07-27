@@ -118,6 +118,7 @@ namespace Riftbound
         private int lastEconomySeed;
         private int lastEconomyRoom = -1;
         private int lastEconomyGold;
+        private bool wasConnected;
 
         public static CoopDecisionRuntime Instance { get; private set; }
         public event Action<int, int, int> HostEconomyReceived;
@@ -140,11 +141,16 @@ namespace Riftbound
             }
             Instance = this;
             DontDestroyOnLoad(gameObject);
+            wasConnected = CoopRuntimeState.Connected;
         }
 
         private void Update()
         {
             HookReliable();
+            var connected = CoopRuntimeState.Connected;
+            if (wasConnected && !connected && waiters.Count > 0)
+                RecoverWaitingDecisionAsSolo();
+            wasConnected = connected;
         }
 
         private void HookReliable()
@@ -251,6 +257,17 @@ namespace Riftbound
                 ? lastEconomyGold
                 : decision.hostGold;
             HostEconomyReceived?.Invoke(decision.seed, decision.roomIndex, gold);
+        }
+
+        private void RecoverWaitingDecisionAsSolo()
+        {
+            waiters.Clear();
+            buffered.Clear();
+            ledger.Reset();
+            FindFirstObjectByType<TouchHud>()?.CloseOverlayNow();
+            FindFirstObjectByType<GameBootstrap>()?.SendMessage(
+                "LoadCurrentRoom",
+                SendMessageOptions.DontRequireReceiver);
         }
 
         private void OnDestroy()
