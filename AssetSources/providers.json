@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "policy": {
+    "defaultResolution": "2k",
+    "maximumResolution": "2k",
+    "defaultMaxDownloadBytes": 104857600,
+    "allowCommercialUse": true,
+    "requireRedistributionFriendlyLicense": true,
+    "commitBinaryAssets": false,
+    "preferredProviderOrder": [
+      "polyhaven",
+      "ambientcg"
+    ]
+  },
+  "providers": {
+    "polyhaven": {
+      "displayName": "Poly Haven",
+      "enabled": true,
+      "priority": 1,
+      "license": "CC0-1.0",
+      "authentication": "none",
+      "api": {
+        "assets": "https://api.polyhaven.com/assets",
+        "files": "https://api.polyhaven.com/files/{asset_id}"
+      },
+      "websiteAsset": "https://polyhaven.com/a/{asset_id}",
+      "credit": "Powered by Poly Haven",
+      "supportedKinds": [
+        "model",
+        "material",
+        "hdri"
+      ],
+      "preferredFormats": {
+        "model": ["gltf", "glb", "fbx", "obj"],
+        "material": ["png", "jpg"],
+        "hdri": ["hdr", "exr"]
+      },
+      "usage": "Primary source for CC0 models, PBR materials and HDRIs. No API key is required."
+    },
+    "ambientcg": {
+      "displayName": "ambientCG",
+      "enabled": true,
+      "priority": 2,
+      "license": "CC0-1.0",
+      "authentication": "none",
+      "api": {
+        "assets": "https://ambientcg.com/api/v3/assets"
+      },
+      "websiteAsset": "https://ambientcg.com/a/{asset_id}",
+      "credit": "ambientCG",
+      "supportedKinds": [
+        "model",
+        "material",
+        "hdri"
+      ],
+      "preferredFormats": {
+        "model": ["gltf", "glb", "fbx", "obj"],
+        "material": ["jpg", "png"],
+        "hdri": ["hdr", "exr"]
+      },
+      "usage": "Secondary source, especially for CC0 PBR materials, decals, terrain assets and HDRIs. No API key is required."
+    }
+  }
+}
