@@ -1,6 +1,8 @@
 name: Android prototype
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -17,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate project structure and catalog
+      - name: Validate project structure and phase 3 systems
         run: |
           test -f ProjectSettings/ProjectVersion.txt
           test -f Packages/manifest.json
@@ -26,7 +28,10 @@ jobs:
           test -f Assets/Game/Core/GameBootstrap.cs
           test -f Assets/Game/Combat/PlayerController.cs
           test -f Assets/Game/Combat/EnemyController.cs
+          test -f Assets/Game/Items/InventorySystem.cs
           test -f Assets/Game/UI/TouchHud.cs
+          test -f Assets/Game/UI/InventoryView.cs
+          test -f Assets/Game/Tests/EditMode/InventoryTests.cs
           test -f Assets/Game/Editor/BuildAutomation.cs
           python3 - <<'PY'
           import json
@@ -43,13 +48,15 @@ jobs:
           if missing:
               raise SystemExit(f"Missing packages: {sorted(missing)}")
 
-          sources = "\n".join(
-              path.read_text()
-              for path in Path("Assets/Game").rglob("*.cs")
-          )
+          source_paths = list(Path("Assets/Game").rglob("*.cs"))
+          sources = "\n".join(path.read_text() for path in source_paths)
           for symbol in (
               "RunPlanner",
-              "ShopGenerator",
+              "LootGenerator",
+              "RunInventory",
+              "InventoryView",
+              "ItemRarity.Cursed",
+              "MetaProgression",
               "GameBootstrap",
               "PlayerController",
               "EnemyController",
@@ -60,10 +67,30 @@ jobs:
               if symbol not in sources:
                   raise SystemExit(f"Missing symbol: {symbol}")
 
-          if "6000.3.20f1" not in Path("ProjectSettings/ProjectVersion.txt").read_text():
-              raise SystemExit("Unexpected Unity version")
+          legacy = (
+              "offer.kind",
+              "offer.catalogIndex",
+              "EquipWeapon(",
+              "EquipArmor(",
+              "SetGold(",
+          )
+          for token in legacy:
+              if token in sources:
+                  raise SystemExit(f"Legacy phase-2 call remains: {token}")
 
-          print("Static project validation passed")
+          for path in source_paths:
+              text = path.read_text()
+              if text.count("{") != text.count("}"):
+                  raise SystemExit(f"Unbalanced braces: {path}")
+
+          version = Path("ProjectSettings/ProjectVersion.txt").read_text()
+          build = Path("Assets/Game/Editor/BuildAutomation.cs").read_text()
+          if "6000.3.20f1" not in version:
+              raise SystemExit("Unexpected Unity version")
+          if 'bundleVersion = "0.3.0"' not in build:
+              raise SystemExit("Unexpected Android app version")
+
+          print("Static phase 3 validation passed")
           PY
 
   build-android:
@@ -115,7 +142,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riftbound-android
+          name: riftbound-android-0.3.0
           path: |
             Builds/Android/Riftbound.apk
             test-artifacts
