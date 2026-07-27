@@ -237,7 +237,7 @@ require("Version {PlayerSettings.bundleVersion}" in build_automation, "Distribut
 workflow = read(".github/workflows/unity-windows.yml")
 for token in [
     "6000.3.17f1",
-    "game-ci/unity-test-runner@v4",
+    "game-ci/unity-test-runner@",
     "game-ci/unity-builder@v5",
     "NeonRift.Editor.BuildAutomation.BuildWindows",
     "UNITY_LICENSE",
@@ -249,6 +249,19 @@ for token in [
     "Unity verification cannot be skipped on main",
 ]:
     require(token in workflow, f"Unity workflow is missing: {token}")
+
+node24_test_runner_refs = [
+    "game-ci/unity-test-runner@08fd329f00a18efa297140b14ac28ebce742759e",
+    "game-ci/unity-test-runner@v5",
+]
+require(
+    any(reference in workflow for reference in node24_test_runner_refs),
+    "Unity test runner must use a reviewed Node 24-compatible reference",
+)
+require(
+    "game-ci/unity-test-runner@v4" not in workflow,
+    "Unity test runner v4 declares the deprecated Node 20 runtime",
+)
 
 asset_workflow = read(".github/workflows/resolve-open-assets.yml")
 for token in [
