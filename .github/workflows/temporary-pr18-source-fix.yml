@@ -1,15 +1,17 @@
 name: Temporary PR18 Source Fix
 
 on:
-  issues:
-    types: [opened, reopened]
+  pull_request:
+    branches: [main]
+    types: [synchronize, reopened]
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   patch-pr-branch:
-    if: github.event.issue.title == 'Apply Android source fixes PR 18'
+    if: github.event.pull_request.number == 18
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
