@@ -1,0 +1,1 @@
+Verify GitHub Actions execution and repository write permissions.
