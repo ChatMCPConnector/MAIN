@@ -13,8 +13,8 @@ namespace Riftbound.Tests
             Assert.That(first.Length, Is.EqualTo(second.Length));
             for (var i = 0; i < first.Length; i++)
             {
-                Assert.That(first[i].kind, Is.EqualTo(second[i].kind));
-                Assert.That(first[i].catalogIndex, Is.EqualTo(second[i].catalogIndex));
+                Assert.That(first[i].item.instanceId, Is.EqualTo(second[i].item.instanceId));
+                Assert.That(first[i].item.rarity, Is.EqualTo(second[i].item.rarity));
                 Assert.That(first[i].price, Is.EqualTo(second[i].price));
             }
         }
@@ -27,21 +27,28 @@ namespace Riftbound.Tests
 
             for (var i = 0; i < offers.Length; i++)
             {
+                Assert.That(offers[i].item, Is.Not.Null);
                 Assert.That(offers[i].price, Is.GreaterThan(0));
+                Assert.That(offers[i].item.powerMultiplier, Is.GreaterThanOrEqualTo(1f));
+
                 for (var j = i + 1; j < offers.Length; j++)
                     Assert.That(
-                        $"{offers[i].kind}:{offers[i].catalogIndex}",
-                        Is.Not.EqualTo($"{offers[j].kind}:{offers[j].catalogIndex}"));
+                        $"{offers[i].item.kind}:{offers[i].item.catalogIndex}",
+                        Is.Not.EqualTo($"{offers[j].item.kind}:{offers[j].item.catalogIndex}"));
             }
         }
 
         [Test]
-        public void TreasureOffersAreFree()
+        public void TreasureOffersAreFreeAndSlightlyLuckier()
         {
             var offers = ShopGenerator.GenerateTreasure(99, 2);
             Assert.That(offers, Has.Length.EqualTo(3));
+
             foreach (var offer in offers)
+            {
                 Assert.That(offer.price, Is.Zero);
+                Assert.That(offer.item.sellValue, Is.GreaterThan(0));
+            }
         }
     }
 }
