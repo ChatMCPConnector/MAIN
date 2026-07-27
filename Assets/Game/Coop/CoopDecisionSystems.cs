@@ -141,6 +141,11 @@ namespace Riftbound
 
         private void Update()
         {
+            HookReliable();
+        }
+
+        private void HookReliable()
+        {
             if (reliable == CoopReliableRuntime.Instance) return;
             if (reliable != null) reliable.Received -= HandleReliable;
             reliable = CoopReliableRuntime.Instance;
@@ -158,6 +163,7 @@ namespace Riftbound
 
         public bool Publish(CoopDecision decision)
         {
+            HookReliable();
             if (!CoopRuntimeState.Connected || CoopRuntimeState.Role != CoopRole.Host || reliable == null)
                 return false;
             var key = decision.Key;
@@ -176,7 +182,7 @@ namespace Riftbound
             if (buffered.TryGetValue(key, out var decision))
             {
                 buffered.Remove(key);
-                if (ledger.TryApply(key)) callback?.Invoke(decision);
+                if (ledger.TryApply(key)) DeliverDecision(decision, callback);
                 return;
             }
             waiters[key] = callback;
@@ -184,6 +190,7 @@ namespace Riftbound
 
         public void PublishEconomy(int seed, int roomIndex, int gold)
         {
+            HookReliable();
             if (!CoopRuntimeState.Connected || CoopRuntimeState.Role != CoopRole.Host || reliable == null)
                 return;
             economyRevision++;
@@ -203,7 +210,7 @@ namespace Riftbound
                 if (waiters.TryGetValue(key, out var callback))
                 {
                     waiters.Remove(key);
-                    if (ledger.TryApply(key)) callback?.Invoke(decision);
+                    if (ledger.TryApply(key)) DeliverDecision(decision, callback);
                 }
                 else
                 {
@@ -224,6 +231,12 @@ namespace Riftbound
                 lastEconomyRevision = revision;
                 HostEconomyReceived?.Invoke(seed, room, gold);
             }
+        }
+
+        private void DeliverDecision(CoopDecision decision, Action<CoopDecision> callback)
+        {
+            callback?.Invoke(decision);
+            HostEconomyReceived?.Invoke(decision.seed, decision.roomIndex, decision.hostGold);
         }
 
         private void OnDestroy()
