@@ -28,6 +28,7 @@ namespace Riftbound
         public float Health => health;
         public float MaxHealth => build.maxHealth;
         public bool CombatEnabled => combatEnabled;
+        public bool IsNetworkInvulnerable => invulnerable || Time.time < dashUntil;
         public string CurrentWeapon => ItemText.PlainTitle(equippedWeapon);
         public string CurrentArmor => equippedArmor == null
             ? "Keine Rüstung"
@@ -223,7 +224,18 @@ namespace Riftbound
 
         public void TakeDamage(float amount)
         {
-            if (!combatEnabled || invulnerable || health <= 0f) return;
+            ApplyDamage(amount, false);
+        }
+
+        public void TakeNetworkDamage(float amount)
+        {
+            ApplyDamage(amount, true);
+        }
+
+        private void ApplyDamage(float amount, bool hostConfirmed)
+        {
+            if (!combatEnabled || health <= 0f || amount <= 0f) return;
+            if (!hostConfirmed && IsNetworkInvulnerable) return;
             var final = amount * build.incomingDamageMultiplier * (1f - build.damageReduction);
             health = Mathf.Max(0f, health - final);
             game.ReportHealth(health, build.maxHealth);
