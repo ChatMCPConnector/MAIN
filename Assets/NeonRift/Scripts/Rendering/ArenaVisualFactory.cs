@@ -17,6 +17,7 @@ namespace NeonRift
         private Material _wallSurface;
         private Material _facadeSurface;
         private Material _skyboxMaterial;
+        private VolumeProfile _volumeProfile;
 
         public void Build(ArenaSpec spec, int arenaIndex)
         {
@@ -45,12 +46,7 @@ namespace NeonRift
                 Destroy(ArenaRoot.gameObject);
             }
 
-            foreach (Material material in _materials)
-            {
-                if (material != null) Destroy(material);
-            }
-            _materials.Clear();
-
+            ReleaseRuntimeResources();
             _floorSurface = null;
             _wallSurface = null;
             _facadeSurface = null;
@@ -151,25 +147,25 @@ namespace NeonRift
             var volume = volumeObject.AddComponent<Volume>();
             volume.isGlobal = true;
             volume.priority = 20f;
-            var profile = ScriptableObject.CreateInstance<VolumeProfile>();
-            profile.name = "Neon Rift Runtime Grade";
-            volume.profile = profile;
+            _volumeProfile = ScriptableObject.CreateInstance<VolumeProfile>();
+            _volumeProfile.name = "Neon Rift Runtime Grade";
+            volume.profile = _volumeProfile;
 
-            var bloom = profile.Add<Bloom>(true);
+            var bloom = _volumeProfile.Add<Bloom>(true);
             bloom.intensity.Override(0.58f);
             bloom.threshold.Override(0.92f);
             bloom.scatter.Override(0.68f);
 
-            var colorAdjustments = profile.Add<ColorAdjustments>(true);
+            var colorAdjustments = _volumeProfile.Add<ColorAdjustments>(true);
             colorAdjustments.contrast.Override(7f);
             colorAdjustments.saturation.Override(9f);
             colorAdjustments.colorFilter.Override(Color.Lerp(Color.white, spec.Neon, 0.065f));
 
-            var vignette = profile.Add<Vignette>(true);
+            var vignette = _volumeProfile.Add<Vignette>(true);
             vignette.intensity.Override(0.22f);
             vignette.smoothness.Override(0.72f);
 
-            var tonemapping = profile.Add<Tonemapping>(true);
+            var tonemapping = _volumeProfile.Add<Tonemapping>(true);
             tonemapping.mode.Override(TonemappingMode.ACES);
         }
 
@@ -425,11 +421,12 @@ namespace NeonRift
             return material;
         }
 
-        private void OnDestroy()
+        private void ReleaseRuntimeResources()
         {
-            if (RenderSettings.skybox == _skyboxMaterial)
+            if (_volumeProfile != null)
             {
-                RenderSettings.skybox = null;
+                Destroy(_volumeProfile);
+                _volumeProfile = null;
             }
 
             foreach (Material material in _materials)
@@ -437,6 +434,15 @@ namespace NeonRift
                 if (material != null) Destroy(material);
             }
             _materials.Clear();
+        }
+
+        private void OnDestroy()
+        {
+            if (RenderSettings.skybox == _skyboxMaterial)
+            {
+                RenderSettings.skybox = null;
+            }
+            ReleaseRuntimeResources();
         }
     }
 }
