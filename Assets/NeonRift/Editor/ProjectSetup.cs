@@ -83,8 +83,19 @@ namespace NeonRift.Editor
                     throw new InvalidOperationException("Unity did not provide the built-in Universal Renderer data.");
                 }
 
-                renderer.name = "Neon Rift Universal Renderer";
-                AssetDatabase.CreateAsset(renderer, RendererPath);
+                // Unity 6 can persist the built-in renderer automatically (usually as
+                // Assets/UniversalRenderer.asset). Creating the same object as another
+                // asset throws, so only create it when it is still an in-memory object.
+                string existingRendererPath = AssetDatabase.GetAssetPath(renderer);
+                if (string.IsNullOrEmpty(existingRendererPath))
+                {
+                    renderer.name = "Neon Rift Universal Renderer";
+                    AssetDatabase.CreateAsset(renderer, RendererPath);
+                }
+                else
+                {
+                    Debug.Log($"Reusing Universal Renderer data at {existingRendererPath}.");
+                }
             }
 
             var serialized = new SerializedObject(pipeline);
