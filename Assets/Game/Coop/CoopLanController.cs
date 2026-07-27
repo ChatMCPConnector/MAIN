@@ -17,6 +17,7 @@ namespace Riftbound
         private const float HelloInterval = 1f;
         private const float ConnectionTimeout = 4f;
         private const float AdvertisementLifetime = 3f;
+        private const float PeerUiInterval = .45f;
         private const string TokenKey = "riftbound-coop-device-token";
 
         private readonly List<CoopSessionAdvertisement> sessions = new List<CoopSessionAdvertisement>();
@@ -42,6 +43,7 @@ namespace Riftbound
         private float nextDiscovery;
         private float nextState;
         private float nextHello;
+        private float nextPeerUi;
         private float lastPacketAt;
         private float disconnectedAt = -1000f;
         private bool partyDefeatRaised;
@@ -172,7 +174,7 @@ namespace Riftbound
         public void Disconnect()
         {
             if (Connected) SendCommand("BYE");
-            StopSession(true);
+            ContinueSoloAndStop("KOOP BEENDET");
         }
 
         public void RequestRoomAdvance(Action authorized)
@@ -241,6 +243,13 @@ namespace Riftbound
             {
                 nextHello = now + HelloInterval;
                 SendHello();
+            }
+
+            if (State == CoopConnectionState.Reconnecting &&
+                now - lastPacketAt > CoopReconnectPolicy.GraceSeconds)
+            {
+                ContinueSoloAndStop("WIEDERVERBINDUNG ABGEBROCHEN · SOLO WEITER");
+                return;
             }
 
             if (Connected && now >= nextState)
@@ -322,6 +331,7 @@ namespace Riftbound
             {
                 if (code != sessionCode || !EndpointsEqual(sender, remoteEndpoint)) return;
                 remoteToken = hostToken;
+                remoteState = null;
                 lastPacketAt = Time.unscaledTime;
                 State = CoopConnectionState.Connected;
                 CoopRuntimeState.Set(Role, true);
@@ -334,13 +344,19 @@ namespace Riftbound
             if (CoopProtocol.TryDecodeState(payload, out var state))
             {
                 if (!AcceptState(state, sender)) return;
+                var readyChanged = remoteState == null || remoteState.ready != state.ready;
+                var downedChanged = remoteState == null || remoteState.downed != state.downed;
                 remoteState = state;
                 lastPacketAt = Time.unscaledTime;
                 readyGate.SetRemote(state.ready);
                 reviveState.SetRemoteDowned(state.downed);
                 TryCompleteReadyGate();
                 EvaluatePartyDefeat();
-                NotifyChanged();
+                if (readyChanged || downedChanged || Time.unscaledTime >= nextPeerUi)
+                {
+                    nextPeerUi = Time.unscaledTime + PeerUiInterval;
+                    NotifyChanged();
+                }
                 return;
             }
 
@@ -368,6 +384,16 @@ namespace Riftbound
                 return;
             }
 
+            var reservationExpired = !string.IsNullOrWhiteSpace(remoteToken) &&
+                                     disconnectedAt > -999f &&
+                                     Time.unscaledTime - disconnectedAt > CoopReconnectPolicy.GraceSeconds;
+            if (reservationExpired)
+            {
+                remoteToken = null;
+                remoteEndpoint = null;
+                remoteState = null;
+            }
+
             var reconnect = !string.IsNullOrWhiteSpace(remoteToken) &&
                             CoopReconnectPolicy.CanReconnect(
                                 remoteToken,
@@ -382,6 +408,7 @@ namespace Riftbound
 
             remoteToken = token;
             remoteEndpoint = sender;
+            remoteState = null;
             disconnectedAt = -1000f;
             lastPacketAt = Time.unscaledTime;
             State = CoopConnectionState.Connected;
@@ -423,7 +450,7 @@ namespace Riftbound
                     NotifyChanged();
                     break;
                 case "BYE":
-                    HandleConnectionTimeout();
+                    ContinueSoloAndStop("PARTNER HAT DIE SITZUNG VERLASSEN");
                     break;
             }
         }
@@ -454,17 +481,23 @@ namespace Riftbound
                 State = CoopConnectionState.Hosting;
                 CoopRuntimeState.Set(Role, false);
                 HideRemoteAvatar();
+                remoteState = null;
+                reviveState.SetRemoteDowned(false);
                 readyGate.Reset();
-                pendingRoomAdvance = null;
-                ShowMessage("PARTNER GETRENNT · WIEDERVERBINDUNG MÖGLICH");
+                ContinueLocalPlayerIfNeeded();
+                ContinuePendingRoomIfNeeded();
+                ShowMessage("PARTNER GETRENNT · SOLO WEITER · WIEDERVERBINDUNG MÖGLICH");
             }
             else if (Role == CoopRole.Client)
             {
                 State = CoopConnectionState.Reconnecting;
                 CoopRuntimeState.Set(Role, false);
                 HideRemoteAvatar();
+                remoteState = null;
+                reviveState.SetRemoteDowned(false);
+                var waitingForRoom = pendingRoomAdvance != null;
                 readyGate.Reset();
-                pendingRoomAdvance = null;
+                if (waitingForRoom) readyGate.SetLocal(true);
                 nextHello = 0f;
                 ShowMessage("VERBINDUNG VERLOREN · NEUER VERSUCH");
             }
@@ -475,6 +508,9 @@ namespace Riftbound
         private void BroadcastAdvertisement()
         {
             if (gameSocket == null || Role != CoopRole.Host) return;
+            var reservationActive = !string.IsNullOrWhiteSpace(remoteToken) &&
+                                    disconnectedAt > -999f &&
+                                    Time.unscaledTime - disconnectedAt <= CoopReconnectPolicy.GraceSeconds;
             var advertisement = new CoopSessionAdvertisement
             {
                 port = gamePort,
@@ -482,7 +518,7 @@ namespace Riftbound
                 seed = game != null ? game.Seed : 0,
                 roomIndex = game != null ? game.RoomIndex : 0,
                 playerCount = Connected ? 2 : 1,
-                joinable = !Connected && game != null && game.IsSafeRoom
+                joinable = !Connected && !reservationActive && game != null && game.IsSafeRoom
             };
             Send(new IPEndPoint(IPAddress.Broadcast, DiscoveryPort), CoopProtocol.EncodeDiscovery(advertisement));
         }
@@ -560,6 +596,7 @@ namespace Riftbound
             try
             {
                 discoverySocket = new UdpClient();
+                discoverySocket.Client.ExclusiveAddressUse = false;
                 discoverySocket.Client.SetSocketOption(
                     SocketOptionLevel.Socket,
                     SocketOptionName.ReuseAddress,
@@ -636,6 +673,32 @@ namespace Riftbound
             if (remoteAvatar != null) remoteAvatar.SetActive(false);
         }
 
+        private void ContinueSoloAndStop(string message)
+        {
+            var roomCallback = pendingRoomAdvance;
+            var reviveCallback = reviveState.LocalDowned ? localRevived : null;
+            StopSession(false);
+            reviveCallback?.Invoke();
+            roomCallback?.Invoke();
+            ShowMessage(message);
+        }
+
+        private void ContinueLocalPlayerIfNeeded()
+        {
+            if (!reviveState.LocalDowned) return;
+            reviveState.SetLocalDowned(false);
+            var callback = localRevived;
+            localRevived = null;
+            callback?.Invoke();
+        }
+
+        private void ContinuePendingRoomIfNeeded()
+        {
+            var callback = pendingRoomAdvance;
+            pendingRoomAdvance = null;
+            callback?.Invoke();
+        }
+
         private void StopSession(bool resetUi)
         {
             gameSocket?.Close();
@@ -705,7 +768,7 @@ namespace Riftbound
             }
             catch
             {
-                // A device can still discover sessions through UDP broadcast.
+                // UDP broadcast discovery can still work when hostname lookup is unavailable.
             }
             return "Lokales Netzwerk";
         }
