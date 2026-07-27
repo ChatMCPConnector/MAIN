@@ -39,7 +39,7 @@ namespace Riftbound.Editor
                 locationPathName = outputPath,
                 target = BuildTarget.Android,
                 targetGroup = BuildTargetGroup.Android,
-                options = BuildOptions.Development
+                options = BuildOptions.None
             };
 
             var report = BuildPipeline.BuildPlayer(options);
@@ -57,8 +57,8 @@ namespace Riftbound.Editor
             PlayerSettings.SetApplicationIdentifier(
                 BuildTargetGroup.Android,
                 "com.chatmcpconnector.riftbound");
-            PlayerSettings.bundleVersion = "0.7.0";
-            PlayerSettings.Android.bundleVersionCode = 7;
+            PlayerSettings.bundleVersion = "1.0.0";
+            PlayerSettings.Android.bundleVersionCode = 100;
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel26;
             PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
