@@ -4,9 +4,7 @@ namespace Riftbound
 {
     public sealed class AndroidLocalNetworkRuntime : MonoBehaviour
     {
-#if UNITY_ANDROID && !UNITY_EDITOR
         private AndroidJavaObject multicastLock;
-#endif
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void EnsureRuntime()

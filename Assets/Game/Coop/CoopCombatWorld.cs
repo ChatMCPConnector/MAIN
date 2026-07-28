@@ -24,7 +24,7 @@ namespace Riftbound
 
         public static CoopEnemySnapshot[] CaptureEnemySnapshots(int roomIndex)
         {
-            return FindObjectsByType<EnemyController>(FindObjectsSortMode.None)
+            return UnityEngine.Object.FindObjectsByType<EnemyController>(FindObjectsSortMode.None)
                 .Where(enemy => enemy != null && !enemy.IsDead && !enemy.IsReplica)
                 .Select(enemy => enemy.CreateSnapshot())
                 .OrderBy(snapshot => snapshot.networkId)
@@ -38,7 +38,7 @@ namespace Riftbound
         {
             if (game == null || snapshots == null || game.RoomIndex != roomIndex) return;
             var existing = new Dictionary<int, EnemyController>();
-            var localEnemies = FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
+            var localEnemies = UnityEngine.Object.FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
             foreach (var enemy in localEnemies)
             {
                 if (enemy == null || enemy.NetworkId <= 0) continue;
@@ -70,7 +70,7 @@ namespace Riftbound
 
         public static void SetReplication(bool enabled)
         {
-            var enemies = FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
+            var enemies = UnityEngine.Object.FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
             foreach (var enemy in enemies)
                 if (enemy != null) enemy.SetReplicaMode(enabled);
         }
@@ -93,7 +93,7 @@ namespace Riftbound
             }
 
             var center = intent.origin + direction * (intent.range * .65f);
-            var enemies = FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
+            var enemies = UnityEngine.Object.FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
             foreach (var enemy in enemies)
             {
                 if (enemy == null || enemy.IsReplica || enemy.IsDead) continue;

@@ -327,9 +327,9 @@ namespace Riftbound
             }
 
             if (Role == CoopRole.Client &&
-                CoopProtocol.TryDecodeWelcome(payload, out var code, out var hostToken, out var hostSeed, out var hostRoom))
+                CoopProtocol.TryDecodeWelcome(payload, out var welcomeCode, out var hostToken, out var hostSeed, out var hostRoom))
             {
-                if (code != sessionCode || !EndpointsEqual(sender, remoteEndpoint)) return;
+                if (welcomeCode != sessionCode || !EndpointsEqual(sender, remoteEndpoint)) return;
                 remoteToken = hostToken;
                 remoteState = null;
                 lastPacketAt = Time.unscaledTime;
