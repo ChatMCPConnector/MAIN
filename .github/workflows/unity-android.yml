@@ -145,9 +145,13 @@ jobs:
           set -euo pipefail
           aapt_source="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -type f -name aapt -perm -111 | sort -V | tail -n 1)"
           test -x "$aapt_source"
-          sudo install -m 0755 "$aapt_source" /usr/local/bin/aapt
+          build_tools="$(dirname "$aapt_source")"
+          sudo rm -rf /opt/android-build-tools
+          sudo cp -a "$build_tools" /opt/android-build-tools
+          echo "/opt/android-build-tools" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=/opt/android-build-tools/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
-          aapt version
+          LD_LIBRARY_PATH="/opt/android-build-tools/lib64:${LD_LIBRARY_PATH:-}" /opt/android-build-tools/aapt version
           df -h
 
       - name: Restore Unity Library cache
