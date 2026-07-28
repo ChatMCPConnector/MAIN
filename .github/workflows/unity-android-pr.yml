@@ -18,19 +18,25 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - name: Validate Unity release inputs
+      - name: Validate playable Unity release inputs
         shell: bash
         run: |
           set -euo pipefail
           test -f ProjectSettings/ProjectVersion.txt
           test -f Packages/manifest.json
           test -f Assets/Game/Editor/BuildAutomation.cs
+          test -f Assets/Game/Editor/ProjectSetup.cs
+          test -f Assets/Game/Tests/PlayMode/AndroidRuntimePlayModeTests.cs
+          test -f Assets/Game/Tests/PlayMode/Riftbound.PlayModeTests.asmdef
           test -f Assets/Plugins/Android/AndroidManifest.xml
           grep -q '6000.3.20f1' ProjectSettings/ProjectVersion.txt
-          grep -q 'bundleVersion = "1.0.1"' Assets/Game/Editor/BuildAutomation.cs
-          grep -q 'bundleVersionCode = 101' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'bundleVersion = "1.0.2"' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'bundleVersionCode = 102' Assets/Game/Editor/BuildAutomation.cs
           grep -q 'BuildOptions.None' Assets/Game/Editor/BuildAutomation.cs
           ! grep -q 'BuildOptions.Development' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'InputSystemOnly = 1' Assets/Game/Editor/ProjectSetup.cs
+          grep -q 'm_ActiveInputHandler' Assets/Game/Editor/ProjectSetup.cs
+          grep -q 'RuntimeBootstrapCreatesPlayableTouchWorld' Assets/Game/Tests/PlayMode/AndroidRuntimePlayModeTests.cs
           grep -q 'com.unity3d.player.UnityPlayerGameActivity' Assets/Plugins/Android/AndroidManifest.xml
           grep -q 'android.intent.action.MAIN' Assets/Plugins/Android/AndroidManifest.xml
           grep -q 'android.intent.category.LAUNCHER' Assets/Plugins/Android/AndroidManifest.xml
@@ -39,7 +45,7 @@ jobs:
   build-android:
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 95
     env:
       UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
       UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
@@ -68,13 +74,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: Library
-          key: Library-${{ runner.os }}-6000.3.20f1-${{ hashFiles('Packages/**', 'ProjectSettings/**', 'Assets/**/*.cs', 'Assets/Plugins/Android/**') }}
+          key: Library-${{ runner.os }}-6000.3.20f1-${{ hashFiles('Packages/**', 'ProjectSettings/**', 'Assets/**/*.cs', 'Assets/**/*.asmdef', 'Assets/Plugins/Android/**') }}
           restore-keys: |
             Library-${{ runner.os }}-6000.3.20f1-
 
       - name: Run all EditMode tests
         uses: game-ci/unity-test-runner@v4
-        id: tests
+        id: editmode-tests
         continue-on-error: true
         with:
           projectPath: .
@@ -101,6 +107,36 @@ jobs:
           print(f'Unity EditMode: result={result}, total={total}, passed={passed}, failed={failed}, skipped={skipped}')
           if result != 'Passed' or total <= 0 or failed != 0 or passed != total:
               raise SystemExit('Unity EditMode tests did not pass completely')
+
+      - name: Run playable runtime PlayMode test
+        uses: game-ci/unity-test-runner@v4
+        id: playmode-tests
+        continue-on-error: true
+        with:
+          projectPath: .
+          unityVersion: 6000.3.20f1
+          testMode: PlayMode
+          artifactsPath: playmode-artifacts
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify playable runtime results
+        shell: python
+        run: |
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          path = pathlib.Path('playmode-artifacts/playmode-results.xml')
+          if not path.is_file():
+              raise SystemExit('Unity did not produce PlayMode test results')
+          root = ET.parse(path).getroot()
+          total = int(root.attrib.get('total', '0'))
+          passed = int(root.attrib.get('passed', '0'))
+          failed = int(root.attrib.get('failed', '0'))
+          skipped = int(root.attrib.get('skipped', '0'))
+          result = root.attrib.get('result', '')
+          print(f'Unity PlayMode: result={result}, total={total}, passed={passed}, failed={failed}, skipped={skipped}')
+          if result != 'Passed' or total <= 0 or failed != 0 or passed != total:
+              raise SystemExit('Playable runtime test did not pass completely')
 
       - name: Build Android release APK
         uses: game-ci/unity-builder@v4
@@ -137,7 +173,7 @@ jobs:
           unzip -tq "$target"
           badging="$(aapt dump badging "$target")"
           echo "$badging"
-          grep -F "package: name='com.chatmcpconnector.riftbound' versionCode='101' versionName='1.0.1'" <<<"$badging"
+          grep -F "package: name='com.chatmcpconnector.riftbound' versionCode='102' versionName='1.0.2'" <<<"$badging"
           grep -F "launchable-activity: name='com.unity3d.player.UnityPlayerGameActivity'" <<<"$badging"
           file "$target"
           sha256sum "$target"
@@ -147,10 +183,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riftbound-android-1.0.1-pr-${{ github.event.pull_request.number }}
+          name: riftbound-android-1.0.2-pr-${{ github.event.pull_request.number }}
           path: |
             Builds/Android/Riftbound.apk
             test-artifacts
+            playmode-artifacts
           if-no-files-found: warn
           retention-days: 30
           compression-level: 0
