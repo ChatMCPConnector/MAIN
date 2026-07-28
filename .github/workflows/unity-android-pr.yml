@@ -100,14 +100,30 @@ jobs:
           buildName: Riftbound
           buildPath: Builds/Android
 
-      - name: Verify APK
+      - name: Normalize and verify APK
         shell: bash
         run: |
           set -euo pipefail
-          test -s Builds/Android/Riftbound.apk
-          file Builds/Android/Riftbound.apk
-          sha256sum Builds/Android/Riftbound.apk
-          ls -lh Builds/Android/Riftbound.apk
+          target="$GITHUB_WORKSPACE/Builds/Android/Riftbound.apk"
+          source="$(find "$GITHUB_WORKSPACE" -type f -iname '*.apk' -printf '%s\t%p\n' | sort -nr | head -n 1 | cut -f 2-)"
+          if [ -z "$source" ] || [ ! -s "$source" ]; then
+            echo "Unity reported success but no APK was found" >&2
+            find "$GITHUB_WORKSPACE" -maxdepth 5 -type f -print | sort
+            exit 1
+          fi
+          mkdir -p "$(dirname "$target")"
+          if [ "$(realpath "$source")" != "$(realpath -m "$target")" ]; then
+            cp "$source" "$target"
+          fi
+          size="$(stat -c%s "$target")"
+          if [ "$size" -lt 10000000 ]; then
+            echo "APK is unexpectedly small: $size bytes" >&2
+            exit 1
+          fi
+          unzip -tq "$target"
+          file "$target"
+          sha256sum "$target"
+          ls -lh "$target"
 
       - name: Upload APK and diagnostics
         if: always()
@@ -119,3 +135,4 @@ jobs:
             test-artifacts
           if-no-files-found: warn
           retention-days: 30
+          compression-level: 0
