@@ -1,0 +1,12 @@
+{
+  "apk_asset": "Riftbound-1.0.0.apk",
+  "apk_sha256": "59da75c2a7c12b3abb771b1a059e04856df768baa874898b9952dae016809a1f",
+  "apk_size_bytes": 30626750,
+  "checksum_asset": "Riftbound-1.0.0.sha256",
+  "release_url": "https://github.com/ChatMCPConnector/MAIN/releases/tag/v1.0.0",
+  "source_artifact_id": 8687471455,
+  "source_commit": "e500a3f367c8668a3746d1da46b0938350dce056",
+  "source_workflow_run_id": 30356191796,
+  "tag": "v1.0.0",
+  "title": "Riftbound Android 1.0.0"
+}
