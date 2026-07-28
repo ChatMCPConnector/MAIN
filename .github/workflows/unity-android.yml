@@ -139,9 +139,15 @@ jobs:
         with:
           lfs: false
 
-      - name: Free disk space
+      - name: Preserve APK analyzer and free disk space
+        shell: bash
         run: |
+          set -euo pipefail
+          aapt_source="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -type f -name aapt -perm -111 | sort -V | tail -n 1)"
+          test -x "$aapt_source"
+          sudo install -m 0755 "$aapt_source" /usr/local/bin/aapt
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          aapt version
           df -h
 
       - name: Restore Unity Library cache
@@ -215,11 +221,9 @@ jobs:
             exit 1
           fi
           unzip -tq "$target"
-          aapt="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -type f -name aapt -perm -111 | sort -V | tail -n 1)"
-          test -x "$aapt"
-          badging="$("$aapt" dump badging "$target")"
+          badging="$(aapt dump badging "$target")"
           echo "$badging"
-          grep -F "package: name='com.chatmcpconnector.riftbound'" <<<"$badging"
+          grep -F "package: name='com.chatmcpconnector.riftbound' versionCode='101' versionName='1.0.1'" <<<"$badging"
           grep -F "launchable-activity: name='com.unity3d.player.UnityPlayerGameActivity'" <<<"$badging"
           file "$target"
           sha256sum "$target"
