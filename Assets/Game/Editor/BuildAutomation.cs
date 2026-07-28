@@ -57,8 +57,8 @@ namespace Riftbound.Editor
             PlayerSettings.SetApplicationIdentifier(
                 BuildTargetGroup.Android,
                 "com.chatmcpconnector.riftbound");
-            PlayerSettings.bundleVersion = "1.0.0";
-            PlayerSettings.Android.bundleVersionCode = 100;
+            PlayerSettings.bundleVersion = "1.0.1";
+            PlayerSettings.Android.bundleVersionCode = 101;
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel26;
             PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
