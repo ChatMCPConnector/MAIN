@@ -2,7 +2,7 @@ name: Riftbound Android Build Reporter
 
 on:
   workflow_run:
-    workflows: ["Riftbound Android 1.0"]
+    workflows: ["Riftbound Android 1.0.1"]
     types: [completed]
 
 permissions:
@@ -42,7 +42,7 @@ jobs:
           from pathlib import Path
 
           data = {
-              "workflow": "Riftbound Android 1.0",
+              "workflow": "Riftbound Android 1.0.1",
               "run_id": int(os.environ["RUN_ID"]),
               "run_number": int(os.environ["RUN_NUMBER"]),
               "run_attempt": int(os.environ["RUN_ATTEMPT"]),
@@ -52,7 +52,7 @@ jobs:
               "event": os.environ["EVENT_NAME"],
               "html_url": os.environ["HTML_URL"],
               "updated_at": os.environ["UPDATED_AT"],
-              "artifact_name": "riftbound-android-1.0.0",
+              "artifact_name": "riftbound-android-1.0.1",
           }
           payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
           Path("Builds/latest-actions-status.json").write_text(payload)
