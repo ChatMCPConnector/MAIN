@@ -165,21 +165,30 @@ jobs:
           buildName: Riftbound
           buildPath: Builds/Android
 
-      - name: Verify release APK
+      - name: Normalize and verify release APK
         shell: bash
         run: |
           set -euo pipefail
-          apk="Builds/Android/Riftbound.apk"
-          test -s "$apk"
-          size="$(stat -c%s "$apk")"
+          target="$GITHUB_WORKSPACE/Builds/Android/Riftbound.apk"
+          source="$(find "$GITHUB_WORKSPACE" -type f -iname '*.apk' -printf '%s\t%p\n' | sort -nr | head -n 1 | cut -f 2-)"
+          if [ -z "$source" ] || [ ! -s "$source" ]; then
+            echo "Unity reported success but no APK was found" >&2
+            find "$GITHUB_WORKSPACE" -maxdepth 5 -type f -print | sort
+            exit 1
+          fi
+          mkdir -p "$(dirname "$target")"
+          if [ "$(realpath "$source")" != "$(realpath -m "$target")" ]; then
+            cp "$source" "$target"
+          fi
+          size="$(stat -c%s "$target")"
           if [ "$size" -lt 10000000 ]; then
             echo "APK is unexpectedly small: $size bytes" >&2
             exit 1
           fi
-          unzip -tq "$apk"
-          file "$apk"
-          sha256sum "$apk"
-          ls -lh "$apk"
+          unzip -tq "$target"
+          file "$target"
+          sha256sum "$target"
+          ls -lh "$target"
 
       - name: Upload APK and diagnostics
         if: always()
