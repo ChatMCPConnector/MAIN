@@ -27,10 +27,14 @@ jobs:
           test -f Assets/Game/Editor/BuildAutomation.cs
           test -f Assets/Plugins/Android/AndroidManifest.xml
           grep -q '6000.3.20f1' ProjectSettings/ProjectVersion.txt
-          grep -q 'bundleVersion = "1.0.0"' Assets/Game/Editor/BuildAutomation.cs
-          grep -q 'bundleVersionCode = 100' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'bundleVersion = "1.0.1"' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'bundleVersionCode = 101' Assets/Game/Editor/BuildAutomation.cs
           grep -q 'BuildOptions.None' Assets/Game/Editor/BuildAutomation.cs
           ! grep -q 'BuildOptions.Development' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'com.unity3d.player.UnityPlayerGameActivity' Assets/Plugins/Android/AndroidManifest.xml
+          grep -q 'android.intent.action.MAIN' Assets/Plugins/Android/AndroidManifest.xml
+          grep -q 'android.intent.category.LAUNCHER' Assets/Plugins/Android/AndroidManifest.xml
+          grep -q 'android:exported="true"' Assets/Plugins/Android/AndroidManifest.xml
 
   build-android:
     needs: validate
@@ -45,9 +49,19 @@ jobs:
         with:
           lfs: false
 
-      - name: Free disk space
+      - name: Preserve APK analyzer and free disk space
+        shell: bash
         run: |
+          set -euo pipefail
+          aapt_source="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -type f -name aapt -perm -111 | sort -V | tail -n 1)"
+          test -x "$aapt_source"
+          build_tools="$(dirname "$aapt_source")"
+          sudo rm -rf /opt/android-build-tools
+          sudo cp -a "$build_tools" /opt/android-build-tools
+          echo "/opt/android-build-tools" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=/opt/android-build-tools/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           sudo rm -rf /usr/local/lib/android /opt/ghc || true
+          LD_LIBRARY_PATH="/opt/android-build-tools/lib64:${LD_LIBRARY_PATH:-}" /opt/android-build-tools/aapt version
           df -h
 
       - name: Restore Unity Library cache
@@ -121,6 +135,10 @@ jobs:
             exit 1
           fi
           unzip -tq "$target"
+          badging="$(aapt dump badging "$target")"
+          echo "$badging"
+          grep -F "package: name='com.chatmcpconnector.riftbound' versionCode='101' versionName='1.0.1'" <<<"$badging"
+          grep -F "launchable-activity: name='com.unity3d.player.UnityPlayerGameActivity'" <<<"$badging"
           file "$target"
           sha256sum "$target"
           ls -lh "$target"
@@ -129,7 +147,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riftbound-android-1.0.0-pr-${{ github.event.pull_request.number }}
+          name: riftbound-android-1.0.1-pr-${{ github.event.pull_request.number }}
           path: |
             Builds/Android/Riftbound.apk
             test-artifacts
