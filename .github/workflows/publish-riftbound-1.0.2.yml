@@ -1,0 +1,78 @@
+name: Publish Riftbound Android 1.0.2
+
+on:
+  issues:
+    types: [reopened]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    if: github.event.issue.number == 19 && github.event.issue.title == 'Publish Riftbound Android 1.0.2'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download verified playable APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: '8695367860'
+        run: |
+          set -euo pipefail
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            > artifact.zip
+          rm -rf artifact
+          mkdir artifact
+          unzip -q artifact.zip -d artifact
+          cp artifact/Builds/Android/Riftbound.apk Riftbound-1.0.2.apk
+          test "$(stat -c%s Riftbound-1.0.2.apk)" -ge 10000000
+          unzip -tq Riftbound-1.0.2.apk
+          sha256sum Riftbound-1.0.2.apk | tee Riftbound-1.0.2.sha256
+          grep -F '770f66dbfb066a96275d7b5fa342c92984b501d3e34cc1bb5a05d1289f09d6e9' Riftbound-1.0.2.sha256
+
+      - name: Publish permanent GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release delete v1.0.2 --cleanup-tag --yes 2>/dev/null || true
+          gh release create v1.0.2 \
+            Riftbound-1.0.2.apk \
+            Riftbound-1.0.2.sha256 \
+            --target 67e4e5b890f71ae208ca7082015f45ed2e793967 \
+            --title 'Riftbound Android 1.0.2' \
+            --notes 'Playable Android hotfix. Unity Input System is configured deterministically and CI now runs a PlayMode test that verifies the runtime bootstrap, camera, player, enemies, touch HUD, action buttons, InputSystemUIInputModule and actual movement from the virtual stick. All 56 EditMode tests and the playable runtime test passed.'
+
+      - name: Record release and remove one-time publisher
+        run: |
+          set -euo pipefail
+          mkdir -p Builds
+          cat > Builds/riftbound-1.0.2-release.json <<'JSON'
+          {
+            "apk_asset": "Riftbound-1.0.2.apk",
+            "apk_sha256": "770f66dbfb066a96275d7b5fa342c92984b501d3e34cc1bb5a05d1289f09d6e9",
+            "apk_size_bytes": 30635006,
+            "editmode_tests": "56/56 passed",
+            "launcher_activity": "com.unity3d.player.UnityPlayerGameActivity",
+            "playmode_test": "RuntimeBootstrapCreatesPlayableTouchWorld passed",
+            "release_commit": "67e4e5b890f71ae208ca7082015f45ed2e793967",
+            "release_url": "https://github.com/ChatMCPConnector/MAIN/releases/tag/v1.0.2",
+            "source_artifact_id": 8695367860,
+            "source_workflow_run_id": 30375946158,
+            "tag": "v1.0.2",
+            "title": "Riftbound Android 1.0.2"
+          }
+          JSON
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/publish-riftbound-1.0.2.yml
+          git add -f Builds/riftbound-1.0.2-release.json
+          git commit -m '[skip ci] Publish playable Riftbound Android 1.0.2'
+          git push origin HEAD:main
