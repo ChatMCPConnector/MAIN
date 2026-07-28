@@ -27,10 +27,14 @@ jobs:
           test -f Assets/Game/Editor/BuildAutomation.cs
           test -f Assets/Plugins/Android/AndroidManifest.xml
           grep -q '6000.3.20f1' ProjectSettings/ProjectVersion.txt
-          grep -q 'bundleVersion = "1.0.0"' Assets/Game/Editor/BuildAutomation.cs
-          grep -q 'bundleVersionCode = 100' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'bundleVersion = "1.0.1"' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'bundleVersionCode = 101' Assets/Game/Editor/BuildAutomation.cs
           grep -q 'BuildOptions.None' Assets/Game/Editor/BuildAutomation.cs
           ! grep -q 'BuildOptions.Development' Assets/Game/Editor/BuildAutomation.cs
+          grep -q 'com.unity3d.player.UnityPlayerGameActivity' Assets/Plugins/Android/AndroidManifest.xml
+          grep -q 'android.intent.action.MAIN' Assets/Plugins/Android/AndroidManifest.xml
+          grep -q 'android.intent.category.LAUNCHER' Assets/Plugins/Android/AndroidManifest.xml
+          grep -q 'android:exported="true"' Assets/Plugins/Android/AndroidManifest.xml
 
   build-android:
     needs: validate
@@ -121,6 +125,12 @@ jobs:
             exit 1
           fi
           unzip -tq "$target"
+          aapt="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -type f -name aapt -perm -111 | sort -V | tail -n 1)"
+          test -x "$aapt"
+          badging="$("$aapt" dump badging "$target")"
+          echo "$badging"
+          grep -F "package: name='com.chatmcpconnector.riftbound'" <<<"$badging"
+          grep -F "launchable-activity: name='com.unity3d.player.UnityPlayerGameActivity'" <<<"$badging"
           file "$target"
           sha256sum "$target"
           ls -lh "$target"
@@ -129,7 +139,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riftbound-android-1.0.0-pr-${{ github.event.pull_request.number }}
+          name: riftbound-android-1.0.1-pr-${{ github.event.pull_request.number }}
           path: |
             Builds/Android/Riftbound.apk
             test-artifacts
