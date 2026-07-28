@@ -1,4 +1,4 @@
-name: Riftbound Android 1.0
+name: Riftbound Android 1.0.1
 
 on:
   push:
@@ -65,8 +65,8 @@ jobs:
 
           build = Path('Assets/Game/Editor/BuildAutomation.cs').read_text()
           for token in (
-              'bundleVersion = "1.0.0"',
-              'bundleVersionCode = 100',
+              'bundleVersion = "1.0.1"',
+              'bundleVersionCode = 101',
               'BuildOptions.None',
               'ScriptingImplementation.IL2CPP',
               'AndroidArchitecture.ARM64',
@@ -82,7 +82,36 @@ jobs:
               raise SystemExit('Android runtime class layout is platform-dependent')
 
           android_manifest = Path('Assets/Plugins/Android/AndroidManifest.xml')
-          ET.parse(android_manifest)
+          tree = ET.parse(android_manifest)
+          root = tree.getroot()
+          android = '{http://schemas.android.com/apk/res/android}'
+          application = root.find('application')
+          if application is None:
+              raise SystemExit('Android application element is missing')
+
+          launcher = None
+          for activity in application.findall('activity'):
+              if activity.get(android + 'name') != 'com.unity3d.player.UnityPlayerGameActivity':
+                  continue
+              actions = {
+                  node.get(android + 'name')
+                  for intent in activity.findall('intent-filter')
+                  for node in intent.findall('action')
+              }
+              categories = {
+                  node.get(android + 'name')
+                  for intent in activity.findall('intent-filter')
+                  for node in intent.findall('category')
+              }
+              if 'android.intent.action.MAIN' in actions and 'android.intent.category.LAUNCHER' in categories:
+                  launcher = activity
+                  break
+
+          if launcher is None:
+              raise SystemExit('MAIN/LAUNCHER UnityPlayerGameActivity is missing')
+          if launcher.get(android + 'exported') != 'true':
+              raise SystemExit('Launcher activity must be exported on modern Android')
+
           android_text = android_manifest.read_text()
           for permission in (
               'android.permission.INTERNET',
@@ -95,7 +124,7 @@ jobs:
               if permission not in android_text:
                   raise SystemExit(f'Missing Android permission: {permission}')
 
-          print('Android release configuration is valid')
+          print('Android release configuration and launcher are valid')
 
   build-android:
     needs: validate
@@ -186,6 +215,12 @@ jobs:
             exit 1
           fi
           unzip -tq "$target"
+          aapt="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -type f -name aapt -perm -111 | sort -V | tail -n 1)"
+          test -x "$aapt"
+          badging="$("$aapt" dump badging "$target")"
+          echo "$badging"
+          grep -F "package: name='com.chatmcpconnector.riftbound'" <<<"$badging"
+          grep -F "launchable-activity: name='com.unity3d.player.UnityPlayerGameActivity'" <<<"$badging"
           file "$target"
           sha256sum "$target"
           ls -lh "$target"
@@ -194,7 +229,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riftbound-android-1.0.0
+          name: riftbound-android-1.0.1
           path: |
             Builds/Android/Riftbound.apk
             test-artifacts
