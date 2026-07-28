@@ -2,26 +2,30 @@ using System;
 using System.IO;
 using UnityEditor;
 using UnityEditor.Build.Reporting;
-using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
-using UnityEngine.SceneManagement;
 
 namespace Riftbound.Editor
 {
     public static class BuildAutomation
     {
-        private const string ScenePath = "Assets/Game/Scenes/Main.unity";
         private const string PipelinePath = "Assets/Game/Settings/RiftboundURP.asset";
         private const string RendererPath = "Assets/Game/Settings/RiftboundRenderer.asset";
 
         [MenuItem("Riftbound/Build Android APK")]
         public static void BuildAndroid()
         {
+            ProjectSetup.EnsureProject();
             ConfigureProject();
             EnsurePipeline();
-            EnsureScene();
+            ProjectSetup.ValidateReadyForBuild();
+
+#if !ENABLE_INPUT_SYSTEM
+            throw new InvalidOperationException(
+                "The Android build was compiled without ENABLE_INPUT_SYSTEM. " +
+                "Allow Unity to finish recompiling after project setup, then run the build again.");
+#endif
 
             var outputPath = GetArgument("-customBuildPath");
             if (string.IsNullOrWhiteSpace(outputPath))
@@ -35,7 +39,7 @@ namespace Riftbound.Editor
 
             var options = new BuildPlayerOptions
             {
-                scenes = new[] { ScenePath },
+                scenes = new[] { ProjectSetup.MainScenePath },
                 locationPathName = outputPath,
                 target = BuildTarget.Android,
                 targetGroup = BuildTargetGroup.Android,
@@ -57,8 +61,8 @@ namespace Riftbound.Editor
             PlayerSettings.SetApplicationIdentifier(
                 BuildTargetGroup.Android,
                 "com.chatmcpconnector.riftbound");
-            PlayerSettings.bundleVersion = "1.0.1";
-            PlayerSettings.Android.bundleVersionCode = 101;
+            PlayerSettings.bundleVersion = "1.0.2";
+            PlayerSettings.Android.bundleVersionCode = 102;
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel26;
             PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
@@ -113,27 +117,6 @@ namespace Riftbound.Editor
             QualitySettings.renderPipeline = pipeline;
             EditorUtility.SetDirty(pipeline);
             EditorUtility.SetDirty(renderer);
-            AssetDatabase.SaveAssets();
-        }
-
-        private static void EnsureScene()
-        {
-            Directory.CreateDirectory("Assets/Game/Scenes");
-            Scene scene;
-            if (File.Exists(ScenePath))
-            {
-                scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
-            }
-            else
-            {
-                scene = EditorSceneManager.NewScene(
-                    NewSceneSetup.EmptyScene,
-                    NewSceneMode.Single);
-                EditorSceneManager.SaveScene(scene, ScenePath);
-            }
-
-            EditorBuildSettings.scenes =
-                new[] { new EditorBuildSettingsScene(ScenePath, true) };
             AssetDatabase.SaveAssets();
         }
 
