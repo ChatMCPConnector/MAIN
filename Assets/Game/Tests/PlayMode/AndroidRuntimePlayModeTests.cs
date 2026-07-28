@@ -40,7 +40,8 @@ namespace Riftbound.Tests
             Assert.That(hud, Is.Not.Null, "The touch HUD was not created.");
 
             var canvas = hud.GetComponent<Canvas>();
-            Assert.That(canvas, Is.Not.Null.And.Property("enabled").True);
+            Assert.That(canvas, Is.Not.Null);
+            Assert.That(canvas.enabled, Is.True);
             Assert.That(hud.GetComponent<GraphicRaycaster>(), Is.Not.Null);
 
             var buttons = hud.GetComponentsInChildren<Button>(true);
