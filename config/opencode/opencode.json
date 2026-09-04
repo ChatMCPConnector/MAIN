@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 83400
+  },
+  "agent": {
+    "build": {
+      "color": "warning"
+    },
+    "plan": {
+      "color": "accent"
+    }
+  },
+  "permission": "allow",
+  "lsp": true
+}

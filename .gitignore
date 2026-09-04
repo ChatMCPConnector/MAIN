@@ -1,0 +1,9 @@
+# Secrets & Wegwerfbares - das kommt NICHT mit ins Git
+.env
+*.db
+*.db-shm
+*.db-wal
+node_modules/
+.venv/
+__pycache__/
+*.log
