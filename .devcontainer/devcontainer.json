@@ -42,5 +42,5 @@
     }
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
-  "postStartCommand": "echo 'Landschaft bereit. ./scripts/save.sh status für Git-Status.'"
+  "postStartCommand": "git pull --rebase --autostash origin main 2>/dev/null || true"
 }
