@@ -12,7 +12,7 @@
         "z-ai/glm-5.3-free": {
           "name": "GLM 5.3 (free)",
           "limit": {
-            "context": 131072,
+            "context": 1000000,
             "output": 8192
           }
         }
@@ -20,12 +20,7 @@
     }
   },
   "model": "tokenrouter/z-ai/glm-5.3-free",
-  "default_agent": "build",
-  "compaction": {
-    "auto": true,
-    "prune": true,
-    "reserved": 83400
-  },
+  "permission": "allow",
   "agent": {
     "build": {
       "color": "warning"
@@ -33,7 +28,5 @@
     "plan": {
       "color": "accent"
     }
-  },
-  "permission": "allow",
-  "lsp": true
+  }
 }
