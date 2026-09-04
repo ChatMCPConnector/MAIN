@@ -67,3 +67,21 @@ Der Agent (ich) darf jederzeit `./scripts/push.sh` laufen lassen - non-interakti
 ```
 
 Danach musst du nichts mehr tun. Sag einfach "push" und ich pushe. Das Token kommt nie ins Git.
+
+## Secrets doch mitsyncen (verschlüsselt, optional)
+
+Standard: Secrets (PAT, opencode-Login, `.env`) werden nie gesynct. Wenn du sie trotzdem mitnehmen willst - beide Accounts sind deine - geht das **verschlüsselt** mit einer Passphrase. Das Repo ist public, also niemals Klartext committen.
+
+Einmalig hier:
+```bash
+./scripts/secrets.sh lock   # Passphrase eingeben (unsichtbar, stark + einmalig wählen). Danach sagst du "push".
+```
+
+Für vollautomatische neue Codespaces: `LANDSCAPE_PASSPHRASE` als Codespaces-Secret pro Account hinterlegen. Dann entsperrt sich jeder neue Codespace beim Start von selbst (PAT + opencode-Login + `.env` sind einfach da).
+
+Im neuen Codespace (falls keine Passphrase hinterlegt ist):
+```bash
+./scripts/secrets.sh unlock
+```
+
+Hinweis: Der mitgesyncte PAT stammt von dem Account, der `lock` gemacht hat - der andere Codespace pusht dann in dessen Namen. Bei Verdacht auf Leak: PAT auf GitHub revoken, Keys rotieren, neu locken.

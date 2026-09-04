@@ -5,6 +5,7 @@ export TZ="${TZ:-Europe/Istanbul}"
 alias save='./scripts/save.sh'
 alias push='./scripts/push.sh'
 alias auth='./scripts/auth.sh status'
+alias secrets='./scripts/secrets.sh status'
 alias st='git status -sb'
 alias ll='ls -lah'
 

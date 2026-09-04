@@ -59,6 +59,13 @@ else
   echo "    kein Token gefunden. Einmalig: ./scripts/auth.sh setup  (oder LANDSCAPE_PAT als Codespaces-Secret setzen)"
 fi
 
+echo "==> [landscape] Secrets entsperren (falls Bundle + Passphrase da)..."
+if [ -f "$REPO_ROOT/config/secrets.enc" ] && [ -n "${LANDSCAPE_PASSPHRASE:-}" ]; then
+  bash "$REPO_ROOT/scripts/secrets.sh" unlock >/dev/null 2>&1 && echo "    Secrets automatisch wiederhergestellt." || echo "    WARN: Auto-Unlock fehlgeschlagen (falsche Passphrase?)."
+elif [ -f "$REPO_ROOT/config/secrets.enc" ]; then
+  echo "    Bundle vorhanden, keine Passphrase. Entsperren mit: ./scripts/secrets.sh unlock"
+fi
+
 echo "==> [landscape] .env prüfen..."
 if [ ! -f "$REPO_ROOT/.env" ] && [ -f "$REPO_ROOT/.env.example" ]; then
   echo "    HINWEIS: $REPO_ROOT/.env fehlt. Bei Bedarf anlegen: cp .env.example .env"
