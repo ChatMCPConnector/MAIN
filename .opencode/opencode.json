@@ -20,7 +20,14 @@
     }
   },
   "model": "tokenrouter/z-ai/glm-5.3-free",
+  "default_agent": "build",
   "permission": "allow",
+  "lsp": true,
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 83400
+  },
   "agent": {
     "build": {
       "color": "warning"
