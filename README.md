@@ -29,7 +29,7 @@ Nach dem Aufbau steht das Linux-Terminal direkt im Browser bereit. Dateien im Re
 
 Deshalb liegt hier alles versioniert:
 - `.devcontainer/setup.sh` baut jede Umgebung identisch auf (läuft automatisch)
-- `config/opencode/` = Vorlage für deine opencode-Config, Plugins, Commands (ohne Secrets)
+- `.opencode/` = die opencode-Config selbst (wird direkt aus dem Repo gelesen, kein Kopieren)
 - `dotfiles/aliases.sh` = Aliase, PATH
 - `work/` = hier deine Projekte ablegen, damit sie mitkommen
 - `scripts/save.sh` = der Umzugs-Befehl
