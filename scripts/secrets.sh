@@ -5,7 +5,7 @@
 # deine Passphrase ist sie nutzlos. Starke, einmalige Passphrase wählen. Bei Verdacht: PAT
 # auf GitHub revoken, .env-Keys rotieren, neu locken.
 #
-#   ./scripts/secrets.sh lock     # packt ein (Passphrase-Abfrage, unsichtbar). DANACH sagst du dem Agent "push".
+#   ./scripts/secrets.sh lock     # packt ein (Passphrase-Abfrage, unsichtbar). DANACH sagst du dem Agent "save".
 #   ./scripts/secrets.sh unlock   # packt aus (automatisch wenn LANDSCAPE_PASSPHRASE gesetzt, sonst Abfrage)
 #   ./scripts/secrets.sh status   # zeigt was drin ist (ohne Passphrase, ohne Inhalte)
 #
@@ -42,7 +42,7 @@ cmd_lock() {
   unset LANDSCAPE_PASSPHRASE
   echo "Verschlüsselt -> $BUNDLE"
   cat "$MANIFEST"
-  echo "Fertig. Sag dem Agent 'push', damit es ins Git kommt."
+  echo "Fertig. Sag dem Agent 'save', damit es ins Git kommt."
 }
 
 cmd_unlock() {

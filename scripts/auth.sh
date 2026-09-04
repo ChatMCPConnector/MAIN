@@ -57,7 +57,7 @@ cmd_status() {
   if out="$(GIT_TERMINAL_PROMPT=0 git push --dry-run origin main 2>&1)"; then
     echo "OK - Agent kann pushen."
   elif echo "$out" | grep -qiE "fetch first|rejected|non-fast-forward"; then
-    echo "OK (Auth geht, nur 'git pull --rebase' nötig) - Agent kann pushen (push.sh pullt automatisch)."
+    echo "OK (Auth geht, nur 'git pull --rebase' nötig) - Agent kann pushen (save.sh pullt automatisch)."
   else
     echo "FEHLT - ./scripts/auth.sh setup ausführen oder LANDSCAPE_PAT als Codespaces-Secret setzen."
     echo "$out" | head -3
