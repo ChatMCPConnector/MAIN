@@ -27,7 +27,7 @@ get_passphrase() {
 
 cmd_lock() {
   local stage; stage="$(mktemp -d)"
-  trap 'rm -rf "$stage"' EXIT
+  trap "rm -rf '$stage'" EXIT
   local found=0
   mkdir -p "$stage/files"
   [ -f "$HOME/.config/landscape/pat" ] && { cp "$HOME/.config/landscape/pat" "$stage/files/pat"; found=1; }
@@ -50,7 +50,7 @@ cmd_unlock() {
   [ -n "${LANDSCAPE_PASSPHRASE:-}" ] && noninteractive=1
   get_passphrase
   local stage; stage="$(mktemp -d)"
-  trap 'rm -rf "$stage"' EXIT
+  trap "rm -rf '$stage'" EXIT
   if ! openssl enc -d -aes-256-cbc -pbkdf2 -pass env:LANDSCAPE_PASSPHRASE -in "$BUNDLE" -out "$stage/bundle.tgz" 2>/dev/null; then
     unset LANDSCAPE_PASSPHRASE
     echo "FEHLER: falsche Passphrase oder Bundle kaputt."
