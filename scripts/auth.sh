@@ -53,10 +53,14 @@ cmd_status() {
   if [ -f "$TOKEN_FILE" ]; then echo "Token-Datei: vorhanden ($(wc -c < "$TOKEN_FILE" | tr -d ' ') Zeichen)"; else echo "Token-Datei: FEHLT"; fi
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then echo "gh auth: OK"; else echo "gh auth: nicht angemeldet"; fi
   echo -n "Push-Test (dry-run): "
-  if GIT_TERMINAL_PROMPT=0 git push --dry-run origin main >/dev/null 2>&1; then
+  local out
+  if out="$(GIT_TERMINAL_PROMPT=0 git push --dry-run origin main 2>&1)"; then
     echo "OK - Agent kann pushen."
+  elif echo "$out" | grep -qiE "fetch first|rejected|non-fast-forward"; then
+    echo "OK (Auth geht, nur 'git pull --rebase' nötig) - Agent kann pushen (push.sh pullt automatisch)."
   else
     echo "FEHLT - ./scripts/auth.sh setup ausführen oder LANDSCAPE_PAT als Codespaces-Secret setzen."
+    echo "$out" | head -3
     return 1
   fi
 }
