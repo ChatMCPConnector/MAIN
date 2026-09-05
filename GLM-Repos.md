@@ -87,12 +87,54 @@ Ziel: GLM 5.3 mit max reasoning (Zero/Think-Modus) kostenlos, bevorzugt über ch
 5. **Puter.js** als „unlimited free GLM"-Quelle taucht mehrfach auf (GLM 4.7 Flash) — Browser-only, Qualität/Rate-Limit unklar.
 6. **Große Ökosysteme** (sub2api 40k★, CLIProxyAPI 50k★, WindsurfAPI 3k★) zeigen das Muster Subscription→API, sind aber für GLM-free nicht direkt nutzbar (Windsurf braucht eigenes Abo).
 
-### Aktualisierte Gesamtwertung (GLM gratis + reasoning + Agent-tauglich)
+## Runde 3: Gezielte Tiefensuche (nur inoffizielle Web-Reverse-Projekte, Sep 2026)
 
-1. **XxxXTeam/glm2api** (chatglm.cn, Guest + refresh_token, think/zero-Mode) — weiter Platz 1 für dein Ziel
-2. **AutoClaw-Bridgen** (glmproxy/OmniClaw) — GLM-5.3 mit Tool-Calls, braucht AutoClaw-Account (Google-SSO, gratis) — stärkster Neuzugang, prüfenswert
-3. izaart95-jpg/GLM-Free-API (chat.z.ai) — JPEG-only Guest tot (405), mit eigenem JWT noch ok
-4. FreeGLMKimiAPI / FreeAI-Gateway — chatglm.cn-Refresh-Token-Support als Zweitverwertung ok
-5. cto.new-Pool — kein Tool-Calling, nur Plan-Mode
-6. oxalpha — Turnstile-Limit, nur manuell
+Methode: GitHub-**Code-Suche** nach den internen chatglm.cn/z.ai-Endpoints (statt Repo-Namens-Suche) — findet auch unbekannte 0★-Repos:
+- `chatglm.cn/chatglm/backend-api/assistant/stream` (Chat-SSE-Endpoint)
+- `8a1317a7468aa3ad86e997d08f3f31cb` (der chatglm.cn X-Sign-HMAC-Secret!)
+
+### Das fehlende Node-Projekt (gefunden!)
+
+**xiaoY233/GLM-Free-API** (63★, TypeScript/Node) — der große Node-Reverse für 智谱清言/chatglm.cn (nicht zu verwechseln mit izaart95-jpg/GLM-Free-API in Go für chat.z.ai). Vom Autor von Chat2API. Ursprung: **LLM-Red-Team/glm-free-api** (gelöscht nach Supply-Chain-Attack + Account-Ban; xiaoY233-Version ist bereinigt, v1.0.2 Feb 2025). Flow: `chatglm_refresh_token` (Cookies/LocalStorage) als Bearer, Multi-Account per Komma, Auto-Session-Cleanup, Zero-Think-Modelle, AI-Draw, Video, Gemini/Claude-Adapter. **Aber: Projekt ist eingestellt** — Nachfolger ist Chat2API (1570★, Node/Electron, GUI-Dashboard), dessen GLM-Adapter aber nur noch `glm-5.1` mapped (chatglm.cn/api, refresh_token).
+
+### Neue Funde (unbekannte + unterschätzte Repos)
+
+| Projekt | Stars | Backend | Sprache | Anmerkung |
+|---|---|---|---|---|
+| **linuxhsj/openclaw-zero-token** | **5169★** | ChatGPT/Claude/Gemini/DeepSeek/Qwen/Doubao/Kimi/**GLM CN+Intl**/Grok/MiMo | TypeScript | Fork von OpenClaw (Claude-Code-Klon): **Browser-Login statt API-Token**, treibt die offiziellen Web-UIs an. GLM-Web-Adapter inkl. glm-4-Think, Tool-Calling via Prompt-Injection (11/13 Modelle). Aktuellste große Lösung. Braucht laufenden Browser-Login (headless via Playwright-Profile) |
+| **Hello-Application-XH/HelloGML** | 331★ | **chatglm.cn** | TypeScript | **Cloudflare-Worker-2API**: OpenAI+Claude+Gemini-Protokoll, Tools/FC, reasoning_content, AI-Draw+Video, Multi-Account-Token-Pool (KV). **auto-Branch: Auto-Guest-Token-Beschaffung + Rotations-Pool ("unbegrenzt, 0 Wartung")** — ruft `user-api/guest/access` mit Sign-Secret ab |
+| lumingya/universal-web-api | 358★ | beliebige Website | Python | "Universal-Reverse": treibt eingeloggte Browser-Tabs an (ChatGPT/DeepSeek/Gemini/Claude/Kimi/Qwen/Grok/Doubao/Arena) → OpenAI/Anthropic-API. chatglm.cn via eigene Site-Workflows konfigurierbar |
+| kai648846760/opentoken | 11★ | DeepSeek/Qwen/Kimi/Doubao/**GLM Intl+CN**/Claude/GPT/Grok/MiMo + NIM/Manus/LiteLLM | Python | Lokaler OpenAI-Gateway; GLM-CN-Adapter **mit vollem Sign-Flow (X-Sign-HMAC, Exp-Groups, Assistant-ID-Map)**; Modell-Discovery teils via **Camoufox** (Anti-Fingerprint-Browser). Aktiv gepflegt (Juni) |
+| hyqibot/token-free-openclaw | 121★ | wie openclaw-zero-token | Python | "永费" OpenClaw-Variante (ChatGLM inkl.), Zero-Token-Gateway-Server |
+| linuxhsj/WebModel | 81★ | Web-UIs | TypeScript | Vorgänger/Versuchslabor von openclaw-zero-token |
+| andeya/token-free-gateway | 48★ | u.a. GLM | TypeScript | leichter OpenAI-Gateway, GLM-Web-Client inkl. |
+| zh2673-git/hot-apis | 12★ | DeepSeek/Kimi/Metaso/Doubao/Qwen/**ChatGLM**/MiniMax | Python | Multi-Reverse mit GLM bis glm-5.1-plus, CoT-Ausgabe |
+| t479842598/glm2api-manage | 14★ | chatglm.cn | Python | glm2api + Management-Layer |
+| lm175/rev-chatglm | 2★ | chatglm.cn | Python | früher chatglm-reverse (März 2025, eingestellt) |
+| DD-MASTERT/AI-Girlfriend-Desktop-Pet | 233★ | chatglm.cn + kimi + deepseek | Python | Desktop-Pet nutzt Web-Tokens (alte glm4.py) |
+| Trashwbin/MultiAI-Answer-cx | 60★ | chatglm.cn + Andere | TypeScript | Prüfungs-Assistent via Multi-Modell-Voting (chatglm-Provider drin) |
+| PancrePal-xiaoyibao / gongxings/ai-creator / nextai-translator / geo-tai/node / ai-shifu/ChatALL | 198-24972★ | chatglm.cn nebenbei | versch. | Anwendungen mit eingebautem chatglm-Web-Client (nur Referenz) |
+| hyqibot/..., forsakenkraken/glm2api, Tozix/free-glm-api, EnderWolf006/glm-free-api-worker, hanxin1997/* | 0★ | versch. | versch. | Fork-Wüste des toten LLM-Red-Team-Originals (Worker-Deployments, Fixes) |
+
+### 💎 Live-Verifikation im Codespace (diese Session!)
+
+Ich habe den kompletten Guest-Flow von chatglm.cn **hier im Codespace nachgebaut und verifiziert**:
+
+1. `POST chatglm.cn/chatglm/user-api/guest/access` → mit `X-Sign` (MD5 von `{timestamp}-{nonce}-{SECRET}`, Timestamp mit Quersummen-Checksumme an Stelle L-2) → liefert **refresh_token + access_token + user_id** — funktioniert ohne Browser, ohne Login, sofort und unbeschränkt wiederholbar
+2. `POST /user-api/user/refresh` (Bearer refresh_token) → frischer access_token
+3. `POST /backend-api/assistant/stream` (assistant_id `65940acff94777010aa6b796`, model `glm-5`) → **SSE-Antwort korrekt** (17×23=391, Model `moe_47` im Finish-Part)
+
+Damit ist bewiesen: **Guest-Pool-2-API ist vom Codespace aus machbar** — genau der Mechanismus, den HelloGMLs auto-Branch produktiv nutzt. Known-Good-Werte: SIGN_SECRET `8a1317a7468aa3ad86e997d08f3f31cb` (auch in opentoken/Chat2API/HelloGML identisch), Exp-Groups-Header, Assistant-ID-Map (glm-5/glm-4-plus: `65940acff94777010aa6b796`, glm-4-think/-zero: `676411c38945bbc58a905d31`).
+
+### Finale Rangliste (nur inoffiziell, unlimited ohne RPD, opencode-tauglich)
+
+1. **XxxXTeam/glm2api** (123★) — chatglm.cn, Guest-Mode + eigener refresh_token, `-think`-Varianten, Image-Gen, aktivste Codebasis. **Bester Kandidat.**
+2. **HelloGML** (331★, auto-Branch) — chatglm.cn als Cloudflare-Worker mit Auto-Guest-Pool; Deployment auf CF statt Codespace möglich
+3. **openclaw-zero-token** (5169★) — mächtigste Multi-Web-Lösung (GLM CN+Intl), braucht aber Browser-Login-Pflege; eher Claude-Code-als-opencode-Workflow
+4. **xiaoY233/Chat2API** (1570★) — Node-Nachfolger des gesuchten Node-Projekts; GLM-Adapter aktuell nur glm-5.1, aber GUI + aktive Pflege
+5. **opentoken** (11★) — unterschätzt: sauberer GLM-CN-Adapter mit Sign-Flow + Camoufox-Fallback
+6. **hot-apis** (12★) — GLM bis 5.1-plus in einfachem Python
+
+**Nicht empfohlen:** oxalpha (Turnstile-Limit 2/Tag), cto.new (keine Tool-Calls), AutoClaw-Bridgen (OAuth gedrosselt), Coding-Plan-Abo (nicht gratis), Chat2API-GLM allein (nur 5.1 gemappt).
+
 
