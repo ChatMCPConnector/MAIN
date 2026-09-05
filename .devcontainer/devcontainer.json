@@ -9,25 +9,7 @@
   "containerEnv": {
     "TZ": "Europe/Istanbul"
   },
-  "forwardPorts": [
-    3000,
-    8000,
-    8080
-  ],
-  "portsAttributes": {
-    "3000": {
-      "label": "Web App",
-      "onAutoForward": "notify"
-    },
-    "8000": {
-      "label": "Python Server",
-      "onAutoForward": "notify"
-    },
-    "8080": {
-      "label": "Web Server",
-      "onAutoForward": "notify"
-    }
-  },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
   "customizations": {
     "vscode": {
       "settings": {
@@ -41,6 +23,5 @@
       ]
     }
   },
-  "postCreateCommand": "bash .devcontainer/setup.sh",
   "postStartCommand": "git pull --rebase --autostash origin main 2>/dev/null || true"
 }
