@@ -7,7 +7,7 @@ Browserbasierte Ubuntu-Linux-Umgebung mit GitHub Codespaces.
 ## Enthalten
 
 - Ubuntu 24.04, Bash, Git, GitHub CLI, Docker, Python 3, Build-Werkzeuge
-- Ports 3000, 8000, 8080 · Zeitzone Europe/Istanbul
+- Ports 3000, 8000, 8080 · Zeitzone Europe/Berlin
 - opencode mit TokenRouter/GLM 5.3 (1M Kontext) — Config liegt in `.opencode/` im Repo
 
 ## Struktur

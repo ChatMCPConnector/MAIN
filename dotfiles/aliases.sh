@@ -1,6 +1,6 @@
 # MAIN-landscape Aliase: werden von .bashrc/.zshrc automatisch gesourced (siehe setup.sh)
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"
-export TZ="${TZ:-Europe/Istanbul}"
+export TZ="Europe/Berlin"
 
 alias save='./scripts/save.sh'
 alias auth='./scripts/auth.sh status'

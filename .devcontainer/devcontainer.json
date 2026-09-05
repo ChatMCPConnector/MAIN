@@ -7,7 +7,7 @@
   },
   "remoteUser": "vscode",
   "containerEnv": {
-    "TZ": "Europe/Istanbul"
+    "TZ": "Europe/Berlin"
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
   "customizations": {

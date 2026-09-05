@@ -53,11 +53,128 @@
           }
         }
       }
+    },
+    "xinjianya": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "XinJianYa (newapi)",
+      "options": {
+        "baseURL": "https://xn--kiv260fv3i.cn/v1",
+        "apiKey": "{file:~/.config/landscape/xinjianya.key}"
+      },
+      "models": {
+        "gpt-5.6-sol": {
+          "name": "GPT-5.6 Sol",
+          "reasoning": true,
+          "cost": {
+            "input": 2,
+            "output": 16,
+            "cache_read": 2
+          },
+          "options": {
+            "reasoningEffort": "max",
+            "textVerbosity": "high"
+          },
+          "variants": {
+            "none": {
+              "reasoningEffort": "none"
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            },
+            "max": {
+              "reasoningEffort": "max"
+            }
+          }
+        }
+      }
+    },
+    "glm2api": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "glm2api (chatglm.cn guest-pool)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8001/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "glm-5.3": {
+          "name": "GLM 5.3",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        },
+        "glm-5.3-think": {
+          "name": "GLM 5.3 Think",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "hellogml": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "HelloGML (chatglm.cn worker)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "apiKey": "sk-test-local-1"
+      },
+      "models": {
+        "glm-5.3": {
+          "name": "GLM 5.3",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        },
+        "glm-5.3-think": {
+          "name": "GLM 5.3 Think",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "chat2apilocal": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Chat2API local (electron)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "GLM-5.3": {
+          "name": "GLM 5.3",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        },
+        "GLM-5.3-Think": {
+          "name": "GLM 5.3 Think",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        }
+      }
     }
   },
   "model": "tokenrouter/z-ai/glm-5.3-free",
   "small_model": "tokenrouter/z-ai/glm-5.3-free",
-  "disabled_providers": ["github-copilot"],
+  "disabled_providers": [
+    "github-copilot"
+  ],
   "default_agent": "build",
   "permission": "allow",
   "lsp": true,
