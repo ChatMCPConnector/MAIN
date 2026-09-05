@@ -24,7 +24,8 @@ done
 mkdir -p "${profile_dir}" "${log_dir}"
 
 if ! pgrep -f "Xvfb ${display}( |$)" >/dev/null; then
-  Xvfb "${display}" -screen 0 1280x800x24 >"${log_dir}/xvfb.log" 2>&1 &
+  nohup Xvfb "${display}" -screen 0 1280x800x24 \
+    >"${log_dir}/xvfb.log" 2>&1 </dev/null &
 fi
 
 for _ in {1..50}; do
@@ -37,23 +38,23 @@ if [[ ! -S "/tmp/.X11-unix/X${display#:}" ]]; then
 fi
 
 if ! ss -ltn | grep -q '127.0.0.1:5920'; then
-  x11vnc -display "${display}" -forever -shared -nopw -localhost -rfbport 5920 \
-    >"${log_dir}/x11vnc.log" 2>&1 &
+  nohup x11vnc -display "${display}" -forever -shared -nopw -localhost -rfbport 5920 \
+    >"${log_dir}/x11vnc.log" 2>&1 </dev/null &
 fi
 
 if ! ss -ltn | grep -q ':6082'; then
-  websockify --web=/usr/share/novnc 6082 localhost:5920 \
-    >"${log_dir}/novnc.log" 2>&1 &
+  nohup websockify --web=/usr/share/novnc 6082 localhost:5920 \
+    >"${log_dir}/novnc.log" 2>&1 </dev/null &
 fi
 
 if ! ss -ltn | grep -q '127.0.0.1:9222'; then
-  DISPLAY="${display}" "${chromium}" \
+  nohup env DISPLAY="${display}" "${chromium}" \
     --no-sandbox \
     --disable-dev-shm-usage \
     --remote-debugging-address=127.0.0.1 \
     --remote-debugging-port=9222 \
     --user-data-dir="${profile_dir}" \
-    "${start_url}" >"${log_dir}/chromium.log" 2>&1 &
+    "${start_url}" >"${log_dir}/chromium.log" 2>&1 </dev/null &
 fi
 
 for _ in {1..100}; do
