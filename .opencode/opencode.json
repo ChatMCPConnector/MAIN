@@ -20,6 +20,7 @@
     }
   },
   "model": "tokenrouter/z-ai/glm-5.3-free",
+  "disabled_providers": ["github-copilot"],
   "default_agent": "build",
   "permission": "allow",
   "lsp": true,
