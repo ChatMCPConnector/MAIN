@@ -157,4 +157,17 @@ Damit ist bewiesen: **Guest-Pool-2-API ist vom Codespace aus machbar** — genau
 
 **Kurzfiat:** Rang 1 (glm2api) im Codespace betreiben — Guest-Mode läuft sofort (live verifiziert), dein refresh_token in `token.txt` für volle Power + `-think`-Modelle. Rang 2 (HelloGML) als Cloudflare-Worker-Alternative, wenn du 24/7-Betrieb ohne laufenden Codespace willst. Rang 9 (Go) nur mit eigenem z.ai-JWT.
 
+## Zuordnung: die beiden ursprünglichen Projekte des Users
+
+- **Go (Original):** `izaart95-jpg/GLM-Free-API` (80★, chat.z.ai, Guest + `reasoning_effort` high/max)
+- **Node (Original):** `xiaoY233/GLM-Free-API` (63★, chatglm.cn, `chatglm_refresh_token`, Zero-Think) — **eingestellt**; direkter Nachfolger vom selben Autor: **xiaoY233/Chat2API** (Rang 3, 1570★)
+
+**Rang 1 (XxxXTeam/glm2api) und Rang 2 (HelloGML) sind komplett eigenständig** — eigene Codebasen, eigene Autoren, keine Code-Verwandtschaft mit den beiden Originalen. Gemeinsam ist nur das Reverse-Engineering-Wissen (Endpoints + Sign-Secret), weil alle dieselbe Website (chatglm.cn) analysieren.
+
+## Nächste Schritte (offen, später fortsetzen)
+
+1. Rang 1 (glm2api) im Codespace aufsetzen: `uv` + Guest-Mode live testen, danach eigenes refresh_token in `token.txt`
+2. Optional Rang 2 (HelloGML) zusätzlich als Cloudflare-Worker deployen (24/7 ohne Codespace)
+3. Anbindung an opencode via `@ai-sdk/openai-compatible` (localhost:8000/v1), `-think`-Modelle für max reasoning
+
 
