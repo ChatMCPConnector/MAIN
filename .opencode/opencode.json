@@ -15,6 +15,13 @@
             "context": 1000000,
             "output": 8192
           }
+        },
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
+          "name": "Nemotron 3 Nano Omni 30B (free)",
+          "limit": {
+            "context": 1000000,
+            "output": 16384
+          }
         }
       }
     }
