@@ -126,15 +126,35 @@ Ich habe den kompletten Guest-Flow von chatglm.cn **hier im Codespace nachgebaut
 
 Damit ist bewiesen: **Guest-Pool-2-API ist vom Codespace aus machbar** — genau der Mechanismus, den HelloGMLs auto-Branch produktiv nutzt. Known-Good-Werte: SIGN_SECRET `8a1317a7468aa3ad86e997d08f3f31cb` (auch in opentoken/Chat2API/HelloGML identisch), Exp-Groups-Header, Assistant-ID-Map (glm-5/glm-4-plus: `65940acff94777010aa6b796`, glm-4-think/-zero: `676411c38945bbc58a905d31`).
 
-### Finale Rangliste (nur inoffiziell, unlimited ohne RPD, opencode-tauglich)
+### Finale geordnete Rangliste (nur inoffizielle Web-Reverse, unlimited, opencode-tauglich)
 
-1. **XxxXTeam/glm2api** (123★) — chatglm.cn, Guest-Mode + eigener refresh_token, `-think`-Varianten, Image-Gen, aktivste Codebasis. **Bester Kandidat.**
-2. **HelloGML** (331★, auto-Branch) — chatglm.cn als Cloudflare-Worker mit Auto-Guest-Pool; Deployment auf CF statt Codespace möglich
-3. **openclaw-zero-token** (5169★) — mächtigste Multi-Web-Lösung (GLM CN+Intl), braucht aber Browser-Login-Pflege; eher Claude-Code-als-opencode-Workflow
-4. **xiaoY233/Chat2API** (1570★) — Node-Nachfolger des gesuchten Node-Projekts; GLM-Adapter aktuell nur glm-5.1, aber GUI + aktive Pflege
-5. **opentoken** (11★) — unterschätzt: sauberer GLM-CN-Adapter mit Sign-Flow + Camoufox-Fallback
-6. **hot-apis** (12★) — GLM bis 5.1-plus in einfachem Python
+**Kriterien:** inoffiziell (kein offizielles Produkt/Abo) · parsen chatglm.cn / chat.z.ai über Browser-Tokens (refresh_token/JWT/Guest) · kein RPD-Hardlimit · OpenAI-kompatibel für opencode.
 
-**Nicht empfohlen:** oxalpha (Turnstile-Limit 2/Tag), cto.new (keine Tool-Calls), AutoClaw-Bridgen (OAuth gedrosselt), Coding-Plan-Abo (nicht gratis), Chat2API-GLM allein (nur 5.1 gemappt).
+| Rang | Projekt | ★ | Backend | Sprache | Auth | Unlimited-Mechanik | Max-Reasoning | Status |
+|---|---|---|---|---|---|---|---|---|
+| **1** | **XxxXTeam/glm2api** | 123 | chatglm.cn | Python (uv) | Guest-Auto + `refresh_token` (token.txt-Pool, Auto-Refresh mit Write-Back) | Guest-Pool nach Concurrency, Re-Fetch bei Fehler, Account-Rotation | `glm-5.3-think`-Varianten, zero-Mode via `reasoning_effort`, deep-research | aktiv (Aug 23) |
+| **2** | **HelloGML** (auto-Branch) | 331 | chatglm.cn | TS (Cloudflare Worker) | API-Key lokal, Guest-Auto-Auffüllung | Auto-Guest-Pool + Rotation (KV), „unbegrenzt, 0 Wartung"; läuft gratis 24/7 auf CF statt im Codespace | reasoning_content, Zero-Think, AI-Draw+Video | auto-Branch Beta; main seit Mai pausiert |
+| **3** | **xiaoY233/Chat2API** | 1570 | chatglm.cn + z.ai + 7 Provider | Node (Electron-GUI) | refresh_token je Provider | Multi-Account + Model-Mapping | Think-Ausgabe adaptiert | aktiv (Mai) — GLM-Adapter mappt nur glm-5.1 |
+| **4** | **kai648846760/opentoken** | 11 | GLM CN + GLM Intl + 14 Provider | Python | refresh_token + Camoufox-Fallback | Credential-Store, Modell-Discovery-Cache | zero/think-Modus im Adapter, sauberster Sign-Flow | aktiv (Jun) — unterschätzt |
+| **5** | **ForgetMeAI/FreeGLMKimiAPI** | 69 | z.ai + chatglm.cn + Kimi | Node | JWT (z.ai) / refresh_token (chatglm) | Multi-Account, Browser-Fallback gegen Anti-Bot | think-Modelle, Tool-Use-Emulation | aktiv (Jun) |
+| **6** | **zh2673-git/hot-apis** | 12 | ChatGLM + 6 weitere | Python | Token (.env) | simpel, CoT-Ausgabe | GLM bis glm-5.1-plus | Apr, ruhig |
+| **7** | **spf0209/FreeAI-Gateway** | 33 | chatglm.cn + z.ai + 6 weitere | Node/TS | refresh_token je Provider | Web-GUI, Provider-Failover | ja | Mär, ruhig |
+| **8** | **xiaoY233/GLM-Free-API** | 63 | chatglm.cn | Node | `chatglm_refresh_token`, Multi per Komma | Auto-Session-Cleanup | Zero-Think, 沉思, AI-Draw | **eingestellt** — das gesuchte Node-Original, nur Referenz |
+| **9** | **izaart95-jpg/GLM-Free-API** | 80 | chat.z.ai | Go | Guest (`x-preview-l`) + JWT | Session-Pool, Vision | `reasoning_effort` high/max, Agent-Mode | sehr aktiv — z.ai-Guest aktuell 405 → eigenes JWT nötig |
+| 10 | linuxhsj/openclaw-zero-token | 5169 | GLM CN+Intl + 12 Web-UIs | TS | **Browser-Login** (Playwright) | Web-Session statt Token | glm-4-Think, Tool-Calling per Prompt-Injection (11/13) | aktiv (Aug) — Claude-Code-Workflow, Browser-Pflege |
+| 11 | lumingya/universal-web-api | 358 | beliebige Site (chatglm konfigurierbar) | Python | Browser-Login (Tab-Pool) | Tab-Rotation, Request-History | DOM-Stream-Extraktion | aktiv (Sep) — Universal, pro Site Workflow nötig |
+| 12 | hyqibot/token-free-openclaw | 121 | wie openclaw-zero-token | Python | Browser/Guest | Zero-Token-Gateway | — | Aug |
+| 13 | andeya/token-free-gateway | 48 | u.a. GLM | TS | GLM-Web-Client | leicht | — | Apr |
+| 14 | linuxhsj/WebModel | 81 | Web-UIs | TS | Browser | — | — | Apr — Versuchslabor von #10 |
+| 15 | D3-vin/GLM-ZAI-2API | 39 | chat.z.ai | Go | JWT | Account-Pool | ja | Jul |
+| 16 | t479842598/glm2api-manage | 14 | chatglm.cn | Python | wie glm2api | Management-Layer über #1 | wie #1 | Jul |
+| 17 | Godde3s/glm-free-api | 2 | chat.z.ai | Go | JWT-Pool | Round-Robin + 429-Failover | ja | aktiv — Mini-Fork von #9 |
+| 18 | lm175/rev-chatglm | 2 | chatglm.cn | Python | Cookie/Token | — | — | tot (Mär 2025) |
+| 19 | uicaster/GLM-WebApi | 0 | chatglm.cn | Python | refresh_token | — | — | Win-GUI, simpel |
+| 20 | Fork-Wüste (EnderWolf006/hanxin1997/Tozix/drq1/lxc-rgb/BPh-yang …) | 0 | chatglm.cn/z.ai | TS | je Fork | Worker-Deployments, Fixes | — | Wartung ohne Ende |
+
+**Bewusst nicht gerankt (erfüllen die Kriterien nicht):** AutoClaw-Brücken (glmproxy/OmniClaw/autoclaw2api — offizielles Zhipu-Produkt, OAuth gedrosselt), GLM Coding Plan + ACP-Agent (Abo), oxalpha (Turnstile, 2 Msg/Tag), cto.new (keine Tool-Calls), Puter.js (Browser-only), WindsurfAPI/sub2api/CLIProxyAPI (Subscription-basiert), DanyAPI (kein GLM), FreeAI-Gateway-Chips wie ChatLuna/one-api (nur offizielle APIs).
+
+**Kurzfiat:** Rang 1 (glm2api) im Codespace betreiben — Guest-Mode läuft sofort (live verifiziert), dein refresh_token in `token.txt` für volle Power + `-think`-Modelle. Rang 2 (HelloGML) als Cloudflare-Worker-Alternative, wenn du 24/7-Betrieb ohne laufenden Codespace willst. Rang 9 (Go) nur mit eigenem z.ai-JWT.
 
 
