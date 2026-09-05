@@ -32,6 +32,7 @@ cmd_lock() {
   mkdir -p "$stage/files"
   [ -f "$HOME/.config/landscape/pat" ] && { cp "$HOME/.config/landscape/pat" "$stage/files/pat"; found=1; }
   [ -f "$HOME/.config/landscape/tokenrouter.key" ] && { cp "$HOME/.config/landscape/tokenrouter.key" "$stage/files/tokenrouter-key"; found=1; }
+  [ -f "$HOME/.config/landscape/bananarouter.key" ] && { cp "$HOME/.config/landscape/bananarouter.key" "$stage/files/bananarouter-key"; found=1; }
   [ -f "$HOME/.local/share/opencode/auth.json" ] && { cp "$HOME/.local/share/opencode/auth.json" "$stage/files/opencode-auth.json"; found=1; }
   [ -f ".env" ] && { cp ".env" "$stage/files/env"; found=1; }
   [ "$found" -eq 1 ] || { echo "Nichts zu sichern (kein PAT, kein opencode-Login, kein .env)."; exit 1; }
@@ -71,6 +72,10 @@ cmd_unlock() {
   if [ -f "$stage/files/tokenrouter-key" ] && [ ! -f "$HOME/.config/landscape/tokenrouter.key" ]; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/tokenrouter-key" "$HOME/.config/landscape/tokenrouter.key" && chmod 600 "$HOME/.config/landscape/tokenrouter.key"
     echo "    TokenRouter-Key wiederhergestellt."
+  fi
+  if [ -f "$stage/files/bananarouter-key" ] && [ ! -f "$HOME/.config/landscape/bananarouter.key" ]; then
+    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/bananarouter-key" "$HOME/.config/landscape/bananarouter.key" && chmod 600 "$HOME/.config/landscape/bananarouter.key"
+    echo "    BananaRouter-Key wiederhergestellt."
   fi
   if [ -f "$stage/files/env" ] && [ ! -f ".env" ]; then
     cp "$stage/files/env" ".env" && chmod 600 ".env"
