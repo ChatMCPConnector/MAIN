@@ -47,8 +47,52 @@ Ziel: GLM 5.3 mit max reasoning (Zero/Think-Modus) kostenlos, bevorzugt über ch
 - **chatglm.cn refresh_token**: Login → F12 → Application → Local Storage → `chatglm_refresh_token` (oder Cookies). Alternativ via Network-Tab: `/user-api/user/refresh` → `Authorization: Bearer ...`
 - **chat.z.ai JWT**: Login → F12 → Console → `localStorage.getItem('token')`
 
-## Verwandte Große (nicht GLM-spezifisch, aber relevant)
+## Zweite Suchrunde (breit, allgemein für GLM — Sep 2026)
 
-- songquanpeng/one-api (36.746★) — LLM-API-Management/-Gateway
-- xiaoY233/Chat2API — Electron-Original von FreeAI-Gateway (GLM/Kimi/Qwen/MiniMax/DeepSeek/Z.ai/Perplexity)
-- dwgx/WindsurfAPI (3k★) — Windsurf/Devin-Modelle als OpenAI-API (inkl. GLM)
+### Neue Top-Funde
+
+| Projekt | Stars | Backend / Quelle | Sprache | Anmerkung |
+|---|---|---|---|---|
+| **eequaled/GLM_proxy** (`npm: glmproxy`) | 21★ | **AutoClaw** (autoclaw.z.ai Desktop-App) | Node | Liest Auth direkt aus AutoClaws Token-Datei; OpenAI **und** Anthropic-Format; Tool-Calls; Claude Code/Cursor/OpenCode-Integrationen; v2.6.0, aktiv (Sep 4) |
+| **sitimas9/autoclaw2api** | 0★ | AutoGLM/Z.ai (AutoClaw backend) | Python/FastAPI | Gratis GLM-5.2, GLM-5 Turbo, DeepSeek via Google-SSO-Token-Pool (24h Auto-Refresh). OAuth-Route wurde Aug 26 deprecated → Token-Import manuell aus Desktop-App nötig; Chat-Completions Upstream LIVE |
+| **guell11/OmniClaw-GLM-Proxy** | 3★ | AutoClaw | Node | OpenAI + Responses + Anthropic, Browser-Console, Tool-Calls, Model-Routing — Claude Code/Codex/OpenCode-ready |
+| **stefandevo/glm-acp-agent** | 46★ | **GLM Coding Plan** (api.z.ai/api/coding/paas/v4) | TS | ACP-Agent (Zed/DevFlow): GLM-5.3, 5.3-Flash, 5 Turbo, 4.7 mit Thinking (`reasoning_content` → agent_thought_chunk), Vision via MCP — **benötigt Coding-Plan-Abo (nicht gratis)** |
+| **1837620622/cto-new-openai-proxy** | 38★ | **cto.new** (Engine Labs) | Go | GPT-5.4 + **GLM-5.1** gratis über Account-Pool (Clerk-Cookie-Refresh, Dashboard). **Kein Function Calling** (Upstream ist eigener Agent) → nur Plan-Mode, kein Build-Mode |
+| **gravixrdp/oxalpha-api** | 0★ | **oxalpha.com** | Python | FastAPI-Proxy auf oxalpha-Web-Chat (`z-ai/glm-5.3-flash` via OpenRouter/GMICloud upstream) |
+| **loxalpha.com selbst** | — | oxalpha.com/api/chat | — | ⚠️ **Live getestet**: funktioniert ohne Key (XSRF-Session), liefert `z-ai/glm-5.3-flash` **mit reasoning-Feld** im OpenRouter-SSE-Format — aber **Cloudflare-Turnstile nach 2 Nachrichten/Tag** (Checkpoint 3) → für Agent-Nutzung unbrauchbar, nur gelegentliche manuelle Nutzung |
+| **dwgx/WindsurfAPI** | 2964★ | Windsurf/Devin Desktop | JS | 100+ Modelle (inkl. GLM) als OpenAI/Anthropic/Gemini-API — braucht Windsurf-Subscription |
+| **Wei-Shaw/sub2api** | 40.541★ | Claude/OpenAI/Gemini/Grok-Subscriptions | — | Ökosystem-Referenz für Subscription-2-API (kein GLM native) |
+| **router-for-me/CLIProxyAPI** | 50.551★ | Antigravity, Codex, Claude Code, Grok Build | — | General-Proxy-Ökosystem (GLM nicht primary) |
+| FANATFANATA/DanyAPI | 26★ | deepseek+qwen | Python | public hosted instance `https://danyapi.cloudpub.ru/v1/` (kein GLM) |
+| LyubomirT/intense-rp-next | 197★ | LLM-Web-UIs (inkl. GLM) | Python | Desktop-App + OpenAI-API für SillyTavern (Rollenpiel-Fokus) |
+| sebattfg/ZeroScript-Free | 213★ | ChatGPT/DeepSeek/Gemini/**Kimi/GLM**/Qwen/Arena/Meta | JS | Roblox-Studio-Agent (Browser-Extension + Bridge) — Nische |
+| sunflower0305/claude-proxy | 34★ | DeepSeek/Qwen/GLM/MiniMax | — | Claude-Code-Proxy für eigene API-Keys |
+| 0xgetz/mistral-bridge | 12★ | OpenAI→Mistral-Konversation für GLM-5.2 | — | Format-Übersetzer |
+| rajakumar865465/Free-Claude-Code-Gateway | 6★ | Kimi/GLM/DeepSeek/OpenRouter | — | "Claude Code free" |
+| Draxnyn/Puter.js-in-OpenCode | 0★ | **Puter.js** (GLM 4.7 Flash „unlimited") | — | Puter als Free-GLM-Quelle in OpenCode |
+| ramkrishna3245/glm52-free-chat | 2★ | Puter | — | Browser-only Free-GLM-5.2-Chat |
+| zyroxteamuk/ZyroxZLM | 0★ | GLM-4.5/4.6/4.7 | Node | API-Proxy + Live-Dashboard |
+| sabyaghosh/glm-free-api-admin-panel | 0★ | chat.z.ai | Go+Next | Fork-Stil von GLM-Free-API + Admin-Panel |
+| lothiann/Free-ZAI-Api | 3★ | z.ai | Python | neu (Sep 3) |
+| Jasmyn-X/glm-coding-grabber | 5★ | — | Userscript | 智谱 GLM Coding Plan 自动抢购 (Flash-Sale-Bot) — Coding-Plans sind knapp! |
+| MeIotCOM/CodingPlanQuota | 17★ | — | — | Quota-Checker für GLM-Coding-Plan (5h/Wochen-Reset) |
+| OLmatter/llm-api-ledger | 21★ | — | — | Coding-Plan-Verbrauchs-Benchmark (Herstellerangabe vs. Messung) |
+
+### Erkenntnisse Runde 2
+
+1. **Neuer GLM-Kanal: AutoClaw** (autoclaw.z.ai, Zhipus eigenes Desktop-Coding-Tool mit GLM-5.3). Drei Brücken (glmproxy, autoclaw2api, OmniClaw) machen daraus lokale APIs — teils mit Tool-Calls. Voraussetzung: AutoClaw-Login (Google-SSO), OAuth-Auto-Registrierung wurde Aug 26 von Z.ai gedrosselt (405), Token-Import aus der Desktop-App nötig.
+2. **oxalpha.com** ist ein Gratis-Webchat, der z-ai/glm-5.3-flash über OpenRouter-Freikontingente durchreicht — inkl. reasoning-Feld. Aber Cloudflare-Turnstile nach 2 Messages/Tag = für Agents tot.
+3. **cto.new** bietet gratis GLM-5.1 (+GPT-5.4) — Account-Pool machbar, aber kein Function Calling → für opencode Build-Mode ungeeignet, Plan-Mode ok.
+4. **GLM Coding Plan** (Zhipu-Abo) ist die offizielle, stabile Route (glm-acp-agent 46★) — kostet aber (~3€/Monat lite) und ist oft ausverkauft (daher Grabber-Bots). Kein „Free".
+5. **Puter.js** als „unlimited free GLM"-Quelle taucht mehrfach auf (GLM 4.7 Flash) — Browser-only, Qualität/Rate-Limit unklar.
+6. **Große Ökosysteme** (sub2api 40k★, CLIProxyAPI 50k★, WindsurfAPI 3k★) zeigen das Muster Subscription→API, sind aber für GLM-free nicht direkt nutzbar (Windsurf braucht eigenes Abo).
+
+### Aktualisierte Gesamtwertung (GLM gratis + reasoning + Agent-tauglich)
+
+1. **XxxXTeam/glm2api** (chatglm.cn, Guest + refresh_token, think/zero-Mode) — weiter Platz 1 für dein Ziel
+2. **AutoClaw-Bridgen** (glmproxy/OmniClaw) — GLM-5.3 mit Tool-Calls, braucht AutoClaw-Account (Google-SSO, gratis) — stärkster Neuzugang, prüfenswert
+3. izaart95-jpg/GLM-Free-API (chat.z.ai) — JPEG-only Guest tot (405), mit eigenem JWT noch ok
+4. FreeGLMKimiAPI / FreeAI-Gateway — chatglm.cn-Refresh-Token-Support als Zweitverwertung ok
+5. cto.new-Pool — kein Tool-Calling, nur Plan-Mode
+6. oxalpha — Turnstile-Limit, nur manuell
+
