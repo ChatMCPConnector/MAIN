@@ -1,0 +1,53 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "xinjianya": {
+      "name": "XinJianYa (newapi)",
+      "api": "openai",
+      "options": {
+        "baseURL": "https://xn--kiv260fv3i.cn/v1",
+        "apiKey": "sk-lBJcWX7m0JXMvxATwtAOZfkY6KTvkhtjEU3VlTtyCcW5Nz1K"
+      },
+      "models": {
+        "gpt-5.6-sol": {
+          "name": "GPT-5.6 Sol",
+          "reasoning": true,
+          "options": {
+            "reasoningEffort": "max",
+            "textVerbosity": "high"
+          },
+          "variants": {
+            "none": { "reasoningEffort": "none" },
+            "low": { "reasoningEffort": "low" },
+            "medium": { "reasoningEffort": "medium" },
+            "high": { "reasoningEffort": "high" },
+            "xhigh": { "reasoningEffort": "xhigh" },
+            "max": { "reasoningEffort": "max" }
+          }
+        }
+      }
+    }
+  }
+}
+
+
+
+API Endpoints
+
+Endpoint 1
+https://new.xinjianya.top
+
+Endpoint 2
+https://api.xinjianya.top
+
+Endpoint 3
+https://key.xinjianya.top
+
+Endpoint 4
+https://zt.xinjianya.top
+
+Endpoint 5
+https://docs.xinjianya.top
+
+Endpoint 6
+https://xn--65qx0xmvyrrp.xn--kiv260fv3i.cn

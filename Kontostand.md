@@ -280,3 +280,146 @@ Token -> API -> lokaler Cache -> Zwei-Werte-Anzeige
 ```
 
 Damit ist die Anzeige ressourcenschonend, minimal und unabhaengig von einem dauerhaft geoeffneten Browser.
+
+## Konkrete Schritte fuer einen browserlosen Abruf
+
+Das Ziel ist ein Abruf mit `fetch()` ohne dauerhaft laufenden Browser. Die bevorzugte Variante verwendet den System Access Token. Cookies sind nur die zweite Wahl, da sie normalerweise an eine angemeldete Sitzung gebunden sind, ablaufen und erneuert werden muessen.
+
+### 1. Exakte API-Anfrage ermitteln
+
+Einmalig wird im angemeldeten Browser die erfolgreiche Anfrage an `/api/user/self` im Network-Tab der DevTools untersucht. Dabei sind folgende Angaben zu erfassen:
+
+- vollstaendiger API-Host
+- vollstaendige URL
+- HTTP-Methode
+- erforderliche Request-Header
+- Struktur der JSON-Antwort
+- Bedeutung und Einheit von `quota` und `used_quota`
+
+Es sollen nicht unbesehen alle Browser-Header uebernommen werden. Entscheidend ist, welche Authentifizierung und welche wenigen Header die offizielle API tatsaechlich benoetigt.
+
+### 2. System Access Token testen
+
+Anschliessend wird dieselbe Anfrage ausserhalb des Browsers mit dem offiziellen System Access Token ausgefuehrt:
+
+```js
+const response = await fetch("https://API-HOST/api/user/self", {
+  headers: {
+    Authorization: `Bearer ${process.env.SYSTEM_ACCESS_TOKEN}`,
+    Accept: "application/json",
+  },
+});
+
+if (!response.ok) {
+  throw new Error(`API request failed: HTTP ${response.status}`);
+}
+
+const data = await response.json();
+console.log(data);
+```
+
+Falls die API einen anderen dokumentierten Token-Header verwendet, muss dieser statt `Authorization: Bearer` eingesetzt werden. Der Header darf nicht geraten werden, sondern muss aus der offiziellen Dokumentation oder einer bereits funktionierenden Token-Anfrage hervorgehen.
+
+### 3. Cloudflare- und API-Fehler unterscheiden
+
+Die Antwort muss sorgfaeltig ausgewertet werden:
+
+- `200` mit JSON: Der browserlose Abruf funktioniert.
+- `401`: Der Token fehlt, ist ungueltig oder abgelaufen.
+- `403` von der API: Dem Token fehlt wahrscheinlich die erforderliche Leseberechtigung.
+- `403` von Cloudflare: Die Anfrage wurde abgefangen, bevor sie die API erreichte.
+- HTML statt JSON: Wahrscheinlich wurde eine Cloudflare-, Login- oder Fehlerseite geliefert.
+
+Eine robuste Inhaltspruefung kann so aussehen:
+
+```js
+const contentType = response.headers.get("content-type") ?? "";
+
+if (!response.ok) {
+  const body = await response.text();
+  throw new Error(
+    `HTTP ${response.status}, content-type=${contentType}, body=${body.slice(0, 200)}`
+  );
+}
+
+if (!contentType.includes("application/json")) {
+  throw new Error(`Expected JSON, received ${contentType}`);
+}
+
+const data = await response.json();
+```
+
+Tokens, Cookies und vollstaendige sicherheitsrelevante Header duerfen dabei nicht protokolliert werden.
+
+### 4. Cookie-Variante nur bei Bedarf
+
+Falls die API keine Token-Authentifizierung fuer diesen Endpunkt anbietet, kann eine legitim erzeugte Sitzung technisch per Cookie verwendet werden:
+
+```js
+const response = await fetch("https://API-HOST/api/user/self", {
+  headers: {
+    Accept: "application/json",
+    Cookie: process.env.ACCOUNT_COOKIE,
+  },
+});
+```
+
+Bei Node.js reicht `credentials: "include"` allein nicht aus. Anders als ein Browser besitzt ein einfacher Node-Prozess keine automatisch gefuellte Cookie-Jar und keine bestehende Anmeldung. Vor einer dauerhaften Cookie-Loesung muss deshalb geklaert werden:
+
+- wie das Cookie legitim erzeugt wird
+- wann das Cookie ablaeuft
+- wie die Sitzung erneuert wird
+- ob ein CSRF-Token erforderlich ist
+- ob die Sitzung an weitere Sicherheitsmerkmale gebunden ist
+- ob ein offizieller programmatischer Login-Endpunkt existiert
+
+Ein manuell aus den DevTools kopiertes Cookie eignet sich nur fuer einen kurzfristigen Test und nicht als dauerhafte Architektur.
+
+### 5. Umrechnung der API-Werte verifizieren
+
+Die sichtbaren Werte `4384.43` und `12.64` muessen mit der echten JSON-Antwort verglichen werden. Vor der Implementierung ist zu pruefen:
+
+- ob `used_quota` direkt dem Verbrauch entspricht
+- ob der Kontostand `quota`, `quota - used_quota` oder einem anderen Feld entspricht
+- ob die Rohwerte in Hundertstel-, Millionstel- oder einer anderen Einheit gespeichert werden
+
+Die Umrechnung darf erst nach diesem Vergleich fest implementiert werden, damit keine plausiblen, aber falschen Werte angezeigt werden.
+
+### 6. Collector und lokaler Cache
+
+Wenn die Token-Anfrage funktioniert, soll ein kleiner Node-Prozess:
+
+1. `/api/user/self` abrufen.
+2. HTTP-Status, Content-Type und Antwortstruktur validieren.
+3. `quota` und `used_quota` in die angezeigten Werte umrechnen.
+4. Den letzten erfolgreichen Stand atomar in eine lokale JSON-Datei schreiben.
+5. Bei Fehlern die letzten erfolgreichen Werte beibehalten.
+6. Den Abruf in einem angemessenen festen Intervall wiederholen.
+
+Beispiel fuer den lokalen Cache:
+
+```json
+{
+  "balance": 4384.43,
+  "usage": 12.64,
+  "updatedAt": "2026-09-05T20:30:00.000Z",
+  "status": "ok"
+}
+```
+
+Die sichtbare Ausgabe bleibt auf genau zwei Werte beschraenkt:
+
+```text
+Kontostand: 4384,43
+Verbrauch:    12,64
+```
+
+### 7. Empfohlene Reihenfolge
+
+1. Erfolgreiche Browser-Anfrage an `/api/user/self` vollstaendig analysieren.
+2. System Access Token mit derselben URL und den minimal erforderlichen Headern testen.
+3. Antwortfelder mit den sichtbaren Konto- und Verbrauchswerten vergleichen.
+4. Bei Erfolg den reinen `fetch()`-Collector mit lokalem Cache implementieren.
+5. Falls Cloudflare nur den Codespace blockiert, den Token aus einer anderen autorisierten Umgebung testen.
+6. Nur wenn keine Token-Authentifizierung moeglich ist, eine offizielle programmatische Sitzung mit Cookie-Jar verwenden.
+7. Chromium nur dann kurzzeitig zum Erzeugen oder Erneuern einer legitimen Sitzung starten, wenn kein vollstaendig browserloser Authentifizierungsweg existiert.
