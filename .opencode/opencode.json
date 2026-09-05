@@ -17,29 +17,6 @@
           }
         }
       }
-    },
-    "bananarouter": {
-      "npm": "file:.opencode/bananarouter-adapter",
-      "name": "BananaRouter",
-      "options": {
-        "apiKey": "{file:~/.config/landscape/bananarouter.key}"
-      },
-      "models": {
-        "glm-5.3-flash": {
-          "name": "GLM 5.3 Flash",
-          "limit": {
-            "context": 128000,
-            "output": 8192
-          }
-        },
-        "glm-5.3": {
-          "name": "GLM 5.3",
-          "limit": {
-            "context": 128000,
-            "output": 8192
-          }
-        }
-      }
     }
   },
   "model": "tokenrouter/z-ai/glm-5.3-free",
