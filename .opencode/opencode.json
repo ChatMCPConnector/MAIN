@@ -17,9 +17,46 @@
           }
         }
       }
+    },
+    "nvidia": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NVIDIA NIM",
+      "whitelist": [
+        "deepseek-ai/deepseek-v4-pro-0813",
+        "deepseek-ai/deepseek-v4-flash-0731",
+        "nvidia/nemotron-3-ultra-550b-a55b"
+      ],
+      "options": {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{file:~/.config/landscape/nvidia-nim.key}"
+      },
+      "models": {
+        "nvidia/nemotron-3-ultra-550b-a55b": {
+          "name": "Nemotron 3 Ultra 550B",
+          "limit": {
+            "context": 1000000,
+            "output": 8192
+          }
+        },
+        "deepseek-ai/deepseek-v4-flash-0731": {
+          "name": "DeepSeek V4 Flash 0731",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        },
+        "deepseek-ai/deepseek-v4-pro-0813": {
+          "name": "DeepSeek V4 Pro 0813",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        }
+      }
     }
   },
   "model": "tokenrouter/z-ai/glm-5.3-free",
+  "small_model": "tokenrouter/z-ai/glm-5.3-free",
   "disabled_providers": ["github-copilot"],
   "default_agent": "build",
   "permission": "allow",
