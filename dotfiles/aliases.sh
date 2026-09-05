@@ -5,7 +5,7 @@ export TZ="${TZ:-Europe/Istanbul}"
 alias save='./scripts/save.sh'
 alias auth='./scripts/auth.sh status'
 alias secrets='./scripts/secrets.sh status'
-alias oc='tmux new-session -A -s oc opencode'
+alias oc='opencode'
 alias st='git status -sb'
 alias ll='ls -lah'
 

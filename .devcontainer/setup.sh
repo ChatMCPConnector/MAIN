@@ -31,12 +31,6 @@ for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
   fi
 done
 
-echo "==> [landscape] tmux einrichten (Mausrad=Bild-auf/runter in TUIs)..."
-sudo apt-get install -y -qq tmux >/dev/null 2>&1 || true
-mkdir -p "$HOME/.config/tmux"
-[ -f "$HOME/.config/tmux/tmux.conf" ] || cp "$REPO_ROOT/dotfiles/tmux.conf" "$HOME/.config/tmux/tmux.conf"
-echo "    tmux.conf installiert. TUIs künftig starten mit: tmux opencode"
-
 echo "==> [landscape] Secrets entsperren (falls Bundle + Passphrase da)..."
 if [ -f "$REPO_ROOT/config/secrets.enc" ] && [ -n "${LANDSCAPE_PASSPHRASE:-}" ]; then
   bash "$REPO_ROOT/scripts/secrets.sh" unlock >/dev/null 2>&1 && echo "    Secrets automatisch wiederhergestellt." || echo "    WARN: Auto-Unlock fehlgeschlagen (falsche Passphrase?)."

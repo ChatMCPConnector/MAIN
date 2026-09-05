@@ -4,9 +4,14 @@
   "keybinds": {
     "messages_page_up": "pageup,ctrl+alt+b",
     "messages_page_down": "pagedown,ctrl+alt+f",
-    "messages_half_page_up": "ctrl+alt+u",
-    "messages_half_page_down": "ctrl+alt+d",
+    "messages_half_page_up": "up,ctrl+alt+u",
+    "messages_half_page_down": "down,ctrl+alt+d",
     "messages_line_up": "ctrl+alt+y",
-    "messages_line_down": "ctrl+alt+e"
+    "messages_line_down": "ctrl+alt+e",
+    "history_previous": "ctrl+up",
+    "history_next": "ctrl+down",
+    "input_move_up": "none",
+    "input_move_down": "none",
+    "session_parent": "<leader>up"
   }
 }
