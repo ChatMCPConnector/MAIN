@@ -1,35 +1,36 @@
 # Agent Instructions
 
-## Session Start
+## 1. Session-Start
 
-1. Lies `INFRASTRUCTURE.md` zu Beginn jeder Session vollstaendig, damit Aufbau, Persistenzregeln, Abhaengigkeiten und aktueller Infrastrukturzustand verstanden werden.
-2. Lies `INFRASTRUCTURE.md` vor jeder neuen Aenderung erneut vollstaendig und pruefe den dokumentierten Zustand gegen das aktuelle System. Prozess-IDs, offene Ports und lokale Sitzungen koennen veraltet sein.
-3. Pruefe nach jeder Aenderung, ob `INFRASTRUCTURE.md` aufgrund neuer oder geaenderter Infrastruktur, Abhaengigkeiten, Pfade, Dienste, Laufzeitdaten oder Persistenzanforderungen aktualisiert werden muss. Ziehe die Dokumentation im selben Arbeitsgang nach.
-4. Interpretiere einen fehlgeschlagenen Import oder einen fehlenden Befehl nicht automatisch als fehlende Installation. Suche zuerst in vorhandenen Caches, Paketpfaden und laufenden Prozessen.
+- Lies `INFRASTRUCTURE.md` einmal pro Session.
+- Kein Re-Read vor jedem Edit. Nur erneut lesen, wenn der Task Infrastruktur berührt (Browser, Ports, Display, Profile, Installationen, Dependencies, Persistenzpfade).
 
-## Infrastructure
+## 2. Was als Infrastruktur-Änderung zählt
 
-- `INFRASTRUCTURE.md` ist die zentrale Quelle fuer installierte Werkzeuge, Browser-Builds, Profile, Ports, Dienste und Infrastrukturentscheidungen.
-- Fuehre keine parallele agentspezifische Infrastrukturakte.
-- Dokumentiere nur verifizierte Zustaende und tatsaechlich ausgefuehrte Aenderungen.
-- Trenne klar zwischen Ist-Zustand, Planung und abgeschlossener Arbeit.
-- Aktualisiere `INFRASTRUCTURE.md` nach jeder verifizierten Infrastruktur-Aenderung.
-- Speichere keine Tokens, Cookies, Passwoerter oder andere Geheimnisse in der Dokumentation.
+Nur das ist eine Infrastruktur-Änderung:
 
-## Safety
+- neues/geändertes Tool, Version, Pfad, Port, Service, Profil,
+- neues/geändertes Setup- oder Startskript,
+- geänderte Persistenz- oder Sicherheitsregel.
 
-- Installiere nichts, bevor vorhandene Installationen und Caches geprueft wurden.
-- Beende keine fremden oder unerwarteten Prozesse ohne ausdrueckliche Freigabe.
-- Loesche oder ersetze keine Browserprofile, Caches oder Installationen ohne vorherige Bestandspruefung und Freigabe.
-- Veraendere keine nicht zugehoerigen Arbeiten im Git-Worktree.
-- Verwende fuer schwer rueckgaengig zu machende Aenderungen einen dokumentierten Rueckweg.
+Normale Code-, Doku- und Config-Edits sind keine Infrastruktur-Änderungen: keine Infra-Prüfung, kein Doku-Zwang, kein Extra-Commit.
 
-## Persistence
+## 3. Infrastructure
 
-- Alle fertigen Arbeiten muessen vollstaendig unter `/workspaces/MAIN` liegen und vom Repository erfasst werden, damit sie per Git-Push und Git-Pull in andere Codespaces gelangen.
-- Quellcode, Konfiguration, Skripte, Dokumentation, erforderliche Assets, produktiv benoetigte Daten und sonstige notwendige Bestandteile duerfen nach Abschluss nicht nur ausserhalb von `/workspaces/MAIN` existieren.
-- Testdaten, Experimente und temporaere Hilfsinhalte, die nicht zur fertigen Arbeit gehoeren, sollen direkt unter `/workspaces` bearbeitet werden.
-- Inhalte unter `/workspaces` ausserhalb von `/workspaces/MAIN` werden nicht durch dieses Repository gesichert und koennen bei einem neuen Codespace verloren gehen.
-- Wenn das produktive System Inhalte ausserhalb von `/workspaces/MAIN` benoetigt oder sich von dort versorgt, muessen diese Inhalte vollstaendig nach `/workspaces/MAIN` umgezogen, reproduzierbar eingebunden und vom Repository erfasst werden.
-- Lokale Inhalte unter `/home/vscode` gelten nicht als automatisch portabel oder gesichert.
-- Wenn ein lokaler Zustand fuer neue Codespaces notwendig ist, uebernimm die erforderlichen Bestandteile nach `/workspaces/MAIN` oder dokumentiere dort einen vollstaendig reproduzierbaren Aufbau.
+- `INFRASTRUCTURE.md` beschreibt den Soll-Zustand. Kanonisch ist immer: gepinnte Version im Repo + reproduzierbares Skript unter `scripts/`.
+- PIDs, `ss`-Ausgaben und laufende Sitzungen sind ephemeral: vor Wiederverwendung einmal prüfen (`pgrep`, `ss`, `curl`), nie als dauerhaften Zustand dokumentieren oder als Blocker verwenden.
+- Nur verifizierte, tatsächlich ausgeführte Änderungen dokumentieren. Planung und Ist-Zustand getrennt halten.
+- Keine parallele agentspezifische Infrastrukturakte.
+- Keine Secrets (Tokens, Cookies, Passwörter) in die Doku schreiben.
+
+## 4. Safety
+
+- Vor Installation/Start/Löschung genau einen Bestandscheck machen (z. B. vorhandener Build, laufender Prozess, belegter Port). Danach handeln, nicht in Schleifen weiterprüfen.
+- Keine fremden Prozesse beenden, keine Caches/Profile/Installationen löschen ohne einmalige explizite Freigabe des Users. Eine erteilte Freigabe gilt, muss nicht erneut eingeholt werden.
+- Für schwer rückgängig machbare Aktionen Rückweg in einem Satz festhalten (Reinstall-/Restart-Befehl).
+
+## 5. Persistence
+
+- Fertige Arbeit liegt vollständig unter `/workspaces/MAIN` und wird per Git erfasst. Unfertige/temporäre Inhalte nach `/workspaces` oder `.runtime/`, nie als „fertig" behandeln.
+- `.runtime/`, Browserprofile, Caches und Klartext-Secrets werden nicht committet (siehe `.gitignore`). Was davon für einen neuen Codespace nötig ist, muss als reproduzierbares Skript unter `scripts/` im Repo liegen.
+- `INFRASTRUCTURE.md` nur bei tatsächlicher Infrastruktur-Änderung im selben Arbeitsgang aktualisieren. Kein Doku-Update und kein Commit für Nicht-Infra-Änderungen erzwingen. Commits nur auf explizite Aufforderung.

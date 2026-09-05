@@ -1,0 +1,9 @@
+{
+  "name": "main-browser-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned Chromium runtime for the MAIN workspace",
+  "dependencies": {
+    "playwright": "1.48.2"
+  }
+}

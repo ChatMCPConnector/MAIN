@@ -10,3 +10,6 @@ __pycache__/
 
 # Secrets ( Verschluesselt via secrets.sh, Klartext nie committen)
 .secrets/
+
+# Reproducible browser runtime and sensitive local browser profile
+.runtime/
