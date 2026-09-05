@@ -7,7 +7,7 @@ Browserbasierte Ubuntu-Linux-Umgebung mit GitHub Codespaces.
 ## Enthalten
 
 - Ubuntu 24.04, Bash, Git, GitHub CLI, Docker, Python 3, Build-Werkzeuge
-- Ports 3000, 8000, 8080 · Zeitzone Europe/Berlin
+- Ports 3000/8000 (Apps), 8001/8787/8080 (LLM-Proxies), 9222/6082/5920 (Browser, nur lokal) · Zeitzone Europe/Berlin
 - opencode mit TokenRouter/GLM 5.3 (1M Kontext) — Config liegt in `.opencode/` im Repo
 
 ## Struktur
@@ -18,7 +18,8 @@ Browserbasierte Ubuntu-Linux-Umgebung mit GitHub Codespaces.
 scripts/         save.sh (push), auth.sh (PAT), secrets.sh (verschlüsseltes Bundle)
 dotfiles/        Aliase, PATH (werden in .bashrc verlinkt)
 config/          secrets.enc — verschlüsseltes Secrets-Bundle
-work/            eigene Projekte hier ablegen
+browser/         Playwright-Runtime (gepinnt) + scripts/browser-*.sh
+work/            eigene Projekte + docs hier ablegen
 ```
 
 ## Account-Wechsel (60h-Limit)

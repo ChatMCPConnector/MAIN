@@ -52,4 +52,17 @@ else
   echo "    kein Token gefunden. Einmalig: ./scripts/auth.sh setup  (oder LANDSCAPE_PAT als Codespaces-Secret setzen)"
 fi
 
+echo "==> [landscape] Browser-Runtime prüfen..."
+if [ -f "$REPO_ROOT/browser/package.json" ] && [ ! -d "$REPO_ROOT/.runtime/ms-playwright" ]; then
+  if command -v npm >/dev/null 2>&1; then
+    bash "$REPO_ROOT/scripts/browser-install.sh" >/dev/null 2>&1 \
+      && echo "    Chromium-Runtime installiert." \
+      || echo "    WARN: Browser-Install fehlgeschlagen, manuell: ./scripts/browser-install.sh"
+  else
+    echo "    SKIP: npm fehlt, manuell nachholen: ./scripts/browser-install.sh"
+  fi
+else
+  echo "    Browser-Runtime vorhanden."
+fi
+
 echo "==> [landscape] Fertig. Weiter mit: ./scripts/save.sh status"
