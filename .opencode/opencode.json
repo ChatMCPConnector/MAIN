@@ -18,22 +18,44 @@
         }
       }
     },
-    "bananarouter": {
-      "npm": "file:.opencode/bananarouter-adapter",
-      "name": "BananaRouter",
+    "glmfree": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "GLM Free (z.ai bridge)",
       "options": {
-        "apiKey": "{file:~/.config/landscape/bananarouter.key}"
+        "baseURL": "https://glm.cognix.sryze.cc/v1",
+        "apiKey": "Waguri"
       },
       "models": {
-        "glm-5.3-flash": {
-          "name": "GLM 5.3 Flash",
+        "glm-5.3": {
+          "name": "GLM 5.3 Thinking (free)",
           "limit": {
             "context": 128000,
             "output": 8192
           }
         },
-        "glm-5.3": {
-          "name": "GLM 5.3",
+        "glm-5.2": {
+          "name": "GLM 5.2 Thinking (free)",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        },
+        "x-preview-l": {
+          "name": "GLM 5.3 Flash Vision (free)",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        },
+        "GLM-5v-Turbo": {
+          "name": "GLM 5V Turbo Vision (free)",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        },
+        "glm-4.7": {
+          "name": "GLM 4.7 (free)",
           "limit": {
             "context": 128000,
             "output": 8192
