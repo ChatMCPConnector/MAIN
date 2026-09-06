@@ -23,20 +23,22 @@ automatisch (`postCreateCommand` → `.devcontainer/setup.sh`).
   .opencode/               opencode-Config: opencode.json, tui.json, agent/*.md
   scripts/                 save.sh, auth.sh, secrets.sh, ports.sh, kontostand.sh,
                            browser-install.sh, browser-start.sh, nvidia-models.py
+  mcp/                     opencode-sessions MCP (Session-Verwaltung, zero deps)
+  proxies/                  GLM-Proxy-Patches + Startskripte + rebuild.sh (Kap. 5)
   dotfiles/                aliases.sh (wird in .bashrc verlinkt)
   config/                  secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst)
   browser/                 Playwright-Runtime 1.48.2 (gepinnt, Details → INFRASTRUCTURE.md)
-  work/                    eigene Projekte + docs/ (Kontostand.md)
+  work/                    eigene Projekte: docs/ + benchmark/ (ChaosShop, Kap. 6)
   .secrets/                Klartext-Secrets, GITIGNORED (u.a. chatglm-refresh-token)
   MASTERPROMPT.md          Benchmark-Prompt für den 3-Wege-GLM-Vergleich
 
-/workspaces/{glm2api,hellogml,chat2api}/   ← GLM-Proxy-Klone (NICHT im Repo!)
-/workspaces/benchmark/                     ← ChaosShop-Vergleich (NICHT im Repo!)
+/workspaces/{glm2api,hellogml,chat2api}/   ← GLM-Proxy-Klone (NICHT im Repo, via proxies/rebuild.sh rekonstruierbar)
+/workspaces/benchmark/                     ← ChaosShop-Kopien (via work/benchmark/rebuild.sh aus Template)
 ```
 
 **Wichtig:** Alles unter `/workspaces/*` außer `MAIN` ist flüchtig — geht beim
-Codespace-Neubau verloren (nur via manuellen Re-Klon + Patches wiederherstellbar,
-siehe Kap. 5).
+Codespace-Neubau verloren, ist aber vollständig aus MAIN reproduzierbar
+(`proxies/rebuild.sh` + `work/benchmark/rebuild.sh`, Details Kap. 5/6).
 
 ## 3. Secrets-Modell
 
@@ -75,8 +77,7 @@ Provider (`opencode.json`, Default-Modell `tokenrouter/z-ai/glm-5.3-free`):
 ## 5. Die drei GLM-Proxies (chatglm.cn-Reverse, Ports 8001/8787/8080)
 
 Alle drei parsen chatglm.cn per Token (Guest-Pool/Auto-Refresh, kein Login nötig)
-und sprechen OpenAI-kompatibel. Start je via `start.sh` im eigenen Ordner
-(prueft Port, startet im Hintergrund, Log nach `/tmp/opencode/*.log`).
+und sprechen OpenAI-kompatibel.
 
 | Proxy | Port | Auth-Mechanik | Stand |
 |---|---|---|---|
@@ -84,7 +85,18 @@ und sprechen OpenAI-kompatibel. Start je via `start.sh` im eigenen Ordner
 | HelloGML (TS/Worker via wrangler dev) | 8787 | 100er Token-Pool, Auto-Fill | ✅ läuft, Tool-Calls verifiziert |
 | Chat2API (Electron headless) | 8080 | 10 Guest-Accounts, Round-Robin | ✅ läuft (Start wiegt ~70s), Tool-Calls verifiziert |
 
-**Lokale Patches (nicht committet, nur hier vorhanden):**
+**Wiederaufbau in einem frischen Codespace (alles im Repo, reproduzierbar):**
+
+```
+./proxies/rebuild.sh            # alle drei: klonen + patchen + deps (+ build bei chat2api)
+/workspaces/<name>/start.sh     # starten (Logs: /tmp/opencode/<name>.log)
+```
+
+- Patches: `proxies/patches/*.patch` (glm2api 228 Zeilen, hellogml, chat2api — Tool-Protokoll/Part-Merge-Fixes)
+- Startskripte: `proxies/scripts/start-*.sh` (rebuild.sh kopiert sie nach `/workspaces/<name>/start.sh`)
+- setup.sh rebuilt Proxies nur bei `LANDSCAPE_REBUILD_PROXIES=1` (Klones/Builds dauern Minuten)
+
+**Patch-Inhalt (lokal, via .patch-Dateien gesichert):**
 - glm2api `tool_protocol.py` + `tool_parser.py`: Tool-Protokoll von DSML-Markup
   auf JSON+`[]`-Terminator umgestellt (+ DSML/Mashup-Fallbacks, Part-Merge-Fix).
 - HelloGML `chat.ts` (+ `wrangler.toml` KV-Platzhalter): gleicher Part-Merge-Fix,
@@ -94,20 +106,22 @@ und sprechen OpenAI-kompatibel. Start je via `start.sh` im eigenen Ordner
 
 Gewonnene Erkenntnis (gilt für alle drei): chatglm.cn streamt pro Part erst
 Token-Schnipsel ohne Akkumulation, dann den Volltext — blindes Überschreiben
-erzeugt überlappenden Müll (`{"ol_callh"…`). Fix = Schnipsel anhängen,
+erzeugt überlappenden Müll (`{"ol_callh"…). Fix = Schnipsel anhängen,
 Finish-Volltext idempotent ersetzen.
 
-Hinweis: Nach `git pull`/Rebuild der Proxy-Repos sind die Patches weg
-(vorher `git diff` sichern). Upstream-Limit ist pro Guest-Token (~5 Nachrichten),
-die Pools rotieren das weg — kein Repo-Limit.
+Upstream-Limit ist pro Guest-Token (~5 Nachrichten), die Pools rotieren das
+weg — kein Repo-Limit. Nach `git pull`/Rebuild der Proxy-Repos sind Patches
+ggf. neu anzuwenden (rebuild.sh macht das idempotent; Konflikt-Fall: `--3way`).
 
 ## 6. Benchmark (ChaosShop-Vergleich)
 
 - `MASTERPROMPT.md`: tool-agnostischer SWE-Bench-Prompt (4 Phasen, kein Tool namentlich).
-- `/workspaces/benchmark/chaosshop-template/`: absichtlich vermurkster Python-Shop
+- `work/benchmark/template/`: absichtlich vermurkster Python-Shop
   (Race, SQLi, Auth-Bypass, Randfälle), Startzustand **4 failed / 5 passed**,
-  reproduzierbar via Kopie.
-- `-work/`-Kopien je Proxy; Agenten `bench-*` lösen je ihre Kopie.
+  im Repo gesichert.
+- `work/benchmark/rebuild.sh` legt `/workspaces/benchmark/<proxy>-work`-Kopien
+  aus dem Template an (setup.sh macht das automatisch, wenn nötig).
+- Agenten `bench-*` lösen je ihre Kopie.
 - Frühere Runs liefen versehentlich über TokenRouter (8-req/min-Limit) — nur Runs
   über die drei lokalen Provider zählen für den Vergleich.
 
@@ -123,8 +137,10 @@ die Pools rotieren das weg — kein Repo-Limit.
 1. Altem Codespace: `./scripts/save.sh` (+ ggf. `./scripts/secrets.sh lock`).
 2. Repo forken, Codespace erstellen — `setup.sh` installiert alles, `unlock`
    läuft automatisch (Secrets als Codespaces-Secrets hinterlegt).
-3. Nicht mitkommen: `/workspaces/{glm2api,hellogml,chat2api,benchmark}`,
-   Browser-Profil/Volumes, Ports (werden neu vergeben), lokale Patches (Kap. 5).
+3. Nicht mitkommen, aber rekonstruierbar: `/workspaces/{glm2api,hellogml,chat2api}`
+   (`./proxies/rebuild.sh` bzw. `LANDSCAPE_REBUILD_PROXIES=1` beim Codespace-Bau),
+   `/workspaces/benchmark` (automatisch aus `work/benchmark/template`),
+   Browser-Profil/Volumes, Ports (werden neu vergeben).
 
 ## 9. Historie-Hinweis
 

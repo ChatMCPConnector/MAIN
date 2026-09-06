@@ -1,0 +1,432 @@
+diff --git a/src/glm2api/services/glm_client.py b/src/glm2api/services/glm_client.py
+index 763810b..e7701dc 100644
+--- a/src/glm2api/services/glm_client.py
++++ b/src/glm2api/services/glm_client.py
+@@ -290,6 +290,18 @@ class GLMWebClient:
+                 return error
+             part_status = str(part.get("status", "")).strip().lower()
+             if part_status == "error":
++                # Der Upstream spiegelt unsere OpenAI-tool-Runde als native
++                # 'tool'-Rolle zurueck (show_type mc_tool_result*), wenn das
++                # Modell versucht, ein client-tool serverseitig auszufuehren.
++                # Das ist kein fataler Fehler: wir ueberspringen solche Parts
++                # und lassen das Modell weiter antworten.
++                role = str(part.get("role", "")).strip().lower()
++                meta = part.get("meta_data")
++                show_type = ""
++                if isinstance(meta, dict):
++                    show_type = str(meta.get("show_type", ""))
++                if role == "tool" or show_type.startswith("mc_tool_result"):
++                    continue
+                 return {"message": "GLM part status error"}
+         return None
+ 
+diff --git a/src/glm2api/services/translator.py b/src/glm2api/services/translator.py
+index 1e6c331..171edda 100644
+--- a/src/glm2api/services/translator.py
++++ b/src/glm2api/services/translator.py
+@@ -33,6 +33,55 @@ POWERSHELL_ALIASES = {"cat", "cd", "copy", "del", "dir", "echo", "erase", "ls",
+ 
+ 
+ 
++def _merge_part_texts(existing: dict[str, object], incoming: dict[str, object]) -> dict[str, object]:
++    """Fusioniert zwei Part-Events desselben logic_id zu EINEM akkumulierten
++    Text-Item (die Delta-Logik arbeitet mit rendered_text[prev_len:]).
++
++    Upstream-Verhalten: init-Events enthalten je einen TOKEN-Schnipsel im
++    text-Feld (Deltas, keine Akkumulation!), das finish-Event den kompletten
++    Text. Snipsel werden an den Akkumulat angehängt; ein finish-Volltext,
++    der mit dem Akkumulat beginnt, ersetzt ihn idempotent."""
++    merged = dict(existing)
++    inc_content = incoming.get("content")
++    if not isinstance(inc_content, list):
++        return merged
++    old_content = existing.get("content")
++    old_text = ""
++    non_text_old: list[object] = []
++    if isinstance(old_content, list):
++        for item in old_content:
++            if isinstance(item, dict) and item.get("type") == "text":
++                old_text += str(item.get("text", ""))
++            else:
++                non_text_old.append(item)
++
++    incoming_status = str(incoming.get("status", ""))
++    new_text_total = old_text
++    for item in inc_content:
++        if not (isinstance(item, dict) and item.get("type") == "text"):
++            continue
++        fragment = str(item.get("text", ""))
++        if not fragment:
++            continue
++        if incoming_status == "finish" and old_text and fragment.startswith(old_text):
++            # finish-Volltext: akkumulat auf den volltext anheben
++            new_text_total = fragment
++        else:
++            new_text_total = old_text + fragment if new_text_total == old_text else new_text_total + fragment
++            if new_text_total == old_text:
++                new_text_total = old_text  # keine aenderung
++    # ein einzelnes text-item mit dem akkumulierten stand
++    content: list[object] = []
++    if new_text_total:
++        content.append({"type": "text", "text": new_text_total})
++    merged["content"] = content + non_text_old
++    # auch non-text-items des incoming uebernehmen (bilder etc.)
++    for item in inc_content:
++        if isinstance(item, dict) and item.get("type") != "text":
++            merged["content"].append(item)
++    return merged
++
++
+ def extract_text_content(content: object) -> str:
+     if isinstance(content, str):
+         return content
+@@ -509,7 +558,15 @@ class GLMEventAccumulator:
+                 logic_id = str(part["logic_id"])
+                 if logic_id not in self.parts_by_logic_id:
+                     insort(self.ordered_logic_ids, logic_id)
+-                self.parts_by_logic_id[logic_id] = part
++                    self.parts_by_logic_id[logic_id] = part
++                else:
++                    # Der Upstream sendet bei init-Events TOKEN-Schnipsel (nicht den
++                    # vollen Stand!) und im finish-Event den kompletten Text.
++                    # Snipsel werden konkateniert; finish-Volltext ersetzt, WENN er
++                    # nicht bloss die bereits akkumulierte Folge fortsetzt.
++                    existing = self.parts_by_logic_id[logic_id]
++                    merged = _merge_part_texts(existing, part)
++                    self.parts_by_logic_id[logic_id] = merged
+                 self._render_cache_dirty = True
+             # Extract server-side native tool_calls from content items
+             if isinstance(part, dict) and isinstance(part.get("content"), list):
+diff --git a/src/glm2api/utils/tool_parser.py b/src/glm2api/utils/tool_parser.py
+index e1e8de6..211cb13 100644
+--- a/src/glm2api/utils/tool_parser.py
++++ b/src/glm2api/utils/tool_parser.py
+@@ -14,7 +14,7 @@ TOOL_RESULT_PATTERN = re.compile(
+     re.IGNORECASE,
+ )
+ START_TAG_PATTERN = re.compile(
+-    r"<(?P<tag>\|DSML\|tool_calls|tool_calls|ml_tool_calls|ml_tool_call)\b[^>]*>",
++    r"<(?P<tag>\|DSML\|tool_calls|DStool_calls|tool_calls|ml_tool_calls|ml_tool_call)\b[^>]*>",
+     re.IGNORECASE,
+ )
+ DSML_TAG_PATTERN = re.compile(r"</?\|DSML\|(?P<name>tool_calls|invoke|parameter|tool_result)\b", re.IGNORECASE)
+@@ -35,11 +35,11 @@ DSML_DOUBLE_PIPE_CLOSE_TAG_PATTERN = re.compile(
+     re.IGNORECASE,
+ )
+ DSML_TOOL_CALLS_CLOSE_PATTERN = re.compile(
+-    r"(?:</\|dsml\|tool_calls\s*>|</\|dsml\|tool_calls\s*\|\s*>|</\|dsmltool_?calls\s*\|\s*>|<\|/dsmltool_?calls\s*\|\s*>)",
++    r"(?:</\|dsml\|tool_calls\s*>|</\|dsml\|tool_calls\s*\|\s*>|</\|dsmltool_?calls\s*\|\s*>|<\|/dsmltool_?calls\s*\|\s*>|</\|?dsml\|?tool_?calls\s*>?)",
+     re.IGNORECASE,
+ )
+ DSML_TOOL_CALLS_TRAILING_CLOSE_PATTERN = re.compile(
+-    r"(?:</\|dsml\|tool_calls\s*>|</\|dsml\|tool_calls\s*\|\s*>|</\|dsmltool_?calls\s*\|\s*>|<\|/dsmltool_?calls\s*\|\s*>|</\|dsml\|tool_calls\s*$|</\|dsmltool_?calls\s*\|?\s*$|<\|/dsmltool_?calls\s*\|?\s*$)",
++    r"(?:</\|dsml\|tool_calls\s*>|</\|dsml\|tool_calls\s*\|\s*>|</\|dsmltool_?calls\s*\|\s*>|<\|/dsmltool_?calls\s*\|\s*>|</\|dsml\|tool_calls\s*$|</\|dsmltool_?calls\s*\|?\s*$|<\|/dsmltool_?calls\s*\|?\s*$|</\|?dsml\|?tool_?calls\s*\|?\s*$)",
+     re.IGNORECASE,
+ )
+ PARAM_NAME_TAG_PATTERN = re.compile(r"<param_name>\s*(.*?)\s*</param_name>", re.IGNORECASE | re.DOTALL)
+@@ -57,6 +57,8 @@ TAG_NAME_HINTS = [
+     "</|DSML|parameter",
+     "<|DSML|tool_result",
+     "</|DSML|tool_result",
++    "<DStool_calls",
++    "</DStool_calls",
+     "<m",
+     "</m",
+     "<ml_",
+@@ -88,6 +90,14 @@ def _local_name(tag: str) -> str:
+     return tag.lower()
+ 
+ 
++def _normalize_root_tag(tag: str) -> str:
++    """'dstool_calls' -> 'tool_calls' (das Modell emittiert diverse Varianten)."""
++    name = _local_name(tag)
++    if name in ("dstoolcalls", "dstool_calls", "dstoolcall", "ds_tool_calls"):
++        return "tool_calls"
++    return name
++
++
+ def _canonical_dsml_name(name: str) -> str:
+     normalized = name.lower().replace("_", "")
+     if normalized == "toolcalls":
+@@ -98,10 +108,28 @@ def _canonical_dsml_name(name: str) -> str:
+ 
+ 
+ def _repair_malformed_dsml(block: str) -> str:
+-    if "<|" not in block and "]]|>" not in block:
++    if "<|" not in block and "]]|>" not in block and "<![CDATA[" not in block:
+         return block
+ 
+     repaired = block.replace("]]|>", "]]>")
++    # Mashup-Variante: '<|DSML|invoke name="x"><![CDATA[name="TOOL">' —
++    # das Modell packt den echten Tool-Namen in CDATA statt ins name-Attribut.
++    repaired = re.sub(
++        r"<(\|?DSML\|?)invoke\s+name=\"[^\"]*\"><!\[CDATA\[name=\"([^\"]+)\"",
++        lambda m: f"<{m.group(1)}invoke name=\"{m.group(2)}\">",
++        repaired,
++        flags=re.IGNORECASE,
++    )
++    # leeres CDATA-Öffnen ('<![CDATA[>') fallen lassen — öffnet sonst einen
++    # CDATA-Bereich, der alle nachfolgenden Tags bis zum nächsten ']]>' schluckt
++    repaired = repaired.replace("<![CDATA[>", "")
++    # doppeltes '>' nach Mashup-Repair fallen lassen
++    repaired = repaired.replace('">>', '">')
++    # Root-Varianten '<DStool_calls>' auf kanonisch '<tool_calls>' mappen,
++    # damit der schließende Tag '</tool_calls>' matched
++    repaired = re.sub(r"<dstool_calls\b[^>]*>", "<DStool_calls>", repaired, flags=re.IGNORECASE)
++    repaired = re.sub(r"<dstool_calls>", "<tool_calls>", repaired, flags=re.IGNORECASE)
++    repaired = re.sub(r"</dstool_calls\s*>", "</tool_calls>", repaired, flags=re.IGNORECASE)
+     if "<![CDATA[" in repaired:
+         repaired = re.sub(
+             r"(?<!\])\]>(?=</\|dsml\|parameter\b|</\|DSML\|parameter\b|</parameter\b|</\|dsmlparameter\|)",
+@@ -333,7 +361,7 @@ def _parse_xml_block(
+     except ET.ParseError:
+         return [], None
+ 
+-    root_name = _local_name(root.tag)
++    root_name = _normalize_root_tag(root.tag)
+     if root_name in {"tool_calls", "ml_tool_calls"}:
+         candidates = [
+             child
+@@ -376,7 +404,7 @@ def _find_matching_block(
+     allow_trailing_close: bool = False,
+ ) -> tuple[int, int] | None:
+     tag_name = start_match.group("tag").lower()
+-    if tag_name == "|dsml|tool_calls":
++    if tag_name in ("|dsml|tool_calls", "dstool_calls"):
+         closing_pattern = DSML_TOOL_CALLS_TRAILING_CLOSE_PATTERN if allow_trailing_close else DSML_TOOL_CALLS_CLOSE_PATTERN
+     else:
+         closing_pattern = re.compile(rf"</{re.escape(tag_name)}\s*>", re.IGNORECASE)
+@@ -507,11 +535,101 @@ def _looks_like_tool_markup_fragment(text: str) -> bool:
+     return False
+ 
+ 
++def _find_json_tool_call(text: str, final: bool) -> tuple[str, str, list[dict[str, object]]]:
++    """Findet das JSON-Tool-Protokoll: {"tool_calls":[...]}[] (mit Terminator).
++    Gibt (visible, remainder, tool_calls) zurück."""
++    start = text.find('{"tool_calls"')
++    if start == -1:
++        # partial am ende halten: '{"tool_call' oder kuerzere prefixes davon
++        if not final:
++            for prefix in ('{"tool_calls', '{"tool_call', '{"tool_cal', '{"tool_ca', '{"tool_c', '{"tool_', '{"tool', '{"too', '{"to', '{"'):
++                idx = text.rfind(prefix)
++                if idx != -1:
++                    return text[:idx], text[idx:], []
++        return text, "", []
++    # komplettes JSON-objekt scannen (balanced braces, CDATA/strings beachten)
++    depth = 0
++    in_str = False
++    esc = False
++    end = -1
++    for i in range(start, len(text)):
++        ch = text[i]
++        if in_str:
++            if esc:
++                esc = False
++            elif ch == "\\":
++                esc = True
++            elif ch == '"':
++                in_str = False
++            continue
++        if ch == '"':
++            in_str = True
++        elif ch == "{":
++            depth += 1
++        elif ch == "}":
++            depth -= 1
++            if depth == 0:
++                end = i + 1
++                break
++    if end == -1:
++        # JSON noch unvollständig (streaming)
++        if final:
++            # kein terminator: trotzdem probieren bis text-ende
++            end = len(text)
++            candidate = text[start:]
++        else:
++            return text[:start], text[start:], []
++    else:
++        candidate = text[start:end]
++    rest = text[end:] if end != -1 else ""
++    # terminator '[]' konsumieren (oder beim final auch ohne)
++    if rest.startswith("[]"):
++        rest = rest[2:]
++    elif not final and rest.strip() == "":
++        # warte noch auf den terminator
++        return text[:start], text[start:], []
++    try:
++        parsed = json.loads(candidate)
++    except json.JSONDecodeError:
++        return text, "", []
++    calls_raw = parsed.get("tool_calls") if isinstance(parsed, dict) else None
++    if not isinstance(calls_raw, list):
++        return text, "", []
++    tool_calls = []
++    for idx, call in enumerate(calls_raw):
++        if not isinstance(call, dict):
++            continue
++        name = str(call.get("name", "")).strip()
++        args = call.get("arguments", {})
++        if isinstance(args, str):
++            args_str = args
++        else:
++            args_str = json.dumps(args or {}, ensure_ascii=False)
++        if name:
++            tool_calls.append({
++                "index": len(tool_calls),
++                "id": f"call_{uuid.uuid4().hex[:24]}",
++                "type": "function",
++                "function": {"name": name, "arguments": args_str or "{}"},
++            })
++    if not tool_calls:
++        return text, "", []
++    visible = (text[:start] + rest).strip()
++    return visible, "", tool_calls
++
++
+ def _split_stream_text(
+     text: str,
+     allowed_tool_names: set[str] | None,
+     final: bool,
+ ) -> tuple[str, str, list[dict[str, object]]]:
++    # 1) JSON-Protokoll prüfen (neues format)
++    visible, remainder, tool_calls = _find_json_tool_call(text, final)
++    if tool_calls or (remainder and not final and remainder.lstrip().startswith('{"tool_call')):
++        if tool_calls:
++            return visible, remainder, tool_calls
++        return visible, remainder, []
++
+     hold_from_candidates = [
+         index
+         for index in (_find_unmatched_fence_start(text), _find_incomplete_block_start(text, allow_trailing_close=final))
+@@ -540,6 +658,10 @@ def _split_stream_text(
+ def parse_tool_calls_from_text(text: str, allowed_tool_names: set[str] | None = None) -> tuple[str, list[dict[str, object]]]:
+     if not text:
+         return "", []
++    # zuerst neues JSON-protokoll pruefen
++    visible, remainder, tool_calls = _find_json_tool_call(text, final=True)
++    if tool_calls:
++        return visible, tool_calls
+     spans, tool_calls = _extract_tool_blocks(text, allowed_tool_names, allow_trailing_close=True)
+     return _remove_spans(text, spans), tool_calls
+ 
+@@ -554,6 +676,15 @@ class StreamingToolParser:
+         if not chunk:
+             return ""
+         self.pending_text += chunk
++        # JSON-tool-protokoll: partial am ende halten, komplette sofort parsen
++        jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False)
++        if jcalls:
++            self.pending_text = jrem
++            self.tool_calls.extend(jcalls)
++            return jvis
++        if jrem:
++            # partial-JSON erkannt: pending als ganzes halten, nur davorliegenden text ausgeben
++            return jvis
+         visible, remainder, parsed_calls = _split_stream_text(
+             self.pending_text,
+             allowed_tool_names=self.allowed_tool_names,
+diff --git a/src/glm2api/utils/tool_protocol.py b/src/glm2api/utils/tool_protocol.py
+index cf5262a..5d47364 100644
+--- a/src/glm2api/utils/tool_protocol.py
++++ b/src/glm2api/utils/tool_protocol.py
+@@ -18,14 +18,8 @@ BLOCKED_NATIVE_TOOL_NAMES = {
+ }
+ SERVER_SIDE_TOOL_NAMES: set[str] = set()
+ 
+-CANONICAL_TOOL_CALL_EXAMPLE = "\n".join(
+-    [
+-        "<|DSML|tool_calls>",
+-        '  <|DSML|invoke name="TOOL_NAME">',
+-        '    <|DSML|parameter name="actual_parameter_name"><![CDATA[value]]></|DSML|parameter>',
+-        "  </|DSML|invoke>",
+-        "</|DSML|tool_calls>",
+-    ]
++CANONICAL_TOOL_CALL_EXAMPLE = (
++    '{"tool_calls":[{"name":"TOOL_NAME","arguments":{"actual_parameter_name":"value"}}]}[]'
+ )
+ 
+ 
+@@ -85,6 +79,7 @@ def _dsml_parameters_from_object(payload: object) -> str:
+ 
+ 
+ def serialize_tool_call_block(name: str, arguments: object) -> str:
++    """Serialisiert einen Tool-Call im JSON-Protokoll (mit []-Terminator)."""
+     parsed_arguments = arguments
+     if isinstance(arguments, str):
+         try:
+@@ -93,21 +88,12 @@ def serialize_tool_call_block(name: str, arguments: object) -> str:
+             parsed_arguments = {"raw": arguments}
+     if not isinstance(parsed_arguments, dict):
+         parsed_arguments = {"value": parsed_arguments}
+-    return (
+-        "<|DSML|tool_calls>\n"
+-        f'  <|DSML|invoke name="{_xml_escape_text(name)}">\n'
+-        f"    {_dsml_parameters_from_object(parsed_arguments)}\n"
+-        "  </|DSML|invoke>\n"
+-        "</|DSML|tool_calls>"
+-    )
++    return safe_json_dumps({"tool_calls": [{"name": name, "arguments": parsed_arguments}]}) + "[]"
+ 
+ 
+ def serialize_tool_result_block(tool_call_id: object, tool_name: str, content: str) -> str:
+-    safe_content = content.replace("]]>", "]]]]><![CDATA[>")
+-    return (
+-        f'<|DSML|tool_result call_id="{_xml_escape_text(str(tool_call_id or "unknown"))}" '
+-        f'name="{_xml_escape_text(tool_name)}"><content><![CDATA[{safe_content}]]></content></|DSML|tool_result>'
+-    )
++    """Tool-Result als JSON-Nachricht (vom Translator in eine tool-Rolle gemappt)."""
++    return safe_json_dumps({"tool_call_id": str(tool_call_id or "unknown"), "name": tool_name, "result": content})
+ 
+ 
+ def build_tool_call_instructions(
+@@ -151,21 +137,20 @@ def build_tool_call_instructions(
+         lines.extend(
+             [
+                 "",
+-                f"DSML tools (parsed by this server): {available_xml_names}.",
+-                "Only these DSML tools are available. Use their exact names and exact parameter fields from the schemas.",
+-                "If a DSML tool is needed, output one executable DSML block only. Do not add prose, apologies, analysis, or progress text in the same assistant answer.",
+-                "Executable DSML must appear in the final assistant text channel, not in Thinking/reasoning. Do not hide tool calls inside reasoning.",
+-                "Use the DSML format below exactly.",
++                f"Executable tools (parsed by this server): {available_xml_names}.",
++                "Only these tools are available. Use their exact names and exact parameter fields from the schemas.",
++                "If a tool is needed, output ONE single JSON object and nothing else. Do not add prose, apologies, analysis, or progress text in the same assistant answer.",
++                "The tool call must appear in the final assistant text channel, not in Thinking/reasoning. Do not hide tool calls inside reasoning.",
++                "Use this exact format:",
+                 CANONICAL_TOOL_CALL_EXAMPLE,
+-                "The server will parse this DSML block back into standard OpenAI tool_calls.",
++                "The trailing [] after the JSON object is mandatory — it marks the end of the tool call. Output the JSON object, then immediately [].",
++                "The server will parse the JSON block back into standard OpenAI tool_calls.",
+                 "Parameter rules:",
+-                "- The root executable block must be <|DSML|tool_calls> and each call must be a <|DSML|invoke name=\"...\"> child.",
+-                "- Each argument must be a <|DSML|parameter name=\"...\"> child of the invoke.",
++                "- The root is a single JSON object with one key \"tool_calls\" holding an array of calls.",
++                "- Each call is an object with keys \"name\" (tool name string) and \"arguments\" (object of parameter name → value).",
+                 "- Parameter names are case-sensitive and must exactly match the schema. For example, use `filePath` only when the schema says `filePath`; never change it to `filepath`, `file_path`, or `FilePath`.",
+-                "- Encode nested objects with nested <|DSML|parameter name=\"...\"> tags.",
+-                "- Use repeated <item> tags to represent arrays.",
+-                "- JSON literals are allowed as parameter values when the schema expects an object, array, number, boolean, or null.",
+-                "- Prefer <![CDATA[...]]> for arbitrary strings.",
++                "- Values must be plain JSON values (strings, numbers, booleans, null, nested objects, arrays).",
++                "- Output raw JSON only: no markdown fences, no code blocks, no comments, no trailing commas.",
+             ]
+         )
+ 
+@@ -176,12 +161,11 @@ def build_tool_call_instructions(
+             "- Do not invent tool names outside the declared list.",
+             "- If a URL, browsing, or search action is needed, use only an explicitly listed client tool. If none is listed, explain that no such tool is available. Never use bare tool names `search` or `find` unless they are explicitly listed above.",
+             "- If you decide to call a tool, call the selected tool directly; do not say you will try, switch, retry, or use a correct tool.",
+-            "- Never output tool-call display text such as `⚙ tool_name [...]`; output only the executable DSML block.",
++            "- Never output tool-call display text such as `⚙ tool_name [...]`; output only the tool-call JSON.",
+             "- After receiving a tool result, answer the user directly from the result and do not repeat the earlier tool-call decision process.",
+-            "- For DSML tools, do not emit OpenAI JSON tool_calls arrays, function_call objects, or any non-DSML tool syntax.",
+-            "- Do not mix normal explanation text with executable DSML.",
+-            "- Put multiple DSML invokes inside one <|DSML|tool_calls> root when you truly need multiple calls in one turn.",
+-            "- After a <|DSML|tool_result ...> block, continue from that result and call another tool only when necessary.",
++            "- For the JSON tool format, do not emit XML, DSML markup, function_call objects, or any other tool syntax.",
++            "- Do not mix normal explanation text with the tool-call JSON.",
++            "- When you truly need multiple calls in one turn, put them all in the \"tool_calls\" array of one JSON object.",
+         ]
+     )
+     if mode == "none":

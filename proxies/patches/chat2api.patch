@@ -1,0 +1,184 @@
+diff --git a/src/main/index.ts b/src/main/index.ts
+index 5066658..706c1ed 100644
+--- a/src/main/index.ts
++++ b/src/main/index.ts
+@@ -15,6 +15,16 @@ process.on('unhandledRejection', (reason) => {
+   console.error('Unhandled Rejection:', reason)
+ })
+ 
++// Headless-Umgebungen (Codespace/Xvfb): Hardware-Generierung komplett abschalten,
++// sonst startet der GPU-Prozess trotzdem (Software-Compositing-Polling = Dauerlast).
++if (!process.env.DISPLAY || process.env.XVFB_RUN || process.env.ELECTRON_HEADLESS) {
++  app.disableHardwareAcceleration()
++  app.commandLine.appendSwitch('disable-gpu')
++  app.commandLine.appendSwitch('disable-software-rasterizer')
++  app.commandLine.appendSwitch('disable-gpu-compositing')
++  console.log('Headless environment detected: hardware acceleration disabled')
++}
++
+ // Workaround for V8 JIT compiler crash on macOS ARM64 (Electron 33 bug)
+ // Completely disable JIT compilation to prevent EXC_BAD_ACCESS crashes
+ // This trades some performance for stability
+diff --git a/src/main/providers/builtin/glm.ts b/src/main/providers/builtin/glm.ts
+index 7ceb77a..b7f80cb 100644
+--- a/src/main/providers/builtin/glm.ts
++++ b/src/main/providers/builtin/glm.ts
+@@ -31,12 +31,16 @@ export const glmConfig: BuiltinProviderConfig = {
+     'X-Lang': 'zh',
+   },
+   enabled: true,
+-  description: 'Zhipu Qingyan AI assistant, supports GLM-5.1 flagship model, deep thinking and video generation',
++  description: 'Zhipu Qingyan AI assistant, supports GLM-5.1/GLM-5.3 flagship models, deep thinking and video generation',
+   supportedModels: [
+     'GLM-5.1',
++    'GLM-5.3',
++    'GLM-5.3-Think',
+   ],
+   modelMappings: {
+     'GLM-5.1': 'glm-5.1',
++    'GLM-5.3': 'glm-5.3',
++    'GLM-5.3-Think': 'glm-5.3-think',
+   },
+   credentialFields: [
+     {
+diff --git a/src/main/proxy/adapters/glm.ts b/src/main/proxy/adapters/glm.ts
+index f4e8faa..2544b03 100644
+--- a/src/main/proxy/adapters/glm.ts
++++ b/src/main/proxy/adapters/glm.ts
+@@ -11,6 +11,45 @@ import { PassThrough } from 'stream'
+ import { createParser } from 'eventsource-parser'
+ import FormData from 'form-data'
+ import mime from 'mime-types'
++
++// Merge-Fix: Der Upstream sendet bei init-Events TOKEN-Schnipsel im text-Feld
++// (keine Akkumulation!) und im finish-Event den kompletten Text. Schnipsel
++// werden an den Akkumulat angehaengt; ein finish-Volltext, der mit dem
++// Akkumulat beginnt, ersetzt ihn idempotent. (Blind-Replace erzeugte
++// ueberlappende Muell-Deltas wie '{"ol_callh".)
++function mergePartTexts(existing: any, incoming: any): any {
++  const merged = { ...existing }
++  const incContent = incoming.content
++  if (!Array.isArray(incContent)) return merged
++  let oldText = ''
++  const nonTextOld: any[] = []
++  if (Array.isArray(existing.content)) {
++    for (const item of existing.content) {
++      if (item && item.type === 'text') oldText += String(item.text ?? '')
++      else nonTextOld.push(item)
++    }
++  }
++  const incomingStatus = String(incoming.status ?? '')
++  let newText = oldText
++  for (const item of incContent) {
++    if (!item || item.type !== 'text') continue
++    const fragment = String(item.text ?? '')
++    if (!fragment) continue
++    if (incomingStatus === 'finish' && oldText && fragment.startsWith(oldText)) {
++      newText = fragment
++    } else {
++      newText = newText + fragment
++    }
++  }
++  const content: any[] = []
++  if (newText) content.push({ type: 'text', text: newText })
++  for (const item of nonTextOld) content.push(item)
++  for (const item of incContent) {
++    if (item && item.type !== 'text') content.push(item)
++  }
++  merged.content = content
++  return merged
++}
+ import path from 'path'
+ import { toolsToSystemPrompt, TOOL_WRAP_HINT, hasToolPromptInjected } from '../utils/tools'
+ import { parseToolCallsFromText } from '../utils/toolParser'
+@@ -751,7 +790,7 @@ export class GLMStreamHandler {
+               result.parts.forEach((part: any) => {
+                 const index = cachedParts.findIndex((p) => p.logic_id === part.logic_id)
+                 if (index !== -1) {
+-                  cachedParts[index] = part
++                  cachedParts[index] = mergePartTexts(cachedParts[index], part)
+                 } else {
+                   cachedParts.push(part)
+                 }
+@@ -961,12 +1000,12 @@ export class GLMStreamHandler {
+ 
+             if (result.status !== 'finish') {
+               if (result.parts) {
+-                // Accumulate parts (same as handleStream), don't replace
++                // Accumulate parts (merge fix), don't replace
+                 // GLM sends incremental parts, each event only contains new content
+                 result.parts.forEach((part: any) => {
+                   const index = cachedParts.findIndex((p) => p.logic_id === part.logic_id)
+                   if (index !== -1) {
+-                    cachedParts[index] = part
++                    cachedParts[index] = mergePartTexts(cachedParts[index], part)
+                   } else {
+                     cachedParts.push(part)
+                   }
+diff --git a/src/main/proxy/toolCalling/protocols/managedBracket.ts b/src/main/proxy/toolCalling/protocols/managedBracket.ts
+index f13b23e..a7077f9 100644
+--- a/src/main/proxy/toolCalling/protocols/managedBracket.ts
++++ b/src/main/proxy/toolCalling/protocols/managedBracket.ts
+@@ -26,7 +26,9 @@ When calling tools, respond with only this block:
+ 
+ [function_calls]
+ [call:exact_tool_name]{"argument":"value"}[/call]
+-[/function_calls]`
++[/function_calls]
++
++IMPORTANT: After the closing [/function_calls] tag, always append [] immediately (e.g. [/function_calls][]). The trailing [] is a mandatory terminator that marks the end of the tool call block.`
+   },
+ 
+   detectStart(buffer) {
+diff --git a/src/main/proxy/toolCalling/providerProfiles.ts b/src/main/proxy/toolCalling/providerProfiles.ts
+index d879552..f45d1b8 100644
+--- a/src/main/proxy/toolCalling/providerProfiles.ts
++++ b/src/main/proxy/toolCalling/providerProfiles.ts
+@@ -22,6 +22,21 @@ const chat2ApiXmlHistoryProfile: Omit<ProviderToolProfile, 'providerId'> = {
+   },
+ }
+ 
++// GLM (chatglm.cn): nutzt das Bracket-JSON-Protokoll — arbeitet MIT den
++// JSON-Pretrained-Multipliern des Modells statt gegen sie (XML-Markup
++// wurde vom Modell staendig verunstaltet). History-Format bleibt XML.
++const glmToolHistoryProfile: Omit<ProviderToolProfile, 'providerId'> = {
++  managedSupport: true,
++  supportsNativeTools: false,
++  preferredManagedProtocol: 'managed_bracket',
++  formatAssistantToolCalls(calls) {
++    return managedXmlProtocol.formatAssistantToolCalls(calls)
++  },
++  formatToolResult(result) {
++    return managedXmlProtocol.formatToolResult(result)
++  },
++}
++
+ const profiles: Record<string, ProviderToolProfile> = {
+   deepseek: {
+     providerId: 'deepseek',
+@@ -33,7 +48,7 @@ const profiles: Record<string, ProviderToolProfile> = {
+   },
+   glm: {
+     providerId: 'glm',
+-    ...chat2ApiXmlHistoryProfile,
++    ...glmToolHistoryProfile,
+   },
+   qwen: {
+     providerId: 'qwen',
+diff --git a/src/main/window/manager.ts b/src/main/window/manager.ts
+index 09e8719..230515c 100644
+--- a/src/main/window/manager.ts
++++ b/src/main/window/manager.ts
+@@ -67,6 +67,12 @@ export function createWindow(options: WindowOptions = {}): BrowserWindow {
+   })
+ 
+   mainWindow.once('ready-to-show', () => {
++    // Headless (Codespace/Xvfb): Fenster unsichtbar lassen — sonst rendert Chromium
++    // das Dashboard endlos weiter (Dauer-CPU-Last). Proxy läuft im Main-Prozess.
++    if (process.env.ELECTRON_HEADLESS) {
++      console.log('Headless mode: window stays hidden (proxy-only operation)')
++      return
++    }
+     mainWindow?.show()
+     mainWindow?.focus()
+   })

@@ -93,4 +93,20 @@ else
   echo "    SKIP: mcp/opencode-sessions-mcp.js fehlt."
 fi
 
+echo "==> [landscape] Proxies + Benchmark (flüchtige Anteile)..."
+# Die GLM-Proxy-Klones (/workspaces/{glm2api,hellogml,chat2api}) und das
+# ChaosShop-Benchmark (/workspaces/benchmark) sind NICHT im Codespace-Volume
+# persistent. Patches + Startskripte + Templates liegen hier im Repo.
+# Rebuild nur auf Wunsch (dauert Minuten wegen Klones/Builds):
+if [ "${LANDSCAPE_REBUILD_PROXIES:-}" = "1" ]; then
+  bash "$REPO_ROOT/proxies/rebuild.sh" && echo "    Proxies rekonstruiert."
+else
+  echo "    SKIP: Rebuild optional. Bei Bedarf: ./proxies/rebuild.sh  (oder LANDSCAPE_REBUILD_PROXIES=1)"
+fi
+if [ -d "$REPO_ROOT/work/benchmark/template" ] && [ ! -d /workspaces/benchmark ]; then
+  bash "$REPO_ROOT/work/benchmark/rebuild.sh" >/dev/null 2>&1 \
+    && echo "    Benchmark-Kopien aus Template wiederhergestellt." \
+    || echo "    WARN: Benchmark-Rebuild fehlgeschlagen, manuell: ./work/benchmark/rebuild.sh"
+fi
+
 echo "==> [landscape] Fertig. Weiter mit: ./scripts/save.sh status"

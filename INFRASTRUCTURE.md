@@ -40,6 +40,11 @@ Konfig: `.opencode/tui.json` (committet in MAIN → kommt in jede Codespace auto
 - Registriert in `.opencode/opencode.json` (`mcp.opencode-sessions`), kommt mit dem Repo in jeden Codespace. `setup.sh` stellt die Registrierung idempotent her (passt Pfade an, legt Config an, fügt mcp-Key ein, falls fehlt).
 - Details: `mcp/README.md`.
 
+## GLM-Proxies (Reproduzierbarkeit)
+
+- Klones unter `/workspaces/{glm2api,hellogml,chat2api}` sind flüchtig; Patches (`proxies/patches/*.patch`), Startskripte (`proxies/scripts/start-*.sh`) und `proxies/rebuild.sh` liegen im Repo (Details → DOKU.md Kap. 5).
+- `proxies/rebuild.sh`: klonen (depth 1) + Patch idempotent anwenden + Deps (+ Build bei chat2api) + start.sh-Kopie nach `/workspaces/<name>/`. Automatisch beim Codespace-Bau nur mit `LANDSCAPE_REBUILD_PROXIES=1` (sonst bewusst manuell, dauert Minuten).
+
 ## Deprecated (darf weg, kein Soll mehr)
 
 Alte, nicht reproduzierbare Ablagen — werden nicht mehr verwendet, seit `browser/` + `scripts/` existieren:
@@ -66,6 +71,7 @@ Läuft etwas Passendes → wiederverwenden. Fehlt der Build → `scripts/browser
 
 ## Changelog
 
+- 2026-09-06: Struktur-Optimierung: Proxy-Patches + Startskripte + `rebuild.sh` neu in `proxies/` (früher flüchtig unter /workspaces — jetzt im Repo reproduzierbar); ChaosShop-Template + `rebuild.sh` neu in `work/benchmark/` (Startzustand 4 failed/5 passed verifiziert); `/workspaces/.trash-AUFGABE-20260904` gelöscht (alter Windows-Debug-Müll, war freigegeben); README auf Schnellstart/Account-Wechsel gekürzt, DOKU.md ist zentrale Referenz.
 - 2026-09-06: Sessions-MCP `opencode-sessions` hinzugefügt (`mcp/opencode-sessions-mcp.js`, zero deps): Session-Verwaltung direkt auf der opencode-SQLite-DB (list/preview/delete/search/info/stats), kaskadierende Löschung + Orphan-Event-Cleanup (574 MB → 2 MB beim Erstsäuberungslauf). In `.opencode/opencode.json` registriert, `setup.sh` stellt Registrierung idempotent in jedem neuen Codespace her.
 - 2026-09-06: Reproduzierbarkeit geschlossen: `setup.sh` installiert jetzt `nodejs`, `npm`, `xvfb`, `x11vnc`, `novnc`, `websockify` (waren nur manuell vorhanden — frischer Codespace hätte die Browser-Runtime nicht starten können). `tui.json` unverändert: `mouse: false` ist Absicht — ohne Maus-Modus übersetzt xterm.js das Mausrad in `up`/`down`, die auf `messages_half_page_up`/`_down` gemappt sind (Mausrad-Scrollen funktioniert so nativ).
 - 2026-09-06: Sicherheitsmodell festgeschrieben (Komfort > Sicherheit): Passphrase liegt als Klartext in `config/passphrase`, `setup.sh` + `scripts/secrets.sh` entsperren sich selbst (Fallback ohne `LANDSCAPE_PASSPHRASE`). `scripts/secrets.sh` sichert jetzt auch `nvidia-nim.key` + `xinjianya.key`; Bundle + `config/secrets.manifest` neu generiert (kein veraltetes `bananarouter-key` mehr, enthält nun `chatglm-refresh-token`).
