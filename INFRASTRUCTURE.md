@@ -50,7 +50,7 @@ Läuft etwas Passendes → wiederverwenden. Fehlt der Build → `scripts/browser
 
 ## Changelog
 
-- 2026-09-06: Reproduzierbarkeit geschlossen: `setup.sh` installiert jetzt `nodejs`, `npm`, `xvfb`, `x11vnc`, `novnc`, `websockify` (waren nur manuell vorhanden — frischer Codespace hätte die Browser-Runtime nicht starten können). `tui.json`: `mouse` wieder `true` (Mausrad-Scrollen im TUI funktioniert).
+- 2026-09-06: Reproduzierbarkeit geschlossen: `setup.sh` installiert jetzt `nodejs`, `npm`, `xvfb`, `x11vnc`, `novnc`, `websockify` (waren nur manuell vorhanden — frischer Codespace hätte die Browser-Runtime nicht starten können). `tui.json` unverändert: `mouse: false` ist Absicht — ohne Maus-Modus übersetzt xterm.js das Mausrad in `up`/`down`, die auf `messages_half_page_up`/`_down` gemappt sind (Mausrad-Scrollen funktioniert so nativ).
 - 2026-09-06: Sicherheitsmodell festgeschrieben (Komfort > Sicherheit): Passphrase liegt als Klartext in `config/passphrase`, `setup.sh` + `scripts/secrets.sh` entsperren sich selbst (Fallback ohne `LANDSCAPE_PASSPHRASE`). `scripts/secrets.sh` sichert jetzt auch `nvidia-nim.key` + `xinjianya.key`; Bundle + `config/secrets.manifest` neu generiert (kein veraltetes `bananarouter-key` mehr, enthält nun `chatglm-refresh-token`).
 
 - 2026-09-06: Kanonik auf `browser/` (Playwright 1.48.2) + `scripts/browser-install.sh` / `scripts/browser-start.sh` + `.runtime/` (gitignored) umgestellt. Alte npx-Caches, `chromium-1140` und `/home/vscode/.config/chromium` als deprecated markiert (löschbar nach Freigabe). Doku-Loop entfernt: kein Voll-Read/Doku-Zwang pro Edit mehr.
