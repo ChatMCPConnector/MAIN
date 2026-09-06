@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "==> [landscape] Systempakete..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential python3 python3-pip python3-venv ca-certificates gnupg > /dev/null
+sudo apt-get install -y -qq curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential python3 python3-pip python3-venv ca-certificates gnupg nodejs npm xvfb x11vnc novnc websockify > /dev/null
 sudo rm -rf /var/lib/apt/lists/*
 
 echo "==> [landscape] opencode installieren (falls fehlt)..."
