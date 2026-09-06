@@ -47,7 +47,20 @@ else
   echo "      git -C $dir apply --3way $PATCH_DIR/$patch"
 fi
 
-# 3) start.sh ins /workspaces-Root legen (uv run lädt Deps on-demand)
+# 3) .env installieren (Port 8001, Guest-Mode, Delete-Conversations aus —
+#    secret-frei, liegt im Repo). Vorhandene .env wird nicht überschrieben.
+if [ -f "$REPO_ROOT/llm-proxies/glm2api.env" ]; then
+  if [ ! -f "$dir/.env" ]; then
+    cp "$REPO_ROOT/llm-proxies/glm2api.env" "$dir/.env"
+    echo "    .env installiert (Port 8001, Guest-Mode aktiv)."
+  else
+    echo "    .env vorhanden (bleibt unangetastet)."
+  fi
+else
+  echo "    WARN: llm-proxies/glm2api.env fehlt — Proxy startet mit Defaults (Port 8000, Guest aus!)"
+fi
+
+# 4) start.sh ins /workspaces-Root legen (uv run lädt Deps on-demand)
 if [ -f "$REPO_ROOT/llm-proxies/scripts/start-$name.sh" ]; then
   mkdir -p "$WS/$name"
   cp "$REPO_ROOT/llm-proxies/scripts/start-$name.sh" "$WS/$name/start.sh"
