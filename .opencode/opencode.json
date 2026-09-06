@@ -65,11 +65,11 @@
         "gpt-5.6-sol": {
           "name": "GPT-5.6 Sol",
           "reasoning": true,
-          "cost": {
-            "input": 2,
-            "output": 16,
-            "cache_read": 2
-          },
+"cost": {
+  "input": 2,
+  "output": 16,
+  "cache_read": 2
+},
           "options": {
             "reasoningEffort": "max",
             "textVerbosity": "high"
@@ -115,6 +115,32 @@
             },
             "max": {
               "reasoningEffort": "max"
+            }
+          }
+        },
+        "grok-4.6": {
+          "name": "Grok 4.6",
+          "reasoning": true,
+          "cost": {
+            "input": 20,
+            "output": 20,
+            "cache_read": 20
+          },
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
             }
           }
         },
