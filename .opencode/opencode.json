@@ -117,6 +117,33 @@
               "reasoningEffort": "max"
             }
           }
+        },
+        "deepseek-ai/deepseek-v4-pro-0813": {
+          "name": "DeepSeek V4 Pro 0813",
+          "reasoning": true,
+          "cost": {
+            "input": 20,
+            "output": 20,
+            "cache_read": 20
+          },
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          },
+          "options": {
+            "reasoningEffort": "max"
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "max": {
+              "reasoningEffort": "max"
+            }
+          }
         }
       }
     },

@@ -32,6 +32,8 @@ cmd_lock() {
   mkdir -p "$stage/files"
   [ -f "$HOME/.config/landscape/pat" ] && { cp "$HOME/.config/landscape/pat" "$stage/files/pat"; found=1; }
   [ -f "$HOME/.config/landscape/tokenrouter.key" ] && { cp "$HOME/.config/landscape/tokenrouter.key" "$stage/files/tokenrouter-key"; found=1; }
+  [ -f "$HOME/.config/landscape/nvidia-nim.key" ] && { cp "$HOME/.config/landscape/nvidia-nim.key" "$stage/files/nvidia-nim-key"; found=1; }
+  [ -f "$HOME/.config/landscape/xinjianya.key" ] && { cp "$HOME/.config/landscape/xinjianya.key" "$stage/files/xinjianya-key"; found=1; }
   [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
   [ -f "$HOME/.local/share/opencode/auth.json" ] && { cp "$HOME/.local/share/opencode/auth.json" "$stage/files/opencode-auth.json"; found=1; }
   [ -f ".env" ] && { cp ".env" "$stage/files/env"; found=1; }
@@ -72,6 +74,14 @@ cmd_unlock() {
   if [ -f "$stage/files/tokenrouter-key" ] && [ ! -f "$HOME/.config/landscape/tokenrouter.key" ]; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/tokenrouter-key" "$HOME/.config/landscape/tokenrouter.key" && chmod 600 "$HOME/.config/landscape/tokenrouter.key"
     echo "    TokenRouter-Key wiederhergestellt."
+  fi
+  if [ -f "$stage/files/nvidia-nim-key" ] && [ ! -f "$HOME/.config/landscape/nvidia-nim.key" ]; then
+    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/nvidia-nim-key" "$HOME/.config/landscape/nvidia-nim.key" && chmod 600 "$HOME/.config/landscape/nvidia-nim.key"
+    echo "    NVIDIA-NIM-Key wiederhergestellt."
+  fi
+  if [ -f "$stage/files/xinjianya-key" ] && [ ! -f "$HOME/.config/landscape/xinjianya.key" ]; then
+    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/xinjianya-key" "$HOME/.config/landscape/xinjianya.key" && chmod 600 "$HOME/.config/landscape/xinjianya.key"
+    echo "    XinJianYa-Key wiederhergestellt."
   fi
   if [ -f "$stage/files/chatglm-refresh-token" ] && [ ! -f ".secrets/chatglm-refresh-token" ]; then
     mkdir -p ".secrets" && cp "$stage/files/chatglm-refresh-token" ".secrets/chatglm-refresh-token" && chmod 600 ".secrets/chatglm-refresh-token"

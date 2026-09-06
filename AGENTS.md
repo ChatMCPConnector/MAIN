@@ -1,5 +1,12 @@
 # Agent Instructions
 
+## 0. Automatik (was ohne dich passiert)
+
+- Beim Codespace-Start läuft `.devcontainer/setup.sh` automatisch (`postCreateCommand`):
+  Systempakete → opencode → Shell-Aliase → **Secrets-Auto-Unlock** (via `LANDSCAPE_PASSPHRASE`) → **Git-Auth** (via `LANDSCAPE_PAT`) → Browser-Runtime.
+- Erste Pflichtlektüre: `INFRASTRUCTURE.md` (Soll-Zustand) + `README.md` (Mehraccount-Modell).
+- Repo ist shared für mehrere eigene Accounts. Alles Bleibende liegt unter `/workspaces/MAIN` und wird per `./scripts/save.sh` gepusht. Einmal pro Account: PAT + Passphrase als Codespaces-Secrets hinterlegen, danach ist alles automatisch.
+
 ## 1. Session-Start
 
 - Lies `INFRASTRUCTURE.md` einmal pro Session.
