@@ -107,12 +107,14 @@ echo "==> [landscape] LLM-Proxy glm2api (HAUPT-Proxy) wiederherstellen..."
 # glm2api ist der einzige lokale GLM-Proxy und MUSS nach einem Codespace-Wechsel
 # vollautomatisch zurück sein (Patch + .env + start.sh kommen alle aus diesem Repo).
 # Klon+uv-Sync dauern ~1-2 Min; der Proxy wird danach direkt gestartet.
-if [ -d /workspaces/glm2api/repo/.git ] && ss -tln | grep -q ":8001 "; then
-  echo "    Proxy-Klon vorhanden + Port 8001 belegt — läuft bereits."
+# Der Proxy-Code liegt direkt im Repo (llm-proxies/glm2api/) — kein Klon mehr.
+# rebuild.sh macht .env + venv (Sekunden), start-glm2api.sh startet.
+if ss -tln | grep -q ":8001 "; then
+  echo "    Port 8001 belegt — Proxy läuft bereits."
 else
-  bash "$REPO_ROOT/llm-proxies/rebuild.sh" && echo "    glm2api rekonstruiert."
-  bash /workspaces/glm2api/start.sh && echo "    glm2api gestartet." \
-    || echo "    WARN: Autostart fehlgeschlagen — manuell: /workspaces/glm2api/start.sh"
+  bash "$REPO_ROOT/llm-proxies/rebuild.sh" && bash "$REPO_ROOT/llm-proxies/scripts/start-glm2api.sh" \
+    && echo "    glm2api läuft." \
+    || echo "    WARN: Autostart fehlgeschlagen — manuell: ./llm-proxies/rebuild.sh --start"
 fi
 
 echo "==> [landscape] Fertig. Weiter mit: ./infra/scripts/save.sh status"

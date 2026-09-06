@@ -13,3 +13,8 @@ __pycache__/
 
 # Reproducible browser runtime and sensitive local browser profile
 .runtime/
+
+# glm2api-Runtime im Repo (Code ist committet, das hier nicht):
+llm-proxies/glm2api/.env
+llm-proxies/glm2api/log/
+llm-proxies/glm2api/token.txt

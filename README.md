@@ -20,20 +20,16 @@ Codespaces-Secrets, danach läuft alles automatisch (`postCreateCommand` →
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/kontostand/browser-*.sh, aliases.sh), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP) |
-| `llm-proxies/` | glm2api-Haupt-Proxy: Patch + Startskript + `rebuild.sh` |
+| `llm-proxies/` | glm2api-Haupt-Proxy: **kompletter Code liegt im Repo** (`llm-proxies/glm2api/` inkl. Patches) + `glm2api.env` + Start/rebuild-Skripte |
 | `work/` | Eigene Projekte: `docs/` |
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
-
-```
-/workspaces/glm2api/   GLM-Proxy-Klon (flüchtig, via llm-proxies/rebuild.sh rekonstruierbar)
-```
 
 ## Schnellstart
 
 Codespace bauen → `setup.sh` stellt ALLES automatisch wieder her (Systempakete,
 opencode, uv, Secrets-Unlock, Git-Auth, Browser-Runtime, **glm2api-Proxy inkl.
-Start** — Komplett-Rebuild + Autostart, das dauert ein paar Minuten beim ersten
-Codespace-Bau). Danach:
+Start** — der Code liegt komplett im Repo, es gibt nichts mehr zu klonen; nur
+`uv sync` (Python 3.14 + Deps, beim ersten Mal ~2-5 Min) + Autostart). Danach:
 
 ```bash
 ./infra/scripts/save.sh status                       # Überblick (Repo, Auth, Secrets)
@@ -102,11 +98,10 @@ komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 /workspaces/glm2api/start.sh        # starten (uv run lädt Deps on-demand)
 ```
 
-**100 %-Wiederherstellung (verifiziert durch Komplett-Reset-Simulation):**
-`setup.sh` installiert `uv` (lädt gemanagtes Python 3.14), klont das
-Upstream-Repo, patcht (`glm2api.patch`), installiert `glm2api.env` (Port 8001,
-Guest-Mode — secret-frei) und startet den Proxy. Alles aus MAIN, nichts bleibt
-flüchtig.
+**100 %-Wiederherstellung:** Der Proxy-Code lebt komplett in MAIN — nach
+einem Codespace-Wechsel macht setup.sh automatisch: uv-Install (falls nötig),
+`.env` aus `glm2api.env` (Port 8001, Guest-Mode, secret-frei), `uv sync`
+(venv), Start. Kein Klon, kein Patch-Anwenden, keine externen Abhängigkeiten.
 - `llm-proxies/patches/glm2api.patch`: Tool-Protokoll von DSML-Markup auf
   JSON+`[]`-Terminator umgestellt (+ DSML/Mashup-Fallbacks, Part-Merge-Fix —
   chatglm.cn streamt erst Token-Schnipsel, dann Volltext; Fix = anhängen +
@@ -138,12 +133,18 @@ Ein Codespace gehört zu Account+Repo+Branch, nicht übertragbar. Mitkommt 1:1
 alles gepushte. Im alten Codespace: `./infra/scripts/save.sh` (+ ggf.
 `./infra/scripts/secrets.sh lock`). Im neuen: Repo forken, Codespace bauen —
 Rest automatisch; einmalig `LANDSCAPE_PAT` (+ optional `LANDSCAPE_PASSPHRASE`)
-als Codespaces-Secrets. Nicht mitkommen, aber rekonstruierbar:
-`/workspaces/glm2api` (rebuild.sh), Browser-Profil, Ports.
+als Codespaces-Secrets. Nicht mitkommen, aber rekonstruierbar: Browser-Profil, Ports.
+glm2api selbst kommt komplett mit (Code im Repo).
 
 ## Changelog
 
-- 2026-09-07: Finaler Härtetest glm2api nach Umbau BESTANDEN (alle 5 Phasen):
+- 2026-09-07 (2): glm2api-Code VOLLSTÄNDIG ins Repo gewandert
+  (`llm-proxies/glm2api/`, inkl. Patches — kein GitHub-Klon mehr nötig).
+  rebuild.sh macht nur .env + uv sync (~Sekunden, kein Minuten-Klon);
+  start-glm2api.sh läuft aus MAIN; /workspaces/glm2api entfällt komplett.
+  Switchover live verifiziert: Proxy läuft aus MAIN-Pfad, Health/Chat/
+  Tool-Calls OK, /workspaces/glm2api gelöscht.
+- 2026-09-07 (1): Finaler Härtetest glm2api nach Umbau BESTANDEN (alle 5 Phasen):
   (A) Kaltstart von Null — /workspaces/glm2api gelöscht → rebuild.sh stellte
   Klon+Patch+.env+venv+start wieder her, Proxy lief; (B) API komplett: 80
   Modelle, non-stream, stream (Part-Merge sauber), Multi-Turn-Kontext; (C)

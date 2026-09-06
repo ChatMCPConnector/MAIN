@@ -22,8 +22,6 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "NVIDIA NIM",
       "whitelist": [
-        "deepseek-ai/deepseek-v4-pro-0813",
-        "deepseek-ai/deepseek-v4-flash-0731",
         "nvidia/nemotron-3-ultra-550b-a55b"
       ],
       "options": {
@@ -35,20 +33,6 @@
           "name": "Nemotron 3 Ultra 550B",
           "limit": {
             "context": 1000000,
-            "output": 8192
-          }
-        },
-        "deepseek-ai/deepseek-v4-flash-0731": {
-          "name": "DeepSeek V4 Flash 0731",
-          "limit": {
-            "context": 128000,
-            "output": 8192
-          }
-        },
-        "deepseek-ai/deepseek-v4-pro-0813": {
-          "name": "DeepSeek V4 Pro 0813",
-          "limit": {
-            "context": 128000,
             "output": 8192
           }
         }
@@ -118,84 +102,32 @@
             }
           }
         },
-        "grok-4.5": {
-          "name": "Grok 4.5",
-          "reasoning": true,
-          "cost": {
-            "input": 20,
-            "output": 20,
-            "cache_read": 20
-          },
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            }
-          }
-        },
-        "grok-4.6": {
-          "name": "Grok 4.6",
-          "reasoning": true,
-          "cost": {
-            "input": 20,
-            "output": 20,
-            "cache_read": 20
-          },
-          "options": {
-            "reasoningEffort": "xhigh"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "xhigh": {
-              "reasoningEffort": "xhigh"
-            }
-          }
-        },
-        "deepseek-ai/deepseek-v4-pro-0813": {
-          "name": "DeepSeek V4 Pro 0813",
-          "reasoning": true,
-          "cost": {
-            "input": 20,
-            "output": 20,
-            "cache_read": 20
-          },
-          "limit": {
-            "context": 128000,
-            "output": 8192
-          },
-          "options": {
-            "reasoningEffort": "max"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "max": {
-              "reasoningEffort": "max"
-            }
-          }
-        }
-      }
-    },
+         "grok-4.5": {
+           "name": "Grok 4.5",
+           "reasoning": true,
+           "cost": {
+             "input": 20,
+             "output": 20,
+             "cache_read": 20
+           },
+           "options": {
+             "reasoningEffort": "high"
+           },
+           "variants": {
+             "low": {
+               "reasoningEffort": "low"
+             },
+             "medium": {
+               "reasoningEffort": "medium"
+             },
+             "high": {
+               "reasoningEffort": "high"
+             }
+           }
+         }
+       }
+     },
+
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "glm2api (chatglm.cn guest-pool)",
