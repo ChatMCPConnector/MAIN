@@ -102,32 +102,31 @@
             }
           }
         },
-         "grok-4.5": {
-           "name": "Grok 4.5",
-           "reasoning": true,
-           "cost": {
-             "input": 20,
-             "output": 20,
-             "cache_read": 20
-           },
-           "options": {
-             "reasoningEffort": "high"
-           },
-           "variants": {
-             "low": {
-               "reasoningEffort": "low"
-             },
-             "medium": {
-               "reasoningEffort": "medium"
-             },
-             "high": {
-               "reasoningEffort": "high"
-             }
-           }
-         }
-       }
-     },
-
+        "grok-4.5": {
+          "name": "Grok 4.5",
+          "reasoning": true,
+          "cost": {
+            "input": 20,
+            "output": 20,
+            "cache_read": 20
+          },
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            }
+          }
+        }
+      }
+    },
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "glm2api (chatglm.cn guest-pool)",
@@ -136,18 +135,29 @@
         "apiKey": "local"
       },
       "models": {
-        "glm-5.3": {
-          "name": "GLM 5.3",
-          "limit": {
-            "context": 128000,
-            "output": 8192
-          }
-        },
         "glm-5.3-think": {
           "name": "GLM 5.3 Think",
+          "reasoning": true,
           "limit": {
             "context": 128000,
             "output": 8192
+          },
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "max": {
+              "reasoningEffort": "max"
+            }
           }
         }
       }
