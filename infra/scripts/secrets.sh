@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# secrets.sh: deine Secrets (PAT, opencode-Login, .env) verschlüsselt im Git mitschleppen.
+# secrets.sh: deine Secrets (API-Keys, opencode-Login, .env) verschlüsselt im Git mitschleppen.
 # Sinn: beide Accounts sind deine -> ein Bundle, eine Passphrase, null Aufwand pro Codespace.
 # Sicherheit: Repo ist PUBLIC -> die Datei config/secrets.enc kann jeder sehen, aber ohne
 # deine Passphrase ist sie nutzlos. Starke, einmalige Passphrase wählen. Bei Verdacht: PAT
 # auf GitHub revoken, .env-Keys rotieren, neu locken.
+#
+# WICHTIG (2026-09-06): Die Passphrase ist NUR ein Entschlüsselungswort — nie ein GitHub-PAT
+# oder ein anderer Secret benutzen (der alte PAT wurde dadurch geleakt+revoked). Die
+# Passphrase liegt als Klartext in config/passphrase (bewusst, Komfort>Auto-Unlock), ein
+# Leak allein dieser Datei ist damit wertlos. Der PAT selbst gehört nur verschlüsselt ins
+# Bundle bzw. als Codespaces-Secret LANDSCAPE_PAT.
 #
 #   ./infra/scripts/secrets.sh lock     # packt ein (Passphrase-Abfrage, unsichtbar). DANACH sagst du dem Agent "save".
 #   ./infra/scripts/secrets.sh unlock   # packt aus (automatisch wenn LANDSCAPE_PASSPHRASE gesetzt, sonst Abfrage)
@@ -105,7 +111,7 @@ cmd_status() {
     echo "Bundle: $BUNDLE ($(wc -c < "$BUNDLE" | tr -d ' ') Bytes, verschlüsselt)"
     [ -f "$MANIFEST" ] && { echo "Inhalt:"; sed 's/^/  /' "$MANIFEST"; }
   else
-    echo "Kein Bundle vorhanden. Mit './infr./infra/scripts/secrets.sh lock' erstellen."
+    echo "Kein Bundle vorhanden. Mit './infra/scripts/secrets.sh lock' erstellen."
   fi
 }
 
