@@ -29,25 +29,3 @@
     }
   }
 }
-
-
-
-API Endpoints
-
-Endpoint 1
-https://new.xinjianya.top
-
-Endpoint 2
-https://api.xinjianya.top
-
-Endpoint 3
-https://key.xinjianya.top
-
-Endpoint 4
-https://zt.xinjianya.top
-
-Endpoint 5
-https://docs.xinjianya.top
-
-Endpoint 6
-https://xn--65qx0xmvyrrp.xn--kiv260fv3i.cn

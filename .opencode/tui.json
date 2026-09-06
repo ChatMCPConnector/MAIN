@@ -10,6 +10,7 @@
     "messages_line_down": "ctrl+alt+e",
     "history_previous": "ctrl+up",
     "history_next": "ctrl+down",
+    "variant_cycle": "ctrl+t,ctrl+o",
     "input_move_up": "none",
     "input_move_down": "none",
     "session_parent": "<leader>up"
