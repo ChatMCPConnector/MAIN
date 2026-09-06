@@ -81,6 +81,7 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
   kaskadierende Löschung + Orphan-Event-Cleanup, schützt aktive/aktuelle/geteilte
   Sessions, `confirm:true` Pflicht. Details: `infra/mcp/README.md`.
+- `agent/glm2api.md`: Arbeits-Subagent fest auf `glm2api/glm-5.3` (Haupt-Proxy).
 - `tui.json`: Maus-Capture **aus** (`mouse: false` ist Absicht — xterm.js
   übersetzt dann das Mausrad in `up`/`down`, die auf halben Seitenwechsel
   gemappt sind. **Nicht auf `true` ändern.**)
@@ -142,6 +143,14 @@ als Codespaces-Secrets. Nicht mitkommen, aber rekonstruierbar:
 
 ## Changelog
 
+- 2026-09-07: Finaler Härtetest glm2api nach Umbau BESTANDEN (alle 5 Phasen):
+  (A) Kaltstart von Null — /workspaces/glm2api gelöscht → rebuild.sh stellte
+  Klon+Patch+.env+venv+start wieder her, Proxy lief; (B) API komplett: 80
+  Modelle, non-stream, stream (Part-Merge sauber), Multi-Turn-Kontext; (C)
+  Agent-Loop 3/3 Tool-Call-Schritte inkl. History-ohne-user-msg; (D) opencode
+  end-to-end via `--model glm2api/glm-5.3` (Datei erstellen+testen, 6
+  Tool-Executions); (E) Parallel-Load 5/5 korrekt (6.3s) + Token-Rotation.
+  Zusätzlich `agent/glm2api.md` als fest verdrahteter Arbeits-Subagent.
 - 2026-09-06 (5): 100 %-Wiederherstellung des Haupt-Proxies: setup.sh installiert
   jetzt `uv` + gemanagtes Python 3.14 (fehlte — Proxy wäre nach Codespace-Wechsel
   nicht startbar gewesen), rebuild.sh macht Klon+Patch+`.env`+`uv sync`+start.sh
