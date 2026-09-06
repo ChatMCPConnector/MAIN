@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# proxies/rebuild.sh: GLM-Proxy-Repos + lokale Patches in einem frischen Codespace
+# llm-proxies/rebuild.sh: GLM-Proxy-Repos + lokale Patches in einem frischen Codespace
 # wiederherstellen. Idempotent: vorhandene Klones werden überspritzt/gepatcht.
 #
-#   ./proxies/rebuild.sh          # alle drei Proxies klonen + patchen
-#   ./proxies/rebuild.sh glm2api  # nur einen
+#   ./llm-proxies/rebuild.sh          # alle drei Proxies klonen + patchen
+#   ./llm-proxies/rebuild.sh glm2api  # nur einen
 #
 # Quellen:
 #   glm2api   https://github.com/XxxXTeam/glm2api          (Port 8001)
@@ -12,7 +12,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PATCH_DIR="$REPO_ROOT/proxies/patches"
+PATCH_DIR="$REPO_ROOT/llm-proxies/patches"
 WS="/workspaces"
 LOG_DIR="/tmp/opencode"
 mkdir -p "$LOG_DIR"
@@ -80,7 +80,7 @@ for t in "${TARGETS[@]}"; do
 done
 
 # start.sh-Symlinks ins /workspaces-Root legen (DOKU-Pfad-Konvention: /workspaces/<name>/start.sh)
-for f in "$REPO_ROOT"/proxies/scripts/start-*.sh; do
+for f in "$REPO_ROOT"/llm-proxies/scripts/start-*.sh; do
   base="$(basename "$f")"
   proxy="${base#start-}"; proxy="${proxy%.sh}"
   [ -d "$WS/$proxy" ] && { cp "$f" "$WS/$proxy/start.sh"; chmod +x "$WS/$proxy/start.sh"; echo "==> start.sh für $proxy aktualisiert"; }

@@ -20,12 +20,12 @@ als Codespaces-Secrets, danach läuft alles automatisch
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json, agent/*.md (bench-*) |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/kontostand/browser-*.sh, aliases.sh), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP) |
-| `proxies/` | GLM-Proxy-Patches + Startskripte + `rebuild.sh` (→ Kap. Proxies) |
+| `llm-proxies/` | GLM-Proxy-Patches + Startskripte + `rebuild.sh` (→ Kap. GLM-Proxies) |
 | `work/` | Eigene Projekte: `docs/` (Kontostand), `benchmark/` (ChaosShop + MASTERPROMPT.md + rebuild.sh) |
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
 
 ```
-/workspaces/{glm2api,hellogml,chat2api}/   GLM-Proxy-Klones (flüchtig, via proxies/rebuild.sh rekonstruierbar)
+/workspaces/{glm2api,hellogml,chat2api}/   GLM-Proxy-Klones (flüchtig, via llm-proxies/rebuild.sh rekonstruierbar)
 /workspaces/benchmark/                     ChaosShop-Kopien (flüchtig, via work/benchmark/rebuild.sh)
 ```
 
@@ -36,7 +36,7 @@ Secrets-Unlock, Git-Auth, Browser-Runtime, Benchmark-Kopien). Danach:
 
 ```bash
 ./infra/scripts/save.sh status                       # Überblick (Repo, Auth, Secrets)
-./proxies/rebuild.sh                                 # GLM-Proxies (optional, dauert Minuten)
+./llm-proxies/rebuild.sh                                 # GLM-Proxies (optional, dauert Minuten)
 /workspaces/<glm2api|hellogml|chat2api>/start.sh     # Proxy starten (Log: /tmp/opencode/<name>.log)
 ```
 
@@ -104,17 +104,17 @@ OpenAI-kompatibel:
 **Wiederaufbau im frischen Codespace (alles im Repo):**
 
 ```
-./proxies/rebuild.sh            # klonen + patchen + deps (+ build bei chat2api) + start.sh kopieren
+./llm-proxies/rebuild.sh            # klonen + patchen + deps (+ build bei chat2api) + start.sh kopieren
 /workspaces/<name>/start.sh     # starten
 ```
 
-- `proxies/patches/*.patch`: Tool-Protokoll-Part-Merge-Fixes je Proxy
+- `llm-proxies/patches/*.patch`: Tool-Protokoll-Part-Merge-Fixes je Proxy
   (glm2api: JSON+`[]`-Terminator statt DSML-Markup; hellogml: Part-Merge +
   Non-Stream-Thinking-Fix; chat2api: GLM→`managed_bracket`, Fenster hidden, HW-Accel aus).
 - Kern-Erkenntnis aller drei: chatglm.cn streamt pro Part erst Token-Schnipsel
   ohne Akkumulation, dann den Volltext — Fix = Schnipsel anhängen, Finish-Volltext
   idempotent ersetzen (blindes Überschreiben erzeugt Müll wie `{"ol_callh"…`).
-- setup.sh rebuilt nur bei `LANDSCAPE_REBUILD_PROXIES=1` (sonst manuell, dauert Minuten).
+- setup.sh rebuilt nur bei `LANDSCAPE_REBUILD_LLM_PROXIES=1` (sonst manuell, dauert Minuten).
 - Upstream-Limit ist pro Guest-Token (~5 Nachrichten) — Pools rotieren das weg.
 
 ## Benchmark (ChaosShop 3-Wege-Vergleich)
