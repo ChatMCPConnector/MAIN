@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # save.sh: add+commit+push in einem. Der Agent darf das jederzeit non-interaktiv laufen lassen.
-#   ./scripts/save.sh [commit-message]   # committen (falls nötig) + pull-rebase + push
-#   ./scripts/save.sh --only-push        # nur pushen, nichts committen
-#   ./scripts/save.sh status             # Repo-, Auth- und Secrets-Status
+#   ./infra/scripts/save.sh [commit-message]   # committen (falls nötig) + pull-rebase + push
+#   ./infra/scripts/save.sh --only-push        # nur pushen, nichts committen
+#   ./infra/scripts/save.sh status             # Repo-, Auth- und Secrets-Status
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 export GIT_TERMINAL_PROMPT=0
 
 TOKEN_FILE="$HOME/.config/landscape/pat"
@@ -13,8 +13,8 @@ if [ "${1:-}" = "status" ]; then
   git status -sb
   echo "--- unpushed ---"
   git log --oneline origin/main..HEAD 2>/dev/null || git log --oneline -5
-  ./scripts/auth.sh status || true
-  ./scripts/secrets.sh status || true
+  ./infra/scripts/auth.sh status || true
+  ./infra/scripts/secrets.sh status || true
   exit 0
 fi
 if [ "${1:-}" = "--only-push" ]; then ONLY_PUSH=1; shift; fi
@@ -53,6 +53,6 @@ fi
 if push_cmd; then
   echo "Gepusht -> $slug/main"
 else
-  echo "PUSH FEHLGESCHLAGEN. Einmalig: ./scripts/auth.sh setup (oder LANDSCAPE_PAT als Codespaces-Secret setzen)."
+  echo "PUSH FEHLGESCHLAGEN. Einmalig: ./infra/scripts/auth.sh setup (oder LANDSCAPE_PAT als Codespaces-Secret setzen)."
   exit 1
 fi

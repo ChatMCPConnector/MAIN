@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly runtime_dir="${root_dir}/.runtime/ms-playwright"
 readonly profile_dir="${root_dir}/.runtime/chromium-profile"
 readonly log_dir="${root_dir}/.runtime/log"
@@ -10,7 +10,7 @@ readonly start_url="${1:-https://new.xinjianya.top}"
 
 chromium="$(find "${runtime_dir}" -type f -path '*/chrome-linux/chrome' -print -quit)"
 if [[ -z "${chromium}" ]]; then
-  echo "Chromium is not installed. Run scripts/browser-install.sh first." >&2
+  echo "Chromium is not installed. Run infra/scripts/browser-install.sh first." >&2
   exit 1
 fi
 

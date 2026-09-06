@@ -231,7 +231,7 @@
   "mcp": {
     "opencode-sessions": {
       "type": "local",
-      "command": ["node", "/workspaces/MAIN/mcp/opencode-sessions-mcp.js"],
+      "command": ["node", "/workspaces/MAIN/infra/mcp/opencode-sessions-mcp.js"],
       "enabled": true,
       "environment": {}
     }

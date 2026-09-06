@@ -2,9 +2,9 @@
 # auth.sh: EINMAL pro Codespace (bzw. einmal pro Account als Codespaces-Secret) einrichten,
 # danach kann der Agent jederzeit selbst pushen ohne dich zu fragen.
 #
-#   ./scripts/auth.sh setup [TOKEN]   # Token speichern (oder ohne Arg -> versteckte Abfrage)
-#   ./scripts/auth.sh status          # Zeigt ob Pushen geht (ohne Token zu verraten)
-#   ./scripts/auth.sh clear           # Token wieder entfernen
+#   ./infra/scripts/auth.sh setup [TOKEN]   # Token speichern (oder ohne Arg -> versteckte Abfrage)
+#   ./infra/scripts/auth.sh status          # Zeigt ob Pushen geht (ohne Token zu verraten)
+#   ./infra/scripts/auth.sh clear           # Token wieder entfernen
 #
 # Empfohlen für mehrere Accounts: Token EINMAL als Codespaces-Secret `LANDSCAPE_PAT`
 # anlegen (GitHub Settings -> Codespaces -> Secrets, Repo MAIN). Dann ist jeder neue
@@ -59,7 +59,7 @@ cmd_status() {
   elif echo "$out" | grep -qiE "fetch first|rejected|non-fast-forward"; then
     echo "OK (Auth geht, nur 'git pull --rebase' nötig) - Agent kann pushen (save.sh pullt automatisch)."
   else
-    echo "FEHLT - ./scripts/auth.sh setup ausführen oder LANDSCAPE_PAT als Codespaces-Secret setzen."
+    echo "FEHLT - ./infra/scripts/auth.sh setup ausführen oder LANDSCAPE_PAT als Codespaces-Secret setzen."
     echo "$out" | head -3
     return 1
   fi

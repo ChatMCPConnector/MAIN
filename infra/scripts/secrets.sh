@@ -5,15 +5,15 @@
 # deine Passphrase ist sie nutzlos. Starke, einmalige Passphrase wählen. Bei Verdacht: PAT
 # auf GitHub revoken, .env-Keys rotieren, neu locken.
 #
-#   ./scripts/secrets.sh lock     # packt ein (Passphrase-Abfrage, unsichtbar). DANACH sagst du dem Agent "save".
-#   ./scripts/secrets.sh unlock   # packt aus (automatisch wenn LANDSCAPE_PASSPHRASE gesetzt, sonst Abfrage)
-#   ./scripts/secrets.sh status   # zeigt was drin ist (ohne Passphrase, ohne Inhalte)
+#   ./infra/scripts/secrets.sh lock     # packt ein (Passphrase-Abfrage, unsichtbar). DANACH sagst du dem Agent "save".
+#   ./infra/scripts/secrets.sh unlock   # packt aus (automatisch wenn LANDSCAPE_PASSPHRASE gesetzt, sonst Abfrage)
+#   ./infra/scripts/secrets.sh status   # zeigt was drin ist (ohne Passphrase, ohne Inhalte)
 #
 # Vollautomatisch: LANDSCAPE_PASSPHRASE als Codespaces-Secret pro Account hinterlegen ->
 # jeder neue Codespace entsperrt sich beim Start von selbst (siehe setup.sh).
 # WICHTIG: Die Passphrase tippst DU im Terminal ein. Nie in den Chat schreiben.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 BUNDLE="config/secrets.enc"
 MANIFEST="config/secrets.manifest"
 
@@ -69,7 +69,7 @@ cmd_unlock() {
   # Bestehendes nie überschreiben (lokale Secrets behalten Vorrang)
   if [ -f "$stage/files/pat" ] && [ ! -f "$HOME/.config/landscape/pat" ]; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/pat" "$HOME/.config/landscape/pat" && chmod 600 "$HOME/.config/landscape/pat"
-    ./scripts/auth.sh setup "$(cat "$HOME/.config/landscape/pat")" >/dev/null 2>&1 || true
+    ./infra/scripts/auth.sh setup "$(cat "$HOME/.config/landscape/pat")" >/dev/null 2>&1 || true
     echo "    PAT wiederhergestellt + Git/gh verdrahtet."
   fi
   if [ -f "$stage/files/opencode-auth.json" ] && [ ! -f "$HOME/.local/share/opencode/auth.json" ]; then
@@ -105,7 +105,7 @@ cmd_status() {
     echo "Bundle: $BUNDLE ($(wc -c < "$BUNDLE" | tr -d ' ') Bytes, verschlüsselt)"
     [ -f "$MANIFEST" ] && { echo "Inhalt:"; sed 's/^/  /' "$MANIFEST"; }
   else
-    echo "Kein Bundle vorhanden. Mit './scripts/secrets.sh lock' erstellen."
+    echo "Kein Bundle vorhanden. Mit './infr./infra/scripts/secrets.sh lock' erstellen."
   fi
 }
 

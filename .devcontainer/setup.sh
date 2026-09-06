@@ -24,8 +24,8 @@ for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
   if ! grep -qF "$MARKER" "$rc" 2>/dev/null; then
     {
       echo ""
-      echo "$MARKER (nicht editieren, Quelle: $REPO_ROOT/dotfiles/aliases.sh)"
-      echo "[ -f \"$REPO_ROOT/dotfiles/aliases.sh\" ] && source \"$REPO_ROOT/dotfiles/aliases.sh\""
+      echo "$MARKER (nicht editieren, Quelle: $REPO_ROOT/infra/scripts/aliases.sh)"
+      echo "[ -f \"$REPO_ROOT/infra/scripts/aliases.sh\" ] && source \"$REPO_ROOT/infra/scripts/aliases.sh\""
     } >> "$rc"
     echo "    verlinkt in $rc"
   fi
@@ -33,9 +33,9 @@ done
 
 echo "==> [landscape] Secrets entsperren (falls Bundle + Passphrase da)..."
 if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
-  bash "$REPO_ROOT/scripts/secrets.sh" unlock >/dev/null 2>&1 && echo "    Secrets automatisch wiederhergestellt." || echo "    WARN: Auto-Unlock fehlgeschlagen (falsche Passphrase?)."
+  bash "$REPO_ROOT/infr./infra/scripts/secrets.sh" unlock >/dev/null 2>&1 && echo "    Secrets automatisch wiederhergestellt." || echo "    WARN: Auto-Unlock fehlgeschlagen (falsche Passphrase?)."
 elif [ -f "$REPO_ROOT/config/secrets.enc" ]; then
-  echo "    Bundle vorhanden, keine Passphrase. Entsperren mit: ./scripts/secrets.sh unlock"
+  echo "    Bundle vorhanden, keine Passphrase. Entsperren mit: ./infra/scripts/secrets.sh unlock"
 fi
 
 echo "==> [landscape] .env prüfen..."
@@ -47,19 +47,19 @@ echo "==> [landscape] Git-Auth verdrahten (für Agent-Push)..."
 # Wenn LANDSCAPE_PAT als Codespaces-Secret oder Env gesetzt ist: automatisch einrichten.
 # Das ist der Einmal-pro-Account-Schritt, danach kann der Agent immer selbst pushen.
 if [ -n "${LANDSCAPE_PAT:-${GITHUB_PAT:-${GH_TOKEN:-}}}" ]; then
-  bash "$REPO_ROOT/scripts/auth.sh" setup >/dev/null 2>&1 || echo "    WARN: Auth-Setup fehlgeschlagen."
+  bash "$REPO_ROOT/infr./infra/scripts/auth.sh" setup >/dev/null 2>&1 || echo "    WARN: Auth-Setup fehlgeschlagen."
 else
-  echo "    kein Token gefunden. Einmalig: ./scripts/auth.sh setup  (oder LANDSCAPE_PAT als Codespaces-Secret setzen)"
+  echo "    kein Token gefunden. Einmalig: ./infra/scripts/auth.sh setup  (oder LANDSCAPE_PAT als Codespaces-Secret setzen)"
 fi
 
 echo "==> [landscape] Browser-Runtime prüfen..."
-if [ -f "$REPO_ROOT/browser/package.json" ] && [ ! -d "$REPO_ROOT/.runtime/ms-playwright" ]; then
+if [ -f "$REPO_ROOT/infra/browser/package.json" ] && [ ! -d "$REPO_ROOT/.runtime/ms-playwright" ]; then
   if command -v npm >/dev/null 2>&1; then
-    bash "$REPO_ROOT/scripts/browser-install.sh" >/dev/null 2>&1 \
+    bash "$REPO_ROOT/infr./infra/scripts/browser-install.sh" >/dev/null 2>&1 \
       && echo "    Chromium-Runtime installiert." \
-      || echo "    WARN: Browser-Install fehlgeschlagen, manuell: ./scripts/browser-install.sh"
+      || echo "    WARN: Browser-Install fehlgeschlagen, manuell: ./infra/scripts/browser-install.sh"
   else
-    echo "    SKIP: npm fehlt, manuell nachholen: ./scripts/browser-install.sh"
+    echo "    SKIP: npm fehlt, manuell nachholen: ./infra/scripts/browser-install.sh"
   fi
 else
   echo "    Browser-Runtime vorhanden."
@@ -68,9 +68,9 @@ fi
 echo "==> [landscape] Sessions-MCP prüfen (opencode-sessions)..."
 # MCP-Server für Session-Verwaltung; DB-Pfad ist pro Codespace identisch (~/.local/share/opencode/opencode.db).
 # Falls das Repo nicht unter /workspaces/MAIN liegt, passt setup.sh den Pfad in der opencode-Config an.
-if [ -f "$REPO_ROOT/mcp/opencode-sessions-mcp.js" ]; then
+if [ -f "$REPO_ROOT/infra/mcp/opencode-sessions-mcp.js" ]; then
   NODE_BIN="$(command -v node || true)"
-  MCP_LINE="  \"mcp\": {\"opencode-sessions\": {\"type\": \"local\", \"command\": [\"${NODE_BIN:-node}\", \"$REPO_ROOT/mcp/opencode-sessions-mcp.js\"], \"enabled\": true, \"environment\": {}}},"
+  MCP_LINE="  \"mcp\": {\"opencode-sessions\": {\"type\": \"local\", \"command\": [\"${NODE_BIN:-node}\", \"$REPO_ROOT/infra/mcp/opencode-sessions-mcp.js\"], \"enabled\": true, \"environment\": {}}},"
   for CFG in "$REPO_ROOT/.opencode/opencode.json" "$HOME/.config/opencode/opencode.json"; do
     mkdir -p "$(dirname "$CFG")"
     if [ ! -f "$CFG" ]; then
@@ -90,7 +90,7 @@ PYEOF
   done
   echo "    opencode-sessions MCP registriert (in opencode-Config)."
 else
-  echo "    SKIP: mcp/opencode-sessions-mcp.js fehlt."
+  echo "    SKIP: infra/mcp/opencode-sessions-mcp.js fehlt."
 fi
 
 echo "==> [landscape] Proxies + Benchmark (flüchtige Anteile)..."
@@ -109,4 +109,4 @@ if [ -d "$REPO_ROOT/work/benchmark/template" ] && [ ! -d /workspaces/benchmark ]
     || echo "    WARN: Benchmark-Rebuild fehlgeschlagen, manuell: ./work/benchmark/rebuild.sh"
 fi
 
-echo "==> [landscape] Fertig. Weiter mit: ./scripts/save.sh status"
+echo "==> [landscape] Fertig. Weiter mit: ./infra/scripts/save.sh status"

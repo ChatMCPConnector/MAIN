@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly browser_dir="${root_dir}/browser"
+readonly root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly browser_dir="${root_dir}/infra/browser"
 readonly runtime_dir="${root_dir}/.runtime/ms-playwright"
 
 mkdir -p "${runtime_dir}"

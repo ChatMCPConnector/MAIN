@@ -2,8 +2,8 @@
 # kontostand.sh: minimaler Collector für Kontostand/Verbrauch (Spec: work/docs/Kontostand.md).
 # Bevorzugt direkten API-Abruf mit System Access Token, kein dauerhafter Browser.
 #
-#   ./scripts/kontostand.sh            # abrufen + cachen + zwei Werte anzeigen
-#   ./scripts/kontostand.sh --cached   # nur letzten Cache-Stand anzeigen
+#   ./infra/scripts/kontostand.sh            # abrufen + cachen + zwei Werte anzeigen
+#   ./infra/scripts/kontostand.sh --cached   # nur letzten Cache-Stand anzeigen
 #
 # Konfiguration (Env oder .env):
 #   SYSTEM_ACCESS_TOKEN   Pflicht für Abruf (nie loggen, nie committen).
@@ -13,7 +13,7 @@
 #
 # Fehlerverhalten: nie 0 anzeigen. Bei Fehler letzten Stand behalten, Exit 1.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CACHE="$ROOT/.runtime/kontostand.json"
 HOST="${KONTOSTAND_HOST:-https://new.xinjianya.top}"
 DIVISOR="${KONTOSTAND_DIVISOR:-}"

@@ -2,10 +2,10 @@
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"
 export TZ="Europe/Berlin"
 
-alias save='./scripts/save.sh'
-alias auth='./scripts/auth.sh status'
-alias secrets='./scripts/secrets.sh status'
-alias ports='./scripts/ports.sh'
+alias save='./infra/scripts/save.sh'
+alias auth='./infra/scripts/auth.sh status'
+alias secrets='./infra/scripts/secrets.sh status'
+alias ports='./infra/scripts/ports.sh'
 alias st='git status -sb'
 alias ll='ls -lah'
 
