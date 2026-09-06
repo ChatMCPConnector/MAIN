@@ -64,8 +64,9 @@ TokenRouter-Key + `.env` verschlüsselt ins (publice) Repo:
 ./scripts/secrets.sh unlock   # im neuen Codespace
 ```
 
-Vollautomatisch: `LANDSCAPE_PASSPHRASE` als Codespaces-Secret hinterlegen —
-dann entsperrt sich jeder neue Codespace beim Start von selbst.
+Vollautomatisch: Die Passphrase liegt als Klartext in `config/passphrase` —
+jeder eigene Codespace entsperrt sich beim Start von selbst. Alternativ/ergänzend
+kann `LANDSCAPE_PASSPHRASE` als Codespaces-Secret hinterlegt werden (hat Vorrang).
 
 Hinweis: Der mitgesyncte PAT stammt vom Account, der `lock` gemacht hat.
 Bei Leak-Verdacht: Token revoken, Keys rotieren, neu locken.

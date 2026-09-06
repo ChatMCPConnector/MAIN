@@ -24,7 +24,7 @@ automatisch (`postCreateCommand` → `.devcontainer/setup.sh`).
   scripts/                 save.sh, auth.sh, secrets.sh, ports.sh, kontostand.sh,
                            browser-install.sh, browser-start.sh, nvidia-models.py
   dotfiles/                aliases.sh (wird in .bashrc verlinkt)
-  config/                  secrets.enc (verschlüsseltes Bundle) + Manifest
+  config/                  secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst)
   browser/                 Playwright-Runtime 1.48.2 (gepinnt, Details → INFRASTRUCTURE.md)
   work/                    eigene Projekte + docs/ (Kontostand.md)
   .secrets/                Klartext-Secrets, GITIGNORED (u.a. chatglm-refresh-token)
@@ -40,13 +40,17 @@ siehe Kap. 5).
 
 ## 3. Secrets-Modell
 
-- Klartext-Keys liegen ausschließlich unter `~/.config/landscape/` und `.secrets/`
+- Klartext-Keys liegen unter `~/.config/landscape/` und `.secrets/`
   (beide nie im Git): `pat`, `tokenrouter.key`, `nvidia-nim.key`, `xinjianya.key`,
   `chatglm-refresh-token`, dazu `~/.local/share/opencode/auth.json` und `.env`.
+  Ausnahme (bewusst, Komfort > Sicherheit): die Enthüllungs-Passphrase liegt
+  als Klartext im Repo unter `config/passphrase`; `Free-API.txt` darf Klartext-Keys
+  enthalten.
 - `./scripts/secrets.sh lock` packt sie verschlüsselt nach `config/secrets.enc`
   (Manifest: `config/secrets.manifest`); `unlock` stellt sie wieder her.
-- Zwei Codespaces-Secrets pro Account steuern alles: `LANDSCAPE_PAT` (Git-Auth)
-  und `LANDSCAPE_PASSPHRASE` (Auto-Unlock beim Start). `landscape-diff()` im
+- Codespaces-Secrets pro Account: `LANDSCAPE_PAT` (Git-Auth, einmalig) steuert
+  den Auto-Push; `LANDSCAPE_PASSPHRASE` ist optional, weil `config/passphrase`
+  den Auto-Unlock beim Start bereits ermöglicht. `landscape-diff()` im
   Alias zeigt, was nur im Bundle, nicht im Git liegt.
 
 ## 4. opencode-Konfiguration (`.opencode/`)

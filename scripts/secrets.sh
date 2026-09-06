@@ -19,6 +19,11 @@ MANIFEST="config/secrets.manifest"
 
 get_passphrase() {
   if [ -n "${LANDSCAPE_PASSPHRASE:-}" ]; then return 0; fi
+  if [ -f "config/passphrase" ]; then
+    LANDSCAPE_PASSPHRASE="$(cat "config/passphrase")"
+    export LANDSCAPE_PASSPHRASE
+    return 0
+  fi
   read -rsp "Secrets-Passphrase: " LANDSCAPE_PASSPHRASE
   echo ""
   [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || { echo "Abgebrochen: keine Passphrase."; exit 1; }

@@ -2,6 +2,14 @@
 
 Soll-Zustand des Codespaces. Details zu Regeln in `AGENTS.md`. Nur verifizierte, ausgeführte Änderungen stehen hier.
 
+## Sicherheitsmodell (bewusst: Komfort > Sicherheit)
+
+Das Repo ist shared für mehrere **eigene** Accounts. Automatik hat Vorrang vor Sekret-Schutz:
+
+- Die Secrets-Enthüllungs-Passphrase liegt absichtlich als Klartext im Repo unter `config/passphrase`. Dadurch entsperrt sich jeder eigene Codespace beim Start selbst (`scripts/secrets.sh` nutzt sie als Fallback, `setup.sh` triggert Auto-Unlock auch ohne `LANDSCAPE_PASSPHRASE`).
+- `Free-API.txt` darf Klartext-API-Keys enthalten (eigene Keys).
+- Der Rest bleibt verschlüsselt (`config/secrets.enc`) bzw. klartext-los: `.env`, `~/.config/landscape/*`, `.secrets/`, Browserprofile, `.runtime/` werden weiterhin nicht committet.
+
 ## Kanonischer Stand (2026-09-06)
 
 - Playwright: `1.48.2`, gepinnt in `browser/package.json`, installiert via `browser/` (`npm ci`).
@@ -40,6 +48,8 @@ curl -fsS http://127.0.0.1:9222/json/version | head -c 300; echo
 Läuft etwas Passendes → wiederverwenden. Fehlt der Build → `scripts/browser-install.sh`. Laufen Dienste nicht → `scripts/browser-start.sh`.
 
 ## Changelog
+
+- 2026-09-06: Sicherheitsmodell festgeschrieben (Komfort > Sicherheit): Passphrase liegt als Klartext in `config/passphrase`, `setup.sh` + `scripts/secrets.sh` entsperren sich selbst (Fallback ohne `LANDSCAPE_PASSPHRASE`). `scripts/secrets.sh` sichert jetzt auch `nvidia-nim.key` + `xinjianya.key`; Bundle + `config/secrets.manifest` neu generiert (kein veraltetes `bananarouter-key` mehr, enthält nun `chatglm-refresh-token`).
 
 - 2026-09-06: Kanonik auf `browser/` (Playwright 1.48.2) + `scripts/browser-install.sh` / `scripts/browser-start.sh` + `.runtime/` (gitignored) umgestellt. Alte npx-Caches, `chromium-1140` und `/home/vscode/.config/chromium` als deprecated markiert (löschbar nach Freigabe). Doku-Loop entfernt: kein Voll-Read/Doku-Zwang pro Edit mehr.
 - 2026-09-05: Erstaufnahme (npx-Caches 1.63.0/1.48.2, chromium-1140, PID 392273, Display :120, Ports 5920/6082/9222, Profil `/home/vscode/.config/chromium`). Konsolidierung war damals noch offen — ist mit dem Stand vom 2026-09-06 erledigt.

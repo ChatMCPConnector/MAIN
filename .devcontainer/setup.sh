@@ -32,7 +32,7 @@ for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
 done
 
 echo "==> [landscape] Secrets entsperren (falls Bundle + Passphrase da)..."
-if [ -f "$REPO_ROOT/config/secrets.enc" ] && [ -n "${LANDSCAPE_PASSPHRASE:-}" ]; then
+if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
   bash "$REPO_ROOT/scripts/secrets.sh" unlock >/dev/null 2>&1 && echo "    Secrets automatisch wiederhergestellt." || echo "    WARN: Auto-Unlock fehlgeschlagen (falsche Passphrase?)."
 elif [ -f "$REPO_ROOT/config/secrets.enc" ]; then
   echo "    Bundle vorhanden, keine Passphrase. Entsperren mit: ./scripts/secrets.sh unlock"
