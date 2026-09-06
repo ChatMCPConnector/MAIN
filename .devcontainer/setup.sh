@@ -65,4 +65,32 @@ else
   echo "    Browser-Runtime vorhanden."
 fi
 
+echo "==> [landscape] Sessions-MCP prüfen (opencode-sessions)..."
+# MCP-Server für Session-Verwaltung; DB-Pfad ist pro Codespace identisch (~/.local/share/opencode/opencode.db).
+# Falls das Repo nicht unter /workspaces/MAIN liegt, passt setup.sh den Pfad in der opencode-Config an.
+if [ -f "$REPO_ROOT/mcp/opencode-sessions-mcp.js" ]; then
+  NODE_BIN="$(command -v node || true)"
+  MCP_LINE="  \"mcp\": {\"opencode-sessions\": {\"type\": \"local\", \"command\": [\"${NODE_BIN:-node}\", \"$REPO_ROOT/mcp/opencode-sessions-mcp.js\"], \"enabled\": true, \"environment\": {}}},"
+  for CFG in "$REPO_ROOT/.opencode/opencode.json" "$HOME/.config/opencode/opencode.json"; do
+    mkdir -p "$(dirname "$CFG")"
+    if [ ! -f "$CFG" ]; then
+      printf '{\n  "$schema": "https://opencode.ai/config.json",\n%s\n  "permission": "allow"\n}\n' "$MCP_LINE" > "$CFG"
+    elif ! grep -q '"opencode-sessions"' "$CFG"; then
+      python3 - "$CFG" "$MCP_LINE" <<'PYEOF' 2>/dev/null || sed -i '1a\
+'"$MCP_LINE" "$CFG"
+import json, sys
+cfg_path, mcp_line = sys.argv[1], sys.argv[2]
+with open(cfg_path) as f:
+    first = f.readline()
+    rest = f.read()
+with open(cfg_path, "w") as f:
+    f.write(first + mcp_line + "\n" + rest)
+PYEOF
+    fi
+  done
+  echo "    opencode-sessions MCP registriert (in opencode-Config)."
+else
+  echo "    SKIP: mcp/opencode-sessions-mcp.js fehlt."
+fi
+
 echo "==> [landscape] Fertig. Weiter mit: ./scripts/save.sh status"

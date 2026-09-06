@@ -34,6 +34,12 @@ Konfig: `.opencode/tui.json` (committet in MAIN → kommt in jede Codespace auto
   - Display `:120`, x11vnc `localhost:5920`, noVNC Port `6082` (`/vnc.html?autoconnect=1&resize=scale`), CDP `http://127.0.0.1:9222`
   - CDP nie öffentlich freigeben (erlaubt Kontrolle über die Browsersitzung). In Remote-Codespaces `localhost:6082` durch die weitergeleitete Port-URL ersetzen.
 
+## Sessions-MCP (opencode-sessions)
+
+- Lokaler MCP-Server `mcp/opencode-sessions-mcp.js` (Node >= 18 + `sqlite3`-CLI, zero dependencies) für Session-Verwaltung direkt auf `~/.local/share/opencode/opencode.db`: list/delete/preview/search/info/stats. Kaskadierende Löschung inkl. Orphan-Event-Cleanup + VACUUM; schützt automatisch die aktuelle + aktive + geteilte Sessions; `confirm: true` Pflicht.
+- Registriert in `.opencode/opencode.json` (`mcp.opencode-sessions`), kommt mit dem Repo in jeden Codespace. `setup.sh` stellt die Registrierung idempotent her (passt Pfade an, legt Config an, fügt mcp-Key ein, falls fehlt).
+- Details: `mcp/README.md`.
+
 ## Deprecated (darf weg, kein Soll mehr)
 
 Alte, nicht reproduzierbare Ablagen — werden nicht mehr verwendet, seit `browser/` + `scripts/` existieren:
@@ -60,6 +66,7 @@ Läuft etwas Passendes → wiederverwenden. Fehlt der Build → `scripts/browser
 
 ## Changelog
 
+- 2026-09-06: Sessions-MCP `opencode-sessions` hinzugefügt (`mcp/opencode-sessions-mcp.js`, zero deps): Session-Verwaltung direkt auf der opencode-SQLite-DB (list/preview/delete/search/info/stats), kaskadierende Löschung + Orphan-Event-Cleanup (574 MB → 2 MB beim Erstsäuberungslauf). In `.opencode/opencode.json` registriert, `setup.sh` stellt Registrierung idempotent in jedem neuen Codespace her.
 - 2026-09-06: Reproduzierbarkeit geschlossen: `setup.sh` installiert jetzt `nodejs`, `npm`, `xvfb`, `x11vnc`, `novnc`, `websockify` (waren nur manuell vorhanden — frischer Codespace hätte die Browser-Runtime nicht starten können). `tui.json` unverändert: `mouse: false` ist Absicht — ohne Maus-Modus übersetzt xterm.js das Mausrad in `up`/`down`, die auf `messages_half_page_up`/`_down` gemappt sind (Mausrad-Scrollen funktioniert so nativ).
 - 2026-09-06: Sicherheitsmodell festgeschrieben (Komfort > Sicherheit): Passphrase liegt als Klartext in `config/passphrase`, `setup.sh` + `scripts/secrets.sh` entsperren sich selbst (Fallback ohne `LANDSCAPE_PASSPHRASE`). `scripts/secrets.sh` sichert jetzt auch `nvidia-nim.key` + `xinjianya.key`; Bundle + `config/secrets.manifest` neu generiert (kein veraltetes `bananarouter-key` mehr, enthält nun `chatglm-refresh-token`).
 

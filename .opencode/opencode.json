@@ -228,6 +228,14 @@
   "default_agent": "build",
   "permission": "allow",
   "lsp": true,
+  "mcp": {
+    "opencode-sessions": {
+      "type": "local",
+      "command": ["node", "/workspaces/MAIN/mcp/opencode-sessions-mcp.js"],
+      "enabled": true,
+      "environment": {}
+    }
+  },
   "compaction": {
     "auto": true,
     "prune": true,
