@@ -10,6 +10,16 @@ Das Repo ist shared für mehrere **eigene** Accounts. Automatik hat Vorrang vor 
 - `Free-API.txt` darf Klartext-API-Keys enthalten (eigene Keys).
 - Der Rest bleibt verschlüsselt (`config/secrets.enc`) bzw. klartext-los: `.env`, `~/.config/landscape/*`, `.secrets/`, Browserprofile, `.runtime/` werden weiterhin nicht committet.
 
+## TUI / Mausrad-Mapping (bleibend — nicht kaputt machen)
+
+Konfig: `.opencode/tui.json` (committet in MAIN → kommt in jede Codespace automatisch mit, opencode liest es beim Start). Das Mausrad-Scrollen läuft **nicht** über opencodes eigenen Maus-Modus, sondern über den Terminal:
+
+- `"mouse": false` ist Absicht. Ohne Maus-Modus setzt opencode keinen Mouse-Tracking-Mode, also übersetzt **xterm.js** (Codespaces-/VS-Code-Terminal) das Mausrad im Alternate-Screen automatisch in `up`/`down`-Tasten.
+- `keybinds`: genau diese `up`/`down` sind auf `messages_half_page_up` / `messages_half_page_down` gemappt (Viertelseite, ruhiger als die halbe Seite von `pageup`/`pagedown`).
+- Konfliktfreie Umbelegung, damit `up`/`down` frei bleiben: `history_previous/next` → `ctrl+up`/`ctrl+down`, `input_move_up/down` → `none`, `session_parent` → `<leader>up`.
+- **Nicht auf `mouse: true` ändern**: dann fängt opencode das Rad selbst und das `up`/`down`-Mapping bricht (Rad scrollt nicht mehr).
+- Nur in xterm.js-Terminals (Codespaces Web, VS Code). In einem anderen Terminal (z. B. reines SSH ohne xterm) kann das Rad stattdessen als Escape-Sequenz ankommen und anderes Verhalten zeigen.
+
 ## Kanonischer Stand (2026-09-06)
 
 - Playwright: `1.48.2`, gepinnt in `browser/package.json`, installiert via `browser/` (`npm ci`).
