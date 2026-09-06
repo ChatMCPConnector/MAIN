@@ -42,7 +42,7 @@ index 7ceb77a..b7f80cb 100644
    credentialFields: [
      {
 diff --git a/src/main/proxy/adapters/glm.ts b/src/main/proxy/adapters/glm.ts
-index f4e8faa..2544b03 100644
+index f4e8faa..bb3b2a6 100644
 --- a/src/main/proxy/adapters/glm.ts
 +++ b/src/main/proxy/adapters/glm.ts
 @@ -11,6 +11,45 @@ import { PassThrough } from 'stream'
@@ -91,7 +91,33 @@ index f4e8faa..2544b03 100644
  import path from 'path'
  import { toolsToSystemPrompt, TOOL_WRAP_HINT, hasToolPromptInjected } from '../utils/tools'
  import { parseToolCallsFromText } from '../utils/toolParser'
-@@ -751,7 +790,7 @@ export class GLMStreamHandler {
+@@ -408,6 +447,25 @@ export class GLMAdapter {
+       return acc
+     }, '')
+ 
++    // Agent-Loop-Fix: Endet die History auf tool-Ergebnisse (typisch für Agenten-Frameworks
++    // wie opencode, die nach Tool-Ausführung KEINE neue user-message senden), wird das
++    // Modell sonst in einen "Zusammenfassungs"-Chat-Modus gezwungen und hört auf, Tools
++    // zu callen. Ergänze in dem Fall eine explizite Agent-Fortsetzungs-Aufforderung,
++    // damit der Loop weitergeht (nur wenn Tools im Spiel sind).
++    const lastMsg = processedMessages[processedMessages.length - 1]
++    if (
++      toolsPrompt &&
++      lastMsg &&
++      (lastMsg.role === 'user' || (lastMsg as any).tool_call_id) &&
++      processedMessages.some(m => m.role === 'assistant' && (m as any).tool_calls)
++    ) {
++      const lastIsToolResult = (lastMsg as any).tool_call_id !== undefined
++        || (lastMsg.role === 'user' && (lastMsg as any).tool_call_id === undefined && messages[messages.length - 1].role === 'tool')
++      if (lastIsToolResult) {
++        textContent = textContent.trim() + "\n\nIMPORTANT: You are in an agent loop. The tool results above are fresh. Continue the task: either call the next tool (in the [function_calls] block) or, if everything is done, give your final answer. Do NOT summarize the conversation — act."
++      }
++    }
++
+     // Inject tools prompt at the VERY END
+     if (toolsPrompt) {
+       textContent = textContent.trim() + "\n\n" + toolsPrompt
+@@ -751,7 +809,7 @@ export class GLMStreamHandler {
                result.parts.forEach((part: any) => {
                  const index = cachedParts.findIndex((p) => p.logic_id === part.logic_id)
                  if (index !== -1) {
@@ -100,7 +126,7 @@ index f4e8faa..2544b03 100644
                  } else {
                    cachedParts.push(part)
                  }
-@@ -961,12 +1000,12 @@ export class GLMStreamHandler {
+@@ -961,12 +1019,12 @@ export class GLMStreamHandler {
  
              if (result.status !== 'finish') {
                if (result.parts) {
@@ -115,6 +141,24 @@ index f4e8faa..2544b03 100644
                    } else {
                      cachedParts.push(part)
                    }
+diff --git a/src/main/proxy/constants/signatures.ts b/src/main/proxy/constants/signatures.ts
+index 86aad57..c68b8c4 100644
+--- a/src/main/proxy/constants/signatures.ts
++++ b/src/main/proxy/constants/signatures.ts
+@@ -156,7 +156,12 @@ export const GENERAL_TOOL_SIGNATURES = [
+   'Tool Call Formatting',
+   'TOOL USE',
+   '## Tool Use',
+-  '## Tools',
++  // '## Tools' entfernt: zu grob — opencode (und andere Agent-Frameworks)
++  // nutzen "## Tools" als harmlose Abschnitts-Überschrift OHNE eigene
++  // Tool-Prompt-Injection. Das Skippen der Proxy-Injection nahm dem Modell
++  // die Tool-Definitionen komplett weg ("Ich kann die Tools nicht nutzen").
++  // Wer wirklich selbst injiziert, trägt [function_calls]-Anweisungen o.ä.
++  // (siehe Signaturen oben) mit.
+ ]
+ 
+ /**
 diff --git a/src/main/proxy/toolCalling/protocols/managedBracket.ts b/src/main/proxy/toolCalling/protocols/managedBracket.ts
 index f13b23e..a7077f9 100644
 --- a/src/main/proxy/toolCalling/protocols/managedBracket.ts
