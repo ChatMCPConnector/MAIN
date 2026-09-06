@@ -17,6 +17,16 @@ else
 fi
 export PATH="$HOME/.opencode/bin:$PATH"
 
+echo "==> [landscape] uv installieren (Python-Runtime für glm2api)..."
+# glm2api braucht Python 3.14 (pyproject: requires-python >=3.14) — das System-
+# python ist 3.12. uv installiert + managed die passende Version selbst.
+if ! command -v uv >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/uv" ]; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+else
+  echo "    uv schon vorhanden."
+fi
+export PATH="$HOME/.local/bin:$PATH"
+
 echo "==> [landscape] Shell-Aliase verlinken..."
 MARKER="# MAIN-landscape"
 for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
@@ -93,14 +103,16 @@ else
   echo "    SKIP: infra/mcp/opencode-sessions-mcp.js fehlt."
 fi
 
-echo "==> [landscape] LLM-Proxy (glm2api, Haupt-Proxy)..."
-# glm2api ist der einzige verbliebene lokale GLM-Proxy (Benchmark-Gewinner:
-# 2/2 Agent-Tasks vollautonom in je 1 Run; hellogml/chat2api wurden entfernt).
-# Rebuild nur auf Wunsch (Klon+Deps dauern):
-if [ "${LANDSCAPE_REBUILD_LLM_PROXIES:-}" = "1" ]; then
-  bash "$REPO_ROOT/llm-proxies/rebuild.sh" && echo "    glm2api rekonstruiert."
+echo "==> [landscape] LLM-Proxy glm2api (HAUPT-Proxy) wiederherstellen..."
+# glm2api ist der einzige lokale GLM-Proxy und MUSS nach einem Codespace-Wechsel
+# vollautomatisch zurück sein (Patch + .env + start.sh kommen alle aus diesem Repo).
+# Klon+uv-Sync dauern ~1-2 Min; der Proxy wird danach direkt gestartet.
+if [ -d /workspaces/glm2api/repo/.git ] && ss -tln | grep -q ":8001 "; then
+  echo "    Proxy-Klon vorhanden + Port 8001 belegt — läuft bereits."
 else
-  echo "    SKIP: Rebuild optional. Bei Bedarf: ./llm-proxies/rebuild.sh  (oder LANDSCAPE_REBUILD_LLM_PROXIES=1)"
+  bash "$REPO_ROOT/llm-proxies/rebuild.sh" && echo "    glm2api rekonstruiert."
+  bash /workspaces/glm2api/start.sh && echo "    glm2api gestartet." \
+    || echo "    WARN: Autostart fehlgeschlagen — manuell: /workspaces/glm2api/start.sh"
 fi
 
 echo "==> [landscape] Fertig. Weiter mit: ./infra/scripts/save.sh status"

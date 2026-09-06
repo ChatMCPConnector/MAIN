@@ -30,13 +30,13 @@ Codespaces-Secrets, danach läuft alles automatisch (`postCreateCommand` →
 
 ## Schnellstart
 
-Codespace bauen → `setup.sh` läuft automatisch (Systempakete, opencode,
-Secrets-Unlock, Git-Auth, Browser-Runtime). Danach:
+Codespace bauen → `setup.sh` stellt ALLES automatisch wieder her (Systempakete,
+opencode, uv, Secrets-Unlock, Git-Auth, Browser-Runtime, **glm2api-Proxy inkl.
+Start** — Komplett-Rebuild + Autostart, das dauert ein paar Minuten beim ersten
+Codespace-Bau). Danach:
 
 ```bash
 ./infra/scripts/save.sh status                       # Überblick (Repo, Auth, Secrets)
-./llm-proxies/rebuild.sh                             # glm2api-Proxy (optional, dauert 1-2 Min)
-/workspaces/glm2api/start.sh                         # Proxy starten (Log: /tmp/opencode/glm2api.log)
 ```
 
 Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
@@ -101,6 +101,11 @@ komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 /workspaces/glm2api/start.sh        # starten (uv run lädt Deps on-demand)
 ```
 
+**100 %-Wiederherstellung (verifiziert durch Komplett-Reset-Simulation):**
+`setup.sh` installiert `uv` (lädt gemanagtes Python 3.14), klont das
+Upstream-Repo, patcht (`glm2api.patch`), installiert `glm2api.env` (Port 8001,
+Guest-Mode — secret-frei) und startet den Proxy. Alles aus MAIN, nichts bleibt
+flüchtig.
 - `llm-proxies/patches/glm2api.patch`: Tool-Protokoll von DSML-Markup auf
   JSON+`[]`-Terminator umgestellt (+ DSML/Mashup-Fallbacks, Part-Merge-Fix —
   chatglm.cn streamt erst Token-Schnipsel, dann Volltext; Fix = anhängen +
@@ -137,6 +142,12 @@ als Codespaces-Secrets. Nicht mitkommen, aber rekonstruierbar:
 
 ## Changelog
 
+- 2026-09-06 (5): 100 %-Wiederherstellung des Haupt-Proxies: setup.sh installiert
+  jetzt `uv` + gemanagtes Python 3.14 (fehlte — Proxy wäre nach Codespace-Wechsel
+  nicht startbar gewesen), rebuild.sh macht Klon+Patch+`.env`+`uv sync`+start.sh
+  in einem Schritt, setup.sh führt Rebuild+Start **automatisch** aus (kein
+  opt-in mehr). Komplett-Reset-Simulation bestanden (Klon+venv gelöscht →
+  Proxy lief danach wieder, .env byte-identisch, LLM-Antwort OK).
 - 2026-09-06 (4): Konsolidierung nach Benchmark: **glm2api ist der Haupt-Proxy**
   (einziger verbliebener, Benchmark-Gewinner — 2/2 Agent-Tasks vollautonom).
   hellogml + chat2api KOMPLETT entfernt (Klones, Patches, Provider, Agenten,
