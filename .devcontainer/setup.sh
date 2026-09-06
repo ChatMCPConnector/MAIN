@@ -33,7 +33,7 @@ done
 
 echo "==> [landscape] Secrets entsperren (falls Bundle + Passphrase da)..."
 if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
-  bash "$REPO_ROOT/infr./infra/scripts/secrets.sh" unlock >/dev/null 2>&1 && echo "    Secrets automatisch wiederhergestellt." || echo "    WARN: Auto-Unlock fehlgeschlagen (falsche Passphrase?)."
+  bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock >/dev/null 2>&1 && echo "    Secrets automatisch wiederhergestellt." || echo "    WARN: Auto-Unlock fehlgeschlagen (falsche Passphrase?)."
 elif [ -f "$REPO_ROOT/config/secrets.enc" ]; then
   echo "    Bundle vorhanden, keine Passphrase. Entsperren mit: ./infra/scripts/secrets.sh unlock"
 fi
@@ -47,7 +47,7 @@ echo "==> [landscape] Git-Auth verdrahten (für Agent-Push)..."
 # Wenn LANDSCAPE_PAT als Codespaces-Secret oder Env gesetzt ist: automatisch einrichten.
 # Das ist der Einmal-pro-Account-Schritt, danach kann der Agent immer selbst pushen.
 if [ -n "${LANDSCAPE_PAT:-${GITHUB_PAT:-${GH_TOKEN:-}}}" ]; then
-  bash "$REPO_ROOT/infr./infra/scripts/auth.sh" setup >/dev/null 2>&1 || echo "    WARN: Auth-Setup fehlgeschlagen."
+  bash "$REPO_ROOT/infra/scripts/auth.sh" setup >/dev/null 2>&1 || echo "    WARN: Auth-Setup fehlgeschlagen."
 else
   echo "    kein Token gefunden. Einmalig: ./infra/scripts/auth.sh setup  (oder LANDSCAPE_PAT als Codespaces-Secret setzen)"
 fi
@@ -55,7 +55,7 @@ fi
 echo "==> [landscape] Browser-Runtime prüfen..."
 if [ -f "$REPO_ROOT/infra/browser/package.json" ] && [ ! -d "$REPO_ROOT/.runtime/ms-playwright" ]; then
   if command -v npm >/dev/null 2>&1; then
-    bash "$REPO_ROOT/infr./infra/scripts/browser-install.sh" >/dev/null 2>&1 \
+    bash "$REPO_ROOT/infra/scripts/browser-install.sh" >/dev/null 2>&1 \
       && echo "    Chromium-Runtime installiert." \
       || echo "    WARN: Browser-Install fehlgeschlagen, manuell: ./infra/scripts/browser-install.sh"
   else
@@ -78,7 +78,7 @@ if [ -f "$REPO_ROOT/infra/mcp/opencode-sessions-mcp.js" ]; then
     elif ! grep -q '"opencode-sessions"' "$CFG"; then
       python3 - "$CFG" "$MCP_LINE" <<'PYEOF' 2>/dev/null || sed -i '1a\
 '"$MCP_LINE" "$CFG"
-import json, sys
+import sys
 cfg_path, mcp_line = sys.argv[1], sys.argv[2]
 with open(cfg_path) as f:
     first = f.readline()
@@ -93,20 +93,14 @@ else
   echo "    SKIP: infra/mcp/opencode-sessions-mcp.js fehlt."
 fi
 
-echo "==> [landscape] Proxies + Benchmark (flüchtige Anteile)..."
-# Die GLM-Proxy-Klones (/workspaces/{glm2api,hellogml,chat2api}) und das
-# ChaosShop-Benchmark (/workspaces/benchmark) sind NICHT im Codespace-Volume
-# persistent. Patches + Startskripte + Templates liegen hier im Repo.
-# Rebuild nur auf Wunsch (dauert Minuten wegen Klones/Builds):
+echo "==> [landscape] LLM-Proxy (glm2api, Haupt-Proxy)..."
+# glm2api ist der einzige verbliebene lokale GLM-Proxy (Benchmark-Gewinner:
+# 2/2 Agent-Tasks vollautonom in je 1 Run; hellogml/chat2api wurden entfernt).
+# Rebuild nur auf Wunsch (Klon+Deps dauern):
 if [ "${LANDSCAPE_REBUILD_LLM_PROXIES:-}" = "1" ]; then
-  bash "$REPO_ROOT/llm-proxies/rebuild.sh" && echo "    Proxies rekonstruiert."
+  bash "$REPO_ROOT/llm-proxies/rebuild.sh" && echo "    glm2api rekonstruiert."
 else
   echo "    SKIP: Rebuild optional. Bei Bedarf: ./llm-proxies/rebuild.sh  (oder LANDSCAPE_REBUILD_LLM_PROXIES=1)"
-fi
-if [ -d "$REPO_ROOT/work/benchmark/template" ] && [ ! -d /workspaces/benchmark ]; then
-  bash "$REPO_ROOT/work/benchmark/rebuild.sh" >/dev/null 2>&1 \
-    && echo "    Benchmark-Kopien aus Template wiederhergestellt." \
-    || echo "    WARN: Benchmark-Rebuild fehlgeschlagen, manuell: ./work/benchmark/rebuild.sh"
 fi
 
 echo "==> [landscape] Fertig. Weiter mit: ./infra/scripts/save.sh status"

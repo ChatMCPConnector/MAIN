@@ -4,10 +4,10 @@
 
 Geteiltes Multi-Account-Repo (ein User, mehrere GitHub-Accounts, je max. ~60h
 Codespaces/Monat): die komplette persönliche Arbeitsumgebung — Dev-Container,
-opencode-Config (mehrere LLM-Provider), Secrets-Mechanik, GLM-Proxies,
-Benchmark. Alles Bleibende liegt im Repo; pro Account einmalig PAT + Passphrase
-als Codespaces-Secrets, danach läuft alles automatisch
-(`postCreateCommand` → `.devcontainer/setup.sh`).
+opencode-Config (mehrere LLM-Provider), Secrets-Mechanik, GLM-Haupt-Proxy.
+Alles Bleibende liegt im Repo; pro Account einmalig PAT + Passphrase als
+Codespaces-Secrets, danach läuft alles automatisch (`postCreateCommand` →
+`.devcontainer/setup.sh`).
 
 **Doku-Aufteilung:** Diese README = Überblick + Layout + Betrieb.
 `AGENTS.md` = Verhaltensregeln für Agenten (wird von opencode automatisch gelesen).
@@ -17,27 +17,26 @@ als Codespaces-Secrets, danach läuft alles automatisch
 | Pfad | Zweck |
 |---|---|
 | `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau) |
-| `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json, agent/*.md (bench-*) |
+| `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/kontostand/browser-*.sh, aliases.sh), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP) |
-| `llm-proxies/` | GLM-Proxy-Patches + Startskripte + `rebuild.sh` (→ Kap. GLM-Proxies) |
-| `work/` | Eigene Projekte: `docs/` (Kontostand), `benchmark/` (ChaosShop + MASTERPROMPT.md + rebuild.sh) |
+| `llm-proxies/` | glm2api-Haupt-Proxy: Patch + Startskript + `rebuild.sh` |
+| `work/` | Eigene Projekte: `docs/` |
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
 
 ```
-/workspaces/{glm2api,hellogml,chat2api}/   GLM-Proxy-Klones (flüchtig, via llm-proxies/rebuild.sh rekonstruierbar)
-/workspaces/benchmark/                     ChaosShop-Kopien (flüchtig, via work/benchmark/rebuild.sh)
+/workspaces/glm2api/   GLM-Proxy-Klon (flüchtig, via llm-proxies/rebuild.sh rekonstruierbar)
 ```
 
 ## Schnellstart
 
 Codespace bauen → `setup.sh` läuft automatisch (Systempakete, opencode,
-Secrets-Unlock, Git-Auth, Browser-Runtime, Benchmark-Kopien). Danach:
+Secrets-Unlock, Git-Auth, Browser-Runtime). Danach:
 
 ```bash
 ./infra/scripts/save.sh status                       # Überblick (Repo, Auth, Secrets)
-./llm-proxies/rebuild.sh                                 # GLM-Proxies (optional, dauert Minuten)
-/workspaces/<glm2api|hellogml|chat2api>/start.sh     # Proxy starten (Log: /tmp/opencode/<name>.log)
+./llm-proxies/rebuild.sh                             # glm2api-Proxy (optional, dauert 1-2 Min)
+/workspaces/glm2api/start.sh                         # Proxy starten (Log: /tmp/opencode/glm2api.log)
 ```
 
 Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
@@ -46,7 +45,7 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 ## Enthalten
 
 - Ubuntu 24.04, Bash, Git, GitHub CLI, Docker, Python 3, Build-Werkzeuge
-- Ports 3000/8000 (Apps), 8001/8787/8080 (LLM-Proxies), 9222/6082/5920 (Browser, nur lokal) · Zeitzone Europe/Berlin
+- Ports 3000/8000 (Apps), 8001 (LLM-Proxy), 9222/6082/5920 (Browser, nur lokal) · Zeitzone Europe/Berlin
 - opencode, Default-Modell `tokenrouter/z-ai/glm-5.3-free` (1M Kontext)
 
 ## Secrets-Modell (bewusst: Komfort > Sicherheit)
@@ -54,9 +53,10 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 Repo ist shared für mehrere **eigene** Accounts. Automatik hat Vorrang vor
 Secret-Schutz-Purismus:
 
-- `config/passphrase`: Enthüllungs-Passphrase als Klartext im Repo → jeder
-  eigene Codespace entsperrt sich beim Start selbst (Fallback ohne
-  `LANDSCAPE_PASSPHRASE`-Secret).
+- `config/passphrase`: Entschlüsselungs-Passphrase als Klartext im Repo → jeder
+  eigene Codespace entsperrt sich beim Start selbst. Sie ist NUR ein
+  Entschlüsselungswort — nie ein Secret/PAT als Passphrase zweckentfremden
+  (der alte PAT wurde dadurch geleakt und von GitHub revoked).
 - `config/secrets.enc` (+ Manifest): verschlüsseltes Bundle mit
   `pat`, `tokenrouter.key`, `nvidia-nim.key`, `xinjianya.key`, `chatglm-refresh-token`,
   `env`, `opencode-auth.json` → landen beim Unlock unter `~/.config/landscape/`,
@@ -64,8 +64,7 @@ Secret-Schutz-Purismus:
 - `./infra/scripts/secrets.sh lock|unlock|status` verwaltet das Bundle.
 - Codespaces-Secrets pro Account: `LANDSCAPE_PAT` (Git-Auth), `LANDSCAPE_PASSPHRASE` (optional).
 - API-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` —
-  kommen also über das Bundle in jeden neuen Codespace. Klartext-Nie-committen
-  gilt weiter für `.env`, `.secrets/`, Browserprofile.
+  kommen also über das Bundle in jeden neuen Codespace.
 
 ## opencode-Konfiguration (`.opencode/`)
 
@@ -76,9 +75,7 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
 | tokenrouter | z-ai/glm-5.3-free (1M) | tokenrouter.key |
 | nvidia | nemotron-3-ultra, deepseek-v4-flash/pro | nvidia-nim.key |
 | xinjianya | gpt-5.6-sol, kimi-k3, deepseek-v4-pro | xinjianya.key |
-| glm2api | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
-| hellogml | glm-5.3, glm-5.3-think | lokal, Port 8787, Key sk-test-local-1 |
-| chat2apilocal | GLM-5.3, GLM-5.3-Think | lokal, Port 8080, kein Key |
+| **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
@@ -87,44 +84,29 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
 - `tui.json`: Maus-Capture **aus** (`mouse: false` ist Absicht — xterm.js
   übersetzt dann das Mausrad in `up`/`down`, die auf halben Seitenwechsel
   gemappt sind. **Nicht auf `true` ändern.**)
-- `agent/*.md`: `bench-glm2api`, `bench-hellogml`, `bench-chat2api`
-  (Subagenten mit fest verdrahtetem Proxy-Modell für Benchmark-Runs).
 
-## Die drei GLM-Proxies (chatglm.cn-Reverse, Ports 8001/8787/8080)
+## glm2api — der LLM-Haupt-Proxy (Port 8001)
 
-Alle drei parsen chatglm.cn per Guest-Token-Pool (kein Login) und sprechen
-OpenAI-kompatibel:
+Chatglm.cn-Reverse (Python/FastAPI, Guest-Token-Pool: 100 Slots, Auto-Refetch
++ 10 Retries), OpenAI-kompatibel. Gewinner des 3-Wege-Agenten-Benchmarks
+(2026-09-06): als einziger Proxy 2/2 SWE-Tasks **vollautonom in je 1 Run**
+(35+ Tool-Executions, 0 Abbrüche). hellogml (Guest-Token-Erschöpfung bei
+Lang-Runs) und chat2api (Markup-Fragilität bei Agent-Loops) wurden daraufhin
+komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 
-| Proxy | Port | Mechanik | Stand |
-|---|---|---|---|
-| glm2api (Python/FastAPI, Rang 1) | 8001 | 100 Guest-Slots, Auto-Refetch + 10 Retries | ✅ läuft, Tool-Calls verifiziert |
-| HelloGML (TS/Worker via wrangler dev) | 8787 | 100er Token-Pool, Auto-Fill | ✅ läuft, Tool-Calls verifiziert |
-| Chat2API (Electron headless) | 8080 | 10 Guest-Accounts, Round-Robin | ✅ läuft (~70s Start), Tool-Calls verifiziert |
-
-**Wiederaufbau im frischen Codespace (alles im Repo):**
+**Wiederaufbau im frischen Codespace:**
 
 ```
-./llm-proxies/rebuild.sh            # klonen + patchen + deps (+ build bei chat2api) + start.sh kopieren
-/workspaces/<name>/start.sh     # starten
+./llm-proxies/rebuild.sh            # klonen + patchen + start.sh kopieren
+/workspaces/glm2api/start.sh        # starten (uv run lädt Deps on-demand)
 ```
 
-- `llm-proxies/patches/*.patch`: Tool-Protokoll-Part-Merge-Fixes je Proxy
-  (glm2api: JSON+`[]`-Terminator statt DSML-Markup; hellogml: Part-Merge +
-  Non-Stream-Thinking-Fix; chat2api: GLM→`managed_bracket`, Fenster hidden, HW-Accel aus).
-- Kern-Erkenntnis aller drei: chatglm.cn streamt pro Part erst Token-Schnipsel
-  ohne Akkumulation, dann den Volltext — Fix = Schnipsel anhängen, Finish-Volltext
-  idempotent ersetzen (blindes Überschreiben erzeugt Müll wie `{"ol_callh"…`).
-- setup.sh rebuilt nur bei `LANDSCAPE_REBUILD_LLM_PROXIES=1` (sonst manuell, dauert Minuten).
-- Upstream-Limit ist pro Guest-Token (~5 Nachrichten) — Pools rotieren das weg.
-
-## Benchmark (ChaosShop 3-Wege-Vergleich)
-
-- `work/benchmark/MASTERPROMPT.md`: tool-agnostischer SWE-Bench-Prompt (4 Phasen).
-- `work/benchmark/template/`: absichtlich vermurkster Python-Shop (Race, SQLi,
-  Auth-Bypass, Randfälle). Startzustand **4 failed / 5 passed** (verifiziert).
-- `work/benchmark/rebuild.sh` legt `/workspaces/benchmark/<proxy>-work`-Kopien an
-  (setup.sh macht das automatisch). Agenten `bench-*` lösen je ihre Kopie.
-- Nur Runs über die drei lokalen Provider zählen (TokenRouter: 8 req/min).
+- `llm-proxies/patches/glm2api.patch`: Tool-Protokoll von DSML-Markup auf
+  JSON+`[]`-Terminator umgestellt (+ DSML/Mashup-Fallbacks, Part-Merge-Fix —
+  chatglm.cn streamt erst Token-Schnipsel, dann Volltext; Fix = anhängen +
+  idempotent ersetzen statt blind überschreiben).
+- setup.sh rebuilt nur bei `LANDSCAPE_REBUILD_LLM_PROXIES=1` (sonst manuell).
+- Upstream-Limit ist pro Guest-Token (~5 Nachrichten) — der Pool rotiert das weg.
 
 ## Infrastruktur-Soll (Details Betrieb)
 
@@ -151,18 +133,20 @@ alles gepushte. Im alten Codespace: `./infra/scripts/save.sh` (+ ggf.
 `./infra/scripts/secrets.sh lock`). Im neuen: Repo forken, Codespace bauen —
 Rest automatisch; einmalig `LANDSCAPE_PAT` (+ optional `LANDSCAPE_PASSPHRASE`)
 als Codespaces-Secrets. Nicht mitkommen, aber rekonstruierbar:
-`/workspaces/{glm2api,hellogml,chat2api}` (rebuild.sh), `/workspaces/benchmark`
-(automatisch), Browser-Profil, Ports.
+`/workspaces/glm2api` (rebuild.sh), Browser-Profil, Ports.
 
 ## Changelog
 
-- 2026-09-06 (2): Struktur radikal vereinfacht: `scripts/` + `browser/` + `mcp/` +
-  dotfiles zusammengezogen in `infra/`; Free-API.txt gelöscht (XinJianYa-Key lag
-  byteweiß identisch im Secrets-Bundle, kommt via Auto-Unlock zurück);
-  MASTERPROMPT.md nach `work/benchmark/`; README+DOKU+INFRASTRUCTURE zu dieser
-  einen README.md gemerged (AGENTS.md bleibt separat — opencode-Regeln).
-- 2026-09-06 (1): Proxies + Benchmark reproduzierbar im Repo (patches/,
-  rebuild-Skripte), Trash gelöscht (1.9 MB), Doku konsolidiert.
-- 2026-09-06 (0): opencode-sessions MCP (Session-Verwaltung direkt auf SQLite-DB,
-  574 MB → 2 MB Orphan-Cleanup), Playwright-Reproduzierbarkeit in setup.sh,
-  Secrets-Modell Komfort>Sicherheit festgeschrieben.
+- 2026-09-06 (4): Konsolidierung nach Benchmark: **glm2api ist der Haupt-Proxy**
+  (einziger verbliebener, Benchmark-Gewinner — 2/2 Agent-Tasks vollautonom).
+  hellogml + chat2api KOMPLETT entfernt (Klones, Patches, Provider, Agenten,
+  start-Skripte). Benchmark-Suite komplett entfernt (Templates, MASTERPROMPT,
+  bench-Agents, Reports). `llm-proxies/rebuild.sh` auf nur-glm2api vereinfacht.
+- 2026-09-06 (3): Struktur radikal vereinfacht: `infra/` (scripts+browser+mcp),
+  Free-API.txt gelöscht (Key identisch im Secrets-Bundle), Doku-Merge zu einer
+  README.md, `llm-proxies/` statt `proxies/`.
+- 2026-09-06 (2): PAT geleakt+revoked → Secrets-Modell korrigiert: echte
+  Zufalls-Passphrase (nur Entschlüsselungswort), PAT nur verschlüsselt im Bundle.
+- 2026-09-06 (1): Proxies reproduzierbar im Repo; opencode-sessions MCP
+  (Session-Verwaltung direkt auf SQLite-DB, 574 MB → 2 MB Orphan-Cleanup);
+  Playwright-Reproduzierbarkeit in setup.sh; Secrets-Modell Komfort>Sicherheit.
