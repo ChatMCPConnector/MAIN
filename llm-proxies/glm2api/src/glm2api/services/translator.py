@@ -504,12 +504,40 @@ def resolve_upstream_model(requested_model: str, config: AppConfig) -> tuple[str
     return upstream_model, assistant_id
 
 
+# Reasoning-Stufen: echte chat_mode-Werte der chatglm.cn-Web-UI (via CDP
+# Reverse-Engineering 2026-09-07 verifiziert):
+#   ""             = 快速 (schnell, kein Denken)
+#   "thinking"     = 深度 (Standard-Denken)
+#   "deep_thinking" = 极致 (volles Denken, 耗时更长)
+# Hinweis: Der alte Wert "zero" wurde von der echten UI nie gesendet.
+CHAT_MODE_THINKING = "thinking"
+CHAT_MODE_DEEP_THINKING = "deep_thinking"
+
+_EFFORT_TO_CHAT_MODE = {
+    "low": CHAT_MODE_THINKING,
+    "minimal": CHAT_MODE_THINKING,
+    "medium": CHAT_MODE_THINKING,
+    "high": CHAT_MODE_DEEP_THINKING,
+    "max": CHAT_MODE_DEEP_THINKING,
+}
+
+
 def resolve_chat_mode(model: str, reasoning_effort: object, deep_research: object) -> str:
     lower_model = (model or "").lower()
     if deep_research or "deepresearch" in lower_model or "deep-research" in lower_model:
         return "deep_research"
-    if reasoning_effort or model_requests_thinking(model) or "think" in lower_model or "zero" in lower_model:
-        return "zero"
+    # Explizite Stufe (reasoning_effort) übersetzt 1:1 in den echten UI-Wert.
+    if isinstance(reasoning_effort, str) and reasoning_effort.lower() in _EFFORT_TO_CHAT_MODE:
+        return _EFFORT_TO_CHAT_MODE[reasoning_effort.lower()]
+    # truthy-aber-unbekannt (z.B. Zahlen, "xhigh") → volles Denken als Default.
+    if reasoning_effort:
+        return CHAT_MODE_DEEP_THINKING
+    if model_requests_thinking(model) or "think" in lower_model:
+        # -think-Modell ohne Stufe: volles Denken (früheres "zero" war ein
+        # von der UI nie gesendeter Wert).
+        return CHAT_MODE_DEEP_THINKING
+    if "zero" in lower_model:
+        return CHAT_MODE_THINKING
     return ""
 
 
