@@ -79,80 +79,58 @@
             }
           }
         },
-        "moonshotai/kimi-k3": {
-          "name": "Kimi K3",
-          "reasoning": true,
-          "cost": {
-            "input": 20,
-            "output": 20,
-            "cache_read": 20
-          },
-          "options": {
-            "reasoningEffort": "max"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
+            "moonshotai/kimi-k3": {
+              "name": "Kimi K3",
+              "reasoning": true,
+              "cost": {
+                "input": 20,
+                "output": 20,
+                "cache_read": 20
+              },
+              "options": {
+                "reasoningEffort": "max"
+              },
+              "variants": {
+                "low": {
+                  "reasoningEffort": "low"
+                },
+                "high": {
+                  "reasoningEffort": "high"
+                },
+                "max": {
+                  "reasoningEffort": "max"
+                }
+              }
             },
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "max": {
-              "reasoningEffort": "max"
+            "grok-4.6": {
+              "name": "Grok 4.6",
+              "reasoning": true,
+              "cost": {
+                "input": 20,
+                "output": 20,
+                "cache_read": 20
+              },
+              "options": {
+                "reasoningEffort": "xhigh"
+              },
+              "variants": {
+                "low": {
+                  "reasoningEffort": "low"
+                },
+                "medium": {
+                  "reasoningEffort": "medium"
+                },
+                "high": {
+                  "reasoningEffort": "high"
+                },
+                "xhigh": {
+                  "reasoningEffort": "xhigh"
+                }
+              }
             }
           }
         },
-        "grok-4.5": {
-          "name": "Grok 4.5",
-          "reasoning": true,
-          "cost": {
-            "input": 20,
-            "output": 20,
-            "cache_read": 20
-          },
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            }
-          }
-        },
-        "grok-4.6": {
-          "name": "Grok 4.6",
-          "reasoning": true,
-          "cost": {
-            "input": 20,
-            "output": 20,
-            "cache_read": 20
-          },
-          "options": {
-            "reasoningEffort": "xhigh"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "xhigh": {
-              "reasoningEffort": "xhigh"
-            }
-          }
-        }
-      }
-    },
+
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "glm2api",

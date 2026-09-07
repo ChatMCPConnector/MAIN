@@ -14,7 +14,7 @@ TOOL_RESULT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 START_TAG_PATTERN = re.compile(
-    r"<(?P<tag>\|DSML\|tool_calls|DStool_calls|tool_calls|ml_tool_calls|ml_tool_call)\b[^>]*>",
+    r"<(?P<tag>\|DSML\|tool_calls|DStool_calls|tool_calls|ml_tool_calls|ml_tool_call)(?=\b|\|)[^>]*>",
     re.IGNORECASE,
 )
 DSML_TAG_PATTERN = re.compile(r"</?\|DSML\|(?P<name>tool_calls|invoke|parameter|tool_result)\b", re.IGNORECASE)

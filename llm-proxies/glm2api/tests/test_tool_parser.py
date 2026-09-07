@@ -1,6 +1,20 @@
 from glm2api.utils.tool_parser import StreamingToolParser, parse_tool_calls_from_text
 
 
+def test_streaming_json_tool_call_with_terminator_in_same_token():
+    parser = StreamingToolParser(allowed_tool_names={"bash"})
+    text = '{"tool_calls":[{"name":"bash","arguments":{"command":"pwd"}}]}[]'
+
+    clean = parser.consume(text)
+    tail, tool_calls = parser.flush()
+
+    assert clean == ""
+    assert tail == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "bash"
+    assert tool_calls[0]["function"]["arguments"] == '{"command": "pwd"}'
+
+
 def test_parse_tool_calls_from_dsml_markup():
     text = (
         "before\n"
