@@ -37,13 +37,13 @@ def test_variant_model_resolves_to_base_upstream_model():
 
 
 def test_model_suffixes_resolve_chat_mode_and_networking_matrix():
-    assert resolve_chat_mode("glm-4-think", None, None) == "zero"
+    assert resolve_chat_mode("glm-4-think", None, None) == "deep_thinking"
     assert resolve_networking("glm-4-think", None) is False
 
     assert resolve_chat_mode("glm-4-search", None, None) == ""
     assert resolve_networking("glm-4-search", None) is True
 
-    assert resolve_chat_mode("glm-4-think-search", None, None) == "zero"
+    assert resolve_chat_mode("glm-4-think-search", None, None) == "deep_thinking"
     assert resolve_networking("glm-4-think-search", None) is True
 
     assert resolve_chat_mode("glm-4", None, None) == ""
@@ -51,7 +51,7 @@ def test_model_suffixes_resolve_chat_mode_and_networking_matrix():
 
 
 def test_existing_thinking_model_name_still_enables_chat_mode():
-    assert resolve_chat_mode("glm-4.1v-thinking-flashx", None, None) == "zero"
+    assert resolve_chat_mode("glm-4.1v-thinking-flashx", None, None) == "deep_thinking"
 
 
 def test_glm_5_2_is_exposed_and_passed_through():
