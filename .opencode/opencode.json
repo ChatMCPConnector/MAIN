@@ -129,14 +129,14 @@
     },
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "glm2api (chatglm.cn guest-pool)",
+      "name": "glm2api",
       "options": {
         "baseURL": "http://127.0.0.1:8001/v1",
         "apiKey": "local"
       },
       "models": {
         "glm-5.3-think": {
-          "name": "GLM 5.3 Think",
+          "name": "GLM-5.3",
           "reasoning": true,
           "limit": {
             "context": 128000,
