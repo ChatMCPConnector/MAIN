@@ -6,7 +6,7 @@ from glm2api.services.translator import (
 )
 
 
-def test_convert_messages_injects_xml_tool_prompt_and_history():
+def test_convert_messages_injects_json_tool_prompt_and_history():
     converted = convert_messages(
         messages=[
             {"role": "user", "content": "查天气"},
@@ -46,15 +46,12 @@ def test_convert_messages_injects_xml_tool_prompt_and_history():
 
     prompt = converted[0]["content"][0]["text"]
 
-    assert "<|DSML|tool_calls>" in prompt
-    assert "<|DSML|invoke name=\"get_weather\">" in prompt
-    assert "<|DSML|tool_result call_id=\"call_1\" name=\"get_weather\">" in prompt
+    assert 'Assistant: {"tool_calls":[{"name":"get_weather","arguments":{"city":"上海"}}]}[]' in prompt
+    assert '[{"call_id":"call_1","name":"get_weather","content":"晴"}]' in prompt
     assert "<ml_tool_calls>" not in prompt
     assert "# TOOL USE PROTOCOL" in prompt
-    assert "Use the DSML format below exactly." in prompt
-    assert "The server will parse this DSML block back into standard OpenAI tool_calls." in prompt
-    assert "<|DSML|parameter name=\"actual_parameter_name\"><![CDATA[value]]></|DSML|parameter>" in prompt
-    assert "Each argument must be a <|DSML|parameter name=\"...\"> child of the invoke." in prompt
+    assert "tool_calls" in prompt
+    assert "arguments" in prompt
     assert "Parameter names are case-sensitive and must exactly match the schema." in prompt
     assert "never change it to `filepath`, `file_path`, or `FilePath`." in prompt
     assert "# BLOCKED TOOLS" not in prompt
@@ -488,7 +485,7 @@ def test_convert_messages_repairs_cherry_fetch_url_and_skips_invalid_tool_error_
     prompt = converted[0]["content"][0]["text"]
 
     assert (
-        "<|DSML|parameter name=\"url\"><![CDATA[https://opendata.baidu.com/api.php?query=1.1.1.1&co=&resource_id=6006&oe=utf8]]></|DSML|parameter>"
+        '{"tool_calls":[{"name":"mcp__CherryFetch__fetchJson","arguments":{"url":"https://opendata.baidu.com/api.php?query=1.1.1.1&co=&resource_id=6006&oe=utf8"}}]}[]'
         in prompt
     )
     assert "expected string, received undefined" not in prompt

@@ -671,11 +671,15 @@ class StreamingToolParser:
     pending_text: str = ""
     tool_calls: list[dict[str, object]] = field(default_factory=list)
     allowed_tool_names: set[str] | None = None
+    buffering_dsml: bool = False
 
     def consume(self, chunk: str) -> str:
         if not chunk:
             return ""
         self.pending_text += chunk
+
+        if self.buffering_dsml:
+            return ""
 
         # Once a tool-markup opener starts, keep the complete block buffered.
         # Parsing individual stream characters must never expose internal DSML/XML.
@@ -688,9 +692,12 @@ class StreamingToolParser:
             start = min(markup_starts)
             prefix = self.pending_text[:start]
             self.pending_text = self.pending_text[start:]
+            if self.pending_text.lower().startswith("<|"):
+                self.buffering_dsml = True
+                return prefix
             start_match = START_TAG_PATTERN.search(self.pending_text)
             matched_span = _find_matching_block(self.pending_text, start_match) if start_match else None
-            if matched_span is None or matched_span[1] != len(self.pending_text):
+            if matched_span is None or matched_span[1] == len(self.pending_text):
                 return prefix
             visible, remainder, parsed_calls = _split_stream_text(
                 self.pending_text,
@@ -726,6 +733,7 @@ class StreamingToolParser:
             final=True,
         )
         self.pending_text = ""
+        self.buffering_dsml = False
         self.tool_calls.extend(parsed_calls)
         tail = "" if _looks_like_tool_markup_fragment(remainder) else remainder
         return (visible + tail).strip(), self.tool_calls

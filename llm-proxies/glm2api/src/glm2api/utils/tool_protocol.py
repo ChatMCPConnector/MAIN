@@ -93,7 +93,9 @@ def serialize_tool_call_block(name: str, arguments: object) -> str:
 
 def serialize_tool_result_block(tool_call_id: object, tool_name: str, content: str) -> str:
     """Tool-Result als JSON-Nachricht (vom Translator in eine tool-Rolle gemappt)."""
-    return safe_json_dumps({"tool_call_id": str(tool_call_id or "unknown"), "name": tool_name, "result": content})
+    return safe_json_dumps(
+        [{"call_id": str(tool_call_id or "unknown"), "name": tool_name, "content": content}]
+    )
 
 
 def build_tool_call_instructions(
