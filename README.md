@@ -136,8 +136,30 @@ Rest automatisch; einmalig `LANDSCAPE_PAT` (+ optional `LANDSCAPE_PASSPHRASE`)
 als Codespaces-Secrets. Nicht mitkommen, aber rekonstruierbar: Browser-Profil, Ports.
 glm2api selbst kommt komplett mit (Code im Repo).
 
+## Codespace-Lifecycle — wann welcher Mechanismus greift
+
+| Event | Mechanismus | Wirkung |
+|---|---|---|
+| Codespace-**Neuerstellung** (Rebuild) | `postCreateCommand` → `setup.sh` | Voll-Setup: Pakete, opencode, uv, Secrets-Unlock, Git-Auth, Browser, MCP-Registrierung, Proxy-Rebuild + Start |
+| Codespace-**Resume** (Stopp→Start, Idle/Über Nacht) | `postStartCommand` → `start-on-boot.sh` | Proxy-Health-Check; läuft er nicht → Start (Code/venv/.env überleben in MAIN). Bei Unvollständigkeit: Hintergrund-Rebuild (Log `/tmp/opencode/boot-rebuild.log`) |
+| Laufzeit | `start-glm2api.sh` idempotent | Doppelstart-sicher, Port-Check |
+
+**Proxy-Verhalten nach Stopp:** Prozesse sterben, `/tmp` (Logs) wird geleert —
+Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
+Proxy bei jedem Start automatisch hoch.
+
 ## Changelog
 
+- 2026-09-07 (4): Proxy-Autostart bei JEDEM Start: `postStartCommand`
+  (`start-on-boot.sh`) — `postCreateCommand` lief nur bei Neuerstellung, nach
+  Resume (Stopp/Über Nacht) war der Proxy tot. Boot-Skript: Health-Check →
+  Start → Background-Rebuild (bei Unvollständigkeit). Live getestet (Proxy
+  hochgezogen, LLM antwortete).
+- 2026-09-07 (3): glm2api-Modell: nur noch `glm-5.3-think` (Denk-Modus,
+  interner Name — Anzeigename „GLM-5.3 glm2api"), Varianten low/medium/high/
+  max. Messung: reasoning_effort wirkt am Proxy nur als Denk-Schalter
+  (chatglm.cn kennt keine Stufen) — Reasoning-Länge ist Modell-Varianz,
+  Varianten bleiben als Komfort drin. Alle Stufen live getestet (korrekt).
 - 2026-09-07 (2): glm2api-Code VOLLSTÄNDIG ins Repo gewandert
   (`llm-proxies/glm2api/`, inkl. Patches — kein GitHub-Klon mehr nötig).
   rebuild.sh macht nur .env + uv sync (~Sekunden, kein Minuten-Klon);
