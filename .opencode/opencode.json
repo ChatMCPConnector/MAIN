@@ -169,14 +169,11 @@
             "output": 8192
           },
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "max"
           },
           "variants": {
             "low": {
               "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
             },
             "high": {
               "reasoningEffort": "high"

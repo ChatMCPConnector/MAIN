@@ -142,6 +142,7 @@ glm2api selbst kommt komplett mit (Code im Repo).
 |---|---|---|
 | Codespace-**Neuerstellung** (Rebuild) | `postCreateCommand` → `setup.sh` | Voll-Setup: Pakete, opencode, uv, Secrets-Unlock, Git-Auth, Browser, MCP-Registrierung, Proxy-Rebuild + Start |
 | Codespace-**Resume** (Stopp→Start, Idle/Über Nacht) | `postStartCommand` → `start-on-boot.sh` | Proxy-Health-Check; läuft er nicht → Start (Code/venv/.env überleben in MAIN). Bei Unvollständigkeit: Hintergrund-Rebuild (Log `/tmp/opencode/boot-rebuild.log`) |
+| **Client-Reconnect** (Browser-Reconnect ohne Container-Restart) | **`proxy-watchdog.sh`** (Daemon, 30s-Intervall) | postStartCommand läuft NICHT bei Reconnect — der Watchdog hält den Proxy trotzdem am Leben (auch nach OOM-Kill). Start via start-on-boot.sh, Lockfile `/tmp/opencode/proxy-watchdog.lock`, Log `/tmp/opencode/watchdog.log` |
 | Laufzeit | `start-glm2api.sh` idempotent | Doppelstart-sicher, Port-Check |
 
 **Proxy-Verhalten nach Stopp:** Prozesse sterben, `/tmp` (Logs) wird geleert —
@@ -150,6 +151,15 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-07 (7): (a) Proxy-Watchdog: postStartCommand greift bei Client-
+  Reconnect NICHT (nur echter Container-Start) — deshalb Daemon
+  (`proxy-watchdog.sh`, 30s-Health-Check, Lockfile), der den Proxy nach
+  OOM-Kill/Reconnect automatisch hochzieht. Live bewiesen: kill -9 → Proxy in
+  ≤40s wieder da. (b) Reasoning-Default jetzt **max** (极致), Varianten
+  reduziert auf **low/high/max** (medium entfällt — war doppelt zu high).
+  MiniKV-SWE-Benchmark je Modus: low (0 Reasoning-Zeichen, 9/9, mehr Steps),
+  high (9198 Z., 9/9), max (10053 Z., 9/9, wenigste Steps — effizienteste
+  Lösung); medium/default zeigten je 1 Abbruch (Token-Rotation).
 - 2026-09-07 (6): postStartCommand-BUGFIX: devcontainer.json hatte den Key
   DUPZIERT (2. Definition = git-pull überschrieb das Boot-Skript) — deshalb
   war glm2api nach jedem Codespace-Start offline. Beide jetzt zusammengeführt

@@ -6,21 +6,27 @@
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Proxy-Health-Check: läuft er schon?
+# Proxy-Health-Check: läuft er schon? (Watchdog unten wird trotzdem gesichert)
 if curl -sf -m 2 http://127.0.0.1:8001/health >/dev/null 2>&1; then
   echo "[boot] glm2api läuft bereits."
-  exit 0
+else
+  # Code/venv/.env vollständig? Wenn ja: einfach starten.
+  if [ -d "$REPO_ROOT/llm-proxies/glm2api/src" ] && [ -x "$REPO_ROOT/llm-proxies/glm2api/.venv/bin/python3" ] && [ -f "$REPO_ROOT/llm-proxies/glm2api/.env" ]; then
+    bash "$REPO_ROOT/llm-proxies/scripts/start-glm2api.sh" >/dev/null 2>&1 \
+      && echo "[boot] glm2api gestartet." \
+      || echo "[boot] WARN: Proxy-Start fehlgeschlagen — manuell: ./llm-proxies/rebuild.sh --start"
+  else
+    # Etwas fehlt (frischer Stand?) → voller Rebuild im Hintergrund.
+    echo "[boot] glm2api unvollständig — Rebuild im Hintergrund..."
+    nohup bash "$REPO_ROOT/llm-proxies/rebuild.sh" --start >> /tmp/opencode/boot-rebuild.log 2>&1 &
+    echo "[boot] Rebuild läuft (Log: /tmp/opencode/boot-rebuild.log). Proxy in ~1-5 Min verfügbar."
+  fi
 fi
 
-# Code/venv/.env vollständig? Wenn ja: einfach starten.
-if [ -d "$REPO_ROOT/llm-proxies/glm2api/src" ] && [ -x "$REPO_ROOT/llm-proxies/glm2api/.venv/bin/python3" ] && [ -f "$REPO_ROOT/llm-proxies/glm2api/.env" ]; then
-  bash "$REPO_ROOT/llm-proxies/scripts/start-glm2api.sh" >/dev/null 2>&1 \
-    && echo "[boot] glm2api gestartet." \
-    || echo "[boot] WARN: Proxy-Start fehlgeschlagen — manuell: ./llm-proxies/rebuild.sh --start"
-  exit 0
+# Watchdog immer (re-)starten: hält den Proxy auch über OOM-Kills/Reattaches am Leben
+# (postStartCommand greift nur bei echtem Container-Start, nicht bei Client-Reconnect).
+mkdir -p /tmp/opencode
+if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/proxy-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
+  nohup bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" >/dev/null 2>&1 &
+  echo "[boot] Proxy-Watchdog gestartet (30s-Intervall)."
 fi
-
-# Etwas fehlt (frischer Stand?) → voller Rebuild im Hintergrund, ports offen halten.
-echo "[boot] glm2api unvollständig — Rebuild im Hintergrund..."
-nohup bash "$REPO_ROOT/llm-proxies/rebuild.sh" --start >> /tmp/opencode/boot-rebuild.log 2>&1 &
-echo "[boot] Rebuild läuft (Log: /tmp/opencode/boot-rebuild.log). Proxy ist in ~1-5 Min verfügbar."
