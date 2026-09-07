@@ -161,3 +161,14 @@ glm2api/
 ---
 
 Die Architektur ist **pipeline-basiert**: Jede Komponente hat eine klare Verantwortung (Config → Auth → Queue → Translate → Upstream → Accumulate → Parse → Stream), was Debugging und Erweiterung erleichtert.
+
+---
+
+## 10. Portables Bundle (Export in andere Umgebungen)
+
+- Bau: `llm-proxies/scripts/build-bundle.sh` (im MAIN-Repo) → `llm-proxies/dist/glm2api-bundle.zip`
+- Inhalt: dieses Verzeichnis komplett (ohne .venv/log/__pycache__) + `glm2api.env`
+  als fertige Config + portable `install.sh`/`start.sh` (relative Pfade, `GLM_PORT`/`GLM_HOST` überschreibbar)
+- Fremd-Start: entpacken → `bash scripts/install.sh` (uv + Python 3.14 + venv + .env)
+  → `bash scripts/start.sh` (Default Port 8001, Guest-Mode)
+- Keine externen Python-Deps (nur Stdlib) — `uv sync` reicht.

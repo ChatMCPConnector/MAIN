@@ -20,8 +20,8 @@ Codespaces-Secrets, danach läuft alles automatisch (`postCreateCommand` →
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/kontostand/browser-*.sh, aliases.sh), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP) |
-| `llm-proxies/` | glm2api-Haupt-Proxy: **kompletter Code liegt im Repo** (`llm-proxies/glm2api/` inkl. Patches) + `glm2api.env` + Start/rebuild-Skripte |
-| `work/` | Eigene Projekte: `docs/` |
+| `llm-proxies/` | glm2api-Haupt-Proxy: **kompletter Code liegt im Repo** (`llm-proxies/glm2api/` inkl. Patches) + `glm2api.env` + Start/rebuild-Skripte + **portables Bundle** (`dist/glm2api-bundle.zip`, Bau via `scripts/build-bundle.sh`) |
+| `work/` | Eigene Projekte: `docs/` (Reverse-Engineering-Doku: `docs/reverse-engineering/`) |
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
 
 ## Schnellstart
@@ -94,8 +94,17 @@ komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 **Wiederaufbau im frischen Codespace:**
 
 ```
-./llm-proxies/rebuild.sh            # klonen + patchen + start.sh kopieren
-/workspaces/glm2api/start.sh        # starten (uv run lädt Deps on-demand)
+./llm-proxies/rebuild.sh            # .env + venv vorbereiten (Sekunden)
+./llm-proxies/scripts/start-glm2api.sh   # starten (uv run)
+```
+
+**Portables Bundle (anderer Rechner/Umgebung):**
+
+```
+./llm-proxies/scripts/build-bundle.sh    # baut dist/glm2api-bundle.zip
+# drin: app/ (Code+Tests+Config), scripts/install.sh+start.sh (relative Pfade),
+# patches/ (Referenz), docs/ (chat_mode-Reverse-Engineering)
+# Ziel: entpacken → bash scripts/install.sh → bash scripts/start.sh (Port 8001)
 ```
 
 **100 %-Wiederherstellung:** Der Proxy-Code lebt komplett in MAIN — nach
@@ -151,6 +160,15 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-08 (1): glm2api **portables Bundle**: `llm-proxies/scripts/build-bundle.sh`
+  baut `llm-proxies/dist/glm2api-bundle.zip` (reproduzierbar aus dem Repo —
+  Code, Tests, glm2api.env, portable install/start-Skripte mit relativen
+  Pfaden, Patch-Referenz, Reverse-Engineering-Doku). Live verifiziert:
+  Entpacken → install.sh → start.sh → Health + Chat-Antwort OK, 60/60 Tests.
+  Aufgeräumt: /workspaces/patch-glm2api (veraltetes Duplikat-Repo, gelöscht —
+  Rückweg: MAIN enthält den vollständigen gepatchten Code im Git) und
+  /workspaces/reverse-engeneer (Doku übernommen nach work/docs/). Zip-Quellen
+  leben kanonisch unter `llm-proxies/scripts/bundle/` (README/install/start).
 - 2026-09-07 (7): (a) Proxy-Watchdog: postStartCommand greift bei Client-
   Reconnect NICHT (nur echter Container-Start) — deshalb Daemon
   (`proxy-watchdog.sh`, 30s-Health-Check, Lockfile), der den Proxy nach
@@ -169,8 +187,9 @@ Proxy bei jedem Start automatisch hoch.
   (kein Denken), medium = thinking, high = thinking, max = 极致/deep_thinking,
   Default (ohne Stufe) = deep_thinking. Alle Modi live verifiziert (low: 0
   Reasoning-Zeichen + 4s; thinking/deep_thinking mit Reasoning; alle korrekt),
-  Upstream-Log bestätigt die chat_mode-Werte. Reverse-Engineering-Doku:
-  /workspaces/reverse-engeneer/ERGEBNIS.md.
+  Upstream-Log bestätigt die chat_mode-Werte. Reverse-Engineering-Doku jetzt
+  im Repo: `work/docs/reverse-engineering/` (ERGEBNIS.md + capture.py/cdp.py,
+  Quelle: /workspaces/reverse-engeneer — Workspace danach entfernt).
 - 2026-09-07 (4): Proxy-Autostart bei JEDEM Start: `postStartCommand`
   (`start-on-boot.sh`) — `postCreateCommand` lief nur bei Neuerstellung, nach
   Resume (Stopp/Über Nacht) war der Proxy tot. Boot-Skript: Health-Check →
