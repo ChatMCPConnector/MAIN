@@ -24,7 +24,8 @@ CANONICAL_TOOL_CALL_EXAMPLE = (
 
 
 def safe_json_dumps(payload: object) -> str:
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return json_str.replace("\n", "\\n").replace("\r", "\\r")
 
 
 def normalize_tool_name(name: object) -> str:
@@ -152,7 +153,7 @@ def build_tool_call_instructions(
                 "- Each call is an object with keys \"name\" (tool name string) and \"arguments\" (object of parameter name → value).",
                 "- Parameter names are case-sensitive and must exactly match the schema. For example, use `filePath` only when the schema says `filePath`; never change it to `filepath`, `file_path`, or `FilePath`.",
                 "- Values must be plain JSON values (strings, numbers, booleans, null, nested objects, arrays).",
-                "- Output raw JSON only: no markdown fences, no code blocks, no comments, no trailing commas.",
+                "- Output raw JSON only: no markdown fences, no code blocks, no comments, no trailing commas, no newlines within strings.",
             ]
         )
 
