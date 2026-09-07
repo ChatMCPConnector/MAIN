@@ -150,6 +150,11 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-07 (6): postStartCommand-BUGFIX: devcontainer.json hatte den Key
+  DUPZIERT (2. Definition = git-pull überschrieb das Boot-Skript) — deshalb
+  war glm2api nach jedem Codespace-Start offline. Beide jetzt zusammengeführt
+  (erst git-pull, dann start-on-boot.sh). Deren Wirken ist damit garantiert;
+  Alters-Empfehlung falls doch etwas klemmt: `bash .devcontainer/start-on-boot.sh`.
 - 2026-09-07 (5): Reasoning-Mapping final (User-Spezifikation): low = 快速/leer
   (kein Denken), medium = thinking, high = thinking, max = 极致/deep_thinking,
   Default (ohne Stufe) = deep_thinking. Alle Modi live verifiziert (low: 0
