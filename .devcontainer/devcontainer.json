@@ -10,6 +10,7 @@
     "TZ": "Europe/Berlin"
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postStartCommand": "bash .devcontainer/start-on-boot.sh",
   "customizations": {
     "vscode": {
       "settings": {

@@ -124,6 +124,32 @@
               "reasoningEffort": "high"
             }
           }
+        },
+        "grok-4.6": {
+          "name": "Grok 4.6",
+          "reasoning": true,
+          "cost": {
+            "input": 20,
+            "output": 20,
+            "cache_read": 20
+          },
+          "options": {
+            "reasoningEffort": "xhigh"
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            }
+          }
         }
       }
     },
