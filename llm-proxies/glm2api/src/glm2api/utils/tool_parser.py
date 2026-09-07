@@ -676,6 +676,27 @@ class StreamingToolParser:
         if not chunk:
             return ""
         self.pending_text += chunk
+
+        # Once a tool-markup opener starts, keep the complete block buffered.
+        # Parsing individual stream characters must never expose internal DSML/XML.
+        markup_starts = [
+            index
+            for marker in TAG_NAME_HINTS
+            if (index := self.pending_text.lower().find(marker.lower())) != -1
+        ]
+        if markup_starts:
+            start = min(markup_starts)
+            prefix = self.pending_text[:start]
+            self.pending_text = self.pending_text[start:]
+            visible, remainder, parsed_calls = _split_stream_text(
+                self.pending_text,
+                allowed_tool_names=self.allowed_tool_names,
+                final=False,
+            )
+            self.pending_text = remainder
+            self.tool_calls.extend(parsed_calls)
+            return prefix + visible
+
         # JSON-tool-protokoll: partial am ende halten, komplette sofort parsen
         jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False)
         if jcalls:
