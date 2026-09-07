@@ -514,10 +514,14 @@ CHAT_MODE_THINKING = "thinking"
 CHAT_MODE_DEEP_THINKING = "deep_thinking"
 
 _EFFORT_TO_CHAT_MODE = {
-    "low": CHAT_MODE_THINKING,
-    "minimal": CHAT_MODE_THINKING,
+    # low    = 快速  (schnell, kein Denken)
+    # medium = 深度  (Standard-Denken)  — Zwischenstufe
+    # high   = thinking (volles Denken via UI-Modus 深度+)
+    # max    = 极致  (deep_thinking, 全力推理)
+    "low": "",
+    "minimal": "",
     "medium": CHAT_MODE_THINKING,
-    "high": CHAT_MODE_DEEP_THINKING,
+    "high": CHAT_MODE_THINKING,
     "max": CHAT_MODE_DEEP_THINKING,
 }
 

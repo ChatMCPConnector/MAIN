@@ -150,6 +150,12 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-07 (5): Reasoning-Mapping final (User-Spezifikation): low = 快速/leer
+  (kein Denken), medium = thinking, high = thinking, max = 极致/deep_thinking,
+  Default (ohne Stufe) = deep_thinking. Alle Modi live verifiziert (low: 0
+  Reasoning-Zeichen + 4s; thinking/deep_thinking mit Reasoning; alle korrekt),
+  Upstream-Log bestätigt die chat_mode-Werte. Reverse-Engineering-Doku:
+  /workspaces/reverse-engeneer/ERGEBNIS.md.
 - 2026-09-07 (4): Proxy-Autostart bei JEDEM Start: `postStartCommand`
   (`start-on-boot.sh`) — `postCreateCommand` lief nur bei Neuerstellung, nach
   Resume (Stopp/Über Nacht) war der Proxy tot. Boot-Skript: Health-Check →
