@@ -27,6 +27,8 @@ fi
 # (postStartCommand greift nur bei echtem Container-Start, nicht bei Client-Reconnect).
 mkdir -p /tmp/opencode
 if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/proxy-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
-  nohup bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" >/dev/null 2>&1 &
+  # setsid zwingend: ohne eigene Session killt devcontainer-cli die ganze
+  # Prozessgruppe beim Aufräumen des postStartCommand (nohup schützt da nicht).
+  setsid bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >/dev/null 2>&1 &
   echo "[boot] Proxy-Watchdog gestartet (30s-Intervall)."
 fi

@@ -117,4 +117,15 @@ else
     || echo "    WARN: Autostart fehlgeschlagen — manuell: ./llm-proxies/rebuild.sh --start"
 fi
 
+echo "==> [landscape] Proxy-Watchdog starten (hält glm2api am Leben)..."
+# Watchdog auch beim Codespace-Bau/Rebuild starten (postStartCommand macht es bei
+# jedem Start zusätzlich). setsid, damit devcontainer-cli ihn nicht mitkillt.
+mkdir -p /tmp/opencode
+if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/proxy-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
+  setsid bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >/dev/null 2>&1 &
+  echo "    Proxy-Watchdog gestartet (30s-Intervall)."
+else
+  echo "    Watchdog läuft bereits."
+fi
+
 echo "==> [landscape] Fertig. Weiter mit: ./infra/scripts/save.sh status"

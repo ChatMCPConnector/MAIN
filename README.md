@@ -161,6 +161,15 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-08 (5): **Watchdog-Start gefixt** — Watchdog lief zwar laut
+  Boot-Log an, wurde aber beim Aufräumen des `postStartCommand` von
+  devcontainer-cli mitgekillt (`nohup` ohne `setsid` schützt nicht vor
+  Process-Group-Kill). Fix: `setsid`-Start in `start-on-boot.sh` UND
+  `setup.sh` (startet jetzt auch beim Codespace-Bau/Rebuild). Verifiziert:
+  Proxy killen → Watchdog zog ihn in <30s hoch; Watchdog überlebt jetzt
+  Shell-/postStart-Ende (eigene Session, `ps`: SID=PGID=PID). Rückweg: Commit
+  revertieren, Watchdog ggf. manuell `setsid bash
+  .devcontainer/proxy-watchdog.sh &` starten.
 - 2026-09-08 (4): **google-Provider** (nativ, Modell `gemini-flash-latest`,
   1M Kontext / 64k Output) in `.opencode/opencode.json`; Key als `gemini.key`
   über `{file:~/.config/landscape/gemini.key}` referenziert, `secrets.sh`
