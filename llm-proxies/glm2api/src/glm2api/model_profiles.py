@@ -17,6 +17,12 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
     "glm-4v": ModelProfile("glm-4v", False, "xml", "xml"),
     "glm-zero-preview": ModelProfile("glm-zero-preview", False, "xml", "xml"),
     "glm-deep-research": ModelProfile("glm-deep-research", False, "xml", "xml"),
+    "glm-5": ModelProfile("glm-5", True, "json", "json"),
+    "glm-5.1": ModelProfile("glm-5.1", True, "json", "json"),
+    "glm-5.2": ModelProfile("glm-5.2", True, "json", "json"),
+    "glm-5.3": ModelProfile("glm-5.3", True, "json", "json"),
+    "glm-5v-turbo": ModelProfile("glm-5v-turbo", True, "json", "json"),
+    "glm-5-turbo": ModelProfile("glm-5-turbo", True, "json", "json"),
     "default": ModelProfile("default", False, "xml", "xml"),
 }
 
