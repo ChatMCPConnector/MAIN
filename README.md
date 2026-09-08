@@ -234,6 +234,10 @@ Proxy bei jedem Start automatisch hoch.
   start-glm2api.sh läuft aus MAIN; /workspaces/glm2api entfällt komplett.
   Switchover live verifiziert: Proxy läuft aus MAIN-Pfad, Health/Chat/
   Tool-Calls OK, /workspaces/glm2api gelöscht.
+- 2026-09-08: glm2api-Betriebsskript erkennt den tatsächlichen Prozess
+  `python3 main.py` einheitlich bei Status, Stopp und Startprüfung. Der
+  Tool-Parser repariert gezielt eine fehlende schließende `]` des
+  `tool_calls`-Arrays, ohne umgebenden Modelltext umzuschreiben.
 - 2026-09-07 (1): Finaler Härtetest glm2api nach Umbau BESTANDEN (alle 5 Phasen):
   (A) Kaltstart von Null — /workspaces/glm2api gelöscht → rebuild.sh stellte
   Klon+Patch+.env+venv+start wieder her, Proxy lief; (B) API komplett: 80

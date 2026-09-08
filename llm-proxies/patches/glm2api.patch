@@ -26,8 +26,8 @@ index 1e6c331..171edda 100644
 --- a/src/glm2api/services/translator.py
 +++ b/src/glm2api/services/translator.py
 @@ -33,6 +33,55 @@ POWERSHELL_ALIASES = {"cat", "cd", "copy", "del", "dir", "echo", "erase", "ls",
- 
- 
+
+
  
 +def _merge_part_texts(existing: dict[str, object], incoming: dict[str, object]) -> dict[str, object]:
 +    """Fusioniert zwei Part-Events desselben logic_id zu EINEM akkumulierten
@@ -197,7 +197,7 @@ index e1e8de6..211cb13 100644
          closing_pattern = DSML_TOOL_CALLS_TRAILING_CLOSE_PATTERN if allow_trailing_close else DSML_TOOL_CALLS_CLOSE_PATTERN
      else:
          closing_pattern = re.compile(rf"</{re.escape(tag_name)}\s*>", re.IGNORECASE)
-@@ -507,11 +535,101 @@ def _looks_like_tool_markup_fragment(text: str) -> bool:
+@@ -507,11 +535,109 @@ def _looks_like_tool_markup_fragment(text: str) -> bool:
      return False
  
  
@@ -257,7 +257,14 @@ index e1e8de6..211cb13 100644
 +    try:
 +        parsed = json.loads(candidate)
 +    except json.JSONDecodeError:
-+        return text, "", []
++        # GLM sometimes closes the outer object but omits only the tool_calls
++        # array bracket. Repair exactly that boundary without touching any
++        # model text before or after the JSON object.
++        repaired = candidate[:-1] + "]}" if candidate.endswith("}") else candidate
++        try:
++            parsed = json.loads(repaired)
++        except json.JSONDecodeError:
++            return text, "", []
 +    calls_raw = parsed.get("tool_calls") if isinstance(parsed, dict) else None
 +    if not isinstance(calls_raw, list):
 +        return text, "", []
@@ -321,11 +328,42 @@ index e1e8de6..211cb13 100644
 +            self.tool_calls.extend(jcalls)
 +            return jvis
 +        if jrem:
-+            # partial-JSON erkannt: pending als ganzes halten, nur davorliegenden text ausgeben
++            # partial-JSON erkannt: nur den JSON-Teil halten, davorliegenden
++            # text ausgeben (pending aktualisieren, sonst wird der prefix
++            # beim naechsten consume doppelt emittiert)
++            self.pending_text = jrem
 +            return jvis
          visible, remainder, parsed_calls = _split_stream_text(
              self.pending_text,
              allowed_tool_names=self.allowed_tool_names,
+diff --git a/tests/test_tool_parser.py b/tests/test_tool_parser.py
+index 7c53ae9..3869d8b 100644
+--- a/tests/test_tool_parser.py
++++ b/tests/test_tool_parser.py
+@@ -17,0 +18,23 @@
++def test_parse_repairs_missing_tool_calls_array_close_and_preserves_model_text():
++    text = (
++        'Vorher {"tool_calls":[{"name":"bash","arguments":{"command":"pwd"}}}'
++        " Nachher"
++    )
++
++    clean, tool_calls = parse_tool_calls_from_text(text, {"bash"})
++
++    assert clean == "Vorher  Nachher"
++    assert len(tool_calls) == 1
++    assert tool_calls[0]["function"]["name"] == "bash"
++    assert tool_calls[0]["function"]["arguments"] == '{"command": "pwd"}'
++
++
++def test_parse_does_not_rewrite_other_malformed_json_as_tool_call():
++    text = 'Modelltext {"tool_calls":{"name":"bash"} bleibt erhalten'
++
++    clean, tool_calls = parse_tool_calls_from_text(text, {"bash"})
++
++    assert clean == text
++    assert tool_calls == []
++
++
 diff --git a/src/glm2api/utils/tool_protocol.py b/src/glm2api/utils/tool_protocol.py
 index cf5262a..5d47364 100644
 --- a/src/glm2api/utils/tool_protocol.py

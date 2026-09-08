@@ -7,6 +7,7 @@ PID_FILE="$GLM2API_DIR/glm2api.pid"
 LOG_DIR="$GLM2API_DIR/log"
 OUTPUT_LOG="$LOG_DIR/glm2api_output.log"
 PORT=8001
+PROCESS_PATTERN="python3 main\\.py"
 
 usage() {
   echo "Verwendung: $0 {status|restart}"
@@ -20,8 +21,8 @@ check_status() {
   echo "=== glm2api Server Status ==="
   
   # Prozess prüfen
-  if pgrep -f "python.*glm2api" > /dev/null; then
-    echo "✓ Prozess läuft (PID: $(pgrep -f 'python.*glm2api'))"
+  if pgrep -f "$PROCESS_PATTERN" > /dev/null; then
+    echo "✓ Prozess läuft (PID: $(pgrep -f "$PROCESS_PATTERN"))"
   else
     echo "✗ Prozess läuft nicht"
   fi
@@ -58,14 +59,14 @@ restart_server() {
   echo "=== glm2api Server neu starten ==="
   
   # Stoppen
-  if pgrep -f "python.*glm2api" > /dev/null; then
+  if pgrep -f "$PROCESS_PATTERN" > /dev/null; then
     echo "Stoppe laufenden Prozess..."
-    pkill -f "python.*glm2api"
+    pkill -f "$PROCESS_PATTERN"
     sleep 2
   fi
   
   # Prüfen ob noch läuft
-  if pgrep -f "python.*glm2api" > /dev/null; then
+  if pgrep -f "$PROCESS_PATTERN" > /dev/null; then
     echo "Fehler: Prozess konnte nicht gestoppt werden"
     exit 1
   fi
@@ -86,7 +87,7 @@ restart_server() {
   echo "Warte auf Start..."
   sleep 3
   
-  if pgrep -f "python.*glm2api" > /dev/null; then
+  if pgrep -f "$PROCESS_PATTERN" > /dev/null; then
     echo "✓ Prozess läuft"
   else
     echo "✗ Prozess läuft nicht - siehe Logfile: $OUTPUT_LOG"

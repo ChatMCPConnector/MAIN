@@ -15,6 +15,29 @@ def test_streaming_json_tool_call_with_terminator_in_same_token():
     assert tool_calls[0]["function"]["arguments"] == '{"command": "pwd"}'
 
 
+def test_parse_repairs_missing_tool_calls_array_close_and_preserves_model_text():
+    text = (
+        'Vorher {"tool_calls":[{"name":"bash","arguments":{"command":"pwd"}}}'
+        " Nachher"
+    )
+
+    clean, tool_calls = parse_tool_calls_from_text(text, {"bash"})
+
+    assert clean == "Vorher  Nachher"
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "bash"
+    assert tool_calls[0]["function"]["arguments"] == '{"command": "pwd"}'
+
+
+def test_parse_does_not_rewrite_other_malformed_json_as_tool_call():
+    text = 'Modelltext {"tool_calls":{"name":"bash"} bleibt erhalten'
+
+    clean, tool_calls = parse_tool_calls_from_text(text, {"bash"})
+
+    assert clean == text
+    assert tool_calls == []
+
+
 def test_parse_tool_calls_from_dsml_markup():
     text = (
         "before\n"

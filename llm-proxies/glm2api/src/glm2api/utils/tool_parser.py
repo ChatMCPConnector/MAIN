@@ -535,15 +535,24 @@ def _looks_like_tool_markup_fragment(text: str) -> bool:
     return False
 
 
-def _find_json_tool_call(text: str, final: bool) -> tuple[str, str, list[dict[str, object]]]:
+def _find_json_tool_call(
+    text: str,
+    final: bool,
+    allowed_tool_names: set[str] | None = None,
+) -> tuple[str, str, list[dict[str, object]]]:
     """Findet das JSON-Tool-Protokoll: {"tool_calls":[...]}[] (mit Terminator).
-    Gibt (visible, remainder, tool_calls) zurück."""
-    start = text.find('{"tool_calls"')
+    Gibt (visible, remainder, tool_calls) zurueck.
+
+    Code-Fences sind maskiert: ein Tool-Call-Beispiel innerhalb ```...```
+    wird NICHT als echter Aufruf geparst. Der Brace-Scan laeuft auf dem
+    Original-Text (Argumente duerfen ihrerseits ``` enthalten)."""
+    masked = _mask_code_fences(text)
+    start = masked.find('{"tool_calls"')
     if start == -1:
         # partial am ende halten: '{"tool_call' oder kuerzere prefixes davon
         if not final:
             for prefix in ('{"tool_calls', '{"tool_call', '{"tool_cal', '{"tool_ca', '{"tool_c', '{"tool_', '{"tool', '{"too', '{"to', '{"'):
-                idx = text.rfind(prefix)
+                idx = masked.rfind(prefix)
                 if idx != -1:
                     return text[:idx], text[idx:], []
         return text, "", []
@@ -597,7 +606,14 @@ def _find_json_tool_call(text: str, final: bool) -> tuple[str, str, list[dict[st
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
-        return text, "", []
+        # GLM sometimes closes the outer object but omits only the tool_calls
+        # array bracket. Repair exactly that boundary without touching any
+        # model text before or after the JSON object.
+        repaired = candidate[:-1] + "]}" if candidate.endswith("}") else candidate
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            return text, "", []
     calls_raw = parsed.get("tool_calls") if isinstance(parsed, dict) else None
     if not isinstance(calls_raw, list):
         return text, "", []
@@ -611,7 +627,7 @@ def _find_json_tool_call(text: str, final: bool) -> tuple[str, str, list[dict[st
             args_str = args
         else:
             args_str = json.dumps(args or {}, ensure_ascii=False)
-        if name:
+        if name and _is_allowed_tool_name(name, allowed_tool_names):
             tool_calls.append({
                 "index": len(tool_calls),
                 "id": f"call_{uuid.uuid4().hex[:24]}",
@@ -630,14 +646,16 @@ def _split_stream_text(
     final: bool,
 ) -> tuple[str, str, list[dict[str, object]]]:
     # 1) JSON-Protokoll prüfen (neues format)
-    visible, remainder, tool_calls = _find_json_tool_call(text, final)
+    visible, remainder, tool_calls = _find_json_tool_call(text, final, allowed_tool_names)
     if tool_calls or (remainder and not final and remainder.lstrip().startswith('{"tool_call')):
         if tool_calls:
             return visible, remainder, tool_calls
         return visible, remainder, []
 
-    # 2) Tool-Calls im think-Feld suchen (Fallback für glm-5.3-think)
-    jstart = text.find('{"tool_calls"')
+    # 2) Tool-Calls im think-Feld suchen (Fallback für glm-5.3-think).
+    #    Gleichfalls fence-maskiert — sonst wuerde ein Tool-Call-Beispiel in
+    #    einer Code-Fence hier als echter Aufruf durchrutschen.
+    jstart = _mask_code_fences(text).find('{"tool_calls"')
     if jstart != -1:
         depth = 0
         in_str = False
@@ -721,7 +739,7 @@ def parse_tool_calls_from_text(text: str, allowed_tool_names: set[str] | None = 
     if not text:
         return "", []
     # zuerst neues JSON-protokoll pruefen
-    visible, remainder, tool_calls = _find_json_tool_call(text, final=True)
+    visible, remainder, tool_calls = _find_json_tool_call(text, final=True, allowed_tool_names=allowed_tool_names)
     if tool_calls:
         return visible, tool_calls
     spans, tool_calls = _extract_tool_blocks(text, allowed_tool_names, allow_trailing_close=True)
@@ -771,13 +789,16 @@ class StreamingToolParser:
             return prefix + visible
 
         # JSON-tool-protokoll: partial am ende halten, komplette sofort parsen
-        jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False)
+        jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False, allowed_tool_names=self.allowed_tool_names)
         if jcalls:
             self.pending_text = jrem
             self.tool_calls.extend(jcalls)
             return jvis
         if jrem:
-            # partial-JSON erkannt: pending als ganzes halten, nur davorliegenden text ausgeben
+            # partial-JSON erkannt: nur den JSON-Teil halten, davorliegenden
+            # text ausgeben (pending aktualisieren, sonst wird der prefix
+            # beim naechsten consume doppelt emittiert)
+            self.pending_text = jrem
             return jvis
         visible, remainder, parsed_calls = _split_stream_text(
             self.pending_text,
