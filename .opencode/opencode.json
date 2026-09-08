@@ -136,15 +136,11 @@
       "options": {
         "apiKey": "{file:~/.config/landscape/gemini.key}"
       },
-      "models": {
-        "gemini-flash-latest": {
-          "name": "Gemini Flash Latest",
-          "limit": {
-            "context": 1048576,
-            "output": 65536
-          }
-        }
-      }
+      "whitelist": [
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite"
+      ]
     },
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",

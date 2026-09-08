@@ -636,6 +636,62 @@ def _split_stream_text(
             return visible, remainder, tool_calls
         return visible, remainder, []
 
+    # 2) Tool-Calls im think-Feld suchen (Fallback für glm-5.3-think)
+    jstart = text.find('{"tool_calls"')
+    if jstart != -1:
+        depth = 0
+        in_str = False
+        esc = False
+        end = -1
+        for i in range(jstart, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end != -1:
+            candidate = text[jstart:end]
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                return text, "", []
+            calls_raw = parsed.get("tool_calls") if isinstance(parsed, dict) else None
+            if isinstance(calls_raw, list):
+                tool_calls = []
+                for idx, call in enumerate(calls_raw):
+                    if not isinstance(call, dict):
+                        continue
+                    name = str(call.get("name", "")).strip()
+                    args = call.get("arguments", {})
+                    if isinstance(args, str):
+                        args_str = args
+                    else:
+                        args_str = json.dumps(args or {}, ensure_ascii=False)
+                    if name:
+                        tool_calls.append({
+                            "index": len(tool_calls),
+                            "id": f"call_{uuid.uuid4().hex[:24]}",
+                            "type": "function",
+                            "function": {"name": name, "arguments": args_str or "{}"},
+                        })
+                if tool_calls:
+                    visible = (text[:jstart] + text[end:]).strip()
+                    return visible, "", tool_calls
+
+    # dann der Rest des Codes (der aktuelle)
     hold_from_candidates = [
         index
         for index in (_find_unmatched_fence_start(text), _find_incomplete_block_start(text, allow_trailing_close=final))
