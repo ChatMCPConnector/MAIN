@@ -21,6 +21,8 @@ def test_get_browser_headers_includes_random_x_forwarded_for():
     manager.config = _DummyConfig()
 
     headers = manager.get_browser_headers()
+    assert headers["X-Lang"] == "en"
+    assert headers["Accept-Language"].startswith("en")
     xff = headers["X-Forwarded-For"]
     octets = xff.split(".")
 

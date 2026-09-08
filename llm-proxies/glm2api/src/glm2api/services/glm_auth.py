@@ -79,7 +79,7 @@ class GLMAccessTokenManager:
         return {
             "Accept": "application/json, text/plain, */*" if app_fr == "default" else "text/event-stream",
             "Accept-Encoding": "gzip, deflate" if app_fr == "default" else "identity",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "Accept-Language": "en-US,en;q=0.9",
             "App-Name": "chatglm",
             "Cache-Control": "no-cache",
             "Content-Type": "application/json",
@@ -98,7 +98,7 @@ class GLMAccessTokenManager:
             "X-App-Version": "0.0.1",
             "X-Device-Brand": "",
             "X-Device-Model": "",
-            "X-Lang": "zh",
+            "X-Lang": "en",
             "X-Forwarded-For": build_random_x_forwarded_for(),
         }
 
