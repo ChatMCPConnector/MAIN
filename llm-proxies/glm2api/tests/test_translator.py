@@ -14,6 +14,7 @@ def test_convert_messages_injects_json_tool_prompt_and_history():
                 "role": "assistant",
                 "tool_calls": [
                     {
+                        "id": "call_1",
                         "function": {
                             "name": "get_weather",
                             "arguments": '{"city":"上海"}',
@@ -23,7 +24,6 @@ def test_convert_messages_injects_json_tool_prompt_and_history():
             },
             {
                 "role": "tool",
-                "name": "get_weather",
                 "tool_call_id": "call_1",
                 "content": "晴",
             },

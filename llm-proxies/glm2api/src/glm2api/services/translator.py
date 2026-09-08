@@ -412,6 +412,7 @@ def convert_messages(
     processed: list[dict[str, str]] = []
     latest_user_url: str | None = extract_recent_user_url(messages)
     valid_tool_call_ids: set[str] = set()
+    tool_names_by_call_id: dict[str, str] = {}
     repaired_tool_call_ids: set[str] = set()
     for message in messages:
         role = str(message.get("role", "user"))
@@ -442,6 +443,7 @@ def convert_messages(
                 tool_call_id = str(tool_call.get("id", "")).strip()
                 if tool_call_id and not tool_call_id.startswith("call_repaired_"):
                     valid_tool_call_ids.add(tool_call_id)
+                    tool_names_by_call_id[tool_call_id] = tool_name
                     if bool(tool_call.get("_repaired")):
                         repaired_tool_call_ids.add(tool_call_id)
             assistant_text = extract_text_content(content).strip() if content else ""
@@ -456,7 +458,9 @@ def convert_messages(
             if tool_call_id and tool_call_id in repaired_tool_call_ids:
                 continue
             role = "user"
-            tool_name = str(message.get("name", "")).strip() or "unknown_tool"
+            tool_name = str(message.get("name", "")).strip() or tool_names_by_call_id.get(tool_call_id, "")
+            if not tool_name:
+                continue
             tool_result_text = extract_text_content(content)
             content = serialize_tool_result_block(
                 tool_call_id=tool_call_id or message.get("tool_call_id", "unknown"),
