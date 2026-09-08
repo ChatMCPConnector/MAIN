@@ -218,7 +218,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
         refresh_tokens = [GUEST_REFRESH_TOKEN_MARKER] * glm_max_concurrency
         single_refresh_token = GUEST_REFRESH_TOKEN_MARKER
     elif not refresh_tokens and single_refresh_token:
-        refresh_tokens = [single_refresh_token]
+        refresh_tokens = [single_refresh_token, GUEST_REFRESH_TOKEN_MARKER]
     elif not refresh_tokens:
         refresh_tokens = [GUEST_REFRESH_TOKEN_MARKER] * glm_max_concurrency
         single_refresh_token = GUEST_REFRESH_TOKEN_MARKER
