@@ -45,6 +45,7 @@ cmd_lock() {
   [ -f "$HOME/.config/landscape/tokenrouter.key" ] && { cp "$HOME/.config/landscape/tokenrouter.key" "$stage/files/tokenrouter-key"; found=1; }
   [ -f "$HOME/.config/landscape/nvidia-nim.key" ] && { cp "$HOME/.config/landscape/nvidia-nim.key" "$stage/files/nvidia-nim-key"; found=1; }
   [ -f "$HOME/.config/landscape/xinjianya.key" ] && { cp "$HOME/.config/landscape/xinjianya.key" "$stage/files/xinjianya-key"; found=1; }
+  [ -f "$HOME/.config/landscape/gemini.key" ] && { cp "$HOME/.config/landscape/gemini.key" "$stage/files/gemini-key"; found=1; }
   [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
   [ -f "$HOME/.local/share/opencode/auth.json" ] && { cp "$HOME/.local/share/opencode/auth.json" "$stage/files/opencode-auth.json"; found=1; }
   [ -f ".env" ] && { cp ".env" "$stage/files/env"; found=1; }
@@ -93,6 +94,10 @@ cmd_unlock() {
   if [ -f "$stage/files/xinjianya-key" ] && [ ! -f "$HOME/.config/landscape/xinjianya.key" ]; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/xinjianya-key" "$HOME/.config/landscape/xinjianya.key" && chmod 600 "$HOME/.config/landscape/xinjianya.key"
     echo "    XinJianYa-Key wiederhergestellt."
+  fi
+  if [ -f "$stage/files/gemini-key" ] && [ ! -f "$HOME/.config/landscape/gemini.key" ]; then
+    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/gemini-key" "$HOME/.config/landscape/gemini.key" && chmod 600 "$HOME/.config/landscape/gemini.key"
+    echo "    Gemini-Key wiederhergestellt."
   fi
   if [ -f "$stage/files/chatglm-refresh-token" ] && [ ! -f ".secrets/chatglm-refresh-token" ]; then
     mkdir -p ".secrets" && cp "$stage/files/chatglm-refresh-token" ".secrets/chatglm-refresh-token" && chmod 600 ".secrets/chatglm-refresh-token"

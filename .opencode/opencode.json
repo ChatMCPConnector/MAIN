@@ -131,6 +131,21 @@
           }
         },
 
+    "google": {
+      "name": "Google Gemini",
+      "options": {
+        "apiKey": "{file:~/.config/landscape/gemini.key}"
+      },
+      "models": {
+        "gemini-flash-latest": {
+          "name": "Gemini Flash Latest",
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        }
+      }
+    },
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "glm2api",

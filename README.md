@@ -54,7 +54,7 @@ Secret-Schutz-Purismus:
   Entschlüsselungswort — nie ein Secret/PAT als Passphrase zweckentfremden
   (der alte PAT wurde dadurch geleakt und von GitHub revoked).
 - `config/secrets.enc` (+ Manifest): verschlüsseltes Bundle mit
-  `pat`, `tokenrouter.key`, `nvidia-nim.key`, `xinjianya.key`, `chatglm-refresh-token`,
+  `pat`, `tokenrouter.key`, `nvidia-nim.key`, `xinjianya.key`, `gemini.key`, `chatglm-refresh-token`,
   `env`, `opencode-auth.json` → landen beim Unlock unter `~/.config/landscape/`,
   `~/.local/share/opencode/auth.json` bzw. `.env`/`.secrets/`.
 - `./infra/scripts/secrets.sh lock|unlock|status` verwaltet das Bundle.
@@ -72,6 +72,7 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
 | nvidia | nemotron-3-ultra, deepseek-v4-flash/pro | nvidia-nim.key |
 | xinjianya | gpt-5.6-sol, kimi-k3, deepseek-v4-pro | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
+| google | gemini-flash-latest (1M) | gemini.key |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
@@ -160,6 +161,13 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-08 (4): **google-Provider** (nativ, Modell `gemini-flash-latest`,
+  1M Kontext / 64k Output) in `.opencode/opencode.json`; Key als `gemini.key`
+  über `{file:~/.config/landscape/gemini.key}` referenziert, `secrets.sh`
+  lock/unlock erweitert, Bundle+Manifest aktualisiert. Live verifiziert:
+  `opencode models` listet ihn, `opencode run --model google/gemini-flash-latest`
+  antwortete OK. Hinweis: `generateContent` meldete einmalig 503 (Modell
+  überlastet, transient) — bei Wiederholung OK.
 - 2026-09-08 (3): vovoapi-Provider **wieder entfernt** (Modelle `gpt-5.6-sol` +
   `gpt-6-astra`, `vovoapi.key`, `secrets.sh`-Erweiterung, Bundle-Eintrag) — Key
   wurde von der API als `INVALID_API_KEY` abgelehnt. Rückweg: Provider-Block aus
