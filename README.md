@@ -160,6 +160,17 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-08 (3): vovoapi-Provider **wieder entfernt** (Modelle `gpt-5.6-sol` +
+  `gpt-6-astra`, `vovoapi.key`, `secrets.sh`-Erweiterung, Bundle-Eintrag) — Key
+  wurde von der API als `INVALID_API_KEY` abgelehnt. Rückweg: Provider-Block aus
+  (2) erneut in `.opencode/opencode.json` eintragen + Key nach
+  `~/.config/landscape/vovoapi.key` + `secrets.sh lock`.
+- 2026-09-08 (2): **vovoapi-Provider** (`https://vovoapi.com/v1`, OpenAI-kompatibel,
+  Modelle `gpt-5.6-sol` + `gpt-6-astra` mit Reasoning-Varianten none/low/medium/high/
+  xhigh/max) in `.opencode/opencode.json`; Key als `vovoapi.key` über
+  `{file:~/.config/landscape/vovoapi.key}` referenziert, `secrets.sh` lock/unlock
+  erweitert, Bundle+Manifest aktualisiert. Status: Config lädt (`opencode models`
+  listet beide), API antwortet aktuell `INVALID_API_KEY` — Key prüfen/rotieren.
 - 2026-09-08 (1): glm2api **portables Bundle**: `llm-proxies/scripts/build-bundle.sh`
   baut `llm-proxies/dist/glm2api-bundle.zip` (reproduzierbar aus dem Repo —
   Code, Tests, glm2api.env, portable install/start-Skripte mit relativen
