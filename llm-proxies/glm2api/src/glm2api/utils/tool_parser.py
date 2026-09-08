@@ -14,7 +14,7 @@ TOOL_RESULT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 START_TAG_PATTERN = re.compile(
-    r"<(?P<tag>\|DSML\|tool_calls|DStool_calls|tool_calls|ml_tool_calls|ml_tool_call)(?=\b|\|)[^>]*>",
+    r"<(?P<tag>\|DSML\|tool_calls|DStool_calls|tool_calls|ml_tool_calls|ml_tool_call|DSMLtool_calls|dsmltool_calls|dstool_calls|dstoolcall|DSML_tool_calls|DSMLtoolcalls|invoke|ml_invoke|parameter|ml_parameter)(?=\b|\|)[^>]*>",
     re.IGNORECASE,
 )
 DSML_TAG_PATTERN = re.compile(r"</?\|DSML\|(?P<name>tool_calls|invoke|parameter|tool_result)\b", re.IGNORECASE)
@@ -582,9 +582,15 @@ def _find_json_tool_call(text: str, final: bool) -> tuple[str, str, list[dict[st
     else:
         candidate = text[start:end]
     rest = text[end:] if end != -1 else ""
-    # terminator '[]' konsumieren (oder beim final auch ohne)
-    if rest.startswith("[]"):
-        rest = rest[2:]
+    # terminator '[]' oder '.[]' konsumieren (flexibel, um Fehlformatierungen zu tolerieren)
+    terminators = ("[]", ".[]")
+    consumed = 0
+    for t in terminators:
+        if rest.startswith(t):
+            consumed = len(t)
+            break
+    if consumed:
+        rest = rest[consumed:]
     elif not final and rest.strip() == "":
         # warte noch auf den terminator
         return text[:start], text[start:], []
