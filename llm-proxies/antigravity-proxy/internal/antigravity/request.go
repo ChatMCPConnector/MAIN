@@ -167,15 +167,15 @@ func ensureAntigravityThinkingDefaults(req *GenerateContentRequest) {
 		thinkingConfig.ThinkingBudget = &thinkingBudget
 	}
 	if strings.Contains(modelLower, "claude") {
-		budget := 10001
+		budget := 32000
 		if thinkingConfig.ThinkingLevel != "" {
 			switch strings.ToLower(thinkingConfig.ThinkingLevel) {
 			case "minimal", "low":
 				budget = 2048
 			case "medium":
-				budget = 8192
-			case "high":
 				budget = 16000
+			case "high", "xhigh", "max":
+				budget = 32000
 			}
 			thinkingConfig.ThinkingLevel = ""
 		}
@@ -185,7 +185,7 @@ func ensureAntigravityThinkingDefaults(req *GenerateContentRequest) {
 			thinkingConfig.ThinkingBudget = &budget
 		}
 		if req.Request.GenerationConfig.MaxOutputTokens <= budget {
-			req.Request.GenerationConfig.MaxOutputTokens = budget + 4000
+			req.Request.GenerationConfig.MaxOutputTokens = budget + 8000
 		}
 	}
 }
