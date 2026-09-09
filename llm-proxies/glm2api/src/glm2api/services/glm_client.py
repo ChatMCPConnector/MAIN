@@ -363,13 +363,19 @@ class GLMWebClient:
                     chunks, status = accumulator.consume_event(event)
                     for chunk in chunks:
                         encoded = chunk.encode("utf-8")
-                        if (
-                            b'"content"' in encoded
-                            and b'"reasoning_content"' not in encoded
-                            and encoded.replace(b"data:", b"").strip()
-                            not in (b"", b"[]")
-                        ):
-                            served_content = True
+                        if not served_content and b'"content"' in encoded and b'"reasoning_content"' not in encoded:
+                            # trivial protocol residue ("[]") does not count
+                            # as served content — it must not block recovery
+                            # rounds (blocked-tool follow-up, transient retry)
+                            try:
+                                delta = json.loads(
+                                    encoded.decode("utf-8").removeprefix("data: ").strip()
+                                )["choices"][0]["delta"]
+                                content_value = delta.get("content")
+                                if content_value and str(content_value).strip() not in ("", "[]"):
+                                    served_content = True
+                            except (json.JSONDecodeError, KeyError, IndexError, ValueError):
+                                served_content = True
                         yield encoded
 
                     if status in {"finish", "intervene"}:
