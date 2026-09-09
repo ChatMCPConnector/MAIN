@@ -19,7 +19,7 @@ Codespaces-Secrets, danach läuft alles automatisch (`postCreateCommand` →
 | `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau) |
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
-| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/kontostand/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Kontostand-Spec, Reverse-Engineering-Doku) |
+| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/kontostand/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | glm2api-Haupt-Proxy: **kompletter Code liegt im Repo** (`llm-proxies/glm2api/` inkl. Patches) + `glm2api.env` + Start/rebuild-Skripte + **portables Bundle** (`dist/glm2api-bundle.zip`, Bau via `scripts/build-bundle.sh`) |
 
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
@@ -109,6 +109,15 @@ komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 # Ziel: entpacken → bash scripts/install.sh → bash scripts/start.sh (Port 8001)
 ```
 
+**Bundle-Refresh (immer aktuell halten):** `build-bundle.sh` überschreibt das
+alte `dist/glm2api-bundle.zip` bei jedem Lauf vollständig mit dem aktuellen
+Source-Stand (rm + Neubau, kein Merge). Nach jeder glm2api-Code-Änderung
+einfach neu laufen lassen. Deterministisch (feste Zeitstempel, inhaltlich
+identische Stands = byte-identische ZIPs) und mit eingebauter Verifikation:
+alle tests/*.py im Zip + byte-identischer src/ gegen den Repo-Source, sonst
+exit 1. Drift ist damit strukturell ausgeschlossen — ein veraltetes Bundle
+kann nicht mehr committet werden, ohne dass der Build vorher scheitert.
+
 **100 %-Wiederherstellung:** Der Proxy-Code lebt komplett in MAIN — nach
 einem Codespace-Wechsel macht setup.sh automatisch: uv-Install (falls nötig),
 `.env` aus `glm2api.env` (Port 8001, Guest-Mode, secret-frei), `uv sync`
@@ -163,13 +172,18 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-09 (2): Kontostand-Spec (infra/docs/Kontostand.md, 432 Zeilen)
+  gelöscht — nicht mehr benötigt. kontostand.sh bleibt, Header-Verweis
+  entfernt. README: Bundle-Refresh-Doku ergänzt (build-bundle.sh
+  überschreibt dist/glm2api-bundle.zip immer mit aktuellem Stand,
+  deterministisch + Verifikation gegen Source-Drift).
 - 2026-09-09: Kompaktierung Runde 2: totes Modul `model_profiles.py`
   entfernt (nirgends importiert). Betriebs-Bug gefixt: `infra/scripts/
   glm2api.sh` startete System-Python 3.12 statt venv-Python 3.14 (App
   requires >=3.14) — Restart wäre mit ImportError gescheitert. README
   "Enthalten" gestrafft, Bundle neu gebaut (44 statt 45 Dateien).
 - 2026-09-09: Struktur-Kompaktierung: `work/` aufgelöst — `docs/` nach
-  `infra/docs/` (Kontostand-Spec + Reverse-Engineering-Doku). Ein Top-Level-
+  `infra/docs/` (Reverse-Engineering-Doku). Ein Top-Level-
   Ordner weniger, Referenzen in kontostand.sh / build-bundle.sh angepasst.
 
 - 2026-09-08 (6): **Kompaktierung/Audit-Umsetzung** (AUDIT.md + glm-api-audit.md
