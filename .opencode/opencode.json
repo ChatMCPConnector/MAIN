@@ -171,7 +171,7 @@
       },
       "models": {
         "gemini-3.5-flash-light": {
-          "name": "Gemini 3.5 Flash Light",
+          "name": "Gemini 3.5 Flash-Lite",
           "reasoning": true,
           "options": {
             "reasoningEffort": "high"

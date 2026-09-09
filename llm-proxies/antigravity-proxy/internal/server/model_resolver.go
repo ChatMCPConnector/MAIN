@@ -92,18 +92,6 @@ func resolveModelForThinking(model string, req antigravity.GeminiInternalRequest
 			return modelGemini36FlashLow
 		}
 
-	case isGemini35FlashModel(modelLower):
-		switch thinkingLevel {
-		case "high":
-			return modelGemini35FlashHigh
-		case "medium":
-			return modelGemini35FlashMedium
-		case "minimal", "low", "":
-			return modelGemini35FlashLow
-		default:
-			return modelGemini35FlashLow
-		}
-
 	case isGemini31FlashLiteModel(modelLower):
 		return modelGemini31FlashLite
 
@@ -204,8 +192,10 @@ func isGemini35FlashModel(modelLower string) bool {
 
 func isGemini31FlashLiteModel(modelLower string) bool {
 	return strings.Contains(modelLower, "3.1-flash-lite") ||
-		modelLower == "gemini-flash-lite" ||
-		modelLower == "flash-lite"
+		strings.Contains(modelLower, "3.5-flash") ||
+		strings.Contains(modelLower, "flash-lite") ||
+		strings.Contains(modelLower, "flash-light") ||
+		modelLower == "gemini-flash-lite"
 }
 
 func isGptOssModel(modelLower string) bool {
