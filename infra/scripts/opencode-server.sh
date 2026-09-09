@@ -18,15 +18,21 @@ case "${1:-status}" in
         echo "[opencode-server] Läuft bereits auf Port ${PORT}."
         exit 0
       fi
-      echo "[opencode-server] WARN: Port ${PORT} belegt, aber Server antwortet nicht."
+      echo "[opencode-server] WARN: Port ${PORT} belegt, aber antwortet nicht. Stoppe alte Instanz..."
+      $0 stop >/dev/null 2>&1 || true
+      sleep 1
     fi
 
     echo "[opencode-server] Starte zentralen Server auf Port ${PORT}..."
-    (cd /workspaces/MAIN && setsid nohup opencode serve --port "${PORT}" --hostname "${HOST}" >> "${LOGFILE}" 2>&1 & echo $! > "${PIDFILE}")
+    cd /workspaces/MAIN
+    nohup /home/vscode/.opencode/bin/opencode-bin serve --port "${PORT}" --hostname "${HOST}" </dev/null >> "${LOGFILE}" 2>&1 &
+    SERVER_PID=$!
+    disown "$SERVER_PID" 2>/dev/null || true
+    echo "$SERVER_PID" > "${PIDFILE}"
 
     for i in $(seq 1 20); do
       if curl -sf -m 2 "${HEALTH_URL}" >/dev/null 2>&1; then
-        echo "[opencode-server] OK: Läuft auf Port ${PORT}."
+        echo "[opencode-server] OK: Läuft auf Port ${PORT} (PID: ${SERVER_PID})."
         exit 0
       fi
       sleep 1
@@ -39,12 +45,21 @@ case "${1:-status}" in
 
   stop)
     if [ -f "${PIDFILE}" ]; then
-      PID="$(cat "${PIDFILE}")"
-      echo "[opencode-server] Stoppe PID ${PID}..."
-      kill "${PID}" 2>/dev/null || true
+      PID="$(cat "${PIDFILE}" 2>/dev/null || true)"
+      if [ -n "${PID}" ] && kill -0 "${PID}" 2>/dev/null; then
+        echo "[opencode-server] Stoppe PID ${PID}..."
+        kill "${PID}" 2>/dev/null || true
+        for _ in $(seq 1 10); do
+          kill -0 "${PID}" 2>/dev/null || break
+          sleep 0.5
+        done
+        if kill -0 "${PID}" 2>/dev/null; then
+          kill -9 "${PID}" 2>/dev/null || true
+        fi
+      fi
       rm -f "${PIDFILE}"
     fi
-    pkill -f "opencode serve" 2>/dev/null || true
+    pkill -f "opencode-bin serve" 2>/dev/null || true
     echo "[opencode-server] Gestoppt."
     ;;
 

@@ -20,6 +20,8 @@ export PATH="$HOME/.opencode/bin:$PATH"
 # opencode Multi-Client Wrapper aktivieren (verhindert Session-Crashes bei parallelen Terminals)
 if [ -f "$HOME/.opencode/bin/opencode" ] && [ ! -f "$HOME/.opencode/bin/opencode-bin" ]; then
   mv "$HOME/.opencode/bin/opencode" "$HOME/.opencode/bin/opencode-bin"
+fi
+if [ -f "$HOME/.opencode/bin/opencode-bin" ]; then
   cp "$REPO_ROOT/infra/scripts/opencode-wrapper.sh" "$HOME/.opencode/bin/opencode"
   chmod +x "$HOME/.opencode/bin/opencode"
   echo "    opencode Multi-Client-Wrapper installiert."

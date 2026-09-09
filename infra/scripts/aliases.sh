@@ -15,13 +15,13 @@ alias ll='ls -lah'
 opencode() {
   local server_url="http://127.0.0.1:4096"
   case "${1:-}" in
-    serve|attach|models|stats|export|import|completion|agent|upgrade|uninstall|db|mcp|plugin|providers)
+    serve|attach|models|stats|export|import|completion|agent|upgrade|uninstall|db|mcp|plugin|providers|debug|github|pr|run)
       command opencode "$@"
       return $?
       ;;
   esac
 
-  if curl -sf -m 1 "$server_url/" >/dev/null 2>&1; then
+  if curl -sf -m 2 "$server_url/" >/dev/null 2>&1; then
     command opencode attach "$server_url" "$@"
   else
     command opencode "$@"

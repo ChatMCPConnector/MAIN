@@ -15,14 +15,14 @@ case "${1:-}" in
 esac
 
 # Wenn der zentrale Server auf Port 4096 läuft: sauber per Client-Attach verbinden
-if curl -sf -m 1 "$SERVER_URL/" >/dev/null 2>&1; then
+if curl -sf -m 2 "$SERVER_URL/" >/dev/null 2>&1; then
   exec "$REAL_OPENCODE" attach "$SERVER_URL" "$@"
 fi
 
 # Server läuft noch nicht: versuchen zu starten
 if [ -x "/workspaces/MAIN/infra/scripts/opencode-server.sh" ]; then
   /workspaces/MAIN/infra/scripts/opencode-server.sh start >/dev/null 2>&1 || true
-  if curl -sf -m 2 "$SERVER_URL/" >/dev/null 2>&1; then
+  if curl -sf -m 3 "$SERVER_URL/" >/dev/null 2>&1; then
     exec "$REAL_OPENCODE" attach "$SERVER_URL" "$@"
   fi
 fi
