@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kontostand.sh: minimaler Collector für Kontostand/Verbrauch (Spec: work/docs/Kontostand.md).
+# kontostand.sh: minimaler Collector für Kontostand/Verbrauch (Spec: infra/docs/Kontostand.md).
 # Bevorzugt direkten API-Abruf mit System Access Token, kein dauerhafter Browser.
 #
 #   ./infra/scripts/kontostand.sh            # abrufen + cachen + zwei Werte anzeigen

@@ -19,9 +19,9 @@ Codespaces-Secrets, danach läuft alles automatisch (`postCreateCommand` →
 | `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau) |
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
-| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/kontostand/browser-*.sh, aliases.sh), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP) |
+| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/kontostand/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Kontostand-Spec, Reverse-Engineering-Doku) |
 | `llm-proxies/` | glm2api-Haupt-Proxy: **kompletter Code liegt im Repo** (`llm-proxies/glm2api/` inkl. Patches) + `glm2api.env` + Start/rebuild-Skripte + **portables Bundle** (`dist/glm2api-bundle.zip`, Bau via `scripts/build-bundle.sh`) |
-| `work/` | Eigene Projekte: `docs/` (Reverse-Engineering-Doku: `docs/reverse-engineering/`) |
+
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
 
 ## Schnellstart
@@ -163,6 +163,10 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-09: Struktur-Kompaktierung: `work/` aufgelöst — `docs/` nach
+  `infra/docs/` (Kontostand-Spec + Reverse-Engineering-Doku). Ein Top-Level-
+  Ordner weniger, Referenzen in kontostand.sh / build-bundle.sh angepasst.
 
 - 2026-09-08 (6): **Kompaktierung/Audit-Umsetzung** (AUDIT.md + glm-api-audit.md
   abgearbeitet): korrupter Patch gestrichen (`llm-proxies/patches/` — der

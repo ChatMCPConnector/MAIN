@@ -5,7 +5,7 @@
 #
 # Quelle des Bundles: llm-proxies/glm2api (Code, kanonischer Source — kein
 # Patch-Artefakt mehr), llm-proxies/glm2api.env (Config),
-# work/docs/reverse-engineering (Doku). Kein Klon, keine externen Quellen.
+# infra/docs/reverse-engineering (Doku). Kein Klon, keine externen Quellen.
 #
 # Determinismus (N-2): alle gestagten Dateien bekommen einen festen Zeitstempel
 # (SOURCE_DATE_EPOCH oder Default 0), damit inhaltlich identische Builds
@@ -40,7 +40,7 @@ cp "$REPO_ROOT/llm-proxies/scripts/bundle/install.sh" "$STAGE/scripts/"
 cp "$REPO_ROOT/llm-proxies/scripts/bundle/start.sh" "$STAGE/scripts/"
 
 # 4) Doku
-cp "$REPO_ROOT/work/docs/reverse-engineering/chatglm-reasoning-modes.md" "$STAGE/docs/" 2>/dev/null || true
+cp "$REPO_ROOT/infra/docs/reverse-engineering/chatglm-reasoning-modes.md" "$STAGE/docs/" 2>/dev/null || true
 cp "$REPO_ROOT/llm-proxies/scripts/bundle/README.md" "$STAGE/README.md"
 
 chmod +x "$STAGE/scripts/"*.sh

@@ -426,7 +426,7 @@ Verbrauch:    12,64
 
 ## Umsetzungsstand 2026-09-06
 
-- Spec liegt unter `work/docs/Kontostand.md` (vorher Root).
+- Spec liegt unter `infra/docs/Kontostand.md` (vorher Root).
 - `scripts/kontostand.sh` implementiert Phase 4/5-Mechanik: Token aus `SYSTEM_ACCESS_TOKEN`/`.env`, atomarer Cache unter `.runtime/kontostand.json` (gitignored), bei Fehler letzten Stand behalten (nie `0`), Exit 1.
 - Erfolgspfad und Fehlerpfad gegen einen lokalen Stub verifiziert (Parsing, Atomaritaet, Keep-last).
 - Noch offen (Phasen 1-3): echter API-Host, `KONTOSTAND_DIVISOR` und Token-Reichweite sind unverifiziert. Ohne `KONTOSTAND_DIVISOR` meldet das Skript `conversion_unverified` (Exit 2) statt zu raten.
