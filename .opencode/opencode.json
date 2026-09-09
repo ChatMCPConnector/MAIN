@@ -241,8 +241,8 @@
       }
     }
   },
-  "model": "gemini-web/gemini-3.1-pro-thinking",
-  "small_model": "gemini-web/gemini-3.8-flash-thinking",
+  "model": "antigravity/gemini-3.8-flash",
+  "small_model": "antigravity/gemini-3.8-flash",
   "disabled_providers": [
     "github-copilot"
   ],

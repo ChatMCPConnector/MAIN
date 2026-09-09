@@ -41,7 +41,7 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 ## Enthalten
 
 - Ports 3000/8000 (Apps), 8001 (glm2api LLM-Proxy), 8083 (gemini-web2api Proxy), 9878 (antigravity-proxy), 9222/6082/5920 (Browser, nur lokal)
-- opencode, Default-Modell `gemini-web/gemini-3.1-pro-thinking` (Thinking immer aktiv)
+- opencode, Default-Modell `antigravity/gemini-3.8-flash` (Thinking immer aktiv auf high)
 - `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
   (kostenlos, NIM-Keys), für Modell-Discovery
 
