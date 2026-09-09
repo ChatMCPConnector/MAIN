@@ -153,3 +153,38 @@ Die Oberfläche wurde zunächst namensbasiert per Glob und anschließend referen
 ## Zusammenfassung
 
 Dokumentiert sind 7 verifizierte Findings: **0 kritisch, 2 hoch, 3 mittel und 2 niedrig**. Der aktuelle Workspace-Code besteht alle 63 vorhandenen Tests. Die größten Risiken sind die beschädigte Patchreferenz, das veraltete portable Bundle und die uneinheitlichen beziehungsweise zu breiten Prozess- und Startprüfungen.
+
+---
+
+## Nachtrag 2026-09-08 (Abbau der verbleibenden Testlücken)
+
+Die urspruenglichen 7 Findings (H-1/H-2, M-1/M-2/M-3, N-1/N-2) wurden im
+Audit-Zug desselben Tages umgesetzt (siehe AUDIT.md, Umsetzungsstatus).
+Danach wurden auch die "Verbleibenden Testlücken" einzeln geprüft:
+
+- **Live-Endpunkte (offen -> ERLEDIGT):** `llm-proxies/scripts/smoke-test.sh`
+  (neu) verifiziert gegen den laufenden Proxy: health, /v1/models (82),
+  OpenAI chat (stream + non-stream), Anthropic /v1/messages,
+  /v1/responses, Tool-Call-Emission und Tool-Result-Roundtrip über 2 Turns.
+  Alle 8 Checks gruen (Lauf vom 2026-09-08).
+- **Doppelbuild (offen -> ERLEDIGT):** build-bundle.sh haelt jetzt einen
+  integrierten Vollstaendigkeits-/Hash-Check (alle tests/*.py im Zip,
+  byte-identischer src/ gegen kanonischen Source, exit 1 bei Drift).
+  Doppelbuild verifiziert: identische MD5 (ae473b8a0021ee74650f128cde25bc6c).
+- **Patch-Syntax-Test (offen -> OBSOLET):** Der Patch wurde als Artefakt
+  gestrichen; Source im Repo ist kanonisch. Kein Patch, kein Patch-Test.
+- **PID-Zuordnung/fremde Portbelegung (offen -> TEILWEISE ERLEDIGT):**
+  start-glm2api.sh validiert Portbelegung jetzt per Health-Check (Exit 1
+  bei Fremdbelegung), glm2api.sh nutzt PID-Datei + gezielten Kill.
+  Ein automatisierter Mehr-Checkout-Test bleibt offen (nicht praktikabel
+  ohne Zerstoerung des Live-Betriebs).
+- **Upgrade-Test veraltete .venv (offen -> ERLEDIGT konzeptionell):**
+  rebuild.sh laeuft jetzt immer `uv sync --frozen` + Sanity-Check, damit
+  ist ein veraltetes venv kein Zustand mehr, der ueberleben kann.
+- **E2E gegen echten Upstream / SSE-Chunk-Grenzen (BLEIBT OFFEN):**
+  Nur gegen chatglm.cn verifizierbar; die drei API-Formate und echte
+  SSE-Streams sind aber ueber den laufenden Proxy live getestet (smoke-test).
+- **Last-/Fairness-Test der Queue (BLEIBT OFFEN):** Bewusst nicht durchgefuehrt
+  (Gast-Pool-Risiko, Blockade-Gefahr fuer den Live-Betrieb).
+- **Externe Dependency-Vulnerability-Pruefung (BLEIBT OFFEN):** Keine externen
+  Runtime-Deps (nur stdlib) — Angriffsflaeche minimal, Pruefung entbehrlich.

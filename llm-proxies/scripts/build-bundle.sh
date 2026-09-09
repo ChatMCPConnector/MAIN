@@ -51,5 +51,26 @@ find "$STAGE" -exec touch -d "@$EPOCH" {} +
 rm -f "$ZIP"
 (cd "$DIST" && zip -r -X -q glm2api-bundle.zip glm2api-bundle)
 
+# 6) Vollstaendigkeits- und Hash-Verifikation gegen den kanonischen Source (N-1/L-4):
+#    - alle tests/*.py muessen im Zip sein
+#    - gepackte src-Dateien muessen byte-identisch zum Source sein
+fail=0
+for t in "$APP_DIR"/tests/*.py; do
+  name="glm2api-bundle/app/tests/$(basename "$t")"
+  unzip -l "$ZIP" "$name" >/dev/null 2>&1 || { echo "FEHLER: Test fehlt im Bundle: $name"; fail=1; }
+done
+while IFS= read -r src_file; do
+  rel="${src_file#"$APP_DIR"/}"
+  zip_md5=$(unzip -p "$ZIP" "glm2api-bundle/app/$rel" 2>/dev/null | md5sum | cut -d" " -f1)
+  src_md5=$(md5sum "$src_file" | cut -d" " -f1)
+  if [ "$zip_md5" != "$src_md5" ]; then
+    echo "FEHLER: Drift im Bundle: $rel (zip=$zip_md5 src=$src_md5)"; fail=1
+  fi
+done < <(find "$APP_DIR/src" -name '*.py' -type f)
+if [ "$fail" -ne 0 ]; then
+  echo "Bundle-Verifikation FEHLGESCHLAGEN — siehe oben."; exit 1
+fi
+echo "Bundle-Verifikation OK: alle Tests + byte-identischer Source."
+
 echo "Fertig: $ZIP"
 unzip -l "$ZIP" | tail -3
