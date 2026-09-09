@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
+# browser-start.sh: Startet den VNC-Browser-Stack (Firefox statt Chromium).
+# Xvfb + x11vnc + noVNC bleiben identisch; Firefox ersetzt Chromium.
+# Zweck des Wechsels: Google-Logins in Firefox erzeugen KEINE DBSC-gebundenen
+# Sessions — deren Cookies kann gemini-web2api per Sentinel-Refresh unbegrenzt
+# selbst erneuern (Chrome/Chromium-Cookies sterben nach ~30-60 min, s. CHANGELOG).
+# Remote-Debugging: Firefox --start-debugger-server (Marionette/DevTools) ist für
+# Cookie-Exports nicht nötig — Cookies liegen in .runtime/firefox-profile
+# (cookies.sqlite), Export via DevTools im noVNC-Browser.
 set -euo pipefail
 
 readonly root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly runtime_dir="${root_dir}/.runtime/ms-playwright"
-readonly profile_dir="${root_dir}/.runtime/chromium-profile"
-readonly log_dir="${root_dir}/.runtime/log"
+readonly runtime_dir="${root_dir}/.runtime"
+readonly profile_dir="${root_dir}/.runtime/firefox-profile"
+readonly log_dir="${runtime_dir}/log"
 readonly display="${DISPLAY:-:120}"
-readonly start_url="${1:-https://new.xinjianya.top}"
+readonly start_url="${1:-https://gemini.google.com}"
 
-chromium="$(find "${runtime_dir}" -type f -path '*/chrome-linux/chrome' -print -quit)"
-if [[ -z "${chromium}" ]]; then
-  echo "Chromium is not installed. Run infra/scripts/browser-install.sh first." >&2
+firefox_bin="${runtime_dir}/firefox/firefox"
+if [[ ! -x "${firefox_bin}" ]]; then
+  echo "Firefox is not installed. Run infra/scripts/firefox-install.sh first." >&2
   exit 1
 fi
 
@@ -47,23 +55,20 @@ if ! ss -ltn | grep -q ':6082'; then
     >"${log_dir}/novnc.log" 2>&1 </dev/null &
 fi
 
-if ! ss -ltn | grep -q '127.0.0.1:9222'; then
-  nohup env DISPLAY="${display}" "${chromium}" \
-    --no-sandbox \
-    --disable-dev-shm-usage \
-    --remote-debugging-address=127.0.0.1 \
-    --remote-debugging-port=9222 \
-    --user-data-dir="${profile_dir}" \
-    "${start_url}" >"${log_dir}/chromium.log" 2>&1 </dev/null &
+if ! pgrep -f "firefox.*firefox-profile" >/dev/null; then
+  nohup env DISPLAY="${display}" "${firefox_bin}" \
+    --no-remote \
+    --profile "${profile_dir}" \
+    "${start_url}" >"${log_dir}/firefox.log" 2>&1 </dev/null &
 fi
 
-for _ in {1..100}; do
-  if curl -fsS http://127.0.0.1:9222/json/version >/dev/null \
+for _ in {1..300}; do
+  if pgrep -f "firefox.*firefox-profile" >/dev/null \
     && ss -ltn | grep -q '127.0.0.1:5920' \
     && ss -ltn | grep -q ':6082'; then
     echo "Browser services are ready:"
-    echo "  CDP:   http://127.0.0.1:9222"
     echo "  noVNC: http://localhost:6082/vnc.html?autoconnect=1&resize=scale"
+    echo "  Cookie-Export: DevTools (F12) im Browser -> Storage -> Cookies"
     exit 0
   fi
   sleep 0.1

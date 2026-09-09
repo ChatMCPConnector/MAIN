@@ -72,17 +72,15 @@ else
   echo "    kein Token gefunden. Einmalig: ./infra/scripts/auth.sh setup  (oder LANDSCAPE_PAT als Codespaces-Secret setzen)"
 fi
 
-echo "==> [landscape] Browser-Runtime prüfen..."
-if [ -f "$REPO_ROOT/infra/browser/package.json" ] && [ ! -d "$REPO_ROOT/.runtime/ms-playwright" ]; then
-  if command -v npm >/dev/null 2>&1; then
-    bash "$REPO_ROOT/infra/scripts/browser-install.sh" >/dev/null 2>&1 \
-      && echo "    Chromium-Runtime installiert." \
-      || echo "    WARN: Browser-Install fehlgeschlagen, manuell: ./infra/scripts/browser-install.sh"
-  else
-    echo "    SKIP: npm fehlt, manuell nachholen: ./infra/scripts/browser-install.sh"
-  fi
+echo "==> [landscape] Browser-Runtime (Firefox) prüfen..."
+# Firefox (Mozilla-Tarball, gepinnt) statt Chromium: Google-Cookies aus Firefox sind
+# nicht DBSC-gebunden -> gemini-web2api kann __Secure-1PSIDTS unbegrenzt erneuern.
+if [ ! -x "$REPO_ROOT/.runtime/firefox/firefox" ]; then
+  bash "$REPO_ROOT/infra/scripts/firefox-install.sh" >/dev/null 2>&1 \
+    && echo "    Firefox-Runtime installiert." \
+    || echo "    WARN: Firefox-Install fehlgeschlagen, manuell: ./infra/scripts/firefox-install.sh"
 else
-  echo "    Browser-Runtime vorhanden."
+  echo "    Firefox-Runtime vorhanden."
 fi
 
 echo "==> [landscape] Sessions-MCP prüfen (opencode-sessions)..."

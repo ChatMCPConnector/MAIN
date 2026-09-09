@@ -40,7 +40,7 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 
 ## Enthalten
 
-- Ports 3000/8000 (Apps), 4096 (opencode-Server für Multi-Client), 8001 (glm2api LLM-Proxy), 8083 (gemini-web2api Proxy), 9878 (antigravity-proxy), 9222/6082/5920 (Browser, nur lokal)
+- Ports 3000/8000 (Apps), 4096 (opencode-Server für Multi-Client), 8001 (glm2api LLM-Proxy), 8083 (gemini-web2api Proxy), 9878 (antigravity-proxy), 6082/5920 (Browser-VNC, nur lokal)
 - opencode, Default-Modell `antigravity/gemini-3.8-flash` (Thinking immer aktiv auf high)
 - `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
   (kostenlos, NIM-Keys), für Modell-Discovery
@@ -136,18 +136,25 @@ einem Codespace-Wechsel macht setup.sh automatisch: uv-Install (falls nötig),
 - **Kanonisch ist:** gepinnte Version im Repo + reproduzierbares Skript.
   PID-/Port-Ausgaben sind ephemeral — vor Wiederverwendung einmal prüfen
   (`pgrep`, `ss`, `curl`), nie als Blocker oder Dauerzustand dokumentieren.
-- **Browser-Runtime:** Playwright 1.48.2 gepinnt in `infra/browser/package.json`
-  → `./infra/scripts/browser-install.sh` (installiert nach `.runtime/ms-playwright`,
-  gitignored) → `./infra/scripts/browser-start.sh [URL]` (Xvfb, x11vnc, noVNC,
-  Chromium; idempotent). Dienste: Display `:120`, VNC `localhost:5920`,
-  noVNC Port `6082`, CDP `http://127.0.0.1:9222` — CDP nie öffentlich freigeben.
-  Profil `.runtime/chromium-profile/` enthält evtl. Logins — nie committen/kopieren.
+- **Browser-Runtime:** **Firefox** (Mozilla-Tarball, Version gepinnt in
+  `infra/scripts/firefox-install.sh`, Install nach `.runtime/firefox`, gitignored)
+  → `./infra/scripts/browser-start.sh [URL]` (Xvfb, x11vnc, noVNC; idempotent).
+  Dienste: Display `:120`, VNC `localhost:5920`, noVNC Port `6082`.
+  **War Firefox statt Chromium/Playwright:** Google-Logins in Chromium erzeugen
+  DBSC-gebundene Sessions — deren Cookies kann gemini-web2api nicht erneuern,
+  sie sterben nach ~30-60 min (Root Cause der „Proxy läuft viel zu schnell ab"-
+  Phase). Firefox-Sessions sind nicht DBSC-gebunden, der Proxy erneuert
+  `__Secure-1PSIDTS` per Sentinel selbst (siehe gemini-web2api/CHANGELOG #6).
+  Cookie-Bezug für den Proxy-Pool: Login im noVNC-Firefox → DevTools (F12) →
+  Storage → Cookies → nach `.secrets/gemini-web-cookie.txt` / Admin-Panel.
+  Profil `.runtime/firefox-profile/` enthält evtl. Logins — nie committen.
 - **Systempakete** via setup.sh (idempotent): nodejs, npm, xvfb, x11vnc, novnc,
-  websockify, sqlite3, build-essential, python3-* etc.
-- **Deprecated (löschbar nach Freigabe):** alte npx-Playwright-Caches
-  (`~/.npm/_npx/705bc*/`, `~/.npm/_npx/7f49*/`), `~/.cache/ms-playwright/chromium-1140/`,
-  `~/.config/chromium/` (altes Profil) — redundant seit `infra/browser/` +
-  `infra/scripts/browser-*.sh`. Rückweg: browser-install.sh + browser-start.sh.
+  websockify, sqlite3, dbus-x11, build-essential, python3-* etc.
+- **Deprecated (gelöscht 2026-09-10):** kompletter Chromium-Stack entfernt
+  (`infra/browser/` Playwright 1.48.2, `.runtime/ms-playwright/`,
+  `.runtime/chromium-profile/`, `browser-install.sh`, CDP-Port 9222).
+  Rückweg: Commit revertieren — bzw. für Chromium-CDP: Playwright-Setup neu
+  anlegen.
 
 ## Account-Wechsel (60h-Limit)
 
@@ -173,6 +180,18 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (3): **Chromium-Stack komplett entfernt, Firefox als VNC-Browser.**
+  Root Cause der schnell ablaufenden gemini-web-Cookies: Google hat die Session auf
+  DBSC (device-bound session) umgestellt — Chromium-Cookies kann gemini-web2api nicht
+  mehr erneuern (Sentinel-Refresh für `__Secure-1PSIDTS` → 403), Login stirbt nach
+  ~30-60 min. Firefox-Sessions sind nicht DBSC-gebunden, deren Cookies kann der Proxy
+  selbst unbegrenzt erneuern. Entfernt: `infra/browser/` (Playwright 1.48.2),
+  `browser-install.sh`, `.runtime/ms-playwright/` (555 MB), `.runtime/chromium-profile/`
+  (66 MB), CDP-Port 9222. Neu: `infra/scripts/firefox-install.sh` (Mozilla-Tarball,
+  gepinnt 155.0.1, nach `.runtime/firefox`), `browser-start.sh` auf Firefox umgeschrieben
+  (Xvfb/x11vnc/noVNC unverändert: Display :120, VNC 5920, noVNC 6082), setup.sh umgestellt,
+  dbus-x11 nachinstalliert. OAuth-Brücke Antigravity→Web geprüft: nicht möglich
+  (CloudCode-Bearer vs. Web-Cookie-Auth, getrennte Welten). Rückweg: Commit revertieren.
 - 2026-09-10 (2): **glm2api: Transient-Stream-Error-Retry (Code 10025/10061/10062).**
   Auslöser: Session „glm2api fehler" starb nach 5 Min Arbeit an
   `GLM upstream returned an error | code=10025 stream request error` — chatglm.cn
