@@ -206,6 +206,18 @@ func TestResolveModelForThinking(t *testing.T) {
 			expected:      "gpt-oss-120b-medium",
 		},
 		{
+			name:          "Claude Opus alias",
+			model:         "claude-opus",
+			thinkingLevel: "",
+			expected:      "claude-opus-4-6-thinking",
+		},
+		{
+			name:          "Claude Opus direct match",
+			model:         "claude-opus-4-6-thinking",
+			thinkingLevel: "HIGH",
+			expected:      "claude-opus-4-6-thinking",
+		},
+		{
 			name:          "Unknown model passes through",
 			model:         "custom-model",
 			thinkingLevel: "HIGH",

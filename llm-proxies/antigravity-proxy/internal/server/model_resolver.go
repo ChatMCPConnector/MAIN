@@ -43,6 +43,9 @@ func resolveModelForThinking(model string, req antigravity.GeminiInternalRequest
 	thinkingLevel := normalizedThinkingLevel(req)
 
 	switch {
+	case isClaudeOpusModel(modelLower):
+		return "claude-opus-4-6-thinking"
+
 	case isGemini31ProModel(modelLower):
 		switch thinkingLevel {
 		case "high":
@@ -159,6 +162,12 @@ func normalizedThinkingLevel(req antigravity.GeminiInternalRequest) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(req.GenerationConfig.ThinkingConfig.ThinkingLevel))
+}
+
+func isClaudeOpusModel(modelLower string) bool {
+	return strings.Contains(modelLower, "claude-opus") ||
+		strings.Contains(modelLower, "opus-4") ||
+		modelLower == "claude-opus-4-6-thinking"
 }
 
 func isGemini31ProModel(modelLower string) bool {

@@ -19,6 +19,11 @@ if ss -tln | grep -q ":${PORT} "; then
   echo "[antigravity-proxy] WARN: Port ${PORT} belegt, aber ${HEALTH_URL} antwortet nicht."
 fi
 
+if [ ! -x "$DIR/antigravity-oauth-proxy" ]; then
+  echo "[antigravity-proxy] Binary fehlt — baue antigravity-oauth-proxy..."
+  (cd "$DIR" && (command -v go >/dev/null 2>&1 && go build -o antigravity-oauth-proxy ./cmd/antigravity-oauth-proxy || /usr/local/go/bin/go build -o antigravity-oauth-proxy ./cmd/antigravity-oauth-proxy))
+fi
+
 echo "[antigravity-proxy] Starte antigravity-oauth-proxy auf Port ${PORT}..."
 (cd "$DIR" && ADMIN_API_KEY="antigravity-secret-6fe2eaa404e1c91bfa0fec01e74ddcc1" \
   setsid nohup ./antigravity-oauth-proxy --port "${PORT}" \

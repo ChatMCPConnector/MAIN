@@ -166,6 +166,15 @@ func ensureAntigravityThinkingDefaults(req *GenerateContentRequest) {
 		thinkingBudget := 10001
 		thinkingConfig.ThinkingBudget = &thinkingBudget
 	}
+	if strings.Contains(modelLower, "claude") {
+		budget := 10001
+		if thinkingConfig.ThinkingBudget != nil && *thinkingConfig.ThinkingBudget > 0 {
+			budget = *thinkingConfig.ThinkingBudget
+		}
+		if req.Request.GenerationConfig.MaxOutputTokens <= budget {
+			req.Request.GenerationConfig.MaxOutputTokens = budget + 4000
+		}
+	}
 }
 
 func maxAllowedOutputTokens(model string) int {
