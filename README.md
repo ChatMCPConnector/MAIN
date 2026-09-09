@@ -43,6 +43,8 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 - Ubuntu 24.04, Bash, Git, GitHub CLI, Docker, Python 3, Build-Werkzeuge
 - Ports 3000/8000 (Apps), 8001 (LLM-Proxy), 9222/6082/5920 (Browser, nur lokal) · Zeitzone Europe/Berlin
 - opencode, Default-Modell `tokenrouter/z-ai/glm-5.3-free` (1M Kontext)
+- `infra/scripts/nvidia-models.py`: eigenständiges Utility — NVIDIA-Modellindex
+  von build.nvidia.com (kostenlos, NIM-Keys), für Modell-Discovery
 
 ## Secrets-Modell (bewusst: Komfort > Sicherheit)
 
@@ -103,8 +105,8 @@ komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 
 ```
 ./llm-proxies/scripts/build-bundle.sh    # baut dist/glm2api-bundle.zip
-# drin: app/ (Code+Tests+Config), scripts/install.sh+start.sh (relative Pfade),
-# patches/ (Referenz), docs/ (chat_mode-Reverse-Engineering)
+# drin: app/ (Code+Tests+Config, kanonischer Source), scripts/install.sh+start.sh
+# (relative Pfade), docs/ (chat_mode-Reverse-Engineering)
 # Ziel: entpacken → bash scripts/install.sh → bash scripts/start.sh (Port 8001)
 ```
 
@@ -112,10 +114,11 @@ komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 einem Codespace-Wechsel macht setup.sh automatisch: uv-Install (falls nötig),
 `.env` aus `glm2api.env` (Port 8001, Guest-Mode, secret-frei), `uv sync`
 (venv), Start. Kein Klon, kein Patch-Anwenden, keine externen Abhängigkeiten.
-- `llm-proxies/patches/glm2api.patch`: Tool-Protokoll von DSML-Markup auf
-  JSON+`[]`-Terminator umgestellt (+ DSML/Mashup-Fallbacks, Part-Merge-Fix —
-  chatglm.cn streamt erst Token-Schnipsel, dann Volltext; Fix = anhängen +
-  idempotent ersetzen statt blind überschreiben).
+- Tool-Protokoll: von DSML-Markup auf JSON+`[]`-Terminator umgestellt (+ DSML/
+  Mashup-Fallbacks, Part-Merge-Fix — chatglm.cn streamt erst Token-Schnipsel,
+  dann Volltext; Fix = anhängen + idempotent ersetzen statt blind
+  überschreiben). Direkt im Source eingearbeitet — der kanonische Code liegt
+  im Repo (kein Patch-Artefakt mehr).
 - setup.sh rebuilt nur bei `LANDSCAPE_REBUILD_LLM_PROXIES=1` (sonst manuell).
 - Upstream-Limit ist pro Guest-Token (~5 Nachrichten) — der Pool rotiert das weg.
 
@@ -161,6 +164,20 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-08 (6): **Kompaktierung/Audit-Umsetzung** (AUDIT.md + glm-api-audit.md
+  abgearbeitet): korrupter Patch gestrichen (`llm-proxies/patches/` — der
+  Source im Repo ist kanonisch); Bundle neu gebaut mit vollständigen Tests
+  (inkl. test_config.py) und deterministischen Zeitstempeln (md5-stabil,
+  Doppelbuild verifiziert); 15 MB Debug-Logs + __pycache__/egg-info
+  aufgeräumt; README-Changelog gekürzt; `.env.example` vervollständigt
+  (SYSTEM_ACCESS_TOKEN, TOKENROUTER_API_KEY); Start-/Rebuild-Skripte gehärtet
+  (glm2api.sh: PID-Datei statt globalem pkill, Health-Check im Status;
+  start-glm2api.sh: Fremdbelegung von Port 8001 wird erkannt statt als OK
+  gemeldet; rebuild.sh: `uv sync --frozen` immer + Sanity-Check);
+  glm2api-README kompaktiert (deutsch, Refresh-Token-Anleitung erhalten).
+  Zusätzlich pytest als dev-Dependency-Group gepinnt (pyproject+uv.lock), damit
+  `uv sync --frozen` die Test-Runner reproduzierbar mitliefert.
+  Rückweg: Commit revertieren.
 - 2026-09-08 (5): **Watchdog-Start gefixt** — Watchdog lief zwar laut
   Boot-Log an, wurde aber beim Aufräumen des `postStartCommand` von
   devcontainer-cli mitgekillt (`nohup` ohne `setsid` schützt nicht vor
@@ -246,22 +263,6 @@ Proxy bei jedem Start automatisch hoch.
   end-to-end via `--model glm2api/glm-5.3` (Datei erstellen+testen, 6
   Tool-Executions); (E) Parallel-Load 5/5 korrekt (6.3s) + Token-Rotation.
   Zusätzlich `agent/glm2api.md` als fest verdrahteter Arbeits-Subagent.
-- 2026-09-06 (5): 100 %-Wiederherstellung des Haupt-Proxies: setup.sh installiert
-  jetzt `uv` + gemanagtes Python 3.14 (fehlte — Proxy wäre nach Codespace-Wechsel
-  nicht startbar gewesen), rebuild.sh macht Klon+Patch+`.env`+`uv sync`+start.sh
-  in einem Schritt, setup.sh führt Rebuild+Start **automatisch** aus (kein
-  opt-in mehr). Komplett-Reset-Simulation bestanden (Klon+venv gelöscht →
-  Proxy lief danach wieder, .env byte-identisch, LLM-Antwort OK).
-- 2026-09-06 (4): Konsolidierung nach Benchmark: **glm2api ist der Haupt-Proxy**
-  (einziger verbliebener, Benchmark-Gewinner — 2/2 Agent-Tasks vollautonom).
-  hellogml + chat2api KOMPLETT entfernt (Klones, Patches, Provider, Agenten,
-  start-Skripte). Benchmark-Suite komplett entfernt (Templates, MASTERPROMPT,
-  bench-Agents, Reports). `llm-proxies/rebuild.sh` auf nur-glm2api vereinfacht.
-- 2026-09-06 (3): Struktur radikal vereinfacht: `infra/` (scripts+browser+mcp),
-  Free-API.txt gelöscht (Key identisch im Secrets-Bundle), Doku-Merge zu einer
-  README.md, `llm-proxies/` statt `proxies/`.
-- 2026-09-06 (2): PAT geleakt+revoked → Secrets-Modell korrigiert: echte
-  Zufalls-Passphrase (nur Entschlüsselungswort), PAT nur verschlüsselt im Bundle.
-- 2026-09-06 (1): Proxies reproduzierbar im Repo; opencode-sessions MCP
-  (Session-Verwaltung direkt auf SQLite-DB, 574 MB → 2 MB Orphan-Cleanup);
-  Playwright-Reproduzierbarkeit in setup.sh; Secrets-Modell Komfort>Sicherheit.
+- 2026-09-04 bis 09-06: Initialer Landschafts-Aufbau, glm2api-Umbau von Klon
+  auf Repo-internen Source, Browser-Infrastruktur, Kontostand-Tool,
+  Secrets-Modell etabliert.

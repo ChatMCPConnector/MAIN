@@ -13,6 +13,9 @@ dependencies = []
 [project.scripts]
 glm2api = "glm2api.__main__:main"
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

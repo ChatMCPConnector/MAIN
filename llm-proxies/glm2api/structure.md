@@ -172,3 +172,7 @@ Die Architektur ist **pipeline-basiert**: Jede Komponente hat eine klare Verantw
 - Fremd-Start: entpacken → `bash scripts/install.sh` (uv + Python 3.14 + venv + .env)
   → `bash scripts/start.sh` (Default Port 8001, Guest-Mode)
 - Keine externen Python-Deps (nur Stdlib) — `uv sync` reicht.
+- Der Source in diesem Verzeichnis ist kanonisch; ein separates Patch-Artefakt
+  (früher `llm-proxies/patches/glm2api.patch`) existiert nicht mehr — alle
+  Projektkorrekturen (JSON-Tool-Protokoll, Part-Merge-Fix) sind direkt
+  eingearbeitet.

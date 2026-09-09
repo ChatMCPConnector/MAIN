@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # llm-proxies/rebuild.sh: glm2api-Hauptproxy LAUFFÄHIG machen.
-# Der Proxy-Code liegt IM REPO (llm-proxies/glm2api/, inkl. aller Patches) —
+# Der Proxy-Code liegt IM REPO (llm-proxies/glm2api/, kanonischer Source) —
 # kein Klon von GitHub mehr nötig. rebuild.sh macht nur noch: .env bereitstellen
-# + Python-venv via uv sync. Idempotent.
+# + Python-venv via uv sync --frozen. Idempotent.
 #
 #   ./llm-proxies/rebuild.sh          # .env + venv vorbereiten
 #   ./llm-proxies/rebuild.sh --start  # ... und direkt starten
@@ -36,18 +36,23 @@ mkdir -p "$APP_DIR/log"
 
 # 3) Python-Runtime + venv via uv (pyproject verlangt Python >=3.14; uv lädt
 #    die gemanagte Version selbst). Fehlendes uv wird installiert.
+#    uv sync --frozen läuft IMMER — die Existenz von .venv beweist weder
+#    Vollständigkeit noch Lockfile-Synchronität.
 UV_BIN="$(command -v uv || echo "$HOME/.local/bin/uv")"
 if [ ! -x "$UV_BIN" ]; then
   echo "    uv fehlt — installiere..."
   curl -LsSf https://astral.sh/uv/install.sh | sh || { echo "    FEHLER: uv-Install gescheitert"; exit 1; }
   UV_BIN="$HOME/.local/bin/uv"
 fi
-if [ ! -d "$APP_DIR/.venv" ]; then
-  (cd "$APP_DIR" && "$UV_BIN" sync 2>&1 | tail -2 | sed 's/^/      /') \
-    && echo "    Python-venv + Deps via uv sync vorbereitet." \
-    || { echo "    FEHLER: uv sync"; exit 1; }
+(cd "$APP_DIR" && "$UV_BIN" sync --frozen 2>&1 | tail -2 | sed 's/^/      /') \
+  && echo "    Python-venv + Deps via uv sync --frozen aktualisiert." \
+  || { echo "    FEHLER: uv sync"; exit 1; }
+
+# Sanity-Check: venv-Python muss existieren und funktionieren
+if [ -x "$APP_DIR/.venv/bin/python" ] && "$APP_DIR/.venv/bin/python" --version >/dev/null 2>&1; then
+  echo "    Sanity-Check OK: $("$APP_DIR/.venv/bin/python" --version 2>&1)"
 else
-  echo "    .venv vorhanden."
+  echo "    FEHLER: .venv/bin/python fehlt oder defekt"; exit 1
 fi
 
 echo "Fertig. Starten mit: $REPO_ROOT/llm-proxies/scripts/start-glm2api.sh"

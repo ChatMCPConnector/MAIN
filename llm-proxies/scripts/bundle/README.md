@@ -21,8 +21,6 @@ glm2api-bundle/
 ├── scripts/
 │   ├── install.sh          #   uv installieren + venv + .env (idempotent)
 │   └── start.sh             #   Proxy starten (portable Pfade, Health-Check)
-├── patches/
-│   └── glm2api.patch        #   Historischer Patch (bereits eingearbeitet, nur Referenz)
 └── docs/
     └── chatglm-reasoning-modes.md   # Reverse-Engineering: chat_mode-Mapping
 ```
@@ -68,8 +66,9 @@ cd app && uv run pytest
 
 ## Hinweise
 
-- `patches/glm2api.patch` ist bereits im Code eingearbeitet (JSON-Tool-Protokoll,
-  Part-Merge-Fix, mc_tool_result-Behandlung) — nur für Referenz/Diff-Zwecke dabei.
+- Der Source im Bundle ist der kanonische Code aus dem MAIN-Repo — ein
+  separates Patch-Artefakt existiert nicht mehr (alle Änderungen sind
+  eingearbeitet).
 - Guest-Mode: Upstream-Limit ~5 Nachrichten pro Guest-Token; der Pool (100 Slots)
   rotiert automatisch, bei Erschöpfung werden neue Tokens geholt.
 - Details Architektur: `app/structure.md` · Reasoning-Stufen: `docs/chatglm-reasoning-modes.md`
