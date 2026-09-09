@@ -186,7 +186,7 @@
           "name": "Gemini 3.5 Flash Light",
           "reasoning": true,
           "options": {
-            "reasoningEffort": "low"
+            "reasoningEffort": "high"
           },
           "variants": {
             "low": { "reasoningEffort": "low" },
@@ -197,23 +197,23 @@
           "name": "Gemini 3.8 Flash",
           "reasoning": true,
           "options": {
-            "reasoningEffort": "low"
+            "reasoningEffort": "high"
           },
           "variants": {
-            "low": { "reasoningEffort": "low" },
-            "medium": { "reasoningEffort": "medium" },
-            "high": { "reasoningEffort": "high" }
+            "low": { "model": "gemini-3.8-flash-low", "reasoningEffort": "low" },
+            "medium": { "model": "gemini-3.8-flash-medium", "reasoningEffort": "medium" },
+            "high": { "model": "gemini-3.8-flash-high", "reasoningEffort": "high" }
           }
         },
         "gemini-3.1-pro": {
           "name": "Gemini 3.1 Pro",
           "reasoning": true,
           "options": {
-            "reasoningEffort": "low"
+            "reasoningEffort": "high"
           },
           "variants": {
-            "low": { "reasoningEffort": "low" },
-            "high": { "reasoningEffort": "high" }
+            "low": { "model": "gemini-3.1-pro-low", "reasoningEffort": "low" },
+            "high": { "model": "gemini-3.1-pro-high", "reasoningEffort": "high" }
           }
         }
       }
