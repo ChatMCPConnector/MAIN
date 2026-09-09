@@ -28,6 +28,10 @@ opencode() {
   fi
 }
 
+opencode-server() {
+  /workspaces/MAIN/infra/scripts/opencode-server.sh "$@"
+}
+
 # Praktisch beim Umzug: zeigt was NICHT im Git ist und damit verloren ginge
 landscape-diff() {
   echo "== Nur noch im Secrets-Bundle (config/secrets.enc), nicht im Git: =="
