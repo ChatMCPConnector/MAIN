@@ -26,10 +26,15 @@ func ToGeminiRequest(openAIReq *openai.ChatCompletionRequest, projectID string) 
 
 	// Handle generation config
 	var genCfg *antigravity.GeminiGenerationConfig
-	if openAIReq.Temperature > 0 || openAIReq.MaxTokens > 0 {
+	if openAIReq.Temperature > 0 || openAIReq.MaxTokens > 0 || openAIReq.ReasoningEffort != "" {
 		genCfg = &antigravity.GeminiGenerationConfig{
 			Temperature:     openAIReq.Temperature,
 			MaxOutputTokens: openAIReq.MaxTokens,
+		}
+		if openAIReq.ReasoningEffort != "" {
+			genCfg.ThinkingConfig = &antigravity.ThinkingConfig{
+				ThinkingLevel: strings.ToUpper(strings.TrimSpace(openAIReq.ReasoningEffort)),
+			}
 		}
 	}
 
