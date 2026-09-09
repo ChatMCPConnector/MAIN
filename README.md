@@ -74,7 +74,7 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
 | xinjianya | gpt-5.6-sol, kimi-k3, deepseek-v4-pro | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
 | **gemini-web** | gemini-3.1-pro-thinking, gemini-3.8-flash-thinking, gemini-3.5-flash-lite-thinking | lokal, Port 8083, Google AI Pro (Cookie-Pool) |
-| **antigravity** | gemini-3.8-flash (high/low), gemini-3.1-pro, gemini-3.5-flash-light | lokal, Port 9878, Google Cloud Code OAuth |
+| **antigravity** | claude-opus-4-6 (1M, Thinking 2k/16k/32k), gemini-3.8-flash (1M, 64k Output), gemini-3.1-pro (1M, 64k Output), gemini-3.5-flash-light (1M, 32k Output) | lokal, Port 9878, Google Cloud Code OAuth |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
@@ -173,6 +173,13 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-09 (9): Claude Opus 4.6 (`antigravity/claude-opus-4-6`) im Antigravity-Proxy
+  und opencode integriert (1M Context, bis 64k Output, Thinking-Budget dynamisch stufbar:
+  `low`=2k, `medium`=16k, `high`=32k, Default `high`). Umgeht das 1024-Token-Limit der
+  Google-IDE vollständig. opencode-Server auf Port 4096 als echter Daemon (`nohup </dev/null disown`)
+  gehärtet (verhindert SIGHUP beim Schließen von Terminals). Volle 1M Context + 64k/32k
+  Output-Limits für alle drei Gemini-Modelle (`gemini-3.8-flash`, `gemini-3.1-pro`,
+  `gemini-3.5-flash-light`) in `opencode.json` freigeschaltet. Alias `opencode-server` ergänzt.
 - 2026-09-09 (8): Multi-Client opencode-Server (`opencode serve`, Port 4096)
   eingerichtet. Smart-Wrapper in `aliases.sh` verbindet alle Terminals via
   `opencode attach http://localhost:4096` — parallele Sessions terminieren

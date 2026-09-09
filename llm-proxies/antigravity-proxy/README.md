@@ -102,6 +102,23 @@ Set `CLOUDCODE_OAUTH_CREDS_PATH` to use a different credentials file, or provide
 
 `ADMIN_API_KEY` protects generation, admin, and MCP requests. Clients may send it as a bearer token or an `X-Goog-Api-Key` header. The `/v1/models` endpoint is public.
 
+## Supported Models & Extended Thinking
+
+The proxy maps incoming OpenAI and Gemini requests to Google's internal CloudCode models and dynamically manages reasoning / thinking parameters:
+
+### Gemini Models (Gemini 3 Generation)
+* **`gemini-3.8-flash`**: 1M context, up to 64k output tokens. Thinking controlled via `thinkingLevel` (`low`, `medium`, `high`).
+* **`gemini-3.1-pro`**: 1M context, up to 64k output tokens. Thinking controlled via `thinkingLevel` (`low`, `high` / `gemini-pro-agent`).
+* **`gemini-3.5-flash-light`**: 1M context, up to 32k output tokens. Thinking controlled via `thinkingLevel` (`low`, `medium`, `high`).
+
+### Claude Models (Anthropic on CloudCode)
+* **`claude-opus-4-6`** (resolves to upstream `claude-opus-4-6-thinking`): 1M context, up to 64k output tokens.
+* **Extended Thinking Budget:** While Google's official Antigravity IDE hardcodes thinking to only 1,024 tokens (~750 words), this proxy allows full extended reasoning via `reasoning_effort`:
+  * `low`: 2,048 thinking tokens
+  * `medium`: 16,000 thinking tokens
+  * `high` *(default)*: 32,000 thinking tokens
+* **Auto Output Budgeting:** Upstream Claude requires `max_tokens > thinking.budget_tokens`. The proxy automatically scales `max_output_tokens` to at least `budget + 8000` to eliminate 400 validation errors.
+
 ## Endpoints
 
 | Endpoint | Purpose |
