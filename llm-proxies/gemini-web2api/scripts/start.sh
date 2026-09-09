@@ -26,13 +26,17 @@ if [ -f "/workspaces/MAIN/.secrets/gemini-web-cookie.txt" ]; then
 fi
 
 echo "[gemini-web2api] Starte gemini-web2api-go auf Port ${PORT}..."
-(cd "$DIR" && setsid nohup ./gemini-web2api-go \
+cd "$DIR"
+nohup ./gemini-web2api-go \
   --port "${PORT}" \
   --db "$DIR/data/gemini.db" \
   --admin-token gemini-admin-secret-2026 \
   --api-key sk-gemini-pro-local-2026 \
   $COOKIE_ARG \
-  >> "${LOGFILE}" 2>&1 & echo $! > "${PIDFILE}")
+  </dev/null >> "${LOGFILE}" 2>&1 &
+SERVER_PID=$!
+disown "$SERVER_PID" 2>/dev/null || true
+echo "$SERVER_PID" > "${PIDFILE}"
 
 for i in $(seq 1 30); do
   if curl -sf -m 2 "${HEALTH_URL}" >/dev/null 2>&1; then
