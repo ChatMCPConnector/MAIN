@@ -35,24 +35,22 @@ pools = [
     {"name": "Gemini", "keys": ["gemini-3.8-flash-high", "gemini-3.1-pro-high", "gemini-3.5-flash-lite"]}
 ]
 
-indent = "      "
+indent = "           "
 line_w = 80
 title = "GOOGLE ANTIGRAVITY QUOTA & STATUS"
 
 print()
+print("=" * line_w)
+print(title.center(line_w))
 print(indent + "=" * line_w)
-print(indent + title.center(line_w))
-print(indent + "=" * line_w)
-print()
 hdr_pool = "Pool"
 hdr_sprint = "5h-Sprint"
 hdr_reset = "Nächster Reset"
 hdr_weekly = "Wochen-Limit"
 print(f"{indent}  {hdr_pool:<12} | {hdr_sprint:<22} | {hdr_reset:<16} | {hdr_weekly}")
 print(indent + "  " + "-" * (line_w - 4))
-print()
 
-for i, p in enumerate(pools):
+for p in pools:
     rem_frac = None
     reset = None
     for k in p["keys"]:
@@ -100,10 +98,7 @@ for i, p in enumerate(pools):
     pool_name = p["name"]
 
     print(f"{indent}  {pool_name:<12} | {quota_display:<22} | {time_str:<16} | {weekly_status}")
-    if i < len(pools) - 1:
-        print()
 
-print()
 print(indent + "=" * line_w)
 print()
 ' <<< "$RESPONSE"

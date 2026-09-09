@@ -805,6 +805,14 @@ def detect_tool_call_names(text: str) -> list[str]:
                         name = str(call.get("name", "")).strip()
                         if name:
                             names.append(name)
+    for pattern in (
+        re.compile(r"<\|?dsml\|?invoke\s+name=[\"']([^\"']+)[\"']", re.IGNORECASE),
+        re.compile(r"<invoke\s+name=[\"']([^\"']+)[\"']", re.IGNORECASE),
+    ):
+        for match in pattern.finditer(masked):
+            name = match.group(1).strip()
+            if name:
+                names.append(name)
     return names
 
 
