@@ -623,6 +623,22 @@ class GLMEventAccumulator:
         chunks: list[str] = []
         final_text = self._deferred_visible_text + tail_text
         self._deferred_visible_text = ""
+        if final_text and self.allowed_tool_names is not None:
+            # Safety net: if tool-call protocol blocks leaked into the
+            # visible text (observed with glm-5.3-think after tool-result
+            # rounds: token-snipsel + finish-fulltext part-merge can emit
+            # protocol fragments as content), extract them here instead of
+            # forwarding raw JSON protocol to the client.
+            cleaned_text, leaked_tool_calls = parse_tool_calls_from_text(
+                final_text,
+                allowed_tool_names=self.allowed_tool_names,
+            )
+            if leaked_tool_calls:
+                for tc in leaked_tool_calls:
+                    tc_copy = dict(tc)
+                    tc_copy["index"] = len(all_tool_calls)
+                    all_tool_calls.append(tc_copy)
+                final_text = cleaned_text.strip()
         if not final_text and not all_tool_calls and self.allowed_tool_names is not None:
             _, attempted_tool_calls = parse_tool_calls_from_text(
                 self._cached_full_text.strip(),

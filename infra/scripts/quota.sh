@@ -44,15 +44,15 @@ pools = [
 ]
 
 hdr_pool = "Pool / Provider"
-hdr_sprint = "Sprint-Balken (5h)"
-hdr_weekly = "Wochen-Balken (Cap)"
+hdr_quota = "Verbleibend"
 hdr_reset = "Nächster Reset"
+hdr_status = "Wochen- & Sprint-Status"
 
-print("=" * 108)
-print("                                 GOOGLE ANTIGRAVITY QUOTA & LIMITS")
-print("=" * 108)
-print(f"  {hdr_pool:<38} | {hdr_sprint:<22} | {hdr_weekly:<25} | {hdr_reset}")
-print("  " + "-" * 104)
+print("=" * 102)
+print("                                 GOOGLE ANTIGRAVITY QUOTA & STATUS")
+print("=" * 102)
+print(f"  {hdr_pool:<38} | {hdr_quota:<20} | {hdr_reset:<16} | {hdr_status}")
+print("  " + "-" * 98)
 
 for p in pools:
     rem_frac = None
@@ -81,43 +81,40 @@ for p in pools:
                 mins = (sec % 3600) // 60
                 if days > 0:
                     is_weekly_lockout = True
-                    time_str = f"in {days}d {hours}h (Woche)"
+                    time_str = f"in {days}d {hours}h"
                 else:
-                    time_str = f"in {hours}h {mins}m (Sprint)"
+                    time_str = f"in {hours}h {mins}m"
         except Exception:
             time_str = reset
 
-    # Sprint-Prozent
     if is_reset_active and (rem_frac is None or rem_frac <= 0.01):
-        sprint_pct = 0.0
+        pct = 0.0
     elif rem_frac is not None:
-        sprint_pct = round(rem_frac * 100, 1)
+        pct = round(rem_frac * 100, 1)
     else:
-        sprint_pct = 100.0
+        pct = 100.0
 
-    s_bar_len = int(sprint_pct / 10)
-    s_bar = "█" * s_bar_len + "░" * (10 - s_bar_len)
-    sprint_display = f"{sprint_pct:>5.1f}% [{s_bar}]"
+    bar_len = int(pct / 10)
+    bar = "█" * bar_len + "░" * (10 - bar_len)
+    quota_display = f"{pct:>5.1f}% [{bar}]"
 
-    # Wochen-Balken:
     if is_weekly_lockout:
-        w_pct = 0.0
-        w_bar = "░" * 10
-        w_display = f"{w_pct:>5.1f}% [{w_bar}] (0%)"
+        status_text = "GESPERRT: Wochenlimit erreicht"
+    elif pct == 0.0:
+        status_text = "5h-Sprint leer (Cooldown aktiv)"
     else:
-        w_pct = 100.0
-        w_bar = "█" * 10
-        w_display = f"{w_pct:>5.1f}% [{w_bar}] (OK)"
+        status_text = "Aktiv (5h-Sprint verfügbar)"
 
     p_name = p["name"]
     p_desc = p["models_desc"]
     pool_title = f"{p_name} ({p_desc})"
-    print(f"  {pool_title:<38} | {sprint_display:<22} | {w_display:<25} | {time_str}")
+    print(f"  {pool_title:<38} | {quota_display:<20} | {time_str:<16} | {status_text}")
 
-print("=" * 108)
-print("  Logik: Google sendet im Backend eine einzige verbleibende Quote pro Pool:")
-print("  • Sprint-Balken: Kurzfristiges 5h-Fenster (refillt alle 5h auf).")
-print("  • Wochen-Balken: Bleibt 100% [██████████], solange der 5h-Zyklus läuft. Sobald das Wochen-")
-print("    kontingent erschöpft ist, springt der Wochenbalken auf 0% [░░░░░░░░░░] (Reset in X Tagen).")
-print("=" * 108)
+print("=" * 102)
+print("  So funktioniert Googles Quota-System:")
+print("  1. Shared Quota: Alle Modelle eines Providers (Claude bzw. Gemini) teilen sich den Pool.")
+print("  2. 5h-Sprint: Zeigt den aktuellen Füllstand. Erneuert sich alle 5 Stunden.")
+print("  3. Wochen-Cap: Ist das Wochenlimit erreicht, stoppt der 5h-Refill und der Timer springt")
+print("     auf mehrere Tage um (z. B. in 4 Tagen). Aktuell: Beide Wochenkontingente sind frei!")
+print("=" * 102)
 ' <<< "$RESPONSE"
