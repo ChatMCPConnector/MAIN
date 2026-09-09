@@ -208,14 +208,14 @@
     },
     "gemini-web": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Gemini Web (Google AI Pro)",
+      "name": "Google AI Pro",
       "options": {
         "baseURL": "http://127.0.0.1:8083/v1",
         "apiKey": "sk-gemini-pro-local-2026"
       },
       "models": {
         "gemini-3.1-pro-thinking": {
-          "name": "Gemini 3.1 Pro Thinking (Web)",
+          "name": "Gemini 3.1 Pro (Web)",
           "reasoning": true,
           "limit": {
             "context": 128000,
@@ -223,7 +223,7 @@
           }
         },
         "gemini-3.8-flash-thinking": {
-          "name": "Gemini 3.8 Flash Thinking (Web)",
+          "name": "Gemini 3.8 Flash (Web)",
           "reasoning": true,
           "limit": {
             "context": 128000,
@@ -231,7 +231,7 @@
           }
         },
         "gemini-3.5-flash-lite-thinking": {
-          "name": "Gemini 3.5 Flash-Lite Thinking (Web)",
+          "name": "Gemini 3.5 Flash-Lite (Web)",
           "reasoning": true,
           "limit": {
             "context": 128000,
