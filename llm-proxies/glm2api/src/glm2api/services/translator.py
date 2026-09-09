@@ -596,6 +596,11 @@ class GLMEventAccumulator:
         tail_text, xml_tool_calls = self.tool_parser.flush()
         xml_tool_calls = sanitize_tool_calls(xml_tool_calls, fallback_url=self.fallback_tool_url)
         if not xml_tool_calls:
+            # Streaming counterpart of build_response(): when the model emits
+            # the tool-call protocol inside the REASONING channel (observed
+            # with glm-5.3-think under large system prompts), the text-side
+            # parser never sees it. Recover the calls from the reasoning text
+            # instead of leaking raw protocol fragments as visible content.
             xml_tool_calls = self._extract_reasoning_tool_calls()
 
         # Merge server-side and XML tool calls, re-indexing
