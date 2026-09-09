@@ -20,7 +20,7 @@ Codespaces-Secrets, danach läuft alles automatisch (`postCreateCommand` →
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
-| `llm-proxies/` | glm2api-Haupt-Proxy: **kompletter Code liegt im Repo** (`llm-proxies/glm2api/` inkl. Patches) + `glm2api.env` + Start/rebuild-Skripte + **portables Bundle** (`dist/glm2api-bundle.zip`, Bau via `scripts/build-bundle.sh`) |
+| `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **gemini-web2api** (Port 8083, Gemini Web Pro Proxy mit Cookie-Pool & Auto-Refresh) |
 
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
 
@@ -40,7 +40,7 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 
 ## Enthalten
 
-- Ports 3000/8000 (Apps), 8001 (LLM-Proxy), 9222/6082/5920 (Browser, nur lokal)
+- Ports 3000/8000 (Apps), 8001 (glm2api LLM-Proxy), 8083 (gemini-web2api Proxy), 9222/6082/5920 (Browser, nur lokal)
 - opencode, Default-Modell `tokenrouter/z-ai/glm-5.3-free` (1M Kontext)
 - `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
   (kostenlos, NIM-Keys), für Modell-Discovery
@@ -73,6 +73,7 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
 | nvidia | nemotron-3-ultra, deepseek-v4-flash/pro | nvidia-nim.key |
 | xinjianya | gpt-5.6-sol, kimi-k3, deepseek-v4-pro | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
+| **gemini-web** | gemini-3.1-pro-thinking, gemini-3.8-flash-thinking, gemini-3.5-flash-lite-thinking | lokal, Port 8083, Google AI Pro (Cookie-Pool) |
 | google | gemini-flash-latest (1M) | gemini.key |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
@@ -172,6 +173,12 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-09 (6): Gemini Web Pro Proxy (`gemini-web2api-go`) unter `llm-proxies/gemini-web2api/`
+  integriert (Port 8083, Chrome-146-Fingerprinting, Cookie-Auto-Refresh). Multi-Turn-Persistenz
+  für Google AI Pro Account unter `/u/1/` eingerichtet. Modelle in opencode (`gemini-web`):
+  `gemini-3.1-pro-thinking`, `gemini-3.8-flash-thinking`, `gemini-3.5-flash-lite-thinking`.
+  Cookie-Persistenz ins verschlüsselte Secrets-Bundle (`gemini-web-cookie.txt`) aufgenommen.
+  Autostart in `setup.sh` und `start-on-boot.sh` verdrahtet.
 - 2026-09-09 (5): Tool-Call-Resilienz gegen LLM-Quoting-Versagen:
   (a) Protokoll-Instruktion erweitert — keine fragilen Inline-`python3 -c
   "..."`-Commands mit verschachtelten Quotes in Tool-Argumenten (Heredocs/

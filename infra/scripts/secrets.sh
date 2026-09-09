@@ -46,6 +46,7 @@ cmd_lock() {
   [ -f "$HOME/.config/landscape/nvidia-nim.key" ] && { cp "$HOME/.config/landscape/nvidia-nim.key" "$stage/files/nvidia-nim-key"; found=1; }
   [ -f "$HOME/.config/landscape/xinjianya.key" ] && { cp "$HOME/.config/landscape/xinjianya.key" "$stage/files/xinjianya-key"; found=1; }
   [ -f "$HOME/.config/landscape/gemini.key" ] && { cp "$HOME/.config/landscape/gemini.key" "$stage/files/gemini-key"; found=1; }
+  [ -f ".secrets/gemini-web-cookie.txt" ] && { cp ".secrets/gemini-web-cookie.txt" "$stage/files/gemini-web-cookie.txt"; found=1; }
   [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
   [ -f "$HOME/.local/share/opencode/auth.json" ] && { cp "$HOME/.local/share/opencode/auth.json" "$stage/files/opencode-auth.json"; found=1; }
   [ -f ".env" ] && { cp ".env" "$stage/files/env"; found=1; }
@@ -102,6 +103,10 @@ cmd_unlock() {
   if [ -f "$stage/files/chatglm-refresh-token" ] && [ ! -f ".secrets/chatglm-refresh-token" ]; then
     mkdir -p ".secrets" && cp "$stage/files/chatglm-refresh-token" ".secrets/chatglm-refresh-token" && chmod 600 ".secrets/chatglm-refresh-token"
     echo "    ChatGLM-Refresh-Token wiederhergestellt."
+  fi
+  if [ -f "$stage/files/gemini-web-cookie.txt" ] && [ ! -f ".secrets/gemini-web-cookie.txt" ]; then
+    mkdir -p ".secrets" && cp "$stage/files/gemini-web-cookie.txt" ".secrets/gemini-web-cookie.txt" && chmod 600 ".secrets/gemini-web-cookie.txt"
+    echo "    Gemini-Web-Cookie wiederhergestellt."
   fi
   if [ -f "$stage/files/env" ] && [ ! -f ".env" ]; then
     cp "$stage/files/env" ".env" && chmod 600 ".env"

@@ -32,3 +32,14 @@ if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/
   setsid bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >/dev/null 2>&1 &
   echo "[boot] Proxy-Watchdog gestartet (30s-Intervall)."
 fi
+
+# gemini-web2api-Check
+if curl -sf -m 2 http://127.0.0.1:8083/ >/dev/null 2>&1; then
+  echo "[boot] gemini-web2api läuft bereits."
+else
+  if [ -x "$REPO_ROOT/llm-proxies/gemini-web2api/scripts/start.sh" ]; then
+    bash "$REPO_ROOT/llm-proxies/gemini-web2api/scripts/start.sh" >/dev/null 2>&1 \
+      && echo "[boot] gemini-web2api gestartet." \
+      || echo "[boot] WARN: gemini-web2api Start fehlgeschlagen."
+  fi
+fi

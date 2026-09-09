@@ -173,6 +173,84 @@
           }
         }
       }
+    },
+    "antigravity": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Antigravity OAuth Proxy",
+      "options": {
+        "baseURL": "http://127.0.0.1:9878/v1",
+        "apiKey": "antigravity-secret-6fe2eaa404e1c91bfa0fec01e74ddcc1"
+      },
+      "models": {
+        "gemini-3.5-flash-light": {
+          "name": "Gemini 3.5 Flash Light",
+          "reasoning": true,
+          "options": {
+            "reasoningEffort": "low"
+          },
+          "variants": {
+            "low": { "reasoningEffort": "low" },
+            "high": { "reasoningEffort": "high" }
+          }
+        },
+        "gemini-3.8-flash": {
+          "name": "Gemini 3.8 Flash",
+          "reasoning": true,
+          "options": {
+            "reasoningEffort": "low"
+          },
+          "variants": {
+            "low": { "reasoningEffort": "low" },
+            "medium": { "reasoningEffort": "medium" },
+            "high": { "reasoningEffort": "high" }
+          }
+        },
+        "gemini-3.1-pro": {
+          "name": "Gemini 3.1 Pro",
+          "reasoning": true,
+          "options": {
+            "reasoningEffort": "low"
+          },
+          "variants": {
+            "low": { "reasoningEffort": "low" },
+            "high": { "reasoningEffort": "high" }
+          }
+        }
+      }
+    },
+    "gemini-web": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Gemini Web (Google AI Pro)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8083/v1",
+        "apiKey": "sk-gemini-pro-local-2026"
+      },
+      "models": {
+        "gemini-3.1-pro-thinking": {
+          "name": "Gemini 3.1 Pro Thinking (Web)",
+          "reasoning": true,
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        },
+        "gemini-3.8-flash-thinking": {
+          "name": "Gemini 3.8 Flash Thinking (Web)",
+          "reasoning": true,
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        },
+        "gemini-3.5-flash-lite-thinking": {
+          "name": "Gemini 3.5 Flash-Lite Thinking (Web)",
+          "reasoning": true,
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        }
+      }
     }
   },
   "model": "tokenrouter/z-ai/glm-5.3-free",
