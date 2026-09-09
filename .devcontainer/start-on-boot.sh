@@ -1,39 +1,32 @@
 #!/usr/bin/env bash
 # start-on-boot.sh: läuft bei JEDEM Codespace-Start (postStartCommand, auch Resume).
-# Leichtgewichtig: kein Paket-Install, kein Rebuild — nur sicherstellen, dass der
-# glm2api-Haupt-Proxy läuft. Die volle Wiederherstellung macht setup.sh
-# (postCreateCommand); hier ist nur der laufende Zustand garantiert.
+# Leichtgewichtig: stellt sicher, dass alle lokalen LLM-Proxies (glm2api, gemini-web2api,
+# antigravity-proxy) laufen und der Watchdog aktiv ist.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Proxy-Health-Check: läuft er schon? (Watchdog unten wird trotzdem gesichert)
-if curl -sf -m 2 http://127.0.0.1:8001/health >/dev/null 2>&1; then
-  echo "[boot] glm2api läuft bereits."
-else
-  # Code/venv/.env vollständig? Wenn ja: einfach starten.
-  if [ -d "$REPO_ROOT/llm-proxies/glm2api/src" ] && [ -x "$REPO_ROOT/llm-proxies/glm2api/.venv/bin/python3" ] && [ -f "$REPO_ROOT/llm-proxies/glm2api/.env" ]; then
-    bash "$REPO_ROOT/llm-proxies/scripts/start-glm2api.sh" >/dev/null 2>&1 \
-      && echo "[boot] glm2api gestartet." \
-      || echo "[boot] WARN: Proxy-Start fehlgeschlagen — manuell: ./llm-proxies/rebuild.sh --start"
-  else
-    # Etwas fehlt (frischer Stand?) → voller Rebuild im Hintergrund.
-    echo "[boot] glm2api unvollständig — Rebuild im Hintergrund..."
-    nohup bash "$REPO_ROOT/llm-proxies/rebuild.sh" --start >> /tmp/opencode/boot-rebuild.log 2>&1 &
-    echo "[boot] Rebuild läuft (Log: /tmp/opencode/boot-rebuild.log). Proxy in ~1-5 Min verfügbar."
+# 0. Secrets entsperren, falls nötig (z.B. nach Container-Neustart)
+if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
+  if [ ! -f "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ] || [ ! -f "$REPO_ROOT/.secrets/gemini-web-cookie.txt" ]; then
+    bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock >/dev/null 2>&1 || true
   fi
 fi
 
-# Watchdog immer (re-)starten: hält den Proxy auch über OOM-Kills/Reattaches am Leben
-# (postStartCommand greift nur bei echtem Container-Start, nicht bei Client-Reconnect).
-mkdir -p /tmp/opencode
-if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/proxy-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
-  # setsid zwingend: ohne eigene Session killt devcontainer-cli die ganze
-  # Prozessgruppe beim Aufräumen des postStartCommand (nohup schützt da nicht).
-  setsid bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >/dev/null 2>&1 &
-  echo "[boot] Proxy-Watchdog gestartet (30s-Intervall)."
+# 1. glm2api (Port 8001)
+if curl -sf -m 2 http://127.0.0.1:8001/health >/dev/null 2>&1; then
+  echo "[boot] glm2api läuft bereits."
+else
+  if [ -d "$REPO_ROOT/llm-proxies/glm2api/src" ] && [ -x "$REPO_ROOT/llm-proxies/glm2api/.venv/bin/python3" ] && [ -f "$REPO_ROOT/llm-proxies/glm2api/.env" ]; then
+    bash "$REPO_ROOT/llm-proxies/scripts/start-glm2api.sh" >/dev/null 2>&1 \
+      && echo "[boot] glm2api gestartet." \
+      || echo "[boot] WARN: glm2api Start fehlgeschlagen."
+  else
+    echo "[boot] glm2api unvollständig — Rebuild im Hintergrund..."
+    nohup bash "$REPO_ROOT/llm-proxies/rebuild.sh" --start >> /tmp/opencode/boot-rebuild.log 2>&1 &
+  fi
 fi
 
-# gemini-web2api-Check
+# 2. gemini-web2api (Port 8083)
 if curl -sf -m 2 http://127.0.0.1:8083/ >/dev/null 2>&1; then
   echo "[boot] gemini-web2api läuft bereits."
 else
@@ -44,8 +37,8 @@ else
   fi
 fi
 
-# antigravity-proxy-Check
-if ss -tln | grep -q ":9878 "; then
+# 3. antigravity-proxy (Port 9878)
+if curl -sf -m 2 http://127.0.0.1:9878/v1/models >/dev/null 2>&1; then
   echo "[boot] antigravity-proxy läuft bereits."
 else
   if [ -x "$REPO_ROOT/llm-proxies/antigravity-proxy/scripts/start.sh" ]; then
@@ -53,4 +46,11 @@ else
       && echo "[boot] antigravity-proxy gestartet." \
       || echo "[boot] WARN: antigravity-proxy Start fehlgeschlagen."
   fi
+fi
+
+# 4. Proxy-Watchdog immer (re-)starten: hält alle 3 Proxies auch über OOM-Kills/Reattaches am Leben
+mkdir -p /tmp/opencode
+if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/proxy-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
+  setsid bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >/dev/null 2>&1 &
+  echo "[boot] Proxy-Watchdog gestartet (30s-Intervall für alle 3 Proxies)."
 fi
