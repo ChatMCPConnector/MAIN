@@ -547,14 +547,17 @@ def _find_json_tool_call(
     masked = _mask_code_fences(text)
     start = masked.find('{"tool_calls"')
     if start == -1:
-        # partial am ende halten — NUR tool-protokoll-prefixe ('{"tool...'),
-        # nicht jedes inline-{' ('{"': sonst stockt normaler JSON/math-text
-        # im stream bis zum flush). '}'/'"'-dynamik egal: das hier ist nur
-        # hold-back, geparsed wird spaeter ohnehin der komplette block.
+        # partial am ende halten — NUR suffixe, die praefix des
+        # tool-protokolls '{"tool_calls' sein koennen (ab 2 zeichen, also
+        # '{"'). nicht jedes inline-'{': sonst stockt normaler text.
+        # '}'/'"'-dynamik egal: das hier ist nur hold-back, geparsed wird
+        # spaeter ohnehin der komplette block.
         if not final:
-            for prefix in ('{"tool_calls', '{"tool_call', '{"tool_cal', '{"tool_ca', '{"tool_c', '{"tool_', '{"tool', '{"too', '{"to'):
-                idx = masked.rfind(prefix)
-                if idx != -1:
+            protocol = '{"tool_calls'
+            max_hold = min(len(masked), len(protocol))
+            for length in range(max_hold, 1, -1):
+                if masked.endswith(protocol[:length]):
+                    idx = len(text) - length
                     return text[:idx], text[idx:], []
         return text, "", []
     # komplettes JSON-objekt scannen (balanced braces, CDATA/strings beachten)

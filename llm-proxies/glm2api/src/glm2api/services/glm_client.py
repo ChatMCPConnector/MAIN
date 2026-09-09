@@ -202,6 +202,7 @@ class GLMWebClient:
             blocked_follow_ups = 0
             while True:
                 retry_exc: UpstreamAPIError | None = None
+                finished = False
                 for event in self._iter_sse_events(response):
                     if not event:
                         continue
@@ -215,27 +216,33 @@ class GLMWebClient:
                         raise
                     accumulator.consume_event(event)
                     if status in {"finish", "intervene"}:
-                        if (
-                            accumulator.blocked_tool_attempt_names
-                            and blocked_follow_ups < max_blocked_follow_ups
-                        ):
-                            # Negative tool-result round instead of silently
-                            # dropping blocked tool calls (see stream path).
-                            blocked_follow_ups += 1
-                            follow_up = blocked_tool_follow_up_payload()
-                            if follow_up is None:
-                                return accumulator.build_response(), accumulator.conversation_id
-                            self.logger.warning(
-                                "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s",
-                                ", ".join(sorted(set(accumulator.blocked_tool_attempt_names))),
-                                blocked_follow_ups,
-                                max_blocked_follow_ups,
-                            )
-                            response.close() # type: ignore
-                            accumulator = new_accumulator()
-                            response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
-                            continue
-                        return accumulator.build_response(), accumulator.conversation_id
+                        finished = True
+                        break
+                if finished:
+                    # build_response() also populates blocked_tool_attempt_names
+                    # (detect_tool_call_names side effect) — call before deciding.
+                    result = accumulator.build_response()
+                    if (
+                        accumulator.blocked_tool_attempt_names
+                        and blocked_follow_ups < max_blocked_follow_ups
+                    ):
+                        # Negative tool-result round instead of silently
+                        # dropping blocked tool calls (see stream path).
+                        blocked_follow_ups += 1
+                        follow_up = blocked_tool_follow_up_payload()
+                        if follow_up is None:
+                            return result, accumulator.conversation_id
+                        self.logger.warning(
+                            "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s",
+                            ", ".join(sorted(set(accumulator.blocked_tool_attempt_names))),
+                            blocked_follow_ups,
+                            max_blocked_follow_ups,
+                        )
+                        response.close() # type: ignore
+                        accumulator = new_accumulator()
+                        response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        continue
+                    return result, accumulator.conversation_id
                 if retry_exc is None:
                     break
                 # Transient upstream error: retry the stream with a fresh
@@ -346,6 +353,8 @@ class GLMWebClient:
             while True:
                 served_content = False
                 retry_exc: UpstreamAPIError | None = None
+                finalize_chunks: list[str] | None = None
+                blocked: list[str] = []
                 for event in self._iter_sse_events(response):
                     if not event:
                         continue
@@ -384,33 +393,35 @@ class GLMWebClient:
                             last_error=event.get("last_error") if isinstance(event.get("last_error"), dict) else None,
                         )
                         blocked = list(accumulator.blocked_tool_attempt_names)
-                        if (
-                            blocked
-                            and blocked_follow_ups < max_blocked_follow_ups
-                            and not served_content
-                        ):
-                            # Follow-up round with a negative tool result
-                            # instead of forwarding the blocked-call notice
-                            # as final assistant text.
-                            blocked_follow_ups += 1
-                            follow_up = blocked_tool_follow_up_payload()
-                            if follow_up is None:
-                                for chunk in finalize_chunks:
-                                    yield chunk.encode("utf-8")
-                                return
-                            self.logger.warning(
-                                "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s",
-                                ", ".join(sorted(set(blocked))),
-                                blocked_follow_ups,
-                                max_blocked_follow_ups,
-                            )
-                            response.close() # type: ignore
-                            accumulator = new_accumulator()
-                            response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
-                            continue
-                        for chunk in finalize_chunks:
-                            yield chunk.encode("utf-8")
-                        return
+                        break
+                if finalize_chunks is not None:
+                    if (
+                        blocked
+                        and blocked_follow_ups < max_blocked_follow_ups
+                        and not served_content
+                    ):
+                        # Follow-up round with a negative tool result
+                        # instead of forwarding the blocked-call notice
+                        # as final assistant text.
+                        blocked_follow_ups += 1
+                        follow_up = blocked_tool_follow_up_payload()
+                        if follow_up is None:
+                            for chunk in finalize_chunks:
+                                yield chunk.encode("utf-8")
+                            return
+                        self.logger.warning(
+                            "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s",
+                            ", ".join(sorted(set(blocked))),
+                            blocked_follow_ups,
+                            max_blocked_follow_ups,
+                        )
+                        response.close() # type: ignore
+                        accumulator = new_accumulator()
+                        response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        continue
+                    for chunk in finalize_chunks:
+                        yield chunk.encode("utf-8")
+                    return
                 if retry_exc is None:
                     for chunk in accumulator.finalize(status="stop"):
                         yield chunk.encode("utf-8")

@@ -180,6 +180,29 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (5): **glm2api: Negative Tool-Results für blockierte Tool-Calls + Protokoll-Leak-Stopp.**
+  Auslöser: ZEPLAN-Benchmark — glm-5.3-think rief in 4 Testläufen wiederholt das
+  halluzinierte native Web-Tool `open_url` auf; glm2api warf diese Calls still weg
+  → das Modell bekam kein Feedback, wiederholte bis das clientseitige Rundenlimit
+  (3/3) verbrannt war → Benchmark-FAIL ohne einen einzigen Arbeitsschritt. Zweites
+  Symptom (live reproduziert mit 11 deklarierten Tools + großem Systemprompt): das
+  Modell streamt das Tool-Protokoll fragmentweise als Text (`{"`, `tool`, `_calls`…),
+  der Parser hielt Fragmente unter 9 Zeichen Präfix-Länge nicht zurück → Protokoll
+  leakte als sichtbarer Content. Fixes (verifiziert mit 82/82 Tests + Live-Repro):
+  (1) **Folgerunde mit negativem Tool-Result**: Erkennt der Proxy blockierte/
+  undeklarierte Call-Versuche (JSON- UND DSML-Protokoll, Text- UND Reasoning-Kanal,
+  via neue `detect_tool_call_names()`-Diagnosefunktion), startet er automatisch
+  eine Folgerunde mit „Tool X existiert nicht, wurde NICHT ausgeführt, verfügbar
+  sind …" — Budget `GLM_BLOCKED_TOOL_FOLLOW_UPS` (Default 2), nur solange kein
+  sichtbarer Content gesendet wurde (triviales `[]`-Restgerümpel zählt nicht).
+  (2) **Parser-Härtung**: Fragment-Hold-Logik ab 2 Zeichen Präfix (`{"`),
+  Leak-Stripping von Blöcken mit nur gefilterten Calls, korrekte while/break-
+  Struktur statt `continue`-in-for-Schleife (die neue Response wurde nie iteriert).
+  (3) **finalize()-Safety-Net**: geleakte Protokoll-Blöcke werden ohne Allow-Filter
+  geparst — erlaubte Calls werden echte Tool-Calls, blockierte in
+  `blocked_tool_attempt_names` protokolliert. Live-Verifikation: das vorher
+  zuverlässig leckende Szenario liefert jetzt einen sauberen strukturierten
+  `read`-Tool-Call.
 - 2026-09-10 (3): **Chromium-Stack komplett entfernt, Firefox als VNC-Browser.**
   Root Cause der schnell ablaufenden gemini-web-Cookies: Google hat die Session auf
   DBSC (device-bound session) umgestellt — Chromium-Cookies kann gemini-web2api nicht
