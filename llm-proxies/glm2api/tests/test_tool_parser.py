@@ -409,8 +409,11 @@ def test_parse_extracts_param_name_only_payload_for_later_repair():
 
 def test_split_stream_think_fallback_respects_allowed_filter():
     # Regression M-1: wenn schritt 1 alle calls filtert, darf der
-    # think-fallback (schritt 2) sie nicht ungefiltert durchlassen
-    from glm2api.utils.tool_parser import _split_stream_text
+    # think-fallback (schritt 2) sie nicht ungefiltert durchlassen.
+    # Gefilterte calls bleiben weiterhin OHNE tool-call-event — aber das
+    # rohe JSON-Protokoll wird aus dem sichtbaren text entfernt (kein leak);
+    # die erkennung blockierter versuche uebernimmt detect_tool_call_names.
+    from glm2api.utils.tool_parser import _split_stream_text, detect_tool_call_names
 
     visible, remainder, calls = _split_stream_text(
         'Vorher {"tool_calls":[{"name":"blocked_tool","arguments":{"a":1}}]}[] Nachher',
@@ -418,8 +421,11 @@ def test_split_stream_think_fallback_respects_allowed_filter():
         final=True,
     )
     assert calls == []
-    # gefilterter call: kein tool-call-event, text bleibt sichtbar unangetastet
-    assert "blocked_tool" in visible or visible == 'Vorher {"tool_calls":[{"name":"blocked_tool","arguments":{"a":1}}]}[] Nachher'
+    # gefilterter call: kein tool-call-event, protokoll-block wird entfernt
+    assert visible == "Vorher [] Nachher"
+    assert detect_tool_call_names(
+        'Vorher {"tool_calls":[{"name":"blocked_tool","arguments":{"a":1}}]}[] Nachher'
+    ) == ["blocked_tool"]
 
 
 def test_streaming_normal_inline_json_does_not_hold_until_flush():

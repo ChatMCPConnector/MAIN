@@ -363,7 +363,12 @@ class GLMWebClient:
                     chunks, status = accumulator.consume_event(event)
                     for chunk in chunks:
                         encoded = chunk.encode("utf-8")
-                        if b'"content"' in encoded and b'"reasoning_content"' not in encoded:
+                        if (
+                            b'"content"' in encoded
+                            and b'"reasoning_content"' not in encoded
+                            and encoded.replace(b"data:", b"").strip()
+                            not in (b"", b"[]")
+                        ):
                             served_content = True
                         yield encoded
 
