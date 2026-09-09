@@ -253,8 +253,8 @@
       }
     }
   },
-  "model": "tokenrouter/z-ai/glm-5.3-free",
-  "small_model": "tokenrouter/z-ai/glm-5.3-free",
+  "model": "gemini-web/gemini-3.1-pro-thinking",
+  "small_model": "gemini-web/gemini-3.8-flash-thinking",
   "disabled_providers": [
     "github-copilot"
   ],

@@ -128,6 +128,17 @@ else
   fi
 fi
 
+echo "==> [landscape] LLM-Proxy antigravity-proxy wiederherstellen & starten..."
+if ss -tln | grep -q ":9878 "; then
+  echo "    Port 9878 belegt — antigravity-proxy läuft bereits."
+else
+  if [ -x "$REPO_ROOT/llm-proxies/antigravity-proxy/scripts/start.sh" ]; then
+    bash "$REPO_ROOT/llm-proxies/antigravity-proxy/scripts/start.sh" \
+      && echo "    antigravity-proxy läuft." \
+      || echo "    WARN: antigravity-proxy Start fehlgeschlagen."
+  fi
+fi
+
 echo "==> [landscape] Proxy-Watchdog starten (hält glm2api am Leben)..."
 # Watchdog auch beim Codespace-Bau/Rebuild starten (postStartCommand macht es bei
 # jedem Start zusätzlich). setsid, damit devcontainer-cli ihn nicht mitkillt.

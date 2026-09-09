@@ -20,7 +20,7 @@ Codespaces-Secrets, danach läuft alles automatisch (`postCreateCommand` →
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
-| `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **gemini-web2api** (Port 8083, Gemini Web Pro Proxy mit Cookie-Pool & Auto-Refresh) |
+| `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **gemini-web2api** (Port 8083, Gemini Web Pro) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
 
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
 
@@ -40,8 +40,8 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 
 ## Enthalten
 
-- Ports 3000/8000 (Apps), 8001 (glm2api LLM-Proxy), 8083 (gemini-web2api Proxy), 9222/6082/5920 (Browser, nur lokal)
-- opencode, Default-Modell `tokenrouter/z-ai/glm-5.3-free` (1M Kontext)
+- Ports 3000/8000 (Apps), 8001 (glm2api LLM-Proxy), 8083 (gemini-web2api Proxy), 9878 (antigravity-proxy), 9222/6082/5920 (Browser, nur lokal)
+- opencode, Default-Modell `gemini-web/gemini-3.1-pro-thinking` (Thinking immer aktiv)
 - `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
   (kostenlos, NIM-Keys), für Modell-Discovery
 
@@ -74,6 +74,7 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
 | xinjianya | gpt-5.6-sol, kimi-k3, deepseek-v4-pro | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
 | **gemini-web** | gemini-3.1-pro-thinking, gemini-3.8-flash-thinking, gemini-3.5-flash-lite-thinking | lokal, Port 8083, Google AI Pro (Cookie-Pool) |
+| **antigravity** | gemini-3.8-flash (high/low), gemini-3.1-pro, gemini-3.5-flash-light | lokal, Port 9878, Google Cloud Code OAuth |
 | google | gemini-flash-latest (1M) | gemini.key |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
@@ -173,6 +174,11 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-09 (7): `antigravity-proxy` (`dvcrn-antigravity-oauth-proxy`) fest unter
+  `llm-proxies/antigravity-proxy/` integriert (Port 9878, CloudCode Assist OAuth).
+  OAuth-Credentials ins verschlüsselte Secrets-Bundle aufgenommen. Autostart in
+  `setup.sh` und `start-on-boot.sh` eingebunden. Standard-Modell in opencode auf
+  `gemini-web/gemini-3.1-pro-thinking` (small_model: `gemini-3.8-flash-thinking`) umgestellt.
 - 2026-09-09 (6): Gemini Web Pro Proxy (`gemini-web2api-go`) unter `llm-proxies/gemini-web2api/`
   integriert (Port 8083, Chrome-146-Fingerprinting, Cookie-Auto-Refresh). Multi-Turn-Persistenz
   für Google AI Pro Account unter `/u/1/` eingerichtet. Modelle in opencode (`gemini-web`):

@@ -43,3 +43,14 @@ else
       || echo "[boot] WARN: gemini-web2api Start fehlgeschlagen."
   fi
 fi
+
+# antigravity-proxy-Check
+if ss -tln | grep -q ":9878 "; then
+  echo "[boot] antigravity-proxy läuft bereits."
+else
+  if [ -x "$REPO_ROOT/llm-proxies/antigravity-proxy/scripts/start.sh" ]; then
+    bash "$REPO_ROOT/llm-proxies/antigravity-proxy/scripts/start.sh" >/dev/null 2>&1 \
+      && echo "[boot] antigravity-proxy gestartet." \
+      || echo "[boot] WARN: antigravity-proxy Start fehlgeschlagen."
+  fi
+fi
