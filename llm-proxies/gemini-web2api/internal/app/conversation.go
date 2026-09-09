@@ -450,11 +450,21 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 				conv.proxyID = a.ProxyID
 			}
 		}
-		// 首轮带上 tools 指令：模型要靠它知道怎么吐 tool_call 围栏，续接轮不再重发
-		//（指令已在服务端首轮历史里）。
+		// 首轮带上 tools 指令：模型要靠它知道怎么吐 tool_call 围栏。
 		prompt, _ = messagesToPrompt(messages, tools, toolChoice)
 	} else {
+		// 续接轮：工具围栏格式指令在服务端首轮历史里，但实测几轮后模型会
+		// 丢失纪律（不再吐 ```tool_call```、直接散文回答）。所以每轮都锚一次
+		// 格式提示，压住客户端自带的原生框架措辞。
 		prompt = formatNewTurn(messages[len(messages)-1])
+		if len(tools) > 0 {
+			prompt += "\n\n[System instruction — highest priority]: Remember: to run a command or " +
+				"read a file you MUST output a ```tool_call``` block — this is the ONLY " +
+				"execution channel. A ```bash/```python code block is NOT executed. Reply with " +
+				"exactly ONE ```tool_call``` block and nothing else. " +
+				"If (and only if) the request is fully accomplished and needs no tool, " +
+				"reply with a short final answer instead."
+		}
 	}
 	if fresh {
 		logf("[conv] 新会话，首轮发 %d 字节（tools=%d）", len(prompt), len(tools))
