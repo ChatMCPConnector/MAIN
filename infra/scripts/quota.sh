@@ -31,28 +31,28 @@ data = json.load(sys.stdin)
 models = data.get("models", {})
 
 pools = [
-    {
-        "name": "Claude",
-        "keys": ["claude-opus-4-6-thinking", "claude-sonnet-4-6"]
-    },
-    {
-        "name": "Gemini",
-        "keys": ["gemini-3.8-flash-high", "gemini-3.1-pro-high", "gemini-3.5-flash-lite"]
-    }
+    {"name": "Claude", "keys": ["claude-opus-4-6-thinking", "claude-sonnet-4-6"]},
+    {"name": "Gemini", "keys": ["gemini-3.8-flash-high", "gemini-3.1-pro-high", "gemini-3.5-flash-lite"]}
 ]
 
+indent = "      "
+line_w = 80
+title = "GOOGLE ANTIGRAVITY QUOTA & STATUS"
+
+print()
+print(indent + "=" * line_w)
+print(indent + title.center(line_w))
+print(indent + "=" * line_w)
+print()
 hdr_pool = "Pool"
-hdr_quota = "5h-Sprint"
+hdr_sprint = "5h-Sprint"
 hdr_reset = "Nächster Reset"
 hdr_weekly = "Wochen-Limit"
+print(f"{indent}  {hdr_pool:<12} | {hdr_sprint:<22} | {hdr_reset:<16} | {hdr_weekly}")
+print(indent + "  " + "-" * (line_w - 4))
+print()
 
-print("=" * 68)
-print("                 GOOGLE ANTIGRAVITY QUOTA & STATUS")
-print("=" * 68)
-print(f"  {hdr_pool:<10} | {hdr_quota:<20} | {hdr_reset:<16} | {hdr_weekly}")
-print("  " + "-" * 64)
-
-for p in pools:
+for i, p in enumerate(pools):
     rem_frac = None
     reset = None
     for k in p["keys"]:
@@ -97,9 +97,13 @@ for p in pools:
     quota_display = f"{pct:>5.1f}% [{bar}]"
 
     weekly_status = f"Gesperrt ({time_str})" if is_weekly_lockout else "Aktiv"
-
     pool_name = p["name"]
-    print(f"  {pool_name:<10} | {quota_display:<20} | {time_str:<16} | {weekly_status}")
 
-print("=" * 68)
+    print(f"{indent}  {pool_name:<12} | {quota_display:<22} | {time_str:<16} | {weekly_status}")
+    if i < len(pools) - 1:
+        print()
+
+print()
+print(indent + "=" * line_w)
+print()
 ' <<< "$RESPONSE"

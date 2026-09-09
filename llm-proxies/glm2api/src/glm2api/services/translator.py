@@ -11,7 +11,7 @@ from logging import Logger
 from ..config import AppConfig
 from ..logging_utils import debug_dump
 from ..model_variants import model_requests_search, model_requests_thinking, split_model_features
-from ..utils.tool_parser import StreamingToolParser, parse_tool_calls_from_text
+from ..utils.tool_parser import StreamingToolParser, detect_tool_call_names, parse_tool_calls_from_text
 from ..utils.tool_protocol import (
     BLOCKED_NATIVE_TOOL_NAMES,
     CANONICAL_TOOL_CALL_EXAMPLE,
@@ -652,36 +652,18 @@ class GLMEventAccumulator:
                     else:
                         self.blocked_tool_attempt_names.append(tool_name)
                 final_text = cleaned_text.strip()
-        if not final_text and not all_tool_calls and self.allowed_tool_names is not None:
-            _, attempted_tool_calls = parse_tool_calls_from_text(
-                self._cached_full_text.strip(),
-                allowed_tool_names=None,
-            )
+        if not all_tool_calls and self.allowed_tool_names is not None:
+            attempted_names: list[str] = []
+            for source_text in (self._cached_full_text.strip(), self._cached_full_reasoning.strip()):
+                if source_text:
+                    attempted_names.extend(detect_tool_call_names(source_text))
             unavailable_names = sorted(
                 {
-                    str(tool_call.get("function", {}).get("name", "")).strip()
-                    for tool_call in attempted_tool_calls
-                    if isinstance(tool_call.get("function"), dict)
-                    and str(tool_call.get("function", {}).get("name", "")).strip()
-                    not in self.allowed_tool_names
+                    name
+                    for name in attempted_names
+                    if name not in self.allowed_tool_names
                 }
             )
-            # Record blocked attempts (also scan the reasoning channel: the
-            # model may emit the protocol there instead of the text channel).
-            if not unavailable_names and self._cached_full_reasoning:
-                _, reasoning_tool_calls = parse_tool_calls_from_text(
-                    self._cached_full_reasoning.strip(),
-                    allowed_tool_names=None,
-                )
-                unavailable_names = sorted(
-                    {
-                        str(tool_call.get("function", {}).get("name", "")).strip()
-                        for tool_call in reasoning_tool_calls
-                        if isinstance(tool_call.get("function"), dict)
-                        and str(tool_call.get("function", {}).get("name", "")).strip()
-                        not in self.allowed_tool_names
-                    }
-                )
             if unavailable_names:
                 self.blocked_tool_attempt_names.extend(unavailable_names)
                 allowed_names = ", ".join(sorted(self.allowed_tool_names)) or "(none)"

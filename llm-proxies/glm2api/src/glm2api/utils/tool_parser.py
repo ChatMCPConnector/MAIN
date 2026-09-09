@@ -758,6 +758,56 @@ def parse_tool_calls_from_text(text: str, allowed_tool_names: set[str] | None = 
     return _remove_spans(text, spans), tool_calls
 
 
+def detect_tool_call_names(text: str) -> list[str]:
+    """Erkennt Tool-Call-Namen OHNE Allow-Filter (auch BLOCKED_NATIVE wie
+    open_url). Dient nur der Diagnose blockierter Versuche — niemals zur
+    Ausfuehrung: das Ergebnis wird fuer negative tool-results genutzt."""
+    if not text:
+        return []
+    names: list[str] = []
+    masked = _mask_code_fences(text)
+    start = masked.find('{"tool_calls"')
+    if start != -1:
+        depth = 0
+        in_str = False
+        esc = False
+        end = -1
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end != -1:
+            try:
+                parsed = json.loads(text[start:end])
+            except json.JSONDecodeError:
+                parsed = None
+            calls_raw = parsed.get("tool_calls") if isinstance(parsed, dict) else None
+            if isinstance(calls_raw, dict):
+                calls_raw = [calls_raw]
+            if isinstance(calls_raw, list):
+                for call in calls_raw:
+                    if isinstance(call, dict):
+                        name = str(call.get("name", "")).strip()
+                        if name:
+                            names.append(name)
+    return names
+
+
 @dataclass
 class StreamingToolParser:
     pending_text: str = ""
