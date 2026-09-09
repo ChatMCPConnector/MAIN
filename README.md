@@ -55,7 +55,7 @@ Secret-Schutz-Purismus:
   Entschlüsselungswort — nie ein Secret/PAT als Passphrase zweckentfremden
   (der alte PAT wurde dadurch geleakt und von GitHub revoked).
 - `config/secrets.enc` (+ Manifest): verschlüsseltes Bundle mit
-  `pat`, `tokenrouter.key`, `nvidia-nim.key`, `xinjianya.key`, `gemini.key`, `chatglm-refresh-token`,
+  `pat`, `tokenrouter.key`, `nvidia-nim.key`, `xinjianya.key`, `gemini-web-cookie.txt`, `antigravity-oauth_creds.json`, `chatglm-refresh-token`,
   `env`, `opencode-auth.json` → landen beim Unlock unter `~/.config/landscape/`,
   `~/.local/share/opencode/auth.json` bzw. `.env`/`.secrets/`.
 - `./infra/scripts/secrets.sh lock|unlock|status` verwaltet das Bundle.
