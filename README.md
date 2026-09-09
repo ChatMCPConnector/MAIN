@@ -172,6 +172,15 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-09 (4): glm2api komplett auf Englisch übersetzt (China-Audit,
+  ~283 A-Stellen): alle Log-/Fehler-/Kommentar-Strings in config, app,
+  __main__, server, glm_auth, glm_client, translator + pyproject.toml +
+  .env.example + glm2api.env + Live-.env. Bewusst chinesisch bleiben nur
+  funktionale Stellen: Busy-Erkennung (glm_client.py:880), Gast-Alias
+  `游客` (config.py:128), chatglm.cn-Header — plus CJK-Test-Fixtures
+  (gewollte Abdeckung). Fortschritts-Doku: /workspaces/china-audit.md.
+  Tests 70 grün (neu: undeclared-tool-EN-Assertion), Proxy neu gestartet,
+  8/8 Smoke-Checks, Bundle neu gebaut.
 - 2026-09-09 (3): glm2api-Tiefenrevision (2 parallele Subagenten-Audits)
   umgesetzt — alle Befunde gefixt: Part-Merge-Duplikat (finish-Volltext
   ohne part-status verdoppelte Text; jetzt status-unabhängig idempotent),

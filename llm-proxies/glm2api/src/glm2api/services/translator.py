@@ -379,20 +379,20 @@ def resolve_upstream_model(requested_model: str, config: AppConfig) -> tuple[str
     return upstream_model, assistant_id
 
 
-# Reasoning-Stufen: echte chat_mode-Werte der chatglm.cn-Web-UI (via CDP
-# Reverse-Engineering 2026-09-07 verifiziert):
-#   ""             = 快速 (schnell, kein Denken)
-#   "thinking"     = 深度 (Standard-Denken)
-#   "deep_thinking" = 极致 (volles Denken, 耗时更长)
-# Hinweis: Der alte Wert "zero" wurde von der echten UI nie gesendet.
+# Reasoning levels: real chat_mode values of the chatglm.cn web UI (verified
+# via CDP reverse engineering 2026-09-07):
+#   ""             = quick (no thinking)
+#   "thinking"     = deep (standard thinking)
+#   "deep_thinking" = ultra (full thinking, takes longer)
+# Note: The old value "zero" was never sent by the real UI.
 CHAT_MODE_THINKING = "thinking"
 CHAT_MODE_DEEP_THINKING = "deep_thinking"
 
 _EFFORT_TO_CHAT_MODE = {
-    # low    = 快速  (schnell, kein Denken)
-    # medium = 深度  (Standard-Denken)  — Zwischenstufe
-    # high   = thinking (volles Denken via UI-Modus 深度+)
-    # max    = 极致  (deep_thinking, 全力推理)
+    # low    = quick (no thinking)
+    # medium = deep (standard thinking)  — intermediate level
+    # high   = thinking (full thinking via UI mode deep+)
+    # max    = ultra (deep_thinking, full-power reasoning)
     "low": "",
     "minimal": "",
     "medium": CHAT_MODE_THINKING,
@@ -456,7 +456,7 @@ class GLMEventAccumulator:
         self.tool_parser.allowed_tool_names = self.allowed_tool_names
 
     def consume_event(self, payload: dict[str, object]) -> tuple[list[str], str | None]:
-        debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE 解析事件", payload)
+        debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE parsed event", payload)
         if not self.conversation_id and payload.get("conversation_id"):
             self.conversation_id = str(payload["conversation_id"])
 
@@ -545,7 +545,7 @@ class GLMEventAccumulator:
                         }
                     )
                 )
-        debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE 生成增量块", chunks)
+        debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE generated delta chunks", chunks)
         return chunks, str(payload.get("status")) if payload.get("status") is not None else None
 
     def finalize(self, status: str | None, last_error: dict[str, object] | None = None) -> list[str]:
@@ -563,7 +563,7 @@ class GLMEventAccumulator:
 
         if self.logger:
             self.logger.info(
-                "响应收尾 status=%s text_len=%s reasoning_len=%s tool_calls=%s server_tools=%s",
+                "Response finalize status=%s text_len=%s reasoning_len=%s tool_calls=%s server_tools=%s",
                 status,
                 len(self._cached_full_text),
                 len(self._cached_full_reasoning),
@@ -591,9 +591,9 @@ class GLMEventAccumulator:
             if unavailable_names:
                 allowed_names = ", ".join(sorted(self.allowed_tool_names)) or "(none)"
                 final_text = (
-                    "模型尝试调用未声明工具 "
+                    "The model attempted to call an undeclared tool: "
                     + ", ".join(f"`{name}`" for name in unavailable_names)
-                    + f"，已阻止。本轮只允许这些工具：{allowed_names}。"
+                    + f". Blocked. Only these tools are allowed in this round: {allowed_names}."
                 )
         if final_text and not all_tool_calls:
             delta_payload: dict[str, object] = {"content": final_text}
@@ -685,7 +685,7 @@ class GLMEventAccumulator:
             )
         )
         chunks.append("data: [DONE]\n\n")
-        debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE finalize 输出", chunks)
+        debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE finalize output", chunks)
         return chunks
 
     def build_response(self) -> dict[str, object]:
@@ -736,13 +736,13 @@ class GLMEventAccumulator:
         }
         if self.logger:
             self.logger.info(
-                "非流式响应构建完成 model=%s text_len=%s reasoning_len=%s tool_calls=%s",
+                "Non-streaming response built model=%s text_len=%s reasoning_len=%s tool_calls=%s",
                 self.model,
                 len(final_content),
                 len(full_reasoning),
                 len(all_tool_calls),
             )
-        debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM 非流式最终响应", response)
+        debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM non-streaming final response", response)
         return response
 
     def _extract_reasoning_tool_calls(self, reasoning_text: str | None = None) -> list[dict[str, object]]:

@@ -351,7 +351,7 @@ def test_accumulator_reports_unavailable_dsml_tool_instead_of_empty_response():
     final_chunks = accumulator.finalize(status)
 
     assert chunks == []
-    assert "未声明工具" in final_chunks[0]
+    assert "undeclared tool" in final_chunks[0]
     assert "`search`" in final_chunks[0]
     assert '"finish_reason":"stop"' in final_chunks[1]
 

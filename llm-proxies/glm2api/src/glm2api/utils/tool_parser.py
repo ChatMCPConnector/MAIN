@@ -616,6 +616,8 @@ def _find_json_tool_call(
         except json.JSONDecodeError:
             return text, "", []
     calls_raw = parsed.get("tool_calls") if isinstance(parsed, dict) else None
+    if isinstance(calls_raw, dict):
+        calls_raw = [calls_raw]
     if not isinstance(calls_raw, list):
         return text, "", []
     tool_calls = []

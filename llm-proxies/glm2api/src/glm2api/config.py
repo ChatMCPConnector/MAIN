@@ -59,7 +59,7 @@ def parse_dotenv(path: Path) -> dict[str, str]:
     except UnicodeDecodeError as exc:
         raise ConfigError(f"Config file is not valid UTF-8 encoded: {path}") from exc
     except OSError as exc:
-        raise ConfigError(f"读取配置文件失败: {path} error={exc}") from exc
+        raise ConfigError(f"Failed to read config file: {path} error={exc}") from exc
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -85,7 +85,7 @@ def parse_int(value: str | None, default: int) -> int:
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise ConfigError(f"整数配置值无效: {value}") from exc
+        raise ConfigError(f"Invalid integer config value: {value}") from exc
 
 
 def parse_float(value: str | None, default: float) -> float:
@@ -94,7 +94,7 @@ def parse_float(value: str | None, default: float) -> float:
     try:
         return float(value)
     except (TypeError, ValueError) as exc:
-        raise ConfigError(f"浮点配置值无效: {value}") from exc
+        raise ConfigError(f"Invalid float config value: {value}") from exc
 
 
 def parse_list(value: str | None, default: tuple[str, ...] = ()) -> list[str]:
@@ -110,9 +110,9 @@ def load_refresh_tokens(token_file_path: Path) -> list[str]:
     try:
         lines = token_file_path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError as exc:
-        raise ConfigError(f"token 文件不是有效的 UTF-8 编码: {token_file_path}") from exc
+        raise ConfigError(f"Token file is not valid UTF-8 encoded: {token_file_path}") from exc
     except OSError as exc:
-        raise ConfigError(f"读取 token 文件失败: {token_file_path} error={exc}") from exc
+        raise ConfigError(f"Failed to read token file: {token_file_path} error={exc}") from exc
     for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -192,7 +192,7 @@ def ensure_env_file(env_path: Path) -> bool:
         env_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(example_path, env_path)
     except OSError as exc:
-        raise ConfigError(f"自动创建配置文件失败: source={example_path} target={env_path} error={exc}") from exc
+        raise ConfigError(f"Failed to auto-create config file: source={example_path} target={env_path} error={exc}") from exc
     return True
 
 
@@ -292,19 +292,19 @@ def load_config(env_file: str = ".env") -> AppConfig:
     )
 
     if not (1 <= config.port <= 65535):
-        raise ConfigError(f"端口配置超出范围: PORT={config.port}")
+        raise ConfigError(f"Port config out of range: PORT={config.port}")
     if config.request_timeout <= 0:
-        raise ConfigError(f"请求超时必须大于 0: REQUEST_TIMEOUT_SECONDS={config.request_timeout}")
+        raise ConfigError(f"Request timeout must be greater than 0: REQUEST_TIMEOUT_SECONDS={config.request_timeout}")
     if config.glm_queue_wait_timeout <= 0:
-        raise ConfigError(f"队列等待时间必须大于 0: GLM_QUEUE_WAIT_TIMEOUT_SECONDS={config.glm_queue_wait_timeout}")
+        raise ConfigError(f"Queue wait timeout must be greater than 0: GLM_QUEUE_WAIT_TIMEOUT_SECONDS={config.glm_queue_wait_timeout}")
     if config.glm_busy_retry_interval < 0:
-        raise ConfigError(f"忙碌重试间隔不能小于 0: GLM_BUSY_RETRY_INTERVAL_SECONDS={config.glm_busy_retry_interval}")
+        raise ConfigError(f"Busy retry interval cannot be less than 0: GLM_BUSY_RETRY_INTERVAL_SECONDS={config.glm_busy_retry_interval}")
     if not config.glm_base_url.startswith(("http://", "https://")):
-        raise ConfigError(f"GLM_BASE_URL 必须以 http:// 或 https:// 开头: {config.glm_base_url}")
+        raise ConfigError(f"GLM_BASE_URL must start with http:// or https://: {config.glm_base_url}")
 
     token_source = "guest mode" if explicit_guest_mode else (f"token file ({token_file_path})" if token_file_path.exists() else ".env GLM_REFRESH_TOKEN")
     logger.info(
-        "配置加载完成 端口=%s 并发=%s 账号数=%s token来源=%s 日志级别=%s",
+        "Configuration loaded port=%s concurrency=%s accounts=%s token_source=%s log_level=%s",
         config.port,
         config.glm_max_concurrency,
         len(config.glm_refresh_tokens),
@@ -312,7 +312,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
         config.log_level,
     )
     logger.debug(
-        "配置详情 host=%s api_prefix=%s timeout=%ss 删除会话=%s 暴露模型=%s",
+        "Config details host=%s api_prefix=%s timeout=%ss delete_conversation=%s exposed_models=%s",
         config.host,
         config.api_prefix,
         config.request_timeout,

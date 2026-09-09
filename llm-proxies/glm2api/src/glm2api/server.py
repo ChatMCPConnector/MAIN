@@ -85,15 +85,15 @@ class GLM2APIServer:
                         )
                         return
 
-                    logger.debug("GET 未匹配 path=%s", self.path)
+                    logger.debug("GET unmatched path=%s", self.path)
                     self._write_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Not Found"}})
                 except _CLIENT_DISCONNECTED:
-                    logger.warning("客户端在 GET 响应写回前断开 path=%s", self.path)
+                    logger.warning("Client disconnected before GET response was written path=%s", self.path)
                 except Exception as exc:
-                    logger.error("处理 GET 请求失败 path=%s error=%s\n%s", self.path, exc, traceback.format_exc())
+                    logger.error("Failed to handle GET request path=%s error=%s\n%s", self.path, exc, traceback.format_exc())
                     self._safe_write_json(
                         HTTPStatus.INTERNAL_SERVER_ERROR,
-                        {"error": {"message": "服务内部错误", "type": exc.__class__.__name__}},
+                        {"error": {"message": "Internal server error", "type": exc.__class__.__name__}},
                     )
 
             def do_POST(self) -> None:
@@ -106,12 +106,12 @@ class GLM2APIServer:
                         f"{config.api_prefix}/messages",
                         f"{config.api_prefix}/responses",
                     }:
-                        logger.debug("POST 未匹配 path=%s", self.path)
+                        logger.debug("POST unmatched path=%s", self.path)
                         self._write_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Not Found"}})
                         return
 
                     if not self._authorize():
-                        logger.warning("认证失败 path=%s ip=%s", self.path, self.client_address[0])
+                        logger.warning("Authentication failed path=%s ip=%s", self.path, self.client_address[0])
                         self._write_json(HTTPStatus.UNAUTHORIZED, {"error": {"message": "Unauthorized"}})
                         return
 
@@ -119,17 +119,17 @@ class GLM2APIServer:
                     if content_length < 0:
                         self._write_json(
                             HTTPStatus.BAD_REQUEST,
-                            {"error": {"message": "Content-Length 不能为负数。", "type": "invalid_content_length"}},
+                            {"error": {"message": "Content-Length must not be negative.", "type": "invalid_content_length"}},
                         )
                         return
                     raw_body = self.rfile.read(content_length) if content_length else b"{}"
-                    debug_dump(logger, config.debug_dump_all, f"HTTP 入站原始请求体 path={self.path}", raw_body)
+                    debug_dump(logger, config.debug_dump_all, f"HTTP inbound raw request body path={self.path}", raw_body)
                     try:
                         payload = json.loads(raw_body.decode("utf-8"))
                     except UnicodeDecodeError:
                         self._write_json(
                             HTTPStatus.BAD_REQUEST,
-                            {"error": {"message": "请求体必须是 UTF-8 编码。", "type": "invalid_encoding"}},
+                            {"error": {"message": "Request body must be UTF-8 encoded.", "type": "invalid_encoding"}},
                         )
                         return
                     except json.JSONDecodeError as exc:
@@ -137,7 +137,7 @@ class GLM2APIServer:
                             HTTPStatus.BAD_REQUEST,
                             {
                                 "error": {
-                                    "message": f"请求体不是合法 JSON: {exc.msg}",
+                                    "message": f"Request body is not valid JSON: {exc.msg}",
                                     "type": "invalid_json",
                                 }
                             },
@@ -147,20 +147,20 @@ class GLM2APIServer:
                     if not isinstance(payload, dict):
                         self._write_json(
                             HTTPStatus.BAD_REQUEST,
-                            {"error": {"message": "请求体顶层必须是 JSON 对象。", "type": "invalid_payload"}},
+                            {"error": {"message": "Request body top level must be a JSON object.", "type": "invalid_payload"}},
                         )
                         return
-                    debug_dump(logger, config.debug_dump_all, f"HTTP 入站解析后 JSON path={self.path}", payload)
+                    debug_dump(logger, config.debug_dump_all, f"HTTP inbound parsed JSON path={self.path}", payload)
 
                     # --- Anthropic Messages API ---
                     if path == f"{config.api_prefix}/messages":
-                        logger.info("收到 Anthropic 请求 model=%s stream=%s", payload.get("model"), payload.get("stream"))
+                        logger.info("Received Anthropic request model=%s stream=%s", payload.get("model"), payload.get("stream"))
                         self._handle_anthropic_messages(payload)
                         return
 
                     # --- OpenAI Responses API ---
                     if path == f"{config.api_prefix}/responses":
-                        logger.info("收到 Responses 请求 model=%s stream=%s", payload.get("model"), payload.get("stream"))
+                        logger.info("Received Responses request model=%s stream=%s", payload.get("model"), payload.get("stream"))
                         self._handle_responses(payload)
                         return
 
@@ -169,10 +169,10 @@ class GLM2APIServer:
                         if not payload.get("prompt"):
                             self._write_json(
                                 HTTPStatus.BAD_REQUEST,
-                                {"error": {"message": "图片生成请求必须包含 prompt 字段。"}},
+                                {"error": {"message": "Image generation request must include a prompt field."}},
                             )
                             return
-                        logger.info("收到绘图请求 model=%s prompt=%s", payload.get("model"), payload.get("prompt"))
+                        logger.info("Received image generation request model=%s prompt=%s", payload.get("model"), payload.get("prompt"))
                         result = glm_client.generate_images(payload)
                         self._write_json(HTTPStatus.OK, result)
                         return
@@ -181,7 +181,7 @@ class GLM2APIServer:
                     if not isinstance(payload.get("messages"), list) or not payload.get("model"):
                         self._write_json(
                             HTTPStatus.BAD_REQUEST,
-                            {"error": {"message": "请求体必须包含 model 和 messages 字段。"}},
+                            {"error": {"message": "Request body must include model and messages fields."}},
                         )
                         return
 
@@ -189,32 +189,32 @@ class GLM2APIServer:
                         self._stream_completion(payload)
                         return
 
-                    logger.info("收到 chat 请求 model=%s", payload.get("model"))
+                    logger.info("Received chat request model=%s", payload.get("model"))
                     result, conversation_id = glm_client.chat_completion(payload)
                     self._write_json(HTTPStatus.OK, result)
                 except QueueTimeoutError as exc:
-                    logger.warning("GLM 队列等待超时 error=%s", exc)
+                    logger.warning("GLM queue wait timeout error=%s", exc)
                     self._write_json(
                         HTTPStatus.SERVICE_UNAVAILABLE,
                         {"error": {"message": str(exc), "type": "queue_timeout"}},
                     )
                 except UpstreamAPIError as exc:
-                    logger.warning("上游 GLM 返回错误 status=%s error=%s", exc.status_code, exc)
+                    logger.warning("Upstream GLM returned an error status=%s error=%s", exc.status_code, exc)
                     status = self._safe_http_status(exc.status_code, fallback=HTTPStatus.BAD_GATEWAY)
                     self._write_json(
                         status,
                         {"error": {"message": str(exc), "type": "upstream_error", "details": exc.payload}},
                     )
                 except ValueError as exc:
-                    logger.warning("请求参数错误 path=%s error=%s", self.path, exc)
+                    logger.warning("Invalid request parameters path=%s error=%s", self.path, exc)
                     self._write_json(
                         HTTPStatus.BAD_REQUEST,
                         {"error": {"message": str(exc), "type": "invalid_request"}},
                     )
                 except _CLIENT_DISCONNECTED as exc:
-                    logger.warning("客户端连接提前断开 path=%s error=%s", self.path, exc)
+                    logger.warning("Client disconnected early path=%s error=%s", self.path, exc)
                 except Exception as exc:
-                    logger.error("处理请求失败 error=%s\n%s", exc, traceback.format_exc())
+                    logger.error("Failed to handle request error=%s\n%s", exc, traceback.format_exc())
                     self._safe_write_json(
                         HTTPStatus.BAD_GATEWAY,
                         {"error": {"message": str(exc), "type": exc.__class__.__name__}},
@@ -259,10 +259,10 @@ class GLM2APIServer:
                             self.wfile.write(event.encode("utf-8"))
                             self.wfile.flush()
                 except _CLIENT_DISCONNECTED as exc:
-                    logger.warning("客户端在 Anthropic 流式响应过程中断开 model=%s error=%s", model, exc)
+                    logger.warning("Client disconnected during Anthropic streaming response model=%s error=%s", model, exc)
                     return
                 except Exception as exc:
-                    logger.error("Anthropic 流式请求失败 model=%s error=%s\n%s", model, exc, traceback.format_exc())
+                    logger.error("Anthropic streaming request failed model=%s error=%s\n%s", model, exc, traceback.format_exc())
 
                 # Ensure message_stop is always sent (idempotent via _finished flag)
                 if accumulator.started:
@@ -273,7 +273,7 @@ class GLM2APIServer:
                     except _CLIENT_DISCONNECTED:
                         pass
 
-                logger.info("Anthropic 流式请求完成 model=%s", model)
+                logger.info("Anthropic streaming request completed model=%s", model)
 
             # ---- OpenAI Responses API ----
 
@@ -341,10 +341,10 @@ class GLM2APIServer:
                             self.wfile.write(event.encode("utf-8"))
                             self.wfile.flush()
                 except _CLIENT_DISCONNECTED as exc:
-                    logger.warning("客户端在 Responses 流式响应过程中断开 model=%s error=%s", model, exc)
+                    logger.warning("Client disconnected during Responses streaming response model=%s error=%s", model, exc)
                     return
                 except Exception as exc:
-                    logger.error("Responses 流式请求失败 model=%s error=%s\n%s", model, exc, traceback.format_exc())
+                    logger.error("Responses streaming request failed model=%s error=%s\n%s", model, exc, traceback.format_exc())
 
                 # Ensure response.completed is always sent (idempotent via _finished flag)
                 if accumulator.started:
@@ -355,13 +355,13 @@ class GLM2APIServer:
                     except _CLIENT_DISCONNECTED:
                         pass
 
-                logger.info("Responses 流式请求完成 model=%s", model)
+                logger.info("Responses streaming request completed model=%s", model)
 
             # ---- Chat completions (original) ----
 
             def _stream_completion(self, payload: dict[str, object]) -> None:
                 model = str(payload.get("model", "unknown"))
-                logger.info("开始流式响应 model=%s", model)
+                logger.info("Starting streaming response model=%s", model)
                 stream_iter = glm_client.stream_chat_completion(payload)
                 self.send_response(HTTPStatus.OK)
                 self._send_common_headers()
@@ -374,19 +374,19 @@ class GLM2APIServer:
                 try:
                     for chunk in stream_iter:
                         if chunk:
-                            debug_dump(logger, config.debug_dump_all, f"HTTP 出站流式分片 model={model}", chunk)
+                            debug_dump(logger, config.debug_dump_all, f"HTTP outbound streaming chunk model={model}", chunk)
                             self.wfile.write(chunk)
                             self.wfile.flush()
                             if b"data: [DONE]\n\n" in chunk:
                                 sent_done = True
                 except UpstreamAPIError as exc:
-                    logger.warning("流式请求中途收到上游错误 status=%s error=%s", exc.status_code, exc)
+                    logger.warning("Upstream error received mid-stream status=%s error=%s", exc.status_code, exc)
                     self._write_sse_error(str(exc), "upstream_error")
                 except _CLIENT_DISCONNECTED as exc:
-                    logger.warning("客户端在流式响应过程中断开 model=%s error=%s", model, exc)
+                    logger.warning("Client disconnected during streaming response model=%s error=%s", model, exc)
                     return
                 except Exception as exc:
-                    logger.error("流式请求失败 model=%s error=%s\n%s", model, exc, traceback.format_exc())
+                    logger.error("Streaming request failed model=%s error=%s\n%s", model, exc, traceback.format_exc())
                     self._write_sse_error(str(exc), exc.__class__.__name__)
                 finally:
                     if not sent_done:
@@ -395,7 +395,7 @@ class GLM2APIServer:
                             self.wfile.flush()
                         except _CLIENT_DISCONNECTED:
                             pass
-                logger.info("流式请求完成 model=%s", model)
+                logger.info("Streaming request completed model=%s", model)
 
             # ---- Auth ----
 
@@ -417,7 +417,7 @@ class GLM2APIServer:
 
             def _write_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
                 body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-                debug_dump(logger, config.debug_dump_all, f"HTTP 出站 JSON 响应 status={int(status)} path={self.path}", body)
+                debug_dump(logger, config.debug_dump_all, f"HTTP outbound JSON response status={int(status)} path={self.path}", body)
                 self.send_response(status)
                 self._send_common_headers()
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -437,14 +437,14 @@ class GLM2APIServer:
                 try:
                     self._write_json(status, payload)
                 except _CLIENT_DISCONNECTED:
-                    logger.warning("客户端在 JSON 响应写回前断开 path=%s", self.path)
+                    logger.warning("Client disconnected before JSON response was written path=%s", self.path)
 
             def _parse_content_length(self) -> int:
                 raw_value = self.headers.get("Content-Length", "0").strip()
                 try:
                     return int(raw_value or "0")
                 except ValueError as exc:
-                    raise ValueError(f"无效的 Content-Length: {raw_value}") from exc
+                    raise ValueError(f"Invalid Content-Length: {raw_value}") from exc
 
             def _write_sse_error(self, message: str, error_type: str) -> None:
                 event = {
@@ -458,7 +458,7 @@ class GLM2APIServer:
                     self.wfile.write(payload)
                     self.wfile.flush()
                 except _CLIENT_DISCONNECTED:
-                    logger.warning("客户端在 SSE 错误写回前断开 path=%s", self.path)
+                    logger.warning("Client disconnected before SSE error was written path=%s", self.path)
 
             def _safe_http_status(self, value: int, fallback: HTTPStatus) -> HTTPStatus:
                 try:
@@ -470,7 +470,7 @@ class GLM2APIServer:
                 debug_dump(
                     logger,
                     config.debug_dump_all,
-                    f"HTTP 入站请求 {self.command} {self.path} headers",
+                    f"HTTP inbound request {self.command} {self.path} headers",
                     {key: value for key, value in self.headers.items()},
                 )
 

@@ -12,13 +12,13 @@ def main() -> int:
         application = create_application()
     except (ConfigError, StartupError) as exc:
         # Logging may not be set up yet — fall back to plain print for early errors
-        print(f"[glm2api] 启动失败: {exc}")
+        print(f"[glm2api] Startup failed: {exc}")
         return 2
     except KeyboardInterrupt:
-        print("[glm2api] 已中断退出")
+        print("[glm2api] Interrupted, exiting")
         return 130
     except Exception as exc:
-        print(f"[glm2api] 未处理异常: {exc}")
+        print(f"[glm2api] Unhandled exception: {exc}")
         print(traceback.format_exc())
         return 1
 
@@ -27,8 +27,8 @@ def main() -> int:
         application.run()
         return 0
     except KeyboardInterrupt:
-        logger.info("已中断退出")
+        logger.info("Interrupted, exiting")
         return 130
     except Exception as exc:
-        logger.error("未处理异常: %s\n%s", exc, traceback.format_exc())
+        logger.error("Unhandled exception: %s\n%s", exc, traceback.format_exc())
         return 1

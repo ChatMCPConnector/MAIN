@@ -15,6 +15,20 @@ def test_streaming_json_tool_call_with_terminator_in_same_token():
     assert tool_calls[0]["function"]["arguments"] == '{"command": "pwd"}'
 
 
+def test_streaming_json_tool_call_accepts_single_object():
+    parser = StreamingToolParser(allowed_tool_names={"bash"})
+    text = '{"tool_calls":{"name":"bash","arguments":{"command":"pwd"}}}[]'
+
+    clean = parser.consume(text)
+    tail, tool_calls = parser.flush()
+
+    assert clean == ""
+    assert tail == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "bash"
+    assert tool_calls[0]["function"]["arguments"] == '{"command": "pwd"}'
+
+
 def test_parse_repairs_missing_tool_calls_array_close_and_preserves_model_text():
     text = (
         'Vorher {"tool_calls":[{"name":"bash","arguments":{"command":"pwd"}}}'

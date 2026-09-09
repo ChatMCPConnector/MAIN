@@ -88,19 +88,19 @@ class ConcurrentRequestQueue:
             start = time.monotonic()
 
             if queue_ahead > 0:
-                self.logger.info("请求进入 GLM 队列 ticket=%s ahead=%s request=%s", ticket, queue_ahead, request_name)
+                self.logger.info("Request entered GLM queue ticket=%s ahead=%s request=%s", ticket, queue_ahead, request_name)
 
             while ticket >= self._serving_ticket + self.max_concurrency:
                 remaining = self.wait_timeout - (time.monotonic() - start)
                 if remaining <= 0:
                     raise QueueTimeoutError(
-                        f"GLM 队列等待超时，前方仍有 {ticket - (self._serving_ticket + self.max_concurrency) + 1} 个请求，请稍后重试。"
+                        f"GLM queue wait timed out, {ticket - (self._serving_ticket + self.max_concurrency) + 1} request(s) still ahead, please retry later."
                     )
                 self._condition.wait(timeout=remaining)
 
             active_slots = ticket - self._serving_ticket + 1
             self.logger.info(
-                "请求获得 GLM 执行槽位 ticket=%s active=%s/%s request=%s",
+                "Request acquired GLM execution slot ticket=%s active=%s/%s request=%s",
                 ticket,
                 active_slots,
                 self.max_concurrency,
@@ -114,7 +114,7 @@ class ConcurrentRequestQueue:
             while self._serving_ticket in self._released_tickets:
                 self._released_tickets.remove(self._serving_ticket)
                 self._serving_ticket += 1
-            self.logger.info("请求离开 GLM 执行槽位 ticket=%s", ticket)
+            self.logger.info("Request released GLM execution slot ticket=%s", ticket)
             self._condition.notify_all()
 
 
@@ -145,7 +145,7 @@ class GLMWebClient:
                 if tool_name in blocked_tool_names:
                     blocked_names.append(tool_name)
             if blocked_names:
-                self.logger.info("已过滤不受支持的工具: %s", ", ".join(blocked_names))
+                self.logger.info("Filtered unsupported tools: %s", ", ".join(blocked_names))
         return filtered_tools, {tool["function"]["name"] for tool in filtered_tools} if filtered_tools else None # type: ignore[index]
 
     def chat_completion(self, payload: dict[str, object]) -> tuple[dict[str, object], str | None]:
@@ -274,7 +274,7 @@ class GLMWebClient:
         detail = f"code={error_code} " if error_code is not None else ""
         raise UpstreamAPIError(
             status_code=502,
-            message=f"GLM 上游返回错误 | {detail}{error_message}".strip(),
+            message=f"GLM upstream returned an error | {detail}{error_message}".strip(),
             payload=error_payload or event,
         )
 
@@ -309,7 +309,7 @@ class GLMWebClient:
         if not self.config.glm_delete_conversation:
             return
         if not conversation_id:
-            self.logger.warning("跳过删除 GLM 会话：未获取到 conversation_id assistant_id=%s", assistant_id or self.config.glm_assistant_id)
+            self.logger.warning("Skipping GLM conversation deletion: no conversation_id obtained assistant_id=%s", assistant_id or self.config.glm_assistant_id)
             return
 
         actual_assistant_id = assistant_id or self.config.glm_assistant_id
@@ -344,20 +344,20 @@ class GLMWebClient:
             status = payload.get("status", payload.get("code"))
             if status not in {0, None}:
                 self.logger.warning(
-                    "GLM 会话删除返回非成功状态 conversation_id=%s assistant_id=%s payload=%s",
+                    "GLM conversation deletion returned non-success status conversation_id=%s assistant_id=%s payload=%s",
                     conversation_id,
                     actual_assistant_id,
                     payload,
                 )
                 return
             self.logger.info(
-                "已删除 GLM 会话 conversation_id=%s assistant_id=%s",
+                "Deleted GLM conversation conversation_id=%s assistant_id=%s",
                 conversation_id,
                 actual_assistant_id,
             )
         except Exception as exc:
             self.logger.warning(
-                "删除 GLM 会话失败 conversation_id=%s assistant_id=%s error=%s",
+                "Failed to delete GLM conversation conversation_id=%s assistant_id=%s error=%s",
                 conversation_id,
                 actual_assistant_id,
                 exc,
@@ -375,12 +375,12 @@ class GLMWebClient:
             tool_choice=openai_payload.get("tool_choice"),
             server_side_tool_names=SERVER_SIDE_TOOL_NAMES,
         )
-        debug_dump(self.logger, self.config.debug_dump_all, "OpenAI 原始 chat 请求 payload", openai_payload)
-        debug_dump(self.logger, self.config.debug_dump_all, "转换后的 GLM messages", converted_messages)
+        debug_dump(self.logger, self.config.debug_dump_all, "OpenAI raw chat request payload", openai_payload)
+        debug_dump(self.logger, self.config.debug_dump_all, "Converted GLM messages", converted_messages)
         refs = self._upload_referenced_files(list(openai_payload.get("messages", []))) # type: ignore
         if refs:
             converted_messages[0]["content"] = refs + list(converted_messages[0]["content"]) # type: ignore
-            debug_dump(self.logger, self.config.debug_dump_all, "附加上传引用后的 GLM messages", converted_messages)
+            debug_dump(self.logger, self.config.debug_dump_all, "GLM messages after appending upload references", converted_messages)
 
         chat_mode = resolve_chat_mode(
             model=requested_model,
@@ -417,12 +417,12 @@ class GLMWebClient:
         ).encode("utf-8")
 
         self.logger.info(
-            "转发请求 model=%s upstream=%s stream=%s",
+            "Forwarding request model=%s upstream=%s stream=%s",
             requested_model,
             upstream_model,
             openai_payload.get("stream"),
         )
-        debug_dump(self.logger, self.config.debug_dump_all, "转发到 GLM 的 chat 原始请求体", request_body)
+        debug_dump(self.logger, self.config.debug_dump_all, "Raw chat request body forwarded to GLM", request_body)
 
         def send_request(account_index: int, access_token: str):
             for attempt in range(self.config.glm_busy_max_retries + 1):
@@ -445,7 +445,7 @@ class GLMWebClient:
                     debug_dump(
                         self.logger,
                         self.config.debug_dump_all,
-                        f"转发到 GLM 的 chat 请求头 account={account_index} attempt={attempt + 1}",
+                        f"Chat request headers forwarded to GLM account={account_index} attempt={attempt + 1}",
                         dict(request.header_items()),
                     )
                     return self._prepare_chat_response(
@@ -456,7 +456,7 @@ class GLMWebClient:
                     if self._should_retry_busy_error(exc.code, error_payload) and attempt < self.config.glm_busy_max_retries:
                         wait_seconds = self.config.glm_busy_retry_interval
                         self.logger.warning(
-                            "GLM 正在处理其他对话，等待重试 attempt=%s/%s wait=%.1fs account=%s",
+                            "GLM is processing another conversation, waiting to retry attempt=%s/%s wait=%.1fs account=%s",
                             attempt + 1,
                             self.config.glm_busy_max_retries,
                             wait_seconds,
@@ -468,7 +468,7 @@ class GLMWebClient:
                     message = self._build_error_message(exc.code, error_payload)
                     raise UpstreamAPIError(status_code=exc.code, message=message, payload=error_payload) from exc
 
-            raise UpstreamAPIError(status_code=429, message="GLM 长时间忙碌，请稍后重试。")
+            raise UpstreamAPIError(status_code=429, message="GLM has been busy for a long time, please retry later.")
 
         response = self._call_with_account_failover(
             f"chat:{requested_model}",
@@ -480,7 +480,7 @@ class GLMWebClient:
     def _open_image_stream(self, payload: dict[str, object], preferred_account_index: int | None = None):
         prompt = str(payload.get("prompt", "")).strip()
         if not prompt:
-            raise UpstreamAPIError(status_code=400, message="图片生成请求缺少 prompt")
+            raise UpstreamAPIError(status_code=400, message="Image generation request is missing prompt")
 
         size = str(payload.get("size", "1024x1024")).strip().lower()
         aspect_ratio = self._resolve_aspect_ratio(size)
@@ -520,14 +520,14 @@ class GLMWebClient:
         ).encode("utf-8")
 
         self.logger.info(
-            "转发绘图请求 model=%s assistant_id=%s size=%s n=%s",
+            "Forwarding image request model=%s assistant_id=%s size=%s n=%s",
             user_model,
             self.config.glm_image_assistant_id,
             size,
             payload.get("n", 1),
         )
-        debug_dump(self.logger, self.config.debug_dump_all, "OpenAI 原始 image 请求 payload", payload)
-        debug_dump(self.logger, self.config.debug_dump_all, "转发到 GLM 的 image 原始请求体", request_body)
+        debug_dump(self.logger, self.config.debug_dump_all, "OpenAI raw image request payload", payload)
+        debug_dump(self.logger, self.config.debug_dump_all, "Raw image request body forwarded to GLM", request_body)
 
         def send_request(account_index: int, access_token: str):
             timestamp, nonce, sign = build_sign()
@@ -548,7 +548,7 @@ class GLMWebClient:
             debug_dump(
                 self.logger,
                 self.config.debug_dump_all,
-                f"转发到 GLM 的 image 请求头 account={account_index}",
+                f"Image request headers forwarded to GLM account={account_index}",
                 dict(request.header_items()),
             )
             try:
@@ -569,7 +569,7 @@ class GLMWebClient:
         content_type = response.headers.get("Content-Type", "").lower()
         if "application/json" in content_type:
             payload = self.auth.read_json_response(response)
-            debug_dump(self.logger, self.config.debug_dump_all, "GLM 非流式原始 JSON 响应", payload)
+            debug_dump(self.logger, self.config.debug_dump_all, "GLM non-streaming raw JSON response", payload)
             status = payload.get("status")
             message = str(payload.get("message", "")).strip()
             if status not in (0, None) or message:
@@ -638,11 +638,11 @@ class GLMWebClient:
         if not data:
             raise UpstreamAPIError(
                 status_code=502,
-                message="GLM 绘图请求已完成，但未返回可用图片结果。",
+                message="GLM image request completed but returned no usable image results.",
                 payload=final_event,
             )
 
-        self.logger.info("绘图完成 返回图片数=%s", len(data))
+        self.logger.info("Image generation completed image_count=%s", len(data))
         return {
             "created": created,
             "data": data,
@@ -680,7 +680,7 @@ class GLMWebClient:
                 image_bytes = response.read()
             return base64.b64encode(image_bytes).decode("ascii")
         except Exception as exc:
-            raise UpstreamAPIError(status_code=502, message=f"下载图片失败: {image_url} error={exc}") from exc
+            raise UpstreamAPIError(status_code=502, message=f"Failed to download image: {image_url} error={exc}") from exc
 
     def _iter_sse_events(self, response):
         pending = ""
@@ -691,15 +691,15 @@ class GLMWebClient:
             if not lines:
                 return None
             payload = "\n".join(line[5:].strip() for line in lines)
-            debug_dump(self.logger, self.config.debug_dump_all, "GLM 原始 SSE block", block)
+            debug_dump(self.logger, self.config.debug_dump_all, "GLM raw SSE block", block)
             if payload == "[DONE]":
                 return "[DONE]"
             try:
                 parsed = json.loads(payload)
-                debug_dump(self.logger, self.config.debug_dump_all, "GLM 解析后的 SSE payload", parsed)
+                debug_dump(self.logger, self.config.debug_dump_all, "GLM parsed SSE payload", parsed)
                 return parsed
             except json.JSONDecodeError:
-                self.logger.debug("忽略无法解析的 SSE 片段: %s", payload)
+                self.logger.debug("Ignoring unparseable SSE fragment: %s", payload)
                 return None
 
         while True:
@@ -709,7 +709,7 @@ class GLMWebClient:
             except http.client.IncompleteRead as exc:
                 raw_chunk = exc.partial or b""
                 stop_after_chunk = True
-                self.logger.warning("上游 SSE 连接提前断开，按已接收内容收尾 bytes=%s", len(raw_chunk))
+                self.logger.warning("Upstream SSE connection closed early, finalizing with received data bytes=%s", len(raw_chunk))
             if not raw_chunk:
                 break
 
@@ -758,7 +758,7 @@ class GLMWebClient:
                         if ref:
                             refs.append(ref)
         if refs:
-            self.logger.info("上传附件完成 成功数=%s", len(refs))
+            self.logger.info("Attachment upload completed success_count=%s", len(refs))
         return refs
 
     def _upload_file_reference(self, file_url: str, is_image: bool) -> dict[str, object] | None:
@@ -770,7 +770,7 @@ class GLMWebClient:
             debug_dump(
                 self.logger,
                 self.config.debug_dump_all,
-                f"准备上传附件 url={file_url} filename={filename} mime={mime_type}",
+                f"Preparing attachment upload url={file_url} filename={filename} mime={mime_type}",
                 {"filename": filename, "mime_type": mime_type, "bytes": len(payload)},
             )
 
@@ -795,20 +795,20 @@ class GLMWebClient:
                 debug_dump(
                     self.logger,
                     self.config.debug_dump_all,
-                    f"转发到 GLM 的 file_upload 请求头 account={account_index}",
+                    f"file_upload request headers forwarded to GLM account={account_index}",
                     dict(request.header_items()),
                 )
                 debug_dump(
                     self.logger,
                     self.config.debug_dump_all,
-                    f"转发到 GLM 的 file_upload 原始请求体 account={account_index}",
+                    f"Raw file_upload request body forwarded to GLM account={account_index}",
                     body,
                 )
                 return urllib.request.urlopen(request, timeout=self.config.request_timeout)
 
             with self._call_with_account_failover("file_upload", send_request) as response: # type: ignore
                 result = self.auth.read_json_response(response).get("result", {})
-            debug_dump(self.logger, self.config.debug_dump_all, "GLM 文件上传响应 result", result)
+            debug_dump(self.logger, self.config.debug_dump_all, "GLM file upload response result", result)
             source_id = result.get("source_id") # type: ignore
             file_result_url = result.get("file_url", file_url) # type: ignore
             if not source_id:
@@ -817,7 +817,7 @@ class GLMWebClient:
                 return {"type": "image_url", "image_url": {"url": file_result_url or source_id}}
             return {"type": "file", "file": [{"source_id": source_id, "file_url": file_result_url}]}
         except Exception as exc:
-            self.logger.warning("上传附件失败 url=%s error=%s", file_url, exc)
+            self.logger.warning("Attachment upload failed url=%s error=%s", file_url, exc)
             return None
 
     def _fetch_file_payload(self, file_url: str) -> tuple[str, str, bytes]:
@@ -833,7 +833,7 @@ class GLMWebClient:
         with urllib.request.urlopen(file_url, timeout=self.config.request_timeout) as response:
             payload = response.read(FILE_SIZE_LIMIT + 1)
             if len(payload) > FILE_SIZE_LIMIT:
-                raise ValueError("文件超过 100MB，拒绝上传。")
+                raise ValueError("File exceeds 100MB, upload rejected.")
             mime_type = response.headers.get_content_type()
         mime_type = mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         return filename, mime_type, payload
@@ -863,7 +863,7 @@ class GLMWebClient:
 
             text = raw_body.decode("utf-8", errors="ignore")
         except Exception as exc:
-            return {"message": f"读取上游错误响应失败: {exc}"}
+            return {"message": f"Failed to read upstream error response: {exc}"}
         try:
             payload = json.loads(text)
             if isinstance(payload, dict):
@@ -883,7 +883,7 @@ class GLMWebClient:
         message = str(payload.get("message", "")).strip()
         inner_status = payload.get("status")
         rid = payload.get("rid")
-        parts = [f"GLM 请求失败 HTTP {status_code}"]
+        parts = [f"GLM request failed HTTP {status_code}"]
         if inner_status is not None:
             parts.append(f"status={inner_status}")
         if message:
@@ -906,7 +906,7 @@ class GLMWebClient:
     ):
         account_count = self.auth.get_account_count()
         if account_count <= 0:
-            raise RuntimeError("没有可用的 GLM 账号或游客 token 配置")
+            raise RuntimeError("No usable GLM account or guest token configured")
         start_index = preferred_account_index % account_count if preferred_account_index is not None else self.auth.get_current_account_index()
         last_exc: Exception | None = None
 
@@ -924,7 +924,7 @@ class GLMWebClient:
                         self.auth.invalidate_account(account_index)
                     if should_switch and attempt < guest_retry_limit:
                         self.logger.warning(
-                            "游客账号请求失败，重新获取游客 ck 重试 attempt=%s/%s request=%s account=%s error=%s",
+                            "Guest account request failed, re-obtaining guest ck and retrying attempt=%s/%s request=%s account=%s error=%s",
                             attempt + 1,
                             guest_retry_limit,
                             request_name,
@@ -940,4 +940,4 @@ class GLMWebClient:
         self.auth.reset_account_cycle()
         if last_exc is not None:
             raise last_exc
-        raise RuntimeError(f"账号轮换失败：{request_name}")
+        raise RuntimeError(f"Account rotation failed: {request_name}")

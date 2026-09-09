@@ -70,7 +70,7 @@ class GLMAccessTokenManager:
         self._lock = threading.Lock()
         self._persist_lock = threading.Lock()
         logger.info(
-            "账号管理器初始化 账号数=%s 游客模式=%s",
+            "Account manager initialized accounts=%s guest_mode=%s",
             len(self._accounts),
             any(a.is_guest for a in self._accounts),
         )
@@ -110,16 +110,16 @@ class GLMAccessTokenManager:
             if content_encoding == "gzip":
                 raw_body = gzip.decompress(raw_body)
 
-            debug_dump(self.logger, self.config.debug_dump_all, "GLM 原始 JSON 响应体", raw_body)
+            debug_dump(self.logger, self.config.debug_dump_all, "GLM raw JSON response body", raw_body)
             payload = json.loads(raw_body.decode("utf-8"))
         except gzip.BadGzipFile as exc:
-            raise RuntimeError("GLM 响应 gzip 解压失败") from exc
+            raise RuntimeError("Failed to decompress gzip-encoded GLM response") from exc
         except UnicodeDecodeError as exc:
-            raise RuntimeError("GLM 响应不是合法 UTF-8") from exc
+            raise RuntimeError("GLM response is not valid UTF-8") from exc
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"GLM 响应不是合法 JSON: {exc}") from exc
+            raise RuntimeError(f"GLM response is not valid JSON: {exc}") from exc
         if not isinstance(payload, dict):
-            raise RuntimeError(f"GLM 响应格式异常，期望 JSON 对象，实际是: {type(payload).__name__}")
+            raise RuntimeError(f"Unexpected GLM response format, expected JSON object, got: {type(payload).__name__}")
         return payload
 
     def get_account_count(self) -> int:
@@ -140,7 +140,7 @@ class GLMAccessTokenManager:
             next_index = (failed_index + 1) % len(self._accounts)
             self._current_index = next_index
             self.logger.warning(
-                "账号请求失败，切换 refresh_token 账号 index=%s -> %s reason=%s",
+                "Account request failed, switching refresh_token account index=%s -> %s reason=%s",
                 failed_index,
                 next_index,
                 reason,
@@ -164,7 +164,7 @@ class GLMAccessTokenManager:
         with self._lock:
             account = self._accounts[account_index]
             if account.cached_token and time.time() < account.cached_token.expires_at - 60:
-                self.logger.debug("使用缓存 access_token account=%s 剩余=%.0fs", account_index, account.cached_token.expires_at - time.time())
+                self.logger.debug("Using cached access_token account=%s remaining=%.0fs", account_index, account.cached_token.expires_at - time.time())
                 return account.cached_token.access_token
         token = self._refresh_access_token(account_index)
         with self._lock:
@@ -194,8 +194,8 @@ class GLMAccessTokenManager:
                 "X-Timestamp": timestamp,
             },
         )
-        debug_dump(self.logger, self.config.debug_dump_all, f"GLM 刷新 access_token 请求头 account={account_index}", dict(request.header_items()))
-        debug_dump(self.logger, self.config.debug_dump_all, f"GLM 刷新 access_token 请求体 account={account_index}", b"{}")
+        debug_dump(self.logger, self.config.debug_dump_all, f"GLM refresh access_token request headers account={account_index}", dict(request.header_items()))
+        debug_dump(self.logger, self.config.debug_dump_all, f"GLM refresh access_token request body account={account_index}", b"{}")
         with urllib.request.urlopen(request, timeout=self.config.request_timeout) as response:
             status = response.status
             payload = self.read_json_response(response)
@@ -204,17 +204,17 @@ class GLMAccessTokenManager:
         access_token = result.get("access_token")
         refresh_token = result.get("refresh_token", account.refresh_token)
         if status != 200 or code not in {0, None} or not access_token:
-            raise RuntimeError(f"刷新 GLM token 失败: {payload}")
+            raise RuntimeError(f"Failed to refresh GLM token: {payload}") from None
         if refresh_token != account.refresh_token:
             try:
                 self._persist_refresh_token(account_index, refresh_token)
             except Exception as exc:
-                self.logger.warning("写回 GLM refresh_token 失败 index=%s error=%s", account_index, exc)
+                self.logger.warning("Failed to write back GLM refresh_token index=%s error=%s", account_index, exc)
             account.refresh_token = refresh_token
             self.config.glm_refresh_tokens[account_index] = refresh_token
             if account_index == 0:
                 self.config.glm_refresh_token = refresh_token
-            self.logger.info("GLM refresh_token 已自动刷新并写回账号存储 index=%s", account_index)
+            self.logger.info("GLM refresh_token automatically refreshed and written back to account storage index=%s", account_index)
         return AccessToken(
             access_token=access_token,
             refresh_token=refresh_token,
@@ -241,8 +241,8 @@ class GLMAccessTokenManager:
                 "X-Timestamp": timestamp,
             },
         )
-        debug_dump(self.logger, self.config.debug_dump_all, f"GLM 游客 token 请求头 account={account_index}", dict(request.header_items()))
-        debug_dump(self.logger, self.config.debug_dump_all, f"GLM 游客 token 请求体 account={account_index}", b"")
+        debug_dump(self.logger, self.config.debug_dump_all, f"GLM guest token request headers account={account_index}", dict(request.header_items()))
+        debug_dump(self.logger, self.config.debug_dump_all, f"GLM guest token request body account={account_index}", b"")
         with urllib.request.urlopen(request, timeout=self.config.request_timeout) as response:
             status = response.status
             payload = self.read_json_response(response)
@@ -251,9 +251,9 @@ class GLMAccessTokenManager:
         access_token = result.get("access_token")
         refresh_token = result.get("refresh_token")
         if status != 200 or code not in {0, None} or not access_token or not refresh_token:
-            raise RuntimeError(f"获取 GLM 游客 token 失败: {payload}")
+            raise RuntimeError(f"Failed to obtain GLM guest token: {payload}") from None
         account.refresh_token = str(refresh_token)
-        self.logger.info("已获取新的 GLM 游客 refresh_token index=%s", account_index)
+        self.logger.info("Obtained new GLM guest refresh_token index=%s", account_index)
         return AccessToken(
             access_token=str(access_token),
             refresh_token=str(refresh_token),
@@ -271,22 +271,22 @@ class GLMAccessTokenManager:
                 try:
                     self.config.token_file_path.write_text(content, encoding="utf-8")
                 except OSError as exc:
-                    raise RuntimeError(f"写入 token 文件失败: {self.config.token_file_path} error={exc}") from exc
+                    raise RuntimeError(f"Failed to write token file: {self.config.token_file_path} error={exc}") from exc
                 return
             self._persist_env_refresh_token(refresh_token)
 
     def _persist_env_refresh_token(self, refresh_token: str) -> None:
         env_path = self.config.env_file_path
         if not env_path.exists():
-            self.logger.warning(".env 文件不存在，无法自动写回新的 refresh_token")
+            self.logger.warning(".env file does not exist, cannot automatically write back new refresh_token")
             return
 
         try:
             content = env_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
-            raise RuntimeError(f".env 不是有效的 UTF-8 编码: {env_path}") from exc
+            raise RuntimeError(f".env is not valid UTF-8 encoded: {env_path}") from exc
         except OSError as exc:
-            raise RuntimeError(f"读取 .env 失败: {env_path} error={exc}") from exc
+            raise RuntimeError(f"Failed to read .env: {env_path} error={exc}") from exc
         lines = content.splitlines()
         updated = False
 
@@ -305,7 +305,7 @@ class GLMAccessTokenManager:
         try:
             env_path.write_text(new_content, encoding="utf-8")
         except OSError as exc:
-            raise RuntimeError(f"写入 .env 失败: {env_path} error={exc}") from exc
+            raise RuntimeError(f"Failed to write .env: {env_path} error={exc}") from exc
 
     def should_switch_account(self, exc: Exception) -> bool:
         if hasattr(exc, "status_code"):
