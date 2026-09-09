@@ -47,8 +47,8 @@ for model_id, info in models.items():
         key = "Gemini 3.8 Flash"
     elif "3.1-pro" in model_id or "pro-agent" in model_id:
         key = "Gemini 3.1 Pro"
-    elif "3.5-flash" in model_id:
-        key = "Gemini 3.5 Flash"
+    elif "3.5-flash" in model_id or "flash-lite" in model_id:
+        key = "Gemini 3.5 Flash-Lite"
     elif "claude-sonnet" in model_id:
         key = "Claude Sonnet 4.6"
     elif "claude-opus" in model_id:
@@ -57,28 +57,40 @@ for model_id, info in models.items():
         key = "GPT-OSS 120B"
 
     if key and key not in seen:
-        pct = round(rem_frac * 100, 1) if rem_frac is not None else 100.0
         time_str = "—"
+        is_reset_active = False
         if reset:
             try:
                 dt = datetime.fromisoformat(reset.replace("Z", "+00:00"))
                 now = datetime.now(timezone.utc)
                 diff = dt - now
-                hours = int(diff.total_seconds() // 3600)
-                minutes = int((diff.total_seconds() % 3600) // 60)
-                time_str = f"in {hours}h {minutes}m"
+                if diff.total_seconds() > 0:
+                    is_reset_active = True
+                    hours = int(diff.total_seconds() // 3600)
+                    minutes = int((diff.total_seconds() % 3600) // 60)
+                    time_str = f"in {hours}h {minutes}m"
             except Exception:
                 time_str = reset
+
+        # Wenn Reset-Zeit aktiv ist und verbleibender Bruchteil <= 1% oder None: Kontingent ist erschöpft (0%)
+        if is_reset_active and (rem_frac is None or rem_frac <= 0.01):
+            pct = 0.0
+        elif rem_frac is not None:
+            pct = round(rem_frac * 100, 1)
+        else:
+            pct = 100.0
+
         seen[key] = (pct, time_str)
 
 col_mod = "Modell"
 col_rem = "Verbleibend"
 col_res = "Reset-Zeit"
-print(f"  {col_mod:<20} | {col_rem:<18} | {col_res}")
-print("  " + "-" * 67)
+print(f"  {col_mod:<22} | {col_rem:<18} | {col_res}")
+print("  " + "-" * 70)
 for name, (pct, rtime) in sorted(seen.items()):
     bar_len = int(pct / 10)
     bar = "█" * bar_len + "░" * (10 - bar_len)
-    print(f"  {name:<20} | {pct:>5.1f}% [{bar}] | {rtime}")
+    status_note = " (Erschöpft)" if pct == 0.0 else ""
+    print(f"  {name:<22} | {pct:>5.1f}% [{bar}] | {rtime}{status_note}")
 print("=========================================================================")
 ' <<< "$RESPONSE"
