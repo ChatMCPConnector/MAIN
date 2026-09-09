@@ -7,6 +7,7 @@ from glm2api.services.glm_client import GLMWebClient, UpstreamAPIError
 class _RetryConfig:
     glm_stream_error_max_retries = 2
     glm_stream_error_retry_interval = 0.0
+    glm_blocked_tool_follow_ups = 0
     request_timeout = 5
     blocked_tool_names = []
     debug_dump_all = False
@@ -174,6 +175,147 @@ def test_non_stream_chat_retries_transient_error():
     assert calls["count"] == 2
     content = json.dumps(result, ensure_ascii=False)
     assert "ok again" in content
+
+
+class _FollowUpConfig(_RetryConfig):
+    glm_blocked_tool_follow_ups = 2
+
+
+def _blocked_tool_events():
+    # model "calls" open_url (undeclared) as text — no declared tool name in it
+    return [
+        {
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {"type": "text", "text": '{"tool_calls":[{"name":"open_url","arguments":{"param_name":"url","param_value":"/x"}}]}[]'}
+                    ],
+                }
+            ],
+        }
+    ]
+
+
+def _normal_answer_events():
+    return [
+        {
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [{"type": "text", "text": "Alles erledigt."}],
+                }
+            ],
+        }
+    ]
+
+
+def _make_follow_up_client(config):
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = config
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None,
+        info=lambda *a, **k: None,
+        debug=lambda *a, **k: None,
+    )
+    client.request_queue = SimpleNamespace(
+        acquire=lambda name: SimpleNamespace(
+            ticket=0, released=False, release=lambda: None
+        )
+    )
+    client.auth = SimpleNamespace(
+        get_account_count=lambda: 1,
+        get_access_token_for_account=lambda i: "tok",
+    )
+    calls = {"count": 0, "payloads": []}
+
+    def fake_open(payload, preferred_account_index=None, filtered_tools=None):
+        calls["count"] += 1
+        calls["payloads"].append(payload)
+        if calls["count"] == 1:
+            events = _blocked_tool_events()
+        else:
+            events = _normal_answer_events()
+        return _FakeResponse(events), "assistant-1"
+
+    client._open_chat_stream = fake_open
+    client.delete_conversation = lambda cid, assistant_id=None: None
+
+    def fake_iter(response):
+        return iter(response._events)
+
+    client._iter_sse_events = fake_iter
+    return client, calls
+
+
+def test_blocked_tool_triggers_follow_up_round_stream():
+    client, calls = _make_follow_up_client(_FollowUpConfig())
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "mach was"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "bash", "parameters": {"type": "object"}},
+            }
+        ],
+    }
+
+    stream = client.stream_chat_completion(dict(payload))
+    chunks = [chunk.decode("utf-8") for chunk in stream]
+
+    assert calls["count"] == 2
+    follow_up_messages = calls["payloads"][1]["messages"]
+    assert any("do NOT exist" in str(m.get("content", "")) for m in follow_up_messages)
+    text = "".join(chunks)
+    assert "Alles erledigt." in text
+    assert "open_url" not in text
+
+
+def test_blocked_tool_follow_up_respects_budget():
+    # follow-ups disabled -> single round, blocked notice forwarded as text
+    client, calls = _make_follow_up_client(_RetryConfig())
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "mach was"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "bash", "parameters": {"type": "object"}},
+            }
+        ],
+    }
+
+    stream = client.stream_chat_completion(dict(payload))
+    chunks = [chunk.decode("utf-8") for chunk in stream]
+
+    assert calls["count"] == 1
+    text = "".join(chunks)
+    assert "undeclared tool" in text
+    assert "open_url" in text
+
+
+def test_blocked_tool_triggers_follow_up_round_non_stream():
+    client, calls = _make_follow_up_client(_FollowUpConfig())
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "mach was"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "bash", "parameters": {"type": "object"}},
+            }
+        ],
+    }
+
+    result, _ = client.chat_completion(dict(payload))
+
+    assert calls["count"] == 2
+    assert "Alles erledigt." in json.dumps(result, ensure_ascii=False)
 
 
 def test_transient_flag_on_upstream_error():

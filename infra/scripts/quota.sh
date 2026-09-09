@@ -44,13 +44,13 @@ pools = [
 hdr_pool = "Pool"
 hdr_quota = "5h-Sprint"
 hdr_reset = "Nächster Reset"
-hdr_weekly = "Wochen-Status"
+hdr_weekly = "Wochen-Limit"
 
-print("=" * 76)
-print("                   GOOGLE ANTIGRAVITY QUOTA & STATUS")
-print("=" * 76)
+print("=" * 68)
+print("                 GOOGLE ANTIGRAVITY QUOTA & STATUS")
+print("=" * 68)
 print(f"  {hdr_pool:<10} | {hdr_quota:<20} | {hdr_reset:<16} | {hdr_weekly}")
-print("  " + "-" * 72)
+print("  " + "-" * 64)
 
 for p in pools:
     rem_frac = None
@@ -96,15 +96,10 @@ for p in pools:
     bar = "█" * bar_len + "░" * (10 - bar_len)
     quota_display = f"{pct:>5.1f}% [{bar}]"
 
-    if is_weekly_lockout:
-        weekly_status = f"Gesperrt ({time_str})"
-    elif pct == 0.0:
-        weekly_status = "OK (nur 5h-Cooldown)"
-    else:
-        weekly_status = "OK (nicht gedrosselt)"
+    weekly_status = f"Gesperrt ({time_str})" if is_weekly_lockout else "Aktiv"
 
     pool_name = p["name"]
     print(f"  {pool_name:<10} | {quota_display:<20} | {time_str:<16} | {weekly_status}")
 
-print("=" * 76)
+print("=" * 68)
 ' <<< "$RESPONSE"

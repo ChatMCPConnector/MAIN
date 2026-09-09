@@ -629,16 +629,28 @@ class GLMEventAccumulator:
             # visible text (observed with glm-5.3-think after tool-result
             # rounds: token-snipsel + finish-fulltext part-merge can emit
             # protocol fragments as content), extract them here instead of
-            # forwarding raw JSON protocol to the client.
-            cleaned_text, leaked_tool_calls = parse_tool_calls_from_text(
+            # forwarding raw JSON protocol to the client. Parse WITHOUT the
+            # allow-list so blocked/undeclared attempts are detected too —
+            # allowed ones become real tool calls, blocked ones are recorded
+            # for the negative-result follow-up round.
+            cleaned_text, attempted_tool_calls = parse_tool_calls_from_text(
                 final_text,
-                allowed_tool_names=self.allowed_tool_names,
+                allowed_tool_names=None,
             )
-            if leaked_tool_calls:
-                for tc in leaked_tool_calls:
-                    tc_copy = dict(tc)
-                    tc_copy["index"] = len(all_tool_calls)
-                    all_tool_calls.append(tc_copy)
+            if attempted_tool_calls:
+                for tool_call in attempted_tool_calls:
+                    function = tool_call.get("function", {})
+                    if not isinstance(function, dict):
+                        continue
+                    tool_name = str(function.get("name", "")).strip()
+                    if not tool_name:
+                        continue
+                    if tool_name in self.allowed_tool_names:
+                        tc_copy = dict(tool_call)
+                        tc_copy["index"] = len(all_tool_calls)
+                        all_tool_calls.append(tc_copy)
+                    else:
+                        self.blocked_tool_attempt_names.append(tool_name)
                 final_text = cleaned_text.strip()
         if not final_text and not all_tool_calls and self.allowed_tool_names is not None:
             _, attempted_tool_calls = parse_tool_calls_from_text(

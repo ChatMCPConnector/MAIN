@@ -638,7 +638,14 @@ def _find_json_tool_call(
                 "function": {"name": name, "arguments": args_str or "{}"},
             })
     if not tool_calls:
-        return text, "", []
+        if allowed_tool_names is None:
+            return text, "", []
+        # The block contained ONLY filtered (undeclared/blocked) tool calls.
+        # Never emit the raw protocol as visible text — strip the block so
+        # the caller can detect the blocked attempt via a follow-up parse
+        # with allowed_tool_names=None and answer with a negative result.
+        visible = (text[:start] + rest).strip()
+        return visible, "", []
     visible = (text[:start] + rest).strip()
     return visible, "", tool_calls
 
