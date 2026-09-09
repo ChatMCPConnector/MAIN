@@ -134,6 +134,29 @@ func fetchAppPage(cookie, proxyURL string) ([]byte, error) {
 			return nil, err
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode == 301 || resp.StatusCode == 302 || resp.StatusCode == 307 {
+			loc := resp.Header.Get("Location")
+			if strings.HasPrefix(loc, "https://gemini.google.com") {
+				req2, err2 := http.NewRequest("GET", loc, nil)
+				if err2 == nil {
+					applyChromeHeaders(req2)
+					for k, v := range headers {
+						req2.Header.Set(k, v)
+					}
+					resp2, err2 := getStdlibClient(proxyURL).Do(req2)
+					if err2 == nil {
+						defer resp2.Body.Close()
+						if resp2.StatusCode == 200 {
+							return io.ReadAll(resp2.Body)
+						}
+					}
+				}
+			}
+			if strings.Contains(loc, "accounts.google.com") {
+				return nil, fmt.Errorf("Google-Cookie abgelaufen: Weiterleitung zum Login (%s)", loc)
+			}
+			return nil, fmt.Errorf("fetch /app: HTTP %d -> %s", resp.StatusCode, loc)
+		}
 		if resp.StatusCode != 200 {
 			return nil, fmt.Errorf("fetch /app: HTTP %d", resp.StatusCode)
 		}
@@ -154,6 +177,28 @@ func fetchAppPage(cookie, proxyURL string) ([]byte, error) {
 			return nil, err
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode == 301 || resp.StatusCode == 302 || resp.StatusCode == 307 {
+			loc := resp.Header.Get("Location")
+			if strings.HasPrefix(loc, "https://gemini.google.com") {
+				req2, err2 := fhttp.NewRequest("GET", loc, nil)
+				if err2 == nil {
+					for k, v := range headers {
+						req2.Header.Set(k, v)
+					}
+					resp2, err2 := getTLSClient().Do(req2)
+					if err2 == nil {
+						defer resp2.Body.Close()
+						if resp2.StatusCode == 200 {
+							return io.ReadAll(resp2.Body)
+						}
+					}
+				}
+			}
+			if strings.Contains(loc, "accounts.google.com") {
+				return nil, fmt.Errorf("Google-Cookie abgelaufen: Weiterleitung zum Login (%s)", loc)
+			}
+			return nil, fmt.Errorf("fetch /app: HTTP %d -> %s", resp.StatusCode, loc)
+		}
 		if resp.StatusCode != 200 {
 			return nil, fmt.Errorf("fetch /app: HTTP %d", resp.StatusCode)
 		}
