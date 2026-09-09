@@ -495,6 +495,7 @@ class GLMEventAccumulator:
     _server_side_tool_calls: list[dict[str, object]] = field(default_factory=list)
     _server_side_tool_call_ids: set[str] = field(default_factory=set)
     _deferred_visible_text: str = ""
+    blocked_tool_attempt_names: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.tool_parser.allowed_tool_names = self.allowed_tool_names
@@ -653,7 +654,24 @@ class GLMEventAccumulator:
                     not in self.allowed_tool_names
                 }
             )
+            # Record blocked attempts (also scan the reasoning channel: the
+            # model may emit the protocol there instead of the text channel).
+            if not unavailable_names and self._cached_full_reasoning:
+                _, reasoning_tool_calls = parse_tool_calls_from_text(
+                    self._cached_full_reasoning.strip(),
+                    allowed_tool_names=None,
+                )
+                unavailable_names = sorted(
+                    {
+                        str(tool_call.get("function", {}).get("name", "")).strip()
+                        for tool_call in reasoning_tool_calls
+                        if isinstance(tool_call.get("function"), dict)
+                        and str(tool_call.get("function", {}).get("name", "")).strip()
+                        not in self.allowed_tool_names
+                    }
+                )
             if unavailable_names:
+                self.blocked_tool_attempt_names.extend(unavailable_names)
                 allowed_names = ", ".join(sorted(self.allowed_tool_names)) or "(none)"
                 final_text = (
                     "The model attempted to call an undeclared tool: "

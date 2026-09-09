@@ -152,21 +152,54 @@ class GLMWebClient:
     def chat_completion(self, payload: dict[str, object]) -> tuple[dict[str, object], str | None]:
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
+        max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
         lease = self.request_queue.acquire(f"chat:{payload.get('model', 'unknown')}")
         try:
             response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
         except Exception:
             lease.release()
             raise
-        accumulator = GLMEventAccumulator(
-            model=str(payload["model"]),
-            allowed_tool_names=allowed_tool_names,
-            fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
-            debug_enabled=self.config.debug_dump_all,
-            logger=self.logger,
-        )
+
+        def new_accumulator() -> GLMEventAccumulator:
+            return GLMEventAccumulator(
+                model=str(payload["model"]),
+                allowed_tool_names=allowed_tool_names,
+                fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
+                debug_enabled=self.config.debug_dump_all,
+                logger=self.logger,
+            )
+
+        accumulator = new_accumulator()
+
+        def blocked_tool_follow_up_payload() -> dict[str, object] | None:
+            if not accumulator.blocked_tool_attempt_names:
+                return None
+            blocked = sorted(set(accumulator.blocked_tool_attempt_names))
+            allowed = sorted(allowed_tool_names or [])
+            follow_up = dict(payload)
+            messages = list(payload.get("messages", [])) # type: ignore[arg-type]
+            messages = messages + [
+                {
+                    "role": "assistant",
+                    "content": "Tool call attempt: " + ", ".join(blocked),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "The tool(s) "
+                        + ", ".join(f"`{name}`" for name in blocked)
+                        + " do NOT exist in this environment and were NOT executed. Do not call them again."
+                        + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
+                        + " Continue the task now with the available tools."
+                    ),
+                },
+            ]
+            follow_up["messages"] = messages
+            return follow_up
+
         try:
             attempt = 0
+            blocked_follow_ups = 0
             while True:
                 retry_exc: UpstreamAPIError | None = None
                 for event in self._iter_sse_events(response):
@@ -182,6 +215,26 @@ class GLMWebClient:
                         raise
                     accumulator.consume_event(event)
                     if status in {"finish", "intervene"}:
+                        if (
+                            accumulator.blocked_tool_attempt_names
+                            and blocked_follow_ups < max_blocked_follow_ups
+                        ):
+                            # Negative tool-result round instead of silently
+                            # dropping blocked tool calls (see stream path).
+                            blocked_follow_ups += 1
+                            follow_up = blocked_tool_follow_up_payload()
+                            if follow_up is None:
+                                return accumulator.build_response(), accumulator.conversation_id
+                            self.logger.warning(
+                                "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s",
+                                ", ".join(sorted(set(accumulator.blocked_tool_attempt_names))),
+                                blocked_follow_ups,
+                                max_blocked_follow_ups,
+                            )
+                            response.close() # type: ignore
+                            accumulator = new_accumulator()
+                            response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                            continue
                         return accumulator.build_response(), accumulator.conversation_id
                 if retry_exc is None:
                     break
@@ -196,13 +249,7 @@ class GLMWebClient:
                     retry_exc,
                 )
                 time.sleep(self.config.glm_stream_error_retry_interval)
-                accumulator = GLMEventAccumulator(
-                    model=str(payload["model"]),
-                    allowed_tool_names=allowed_tool_names,
-                    fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
-                    debug_enabled=self.config.debug_dump_all,
-                    logger=self.logger,
-                )
+                accumulator = new_accumulator()
                 response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
         finally:
             response.close() # type: ignore
@@ -241,6 +288,7 @@ class GLMWebClient:
     def stream_chat_completion(self, payload: dict[str, object]):
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
+        max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
 
         def new_accumulator() -> GLMEventAccumulator:
             return GLMEventAccumulator(
@@ -260,9 +308,41 @@ class GLMWebClient:
 
         accumulator = new_accumulator()
 
+        def blocked_tool_follow_up_payload() -> dict[str, object] | None:
+            # Negative tool-result round: the model tried to call a blocked/
+            # undeclared tool (e.g. open_url). Instead of silently dropping
+            # the call (which makes the model repeat until its client-side
+            # round limit is burnt), inject an explicit "tool not available"
+            # turn into the conversation and let it answer properly.
+            if not accumulator.blocked_tool_attempt_names:
+                return None
+            blocked = sorted(set(accumulator.blocked_tool_attempt_names))
+            allowed = sorted(allowed_tool_names or [])
+            follow_up = dict(payload)
+            messages = list(payload.get("messages", [])) # type: ignore[arg-type]
+            messages = messages + [
+                {
+                    "role": "assistant",
+                    "content": "Tool call attempt: " + ", ".join(blocked),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "The tool(s) "
+                        + ", ".join(f"`{name}`" for name in blocked)
+                        + " do NOT exist in this environment and were NOT executed. Do not call them again."
+                        + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
+                        + " Continue the task now with the available tools."
+                    ),
+                },
+            ]
+            follow_up["messages"] = messages
+            return follow_up
+
         def generate():
             nonlocal response, assistant_id, accumulator
             attempt = 0
+            blocked_follow_ups = 0
             while True:
                 served_content = False
                 retry_exc: UpstreamAPIError | None = None
@@ -288,10 +368,36 @@ class GLMWebClient:
                         yield encoded
 
                     if status in {"finish", "intervene"}:
-                        for chunk in accumulator.finalize(
+                        finalize_chunks = accumulator.finalize(
                             status=status,
                             last_error=event.get("last_error") if isinstance(event.get("last_error"), dict) else None,
+                        )
+                        blocked = list(accumulator.blocked_tool_attempt_names)
+                        if (
+                            blocked
+                            and blocked_follow_ups < max_blocked_follow_ups
+                            and not served_content
                         ):
+                            # Follow-up round with a negative tool result
+                            # instead of forwarding the blocked-call notice
+                            # as final assistant text.
+                            blocked_follow_ups += 1
+                            follow_up = blocked_tool_follow_up_payload()
+                            if follow_up is None:
+                                for chunk in finalize_chunks:
+                                    yield chunk.encode("utf-8")
+                                return
+                            self.logger.warning(
+                                "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s",
+                                ", ".join(sorted(set(blocked))),
+                                blocked_follow_ups,
+                                max_blocked_follow_ups,
+                            )
+                            response.close() # type: ignore
+                            accumulator = new_accumulator()
+                            response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                            continue
+                        for chunk in finalize_chunks:
                             yield chunk.encode("utf-8")
                         return
                 if retry_exc is None:

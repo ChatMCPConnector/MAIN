@@ -33,26 +33,24 @@ models = data.get("models", {})
 pools = [
     {
         "name": "Claude",
-        "models_desc": "Opus 4.6, Sonnet 4.6",
         "keys": ["claude-opus-4-6-thinking", "claude-sonnet-4-6"]
     },
     {
         "name": "Gemini",
-        "models_desc": "3.8 Flash, 3.1 Pro, 3.5 Lite",
         "keys": ["gemini-3.8-flash-high", "gemini-3.1-pro-high", "gemini-3.5-flash-lite"]
     }
 ]
 
-hdr_pool = "Pool / Provider"
-hdr_quota = "Verbleibend"
+hdr_pool = "Pool"
+hdr_quota = "5h-Sprint"
 hdr_reset = "Nächster Reset"
-hdr_status = "Wochen- & Sprint-Status"
+hdr_weekly = "Wochen-Status"
 
-print("=" * 102)
-print("                                 GOOGLE ANTIGRAVITY QUOTA & STATUS")
-print("=" * 102)
-print(f"  {hdr_pool:<38} | {hdr_quota:<20} | {hdr_reset:<16} | {hdr_status}")
-print("  " + "-" * 98)
+print("=" * 76)
+print("                   GOOGLE ANTIGRAVITY QUOTA & STATUS")
+print("=" * 76)
+print(f"  {hdr_pool:<10} | {hdr_quota:<20} | {hdr_reset:<16} | {hdr_weekly}")
+print("  " + "-" * 72)
 
 for p in pools:
     rem_frac = None
@@ -99,22 +97,14 @@ for p in pools:
     quota_display = f"{pct:>5.1f}% [{bar}]"
 
     if is_weekly_lockout:
-        status_text = "GESPERRT: Wochenlimit erreicht"
+        weekly_status = f"Gesperrt ({time_str})"
     elif pct == 0.0:
-        status_text = "5h-Sprint leer (Cooldown aktiv)"
+        weekly_status = "OK (nur 5h-Cooldown)"
     else:
-        status_text = "Aktiv (5h-Sprint verfügbar)"
+        weekly_status = "OK (nicht gedrosselt)"
 
-    p_name = p["name"]
-    p_desc = p["models_desc"]
-    pool_title = f"{p_name} ({p_desc})"
-    print(f"  {pool_title:<38} | {quota_display:<20} | {time_str:<16} | {status_text}")
+    pool_name = p["name"]
+    print(f"  {pool_name:<10} | {quota_display:<20} | {time_str:<16} | {weekly_status}")
 
-print("=" * 102)
-print("  So funktioniert Googles Quota-System:")
-print("  1. Shared Quota: Alle Modelle eines Providers (Claude bzw. Gemini) teilen sich den Pool.")
-print("  2. 5h-Sprint: Zeigt den aktuellen Füllstand. Erneuert sich alle 5 Stunden.")
-print("  3. Wochen-Cap: Ist das Wochenlimit erreicht, stoppt der 5h-Refill und der Timer springt")
-print("     auf mehrere Tage um (z. B. in 4 Tagen). Aktuell: Beide Wochenkontingente sind frei!")
-print("=" * 102)
+print("=" * 76)
 ' <<< "$RESPONSE"
