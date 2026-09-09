@@ -778,6 +778,18 @@ class GLMEventAccumulator:
         xml_tool_calls = sanitize_tool_calls(xml_tool_calls, fallback_url=self.fallback_tool_url)
         if not xml_tool_calls:
             xml_tool_calls = self._extract_reasoning_tool_calls(full_reasoning)
+        if self.allowed_tool_names is not None and not xml_tool_calls:
+            # Non-stream counterpart of finalize(): record blocked tool
+            # attempts so the client can start a negative-result round.
+            attempted_names: list[str] = []
+            for source_text in (full_text.strip(), full_reasoning.strip()):
+                if source_text:
+                    attempted_names.extend(detect_tool_call_names(source_text))
+            self.blocked_tool_attempt_names.extend(
+                name
+                for name in attempted_names
+                if name not in self.allowed_tool_names
+            )
 
         # Merge server-side and XML tool calls, re-indexing
         all_tool_calls: list[dict[str, object]] = list(self._server_side_tool_calls)

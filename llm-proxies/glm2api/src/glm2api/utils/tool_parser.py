@@ -720,6 +720,12 @@ def _split_stream_text(
                 if tool_calls:
                     visible = (text[:jstart] + text[end:]).strip()
                     return visible, "", tool_calls
+                if allowed_tool_names is not None:
+                    # Only filtered calls in the block: strip it from the
+                    # visible text (never leak raw protocol); the caller
+                    # detects the blocked attempt via detect_tool_call_names.
+                    visible = (text[:jstart] + text[end:]).strip()
+                    return visible, "", []
 
     # dann der Rest des Codes (der aktuelle)
     hold_from_candidates = [

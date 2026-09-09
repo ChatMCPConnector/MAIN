@@ -40,8 +40,8 @@ line_w = 80
 title = "GOOGLE ANTIGRAVITY QUOTA & STATUS"
 
 print()
-print("=" * line_w)
-print(title.center(line_w))
+print(indent + "=" * line_w)
+print(indent + title.center(line_w))
 print(indent + "=" * line_w)
 hdr_pool = "Pool"
 hdr_sprint = "5h-Sprint"
@@ -100,5 +100,5 @@ for p in pools:
     print(f"{indent}  {pool_name:<12} | {quota_display:<22} | {time_str:<16} | {weekly_status}")
 
 print(indent + "=" * line_w)
-print()
+print("\n" * 4, end="")
 ' <<< "$RESPONSE"
