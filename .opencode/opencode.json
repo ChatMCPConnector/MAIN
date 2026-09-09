@@ -130,18 +130,6 @@
             }
           }
         },
-
-    "google": {
-      "name": "Google Gemini",
-      "options": {
-        "apiKey": "{file:~/.config/landscape/gemini.key}"
-      },
-      "whitelist": [
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite"
-      ]
-    },
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "glm2api",

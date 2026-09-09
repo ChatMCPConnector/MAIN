@@ -75,7 +75,6 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
 | **gemini-web** | gemini-3.1-pro-thinking, gemini-3.8-flash-thinking, gemini-3.5-flash-lite-thinking | lokal, Port 8083, Google AI Pro (Cookie-Pool) |
 | **antigravity** | gemini-3.8-flash (high/low), gemini-3.1-pro, gemini-3.5-flash-light | lokal, Port 9878, Google Cloud Code OAuth |
-| google | gemini-flash-latest (1M) | gemini.key |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
