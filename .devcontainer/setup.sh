@@ -139,6 +139,17 @@ else
   fi
 fi
 
+echo "==> [landscape] Zentralen opencode-Server starten..."
+if ss -tln | grep -q ":4096 "; then
+  echo "    Port 4096 belegt — opencode-server läuft bereits."
+else
+  if [ -x "$REPO_ROOT/infra/scripts/opencode-server.sh" ]; then
+    bash "$REPO_ROOT/infra/scripts/opencode-server.sh" start \
+      && echo "    opencode-server läuft." \
+      || echo "    WARN: opencode-server Start fehlgeschlagen."
+  fi
+fi
+
 echo "==> [landscape] Proxy-Watchdog starten (hält glm2api am Leben)..."
 # Watchdog auch beim Codespace-Bau/Rebuild starten (postStartCommand macht es bei
 # jedem Start zusätzlich). setsid, damit devcontainer-cli ihn nicht mitkillt.

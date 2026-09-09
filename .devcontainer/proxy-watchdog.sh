@@ -33,5 +33,11 @@ while true; do
     bash "$REPO_ROOT/llm-proxies/antigravity-proxy/scripts/start.sh" >> /tmp/opencode/watchdog.log 2>&1 || true
   fi
 
+  # 4. opencode-server (Port 4096)
+  if ! curl -sf -m 3 http://127.0.0.1:4096/ >/dev/null 2>&1; then
+    echo "$(date '+%H:%M:%S') [watchdog] opencode-server (Port 4096) weg — starte neu..." >> /tmp/opencode/watchdog.log
+    bash "$REPO_ROOT/infra/scripts/opencode-server.sh" start >> /tmp/opencode/watchdog.log 2>&1 || true
+  fi
+
   sleep 30
 done

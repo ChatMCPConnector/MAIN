@@ -48,9 +48,20 @@ else
   fi
 fi
 
-# 4. Proxy-Watchdog immer (re-)starten: hält alle 3 Proxies auch über OOM-Kills/Reattaches am Leben
+# 4. opencode-server (Port 4096)
+if curl -sf -m 2 http://127.0.0.1:4096/ >/dev/null 2>&1; then
+  echo "[boot] opencode-server läuft bereits."
+else
+  if [ -x "$REPO_ROOT/infra/scripts/opencode-server.sh" ]; then
+    bash "$REPO_ROOT/infra/scripts/opencode-server.sh" start >/dev/null 2>&1 \
+      && echo "[boot] opencode-server gestartet." \
+      || echo "[boot] WARN: opencode-server Start fehlgeschlagen."
+  fi
+fi
+
+# 5. Proxy-Watchdog immer (re-)starten: hält alle Proxies und opencode-server am Leben
 mkdir -p /tmp/opencode
 if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/proxy-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
   setsid bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >/dev/null 2>&1 &
-  echo "[boot] Proxy-Watchdog gestartet (30s-Intervall für alle 3 Proxies)."
+  echo "[boot] Proxy-Watchdog gestartet (30s-Intervall für alle Proxies + Server)."
 fi

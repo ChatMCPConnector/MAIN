@@ -40,7 +40,7 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 
 ## Enthalten
 
-- Ports 3000/8000 (Apps), 8001 (glm2api LLM-Proxy), 8083 (gemini-web2api Proxy), 9878 (antigravity-proxy), 9222/6082/5920 (Browser, nur lokal)
+- Ports 3000/8000 (Apps), 4096 (opencode-Server für Multi-Client), 8001 (glm2api LLM-Proxy), 8083 (gemini-web2api Proxy), 9878 (antigravity-proxy), 9222/6082/5920 (Browser, nur lokal)
 - opencode, Default-Modell `antigravity/gemini-3.8-flash` (Thinking immer aktiv auf high)
 - `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
   (kostenlos, NIM-Keys), für Modell-Discovery
@@ -173,6 +173,11 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-09 (8): Multi-Client opencode-Server (`opencode serve`, Port 4096)
+  eingerichtet. Smart-Wrapper in `aliases.sh` verbindet alle Terminals via
+  `opencode attach http://localhost:4096` — parallele Sessions terminieren
+  sich nicht mehr gegenseitig. In Watchdog (`proxy-watchdog.sh`), `start-on-boot.sh`
+  und `setup.sh` verankert.
 - 2026-09-09 (7): `antigravity-proxy` (`dvcrn-antigravity-oauth-proxy`) fest unter
   `llm-proxies/antigravity-proxy/` integriert (Port 9878, CloudCode Assist OAuth).
   OAuth-Credentials ins verschlüsselte Secrets-Bundle aufgenommen. Autostart in

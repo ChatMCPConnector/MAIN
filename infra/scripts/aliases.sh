@@ -9,6 +9,24 @@ alias ports='./infra/scripts/ports.sh'
 alias st='git status -sb'
 alias ll='ls -lah'
 
+# opencode Server-Client Wrapper: verbindet mehrere Terminal-Tabs mit dem
+# zentralen Server (Port 4096), damit sich parallele Sessions nie gegenseitig abbrechen.
+opencode() {
+  local server_url="http://127.0.0.1:4096"
+  case "${1:-}" in
+    serve|attach|models|stats|export|import|completion|agent|upgrade|uninstall|db|mcp|plugin|providers)
+      command opencode "$@"
+      return $?
+      ;;
+  esac
+
+  if curl -sf -m 1 "$server_url/" >/dev/null 2>&1; then
+    command opencode attach "$server_url" "$@"
+  else
+    command opencode "$@"
+  fi
+}
+
 # Praktisch beim Umzug: zeigt was NICHT im Git ist und damit verloren ginge
 landscape-diff() {
   echo "== Nur noch im Secrets-Bundle (config/secrets.enc), nicht im Git: =="
