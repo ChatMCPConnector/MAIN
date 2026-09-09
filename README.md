@@ -19,7 +19,7 @@ Codespaces-Secrets, danach läuft alles automatisch (`postCreateCommand` →
 | `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau) |
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
-| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/kontostand/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
+| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | glm2api-Haupt-Proxy: **kompletter Code liegt im Repo** (`llm-proxies/glm2api/` inkl. Patches) + `glm2api.env` + Start/rebuild-Skripte + **portables Bundle** (`dist/glm2api-bundle.zip`, Bau via `scripts/build-bundle.sh`) |
 
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
@@ -172,6 +172,21 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-09 (3): glm2api-Tiefenrevision (2 parallele Subagenten-Audits)
+  umgesetzt — alle Befunde gefixt: Part-Merge-Duplikat (finish-Volltext
+  ohne part-status verdoppelte Text; jetzt status-unabhängig idempotent),
+  Anthropic-SSE-Fragment-Puffer (analog Responses-Adapter), 160 Z. toter
+  Legacy-Code entfernt (translator + tool_protocol), Auth-Lock-Scope
+  verkleinert (Refresh läuft außerhalb des Locks, double-checked),
+  allowed-Filter auch im think-Fallback, Streaming-Deferral nur noch bei
+  echten Tool-Partials (kein Puffer-Regress bei deklarierten Tools),
+  `'{"'`-Holding auf Tool-Präfixe begrenzt, `"‚<m'`-Hint entfernt (math-
+  Text fließt), Tool-Results zu ID-reparierten Calls bleiben erhalten,
+  `_resolve_tools` einmal pro Request, Server-Klassen-Attribute wirksam,
+  Config-Logging vor setup, Syntaxfehler in uncommitteter CN→EN-Übersetzung
+  behoben, smoke-test $SMOKE_MODEL fix + JSON-Body-Fix, bundle/start.sh
+  Health-Check, kontostand.sh gestrichen. Tests 63 → 69, alle grün;
+  Proxy neu gestartet, 8/8 Smoke-Checks bestanden.
 - 2026-09-09 (2): Kontostand-Spec (infra/docs/Kontostand.md, 432 Zeilen)
   gelöscht — nicht mehr benötigt. kontostand.sh bleibt, Header-Verweis
   entfernt. README: Bundle-Refresh-Doku ergänzt (build-bundle.sh

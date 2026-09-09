@@ -391,3 +391,28 @@ def test_parse_extracts_param_name_only_payload_for_later_repair():
     assert clean == ""
     assert len(tool_calls) == 1
     assert tool_calls[0]["function"]["arguments"] == '{"param_name":"url"}'
+
+
+def test_split_stream_think_fallback_respects_allowed_filter():
+    # Regression M-1: wenn schritt 1 alle calls filtert, darf der
+    # think-fallback (schritt 2) sie nicht ungefiltert durchlassen
+    from glm2api.utils.tool_parser import _split_stream_text
+
+    visible, remainder, calls = _split_stream_text(
+        'Vorher {"tool_calls":[{"name":"blocked_tool","arguments":{"a":1}}]}[] Nachher',
+        allowed_tool_names={"allowed_tool"},
+        final=True,
+    )
+    assert calls == []
+    # gefilterter call: kein tool-call-event, text bleibt sichtbar unangetastet
+    assert "blocked_tool" in visible or visible == 'Vorher {"tool_calls":[{"name":"blocked_tool","arguments":{"a":1}}]}[] Nachher'
+
+
+def test_streaming_normal_inline_json_does_not_hold_until_flush():
+    # Regression N-5: gewoehnliches inline-json im modelltext darf den
+    # stream nicht bis zum flush blockieren
+    parser = StreamingToolParser()
+    out = parser.consume('Antwort: {"name": "test"} Ende')
+    tail, calls = parser.flush()
+    assert '"name": "test"' in out + tail
+    assert calls == []

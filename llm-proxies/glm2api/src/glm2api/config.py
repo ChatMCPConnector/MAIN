@@ -57,7 +57,7 @@ def parse_dotenv(path: Path) -> dict[str, str]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError as exc:
-        raise ConfigError(f"配置文件不是有效的 UTF-8 编码: {path}") from exc
+        raise ConfigError(f"Config file is not valid UTF-8 encoded: {path}") from exc
     except OSError as exc:
         raise ConfigError(f"读取配置文件失败: {path} error={exc}") from exc
 
@@ -199,6 +199,16 @@ def ensure_env_file(env_path: Path) -> bool:
 def load_config(env_file: str = ".env") -> AppConfig:
     import logging
 
+    # Basis-Logging vorab konfigurieren: load_config laeuft VOR
+    # Application.__init__ (setup_logging) — ohne Handler laufen die
+    # INFO-Logs hier ins lastResort-Nirvana. Ein einfacher Stream-Handler
+    # reicht; das volle Setup (Level, Formatter, Datei) macht app.py danach.
+    _logger = logging.getLogger("glm2api")
+    if not _logger.handlers:
+        _handler = logging.StreamHandler()
+        _handler.setFormatter(logging.Formatter("%(message)s"))
+        _logger.addHandler(_handler)
+        _logger.setLevel(logging.INFO)
     logger = logging.getLogger("glm2api.config")
     env_path = Path(env_file)
     env_file_created = ensure_env_file(env_path)
@@ -275,7 +285,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
         glm_busy_retry_interval=parse_float(values.get("GLM_BUSY_RETRY_INTERVAL_SECONDS"), 2.0),
         glm_guest_max_retries=max(0, parse_int(values.get("GLM_GUEST_MAX_RETRIES"), 3)),
         blocked_tool_names=parse_list(values.get("BLOCKED_TOOL_NAMES"), DEFAULT_BLOCKED_TOOL_NAMES),
-        exposed_models=exposed_models,  # type: ignore
+        exposed_models=exposed_models,
         model_aliases=model_aliases,
         server_api_keys=parse_list(values.get("SERVER_API_KEYS")),
         cors_allow_origin=values.get("CORS_ALLOW_ORIGIN", "*").strip() or "*",
@@ -292,7 +302,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
     if not config.glm_base_url.startswith(("http://", "https://")):
         raise ConfigError(f"GLM_BASE_URL 必须以 http:// 或 https:// 开头: {config.glm_base_url}")
 
-    token_source = "游客模式" if explicit_guest_mode else (f"token 文件 ({token_file_path})" if token_file_path.exists() else ".env GLM_REFRESH_TOKEN")
+    token_source = "guest mode" if explicit_guest_mode else (f"token file ({token_file_path})" if token_file_path.exists() else ".env GLM_REFRESH_TOKEN")
     logger.info(
         "配置加载完成 端口=%s 并发=%s 账号数=%s token来源=%s 日志级别=%s",
         config.port,

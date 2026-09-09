@@ -122,10 +122,6 @@ class GLMAccessTokenManager:
             raise RuntimeError(f"GLM 响应格式异常，期望 JSON 对象，实际是: {type(payload).__name__}")
         return payload
 
-    def get_access_token(self) -> str:
-        with self._lock:
-            return self._get_access_token_for_index(self._current_index)
-
     def get_account_count(self) -> int:
         return len(self._accounts)
 
@@ -160,16 +156,24 @@ class GLMAccessTokenManager:
             self._accounts[account_index].cached_token = None
 
     def get_access_token_for_account(self, account_index: int) -> str:
+        # Lock nur fuer Cache-Lookup und State-Update; der Netzwerk-Refresh
+        # laeuft AUSSERHALB des Locks (sonst blockiert ein langsamer/timeoutender
+        # Refresh alle anderen Accounts bis zu request_timeout=120s).
+        # Double-checked: nach dem Refresh erneut pruefen, ob zwischenzeitlich
+        # ein parallel laufender Refresh schon ein frisches Token gesetzt hat.
         with self._lock:
-            return self._get_access_token_for_index(account_index)
-
-    def _get_access_token_for_index(self, account_index: int) -> str:
-        account = self._accounts[account_index]
-        if account.cached_token and time.time() < account.cached_token.expires_at - 60:
-            self.logger.debug("使用缓存 access_token account=%s 剩余=%.0fs", account_index, account.cached_token.expires_at - time.time())
-            return account.cached_token.access_token
-        account.cached_token = self._refresh_access_token(account_index)
-        return account.cached_token.access_token
+            account = self._accounts[account_index]
+            if account.cached_token and time.time() < account.cached_token.expires_at - 60:
+                self.logger.debug("使用缓存 access_token account=%s 剩余=%.0fs", account_index, account.cached_token.expires_at - time.time())
+                return account.cached_token.access_token
+        token = self._refresh_access_token(account_index)
+        with self._lock:
+            account = self._accounts[account_index]
+            if account.cached_token and time.time() < account.cached_token.expires_at - 60:
+                # paralleler Refresh war schneller — deren Token nutzen, unseres verwerfen
+                return account.cached_token.access_token
+            account.cached_token = token
+            return token.access_token
 
     def _refresh_access_token(self, account_index: int) -> AccessToken:
         account = self._accounts[account_index]
@@ -193,12 +197,13 @@ class GLMAccessTokenManager:
         debug_dump(self.logger, self.config.debug_dump_all, f"GLM 刷新 access_token 请求头 account={account_index}", dict(request.header_items()))
         debug_dump(self.logger, self.config.debug_dump_all, f"GLM 刷新 access_token 请求体 account={account_index}", b"{}")
         with urllib.request.urlopen(request, timeout=self.config.request_timeout) as response:
+            status = response.status
             payload = self.read_json_response(response)
         code = payload.get("code", payload.get("status"))
-        result = payload.get("result") or {}
+        result: dict[str, object] = payload.get("result") or {}
         access_token = result.get("access_token")
         refresh_token = result.get("refresh_token", account.refresh_token)
-        if response.status != 200 or code not in {0, None} or not access_token:
+        if status != 200 or code not in {0, None} or not access_token:
             raise RuntimeError(f"刷新 GLM token 失败: {payload}")
         if refresh_token != account.refresh_token:
             try:
@@ -239,12 +244,13 @@ class GLMAccessTokenManager:
         debug_dump(self.logger, self.config.debug_dump_all, f"GLM 游客 token 请求头 account={account_index}", dict(request.header_items()))
         debug_dump(self.logger, self.config.debug_dump_all, f"GLM 游客 token 请求体 account={account_index}", b"")
         with urllib.request.urlopen(request, timeout=self.config.request_timeout) as response:
+            status = response.status
             payload = self.read_json_response(response)
         code = payload.get("code", payload.get("status"))
-        result = payload.get("result") or {}
+        result: dict[str, object] = payload.get("result") or {}
         access_token = result.get("access_token")
         refresh_token = result.get("refresh_token")
-        if response.status != 200 or code not in {0, None} or not access_token or not refresh_token:
+        if status != 200 or code not in {0, None} or not access_token or not refresh_token:
             raise RuntimeError(f"获取 GLM 游客 token 失败: {payload}")
         account.refresh_token = str(refresh_token)
         self.logger.info("已获取新的 GLM 游客 refresh_token index=%s", account_index)

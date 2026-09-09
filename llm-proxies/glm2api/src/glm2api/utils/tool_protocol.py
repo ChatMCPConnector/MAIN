@@ -47,38 +47,6 @@ def filter_tools(tools: list[dict[str, object]] | None, blocked_tool_names: set[
     return filtered_tools or None
 
 
-def _xml_escape_text(value: str) -> str:
-    return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )
-
-
-def _xml_wrap_scalar(value: object) -> str:
-    if isinstance(value, str):
-        return f"<![CDATA[{value.replace(']]>', ']]]]><![CDATA[>')}]]>"
-    return safe_json_dumps(value)
-
-
-def _safe_parameter_name(value: object) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(value).strip()) or "value"
-
-
-def _dsml_parameters_from_object(payload: object) -> str:
-    if isinstance(payload, dict):
-        parts: list[str] = []
-        for key, value in payload.items():
-            name = _xml_escape_text(_safe_parameter_name(key))
-            parts.append(f'<|DSML|parameter name="{name}">{_dsml_parameters_from_object(value)}</|DSML|parameter>')
-        return "".join(parts)
-    if isinstance(payload, list):
-        return "".join(f"<item>{_dsml_parameters_from_object(item)}</item>" for item in payload)
-    return _xml_wrap_scalar(payload)
-
-
 def serialize_tool_call_block(name: str, arguments: object) -> str:
     """Serialisiert einen Tool-Call im JSON-Protokoll (mit []-Terminator)."""
     parsed_arguments = arguments

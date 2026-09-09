@@ -59,8 +59,6 @@ TAG_NAME_HINTS = [
     "</|DSML|tool_result",
     "<DStool_calls",
     "</DStool_calls",
-    "<m",
-    "</m",
     "<ml_",
     "</ml_",
     "<ml_tool_calls",
@@ -549,9 +547,12 @@ def _find_json_tool_call(
     masked = _mask_code_fences(text)
     start = masked.find('{"tool_calls"')
     if start == -1:
-        # partial am ende halten: '{"tool_call' oder kuerzere prefixes davon
+        # partial am ende halten — NUR tool-protokoll-prefixe ('{"tool...'),
+        # nicht jedes inline-{' ('{"': sonst stockt normaler JSON/math-text
+        # im stream bis zum flush). '}'/'"'-dynamik egal: das hier ist nur
+        # hold-back, geparsed wird spaeter ohnehin der komplette block.
         if not final:
-            for prefix in ('{"tool_calls', '{"tool_call', '{"tool_cal', '{"tool_ca', '{"tool_c', '{"tool_', '{"tool', '{"too', '{"to', '{"'):
+            for prefix in ('{"tool_calls', '{"tool_call', '{"tool_cal', '{"tool_ca', '{"tool_c', '{"tool_', '{"tool', '{"too', '{"to'):
                 idx = masked.rfind(prefix)
                 if idx != -1:
                     return text[:idx], text[idx:], []
@@ -655,6 +656,8 @@ def _split_stream_text(
     # 2) Tool-Calls im think-Feld suchen (Fallback für glm-5.3-think).
     #    Gleichfalls fence-maskiert — sonst wuerde ein Tool-Call-Beispiel in
     #    einer Code-Fence hier als echter Aufruf durchrutschen.
+    #    allowed-Filter gilt AUCH hier: wenn Schritt 1 alle Calls gefiltert
+    #    hat, darf Schritt 2 sie nicht ungefiltert durchlassen.
     jstart = _mask_code_fences(text).find('{"tool_calls"')
     if jstart != -1:
         depth = 0
@@ -698,7 +701,7 @@ def _split_stream_text(
                         args_str = args
                     else:
                         args_str = json.dumps(args or {}, ensure_ascii=False)
-                    if name:
+                    if name and _is_allowed_tool_name(name, allowed_tool_names):
                         tool_calls.append({
                             "index": len(tool_calls),
                             "id": f"call_{uuid.uuid4().hex[:24]}",

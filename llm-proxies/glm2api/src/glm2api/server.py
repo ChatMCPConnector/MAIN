@@ -35,9 +35,13 @@ class GLM2APIServer:
         self.glm_client = glm_client
         self.logger = logger
         handler_cls = self._build_handler()
-        self._server = ThreadingHTTPServer((config.host, config.port), handler_cls)
-        self._server.daemon_threads = True
-        self._server.allow_reuse_address = True
+        # daemon_threads + allow_reuse_address als Klassen-Attribute: nach der
+        # Instantiierung gesetzte Werte wirkten nicht mehr (Bindung schon passiert)
+        class _Server(ThreadingHTTPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+
+        self._server = _Server((config.host, config.port), handler_cls)
 
     def serve_forever(self) -> None:
         self._server.serve_forever()

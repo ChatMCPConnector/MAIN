@@ -149,10 +149,10 @@ class GLMWebClient:
         return filtered_tools, {tool["function"]["name"] for tool in filtered_tools} if filtered_tools else None # type: ignore[index]
 
     def chat_completion(self, payload: dict[str, object]) -> tuple[dict[str, object], str | None]:
-        _, allowed_tool_names = self._resolve_tools(payload)
+        filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         lease = self.request_queue.acquire(f"chat:{payload.get('model', 'unknown')}")
         try:
-            response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket))
+            response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
         except Exception:
             lease.release()
             raise
@@ -207,10 +207,10 @@ class GLMWebClient:
             lease.release()
 
     def stream_chat_completion(self, payload: dict[str, object]):
-        _, allowed_tool_names = self._resolve_tools(payload)
+        filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")
         try:
-            response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket))
+            response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
         except Exception:
             lease.release()
             raise
@@ -363,10 +363,11 @@ class GLMWebClient:
                 exc,
             )
 
-    def _open_chat_stream(self, openai_payload: dict[str, object], preferred_account_index: int | None = None):
+    def _open_chat_stream(self, openai_payload: dict[str, object], preferred_account_index: int | None = None, filtered_tools: list[dict[str, object]] | None = None):
         requested_model = str(openai_payload.get("model", "glm-4"))
         upstream_model, assistant_id = resolve_upstream_model(requested_model, self.config)
-        filtered_tools, _ = self._resolve_tools(openai_payload)
+        if filtered_tools is None:
+            filtered_tools, _ = self._resolve_tools(openai_payload)
         converted_messages = convert_messages(
             messages=list(openai_payload.get("messages", [])), # type: ignore
             tools=filtered_tools,

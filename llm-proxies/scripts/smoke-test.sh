@@ -49,11 +49,11 @@ call_args=$(echo "$tc" | python3 -c "import json,sys; d=json.load(sys.stdin); pr
 [ -n "$call_id" ]; check "tool-call emittiert" $?
 
 # 7) Tool-Result Roundtrip Turn 2 (Modell verarbeitet Tool-Output)
-python3 - "$call_id" "$call_args" <<'PYEOF' > /tmp/opencode/smoke_body.json
+python3 - "$MODEL" "$call_id" "$call_args" <<'PYEOF' > /tmp/opencode/smoke_body.json
 import json, sys
-call_id, call_args = sys.argv[1], sys.argv[2]
+model, call_id, call_args = sys.argv[1], sys.argv[2], sys.argv[3]
 body = {
-  "model": "glm-4.7-flash",
+  "model": model,
   "messages": [
     {"role": "user", "content": "Benutze das Tool get_time mit timezone Europe/Berlin"},
     {"role": "assistant", "tool_calls": [{"id": call_id, "type": "function", "function": {"name": "get_time", "arguments": call_args}}]},

@@ -20,8 +20,14 @@ fi
 mkdir -p "$APP_DIR/log"
 
 if ss -tln 2>/dev/null | grep -q ":${PORT} "; then
-    echo "Läuft bereits auf Port ${PORT}."
-    exit 0
+    # Port belegt: nur OK, wenn /health wirklich unser glm2api antwortet
+    if curl -sf -m 2 "http://${HOST}:${PORT}/health" >/dev/null 2>&1; then
+        echo "Läuft bereits auf Port ${PORT} (/health OK)."
+        exit 0
+    fi
+    echo "FEHLER: Port ${PORT} belegt, aber ${HOST}:${PORT}/health antwortet nicht"
+    echo "korrekt — vermutlich ein fremder Prozess. Belegung prüfen: ss -tlnp | grep :${PORT}"
+    exit 1
 fi
 
 echo "Starte glm2api (aus $APP_DIR)..."

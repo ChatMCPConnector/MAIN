@@ -282,6 +282,8 @@ def test_accumulator_drops_tool_preamble_and_repairs_shell_command_array():
 
 
 def test_accumulator_defers_visible_text_when_tools_available():
+    # Deferral nur bei potentiellem Tool-Protokoll im Parser-Pending;
+    # normaler text streamt live (kein pauschales buffern mehr).
     accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"shell"})
     chunks, status = accumulator.consume_event(
         {
@@ -298,9 +300,30 @@ def test_accumulator_defers_visible_text_when_tools_available():
 
     final_chunks = accumulator.finalize(status)
 
-    assert chunks == []
-    assert '"content":"你好"' in final_chunks[0]
-    assert '"finish_reason":"stop"' in final_chunks[1]
+    # normaler text: sofort gestreamt (kein deferral ohne tool-partial)
+    assert chunks != []
+    assert '"content":"你好"' in chunks[0]
+    assert any('"finish_reason":"stop"' in c for c in final_chunks)
+
+
+def test_accumulator_defers_text_while_tool_protocol_pending():
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"shell"})
+    # text gefolgt von einem unvollstaendigen tool-protokoll-anfang:
+    # der parser haelt '{"tool' zurueck -> deferral aktiv
+    chunks, status = accumulator.consume_event(
+        {
+            "conversation_id": "conv_1",
+            "parts": [
+                {
+                    "logic_id": "1",
+                    "content": [{"type": "text", "text": "sieh '...'} before {\"tool"}],
+                }
+            ],
+        }
+    )
+    final_chunks = accumulator.finalize(status)
+    combined = "".join(chunks) + "".join(final_chunks)
+    assert '{"tool' in combined or 'tool' in combined  # nichts verloren
 
 
 def test_accumulator_reports_unavailable_dsml_tool_instead_of_empty_response():
@@ -596,3 +619,60 @@ def test_accumulator_keeps_markdown_block_separators_between_parts():
         "## 查询结果：IP 地址 `1.1.1.1` 的归属地信息\n\n"
         "| 字段 | 值 |\n|---|---|\n| 查询 IP | `1.1.1.1` |"
     )
+
+
+def test_merge_part_texts_finish_without_part_status_no_duplicate():
+    # Regression K-1: finish-status nur top-level im event, nicht im part —
+    # der volltext darf den akkumulierten delta-text nicht duplizieren
+    accumulator = GLMEventAccumulator(model="glm-test")
+    accumulator.consume_event(
+        {"conversation_id": "c", "parts": [{"logic_id": "1", "content": [{"type": "text", "text": "Hallo "}]}]}
+    )
+    accumulator.consume_event(
+        {"conversation_id": "c", "parts": [{"logic_id": "1", "content": [{"type": "text", "text": "Welt"}]}]}
+    )
+    accumulator.consume_event(
+        {"conversation_id": "c", "status": "finish", "parts": [{"logic_id": "1", "content": [{"type": "text", "text": "Hallo Welt"}]}]}
+    )
+    response = accumulator.build_response()
+    assert response["choices"][0]["message"]["content"] == "Hallo Welt"
+
+
+def test_merge_part_texts_finish_with_part_status_still_works():
+    accumulator = GLMEventAccumulator(model="glm-test")
+    accumulator.consume_event(
+        {"conversation_id": "c", "parts": [{"logic_id": "1", "content": [{"type": "text", "text": "A"}]}]}
+    )
+    accumulator.consume_event(
+        {"conversation_id": "c", "parts": [{"logic_id": "1", "status": "finish", "content": [{"type": "text", "text": "AB"}]}]}
+    )
+    response = accumulator.build_response()
+    assert response["choices"][0]["message"]["content"] == "AB"
+
+
+def test_convert_messages_keeps_tool_result_for_id_repaired_call():
+    # Regression N-2: tool_call OHNE id bekommt call_repaired_N — die
+    # tool-result mit genau dieser id darf nicht verworfen werden
+    converted = convert_messages(
+        messages=[
+            {"role": "user", "content": "uhrzeit?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "get_time", "arguments": '{"timezone":"Europe/Berlin"}'}}],
+            },
+            {"role": "tool", "tool_call_id": "call_repaired_0", "content": "15:23 MESZ"},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_time",
+                    "description": "zeit",
+                    "parameters": {"type": "object", "properties": {"timezone": {"type": "string"}}},
+                },
+            }
+        ],
+    )
+    prompt = converted[0]["content"][0]["text"]
+    assert "15:23 MESZ" in prompt

@@ -286,6 +286,7 @@ class AnthropicStreamAccumulator:
         self._pending_tool_calls: dict[int, dict[str, object]] = {}
         self._block_open = False
         self._finished = False
+        self._pending_sse = ""
 
     def start_message(self) -> str:
         """Emit message_start event."""
@@ -303,10 +304,18 @@ class AnthropicStreamAccumulator:
         return self._sse("message_start", {"type": "message_start", "message": msg})
 
     def feed_chunk(self, chunk: bytes) -> list[str]:
-        """Process a raw SSE chunk line (already decoded). Returns Anthropic SSE events."""
-        text = chunk.decode("utf-8", errors="ignore")
+        """Process a raw SSE chunk line (already decoded). Returns Anthropic SSE events.
+
+        Ueber Chunks gesplittete data-Bloecke werden gepuffert (analog
+        ResponsesStreamAccumulator) — ein Fragment bleibt in _pending_sse
+        liegen, bis der Rest des Blocks nachkommt."""
+        text = self._pending_sse + chunk.decode("utf-8", errors="ignore")
+        self._pending_sse = ""
         events: list[str] = []
-        for line in text.split("\n\n"):
+        blocks = text.split("\n\n")
+        if not text.endswith("\n\n"):
+            self._pending_sse = blocks.pop()
+        for line in blocks:
             line = line.strip()
             if not line:
                 continue
