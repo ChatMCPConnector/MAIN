@@ -133,6 +133,42 @@ def extract_recent_user_url(messages: list[dict[str, object]]) -> str | None:
     return None
 
 
+# Gezieltes Repair fuer ein bekanntes LLM-Quoting-Versagen: das Modell
+# emittiert python-code mit x'key' statt x['key'] (fehlende brackets beim
+# dict-zugriff, beobachtet mit inline `python3 -c "..."` commands).
+_BROKEN_DICT_ACCESS = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)'([A-Za-z_][A-Za-z0-9_]*)'")
+_PYTHON_CMD_INNER = re.compile(r"""^(python3?|pypy3?)\s+-c\s+(?:"([^"]*)"|'([^']*)')\s*$""", re.DOTALL)
+
+
+def _python_compiles(code: str) -> bool:
+    """Der Compile-Oracle: true wenn der code syntaktisch gueltiges python ist."""
+    try:
+        compile(code, "<tool-command>", "exec")
+        return True
+    except SyntaxError:
+        return False
+
+
+def repair_python_command_quotes(command: str) -> str:
+    """Repariert x'key' -> x['key'] in python-commands.
+
+    Compile-Oracle auf dem INNEREN von `python3 -c \"...\"` (der shell-wrapper
+    selbst ist kein python und kompiliert nie). Reparatur wird nur uebernommen,
+    wenn das innere vorher nicht kompilierte und nachher tut — funktionierender
+    code wird nie angerührt (keine false positives)."""
+    match = _PYTHON_CMD_INNER.match(command.strip())
+    if not match:
+        return command
+    inner = match.group(2) if match.group(2) is not None else match.group(3)
+    quote = '"' if match.group(2) is not None else "'"
+    if _python_compiles(inner):
+        return command
+    repaired_inner = _BROKEN_DICT_ACCESS.sub(r"\1['\2']", inner)
+    if repaired_inner != inner and _python_compiles(repaired_inner):
+        return command[: match.start(2) if match.group(2) is not None else match.start(3)] + repaired_inner + command[(match.end(2) if match.group(2) is not None else match.end(3)) :]
+    return command
+
+
 def sanitize_tool_call_payload(
     tool_name: str,
     arguments: object,
@@ -157,6 +193,14 @@ def sanitize_tool_call_payload(
         cleaned = {}
     if "param_name" in cleaned and "param_value" not in cleaned and len(cleaned) == 1:
         cleaned = {}
+
+    if tool_name in {"bash", "shell", "run", "execute"}:
+        command = cleaned.get("command")
+        if isinstance(command, str):
+            # Quote-Repair fuer python-commands (compile-oracle-geprüft)
+            stripped = command.strip()
+            if re.match(r"^(python3?|pypy3?)\s", stripped):
+                cleaned["command"] = repair_python_command_quotes(command)
 
     if tool_name == "shell":
         command = cleaned.get("command")

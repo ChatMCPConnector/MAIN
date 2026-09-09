@@ -1,3 +1,4 @@
+import json
 from glm2api.services.translator import (
     BLOCKED_NATIVE_TOOL_NAMES,
     GLMEventAccumulator,
@@ -676,3 +677,39 @@ def test_convert_messages_keeps_tool_result_for_id_repaired_call():
     )
     prompt = converted[0]["content"][0]["text"]
     assert "15:23 MESZ" in prompt
+
+
+def test_sanitize_bash_repairs_broken_python_dict_quotes():
+    # LLM-Quoting-Versagen: x'key' statt x['key'] in python-commands.
+    # Compile-Oracle repariert NUR wenn das resultat wirklich kompiliert.
+    broken = 'python3 -c "\nimport json\ncreds = json.load(f)\nexpiry = creds\'expiry_date\' / 1000\nx = {\'a\': creds\'access_token\', \'r\': creds\'refresh_token\'}\n"'
+    converted = convert_messages(
+        messages=[
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": json.dumps({"command": broken})}}]},
+        ],
+        tools=[{"type": "function", "function": {"name": "bash", "description": "run", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}}}],
+    )
+    prompt = converted[0]["content"][0]["text"]
+    assert "creds['expiry_date']" in prompt
+    assert "creds['access_token']" in prompt
+
+
+def test_sanitize_bash_never_touches_working_python():
+    good = "python3 -c \"x = 'a' + 'b'\""
+    payload = sanitize_tool_call_payload("bash", {"command": good})
+    assert payload["command"] == good
+    good2 = "python3 -c \"print(x['key'])\""
+    payload2 = sanitize_tool_call_payload("bash", {"command": good2})
+    assert payload2["command"] == good2
+    # nicht-python unberuehrt
+    payload3 = sanitize_tool_call_payload("bash", {"command": "echo 'hello'"})
+    assert payload3["command"] == "echo 'hello'"
+
+
+def test_repair_skips_doubly_broken_commands():
+    # wenn neben den quotes auch die kommentar-struktur zerstoert ist,
+    # greift das repair nicht (oracle-verbatim) — kein wildes umschreiben
+    doubly_broken = 'python3 -c "\n# Kopf\n     kein kommentar\nx = creds\'k\'\n"'
+    from glm2api.services.translator import repair_python_command_quotes
+    assert repair_python_command_quotes(doubly_broken) == doubly_broken

@@ -172,6 +172,16 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-09 (5): Tool-Call-Resilienz gegen LLM-Quoting-Versagen:
+  (a) Protokoll-Instruktion erweitert — keine fragilen Inline-`python3 -c
+  "..."`-Commands mit verschachtelten Quotes in Tool-Argumenten (Heredocs/
+  Skriptdateien bevorzugt). (b) Auto-Repair `x'key'` → `x['key']` beim
+  Tool-Call-Parsing für bash/shell/python-Commands mit Compile-Oracle
+  (Reparatur nur wenn Ergebnis kompiliert und Original nicht — keine
+  False Positives, funktionierender Code bleibt unberührt). Ausgelöst
+  durch Session-Vorfall: glm-4.7-flash erzeugte `creds'expiry_date'`
+  (ungültiges Python). Bei doppelt kaputten Commands (Quotes + Struktur)
+  greift das Oracle schützend nicht. Tests 70 → 73.
 - 2026-09-09 (4): glm2api komplett auf Englisch übersetzt (China-Audit,
   ~283 A-Stellen): alle Log-/Fehler-/Kommentar-Strings in config, app,
   __main__, server, glm_auth, glm_client, translator + pyproject.toml +

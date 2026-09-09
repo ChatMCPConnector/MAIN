@@ -122,6 +122,7 @@ def build_tool_call_instructions(
                 "- Parameter names are case-sensitive and must exactly match the schema. For example, use `filePath` only when the schema says `filePath`; never change it to `filepath`, `file_path`, or `FilePath`.",
                 "- Values must be plain JSON values (strings, numbers, booleans, null, nested objects, arrays).",
                 "- Output raw JSON only: no markdown fences, no code blocks, no comments, no trailing commas, no newlines within strings.",
+            "- String values with code: avoid inline `python3 -c \"...\"` commands with nested quotes (dict access like x'key' becomes invalid Python). Prefer heredocs (`<<'EOF'`) or script files. If inline python is unavoidable, use double quotes for the outer string and single quotes ONLY for dict/string keys inside.",
             ]
         )
 
