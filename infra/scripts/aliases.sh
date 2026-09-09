@@ -6,6 +6,7 @@ alias save='./infra/scripts/save.sh'
 alias auth='./infra/scripts/auth.sh status'
 alias secrets='./infra/scripts/secrets.sh status'
 alias ports='./infra/scripts/ports.sh'
+alias quota='bash /workspaces/MAIN/infra/scripts/quota.sh'
 alias st='git status -sb'
 alias ll='ls -lah'
 
