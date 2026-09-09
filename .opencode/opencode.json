@@ -162,6 +162,38 @@
         }
       }
     },
+    "glmfree": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "GLM Free (glm-free-api)",
+      "options": {
+        "baseURL": "http://158.101.162.206:50063/v1",
+        "apiKey": "GFN@OpenAI"
+      },
+      "models": {
+        "glm-5.3": {
+          "name": "GLM-5.3",
+          "reasoning": true,
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          },
+          "options": {
+            "reasoningEffort": "max"
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "max": {
+              "reasoningEffort": "max"
+            }
+          }
+        }
+      }
+    },
     "antigravity": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Antigravity OAuth Proxy",
