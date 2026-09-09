@@ -173,6 +173,24 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (2): **glm2api: Transient-Stream-Error-Retry (Code 10025/10061/10062).**
+  Auslöser: Session „glm2api fehler" starb nach 5 Min Arbeit an
+  `GLM upstream returned an error | code=10025 stream request error` — chatglm.cn
+  bricht frische Streams gelegentlich transient ab, glm2api hatte dafür keine
+  Retry-Logik (nur Busy-429 und Failover *vor* Stream-Start). Fix: `UpstreamAPIError`
+  trägt jetzt ein `transient`-Flag (error_code ∈ {10025, 10061, 10062}); Stream- und
+  Non-Stream-Pfad öffnen bei transientem Fehler vor sichtbarem Content (Reasoning-
+  Replay ist harmlos, Text-Duplikate nicht) die Upstream-Konversation neu —
+  frischer Accumulator + Retry, bis `GLM_STREAM_ERROR_MAX_RETRIES` (Default 2,
+  Intervall `GLM_STREAM_ERROR_RETRY_INTERVAL_SECONDS`, Default 1s) erschöpft; nach
+  bereits gesendetem Text weiterhin sofort raise. Cleanup (Response/Conversation/
+  Lease) garantiert in `finally`. Zusätzlich: Betrieb auf registrierten
+  `GLM_REFRESH_TOKEN` umgestellt (`.env` + `glm2api.env`, Guest nur noch Fallback).
+  Tests 73 → 79 (neu: test_stream_retry.py — Retry-Trigger, Give-up, Non-transient,
+  Error-nach-Content, Non-Stream-Retry), Proxy neu gestartet, live verifiziert
+  (stream + non-stream), Bundle neu gebaut. Token-Hinweis: der registrierte
+  Refresh-Token liegt nur in der lokalen `.env` (gitignored); für neue Codespaces
+  als `chatglm-refresh-token` ins Secrets-Bundle (`config/secrets.enc`) packen.
 - 2026-09-10: **gemini-web2api Multi-Turn aktiviert + Tool-Disziplin gefixt (2 Ebenen).**
   (a) `multi_turn=true` in der Runtime-Config (kv-Tabelle, Admin-Panel) aktiviert — Proxy
   erkennt Konversations-Fortsetzungen per History-Fingerprint (`convParentKey`) und sendet

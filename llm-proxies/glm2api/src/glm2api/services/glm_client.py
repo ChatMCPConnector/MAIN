@@ -47,10 +47,11 @@ IMAGE_SIZE_TO_ASPECT_RATIO = {
 
 
 class UpstreamAPIError(RuntimeError):
-    def __init__(self, status_code: int, message: str, payload: dict[str, object] | None = None) -> None:
+    def __init__(self, status_code: int, message: str, payload: dict[str, object] | None = None, transient: bool = False) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.payload = payload or {}
+        self.transient = transient
 
 
 class QueueTimeoutError(RuntimeError):
@@ -150,6 +151,7 @@ class GLMWebClient:
 
     def chat_completion(self, payload: dict[str, object]) -> tuple[dict[str, object], str | None]:
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
+        max_stream_retries = self.config.glm_stream_error_max_retries
         lease = self.request_queue.acquire(f"chat:{payload.get('model', 'unknown')}")
         try:
             response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
@@ -164,14 +166,44 @@ class GLMWebClient:
             logger=self.logger,
         )
         try:
-            for event in self._iter_sse_events(response):
-                if not event:
-                    continue
-                status = event.get("status")
-                self._raise_for_event_error(event, stream=False)
-                accumulator.consume_event(event)
-                if status in {"finish", "intervene"}:
-                    return accumulator.build_response(), accumulator.conversation_id
+            attempt = 0
+            while True:
+                retry_exc: UpstreamAPIError | None = None
+                for event in self._iter_sse_events(response):
+                    if not event:
+                        continue
+                    status = event.get("status")
+                    try:
+                        self._raise_for_event_error(event, stream=False)
+                    except UpstreamAPIError as exc:
+                        if exc.transient and attempt < max_stream_retries:
+                            retry_exc = exc
+                            break
+                        raise
+                    accumulator.consume_event(event)
+                    if status in {"finish", "intervene"}:
+                        return accumulator.build_response(), accumulator.conversation_id
+                if retry_exc is None:
+                    break
+                # Transient upstream error: retry the stream with a fresh
+                # conversation before giving up.
+                attempt += 1
+                response.close() # type: ignore
+                self.logger.warning(
+                    "Transient GLM error in non-streaming chat, retrying attempt=%s/%s error=%s",
+                    attempt,
+                    max_stream_retries,
+                    retry_exc,
+                )
+                time.sleep(self.config.glm_stream_error_retry_interval)
+                accumulator = GLMEventAccumulator(
+                    model=str(payload["model"]),
+                    allowed_tool_names=allowed_tool_names,
+                    fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
+                    debug_enabled=self.config.debug_dump_all,
+                    logger=self.logger,
+                )
+                response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
         finally:
             response.close() # type: ignore
             self.delete_conversation(accumulator.conversation_id, assistant_id=assistant_id)
@@ -208,6 +240,17 @@ class GLMWebClient:
 
     def stream_chat_completion(self, payload: dict[str, object]):
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
+        max_stream_retries = self.config.glm_stream_error_max_retries
+
+        def new_accumulator() -> GLMEventAccumulator:
+            return GLMEventAccumulator(
+                model=str(payload["model"]),
+                allowed_tool_names=allowed_tool_names,
+                fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
+                debug_enabled=self.config.debug_dump_all,
+                logger=self.logger,
+            )
+
         lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")
         try:
             response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
@@ -215,23 +258,34 @@ class GLMWebClient:
             lease.release()
             raise
 
-        accumulator = GLMEventAccumulator(
-            model=str(payload["model"]),
-            allowed_tool_names=allowed_tool_names,
-            fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
-            debug_enabled=self.config.debug_dump_all,
-            logger=self.logger,
-        )
+        accumulator = new_accumulator()
 
         def generate():
-            try:
+            nonlocal response, assistant_id, accumulator
+            attempt = 0
+            while True:
+                served_content = False
+                retry_exc: UpstreamAPIError | None = None
                 for event in self._iter_sse_events(response):
                     if not event:
                         continue
-                    self._raise_for_event_error(event, stream=True)
+                    try:
+                        self._raise_for_event_error(event, stream=True)
+                    except UpstreamAPIError as exc:
+                        if (
+                            exc.transient
+                            and not served_content
+                            and attempt < max_stream_retries
+                        ):
+                            retry_exc = exc
+                            break
+                        raise
                     chunks, status = accumulator.consume_event(event)
                     for chunk in chunks:
-                        yield chunk.encode("utf-8")
+                        encoded = chunk.encode("utf-8")
+                        if b'"content"' in encoded and b'"reasoning_content"' not in encoded:
+                            served_content = True
+                        yield encoded
 
                     if status in {"finish", "intervene"}:
                         for chunk in accumulator.finalize(
@@ -240,15 +294,41 @@ class GLMWebClient:
                         ):
                             yield chunk.encode("utf-8")
                         return
-
-                for chunk in accumulator.finalize(status="stop"):
-                    yield chunk.encode("utf-8")
-            finally:
+                if retry_exc is None:
+                    for chunk in accumulator.finalize(status="stop"):
+                        yield chunk.encode("utf-8")
+                    return
+                # Transient upstream error before any visible content: retry
+                # the stream with a fresh conversation (guest tokens and
+                # fresh sessions die quickly; reasoning replay is harmless).
+                attempt += 1
                 response.close() # type: ignore
+                self.logger.warning(
+                    "Transient GLM stream error before any visible content, retrying attempt=%s/%s error=%s",
+                    attempt,
+                    max_stream_retries,
+                    retry_exc,
+                )
+                time.sleep(self.config.glm_stream_error_retry_interval)
+                accumulator = new_accumulator()
+                response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+
+        def wrapped():
+            try:
+                yield from generate()
+            finally:
+                try:
+                    response.close() # type: ignore
+                except Exception:
+                    pass
                 self.delete_conversation(accumulator.conversation_id, assistant_id=assistant_id)
                 lease.release()
 
-        return generate()
+        return wrapped()
+
+    # Error codes the upstream may emit mid-stream that are worth a retry
+    # with the same or a rotated account instead of failing the whole request.
+    TRANSIENT_UPSTREAM_ERROR_CODES = {10025, 10061, 10062}
 
     def _raise_for_event_error(self, event: dict[str, object], stream: bool) -> None:
         status = str(event.get("status", "")).strip().lower()
@@ -272,10 +352,17 @@ class GLMWebClient:
             or ("GLM stream request error" if stream else "GLM request error")
         ).strip()
         detail = f"code={error_code} " if error_code is not None else ""
+        transient = False
+        if error_code is not None:
+            try:
+                transient = int(error_code) in self.TRANSIENT_UPSTREAM_ERROR_CODES  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                transient = False
         raise UpstreamAPIError(
             status_code=502,
             message=f"GLM upstream returned an error | {detail}{error_message}".strip(),
             payload=error_payload or event,
+            transient=transient,
         )
 
     def _extract_event_error(self, event: dict[str, object]) -> dict[str, object] | None:

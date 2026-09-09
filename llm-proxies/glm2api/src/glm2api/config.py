@@ -153,6 +153,8 @@ class AppConfig:
     glm_busy_max_retries: int
     glm_busy_retry_interval: float
     glm_guest_max_retries: int
+    glm_stream_error_max_retries: int
+    glm_stream_error_retry_interval: float
     blocked_tool_names: list[str]
     exposed_models: list[str]
     model_aliases: dict[str, str]
@@ -284,6 +286,8 @@ def load_config(env_file: str = ".env") -> AppConfig:
         glm_busy_max_retries=parse_int(values.get("GLM_BUSY_MAX_RETRIES"), 30),
         glm_busy_retry_interval=parse_float(values.get("GLM_BUSY_RETRY_INTERVAL_SECONDS"), 2.0),
         glm_guest_max_retries=max(0, parse_int(values.get("GLM_GUEST_MAX_RETRIES"), 3)),
+        glm_stream_error_max_retries=max(0, parse_int(values.get("GLM_STREAM_ERROR_MAX_RETRIES"), 2)),
+        glm_stream_error_retry_interval=max(0.0, parse_float(values.get("GLM_STREAM_ERROR_RETRY_INTERVAL_SECONDS"), 1.0)),
         blocked_tool_names=parse_list(values.get("BLOCKED_TOOL_NAMES"), DEFAULT_BLOCKED_TOOL_NAMES),
         exposed_models=exposed_models,
         model_aliases=model_aliases,
