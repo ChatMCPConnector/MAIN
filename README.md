@@ -173,6 +173,19 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10: **gemini-web2api Multi-Turn aktiviert + Tool-Disziplin gefixt (2 Ebenen).**
+  (a) `multi_turn=true` in der Runtime-Config (kv-Tabelle, Admin-Panel) aktiviert — Proxy
+  erkennt Konversations-Fortsetzungen per History-Fingerprint (`convParentKey`) und sendet
+  nur noch die neueste Nachricht statt der kompletten Historie: **eine** gemini.google.com-
+  Session pro Konversation statt eine pro Request; löst auch das 130k-Byte-Prompt-Wand-
+  Problem (502 „no content frame") aus der Session „Gemini web fehler". (b) Fix 1:
+  Format-Erinnerung (```tool_call```) in jeder 续接轮 — Modell verlor sonst nach wenigen
+  Runden die Tool-Disziplin und antwortete in Prosa („I encountered an error"-Symptom in
+  opencode). (c) Fix 2: Tool-Schemas in jeder 续接轮 neu injiziert (`toolsReminderBlock`)
+  — Gemini-Webserver entfernt die Erstrunden-Tool-Definitionen nach ~9 Runden aus dem
+  Kontext, Modell sagte dann „Ich habe kein Dateisystem-Tool". Langzeit-Stresstest:
+  15 续接 in einer Web-Session, 10/10 korrekte Tool-Calls inkl. 4er-Kette ohne neue
+  User-Nachricht, 0 Fehler. Proxy neu gebaut + läuft.
 - 2026-09-09 (9): Claude Opus 4.6 (`antigravity/claude-opus-4-6`) im Antigravity-Proxy
   und opencode integriert (1M Context, bis 64k Output, Thinking-Budget dynamisch stufbar:
   `low`=2k, `medium`=16k, `high`=32k, Default `high`). Umgeht das 1024-Token-Limit der

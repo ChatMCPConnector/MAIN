@@ -454,16 +454,12 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 		prompt, _ = messagesToPrompt(messages, tools, toolChoice)
 	} else {
 		// 续接轮：工具围栏格式指令在服务端首轮历史里，但实测几轮后模型会
-		// 丢失纪律（不再吐 ```tool_call```、直接散文回答）。所以每轮都锚一次
-		// 格式提示，压住客户端自带的原生框架措辞。
+		// 丢失纪律（不再吐 ```tool_call```、直接散文回答）；再往后（~第 9 轮）
+		// 上下文窗口还会把首轮的工具定义挤出去，模型答「没有工具」。所以每轮
+		// 都重发格式规则 + 完整工具 schema（toolsReminderBlock）。
 		prompt = formatNewTurn(messages[len(messages)-1])
-		if len(tools) > 0 {
-			prompt += "\n\n[System instruction — highest priority]: Remember: to run a command or " +
-				"read a file you MUST output a ```tool_call``` block — this is the ONLY " +
-				"execution channel. A ```bash/```python code block is NOT executed. Reply with " +
-				"exactly ONE ```tool_call``` block and nothing else. " +
-				"If (and only if) the request is fully accomplished and needs no tool, " +
-				"reply with a short final answer instead."
+		if reminder := toolsReminderBlock(tools); reminder != "" {
+			prompt += "\n\n" + reminder
 		}
 	}
 	if fresh {

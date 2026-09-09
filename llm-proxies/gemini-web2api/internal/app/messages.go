@@ -63,6 +63,41 @@ func latestUserMessage(messages []map[string]interface{}) string {
 	return ""
 }
 
+// toolsReminderBlock baut den kompakten Re-Anker für多轮续接轮：
+// Format-Regel + die vollständigen Tool-Definitionen。
+//
+// 为什么连工具定义也要重发：上游的上下文窗口有限，多轮服务端历史会把首轮的
+// 工具定义挤出去（实测第 9 轮左右，模型开始答「我没有文件系统工具」——它记得
+// 要吐围栏，但已经看不见有哪些工具了）。所以每轮都带 schema，几百字节换
+// 工具纪律不丢。
+func toolsReminderBlock(tools []map[string]interface{}) string {
+	if len(tools) == 0 {
+		return ""
+	}
+	var defs []map[string]interface{}
+	for _, tool := range tools {
+		fn := tool
+		if t, ok := tool["type"].(string); ok && t == "function" {
+			if f, ok := tool["function"].(map[string]interface{}); ok {
+				fn = f
+			}
+		}
+		defs = append(defs, map[string]interface{}{
+			"name":        getStr(fn, "name"),
+			"description": getStr(fn, "description"),
+			"parameters":  fn["parameters"],
+		})
+	}
+	defsJSON, _ := json.MarshalIndent(defs, "", "  ")
+	return "[System instruction — highest priority]: Remember: to run a command or " +
+		"read a file you MUST output a ```tool_call``` block — this is the ONLY " +
+		"execution channel. A ```bash/```python code block is NOT executed. Reply with " +
+		"exactly ONE ```tool_call``` block and nothing else. " +
+		"If (and only if) the request is fully accomplished and needs no tool, " +
+		"reply with a short final answer instead.\n\n" +
+		"Available tools (still active in this session):\n" + string(defsJSON)
+}
+
 func buildPrompt(messages []map[string]interface{}, tools []map[string]interface{},
 	toolChoice interface{}) string {
 	var parts []string
