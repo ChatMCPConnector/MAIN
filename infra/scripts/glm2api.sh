@@ -98,7 +98,8 @@ stop_server() {
 start_server() {
   mkdir -p "$LOG_DIR"
   cd "$GLM2API_DIR" || exit 1
-  nohup python3 main.py >> "$OUTPUT_LOG" 2>&1 &
+  # venv-Python statt System-Python: App requires >=3.14, System hat nur 3.12
+  nohup "$GLM2API_DIR/.venv/bin/python3" main.py >> "$OUTPUT_LOG" 2>&1 &
   local pid=$!
   # PID atomar in Datei schreiben (gleiche Partition → rename ist atomar)
   printf '%s\n' "$pid" > "$PID_FILE.tmp" && mv -f "$PID_FILE.tmp" "$PID_FILE"

@@ -40,11 +40,10 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 
 ## Enthalten
 
-- Ubuntu 24.04, Bash, Git, GitHub CLI, Docker, Python 3, Build-Werkzeuge
-- Ports 3000/8000 (Apps), 8001 (LLM-Proxy), 9222/6082/5920 (Browser, nur lokal) · Zeitzone Europe/Berlin
+- Ports 3000/8000 (Apps), 8001 (LLM-Proxy), 9222/6082/5920 (Browser, nur lokal)
 - opencode, Default-Modell `tokenrouter/z-ai/glm-5.3-free` (1M Kontext)
-- `infra/scripts/nvidia-models.py`: eigenständiges Utility — NVIDIA-Modellindex
-  von build.nvidia.com (kostenlos, NIM-Keys), für Modell-Discovery
+- `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
+  (kostenlos, NIM-Keys), für Modell-Discovery
 
 ## Secrets-Modell (bewusst: Komfort > Sicherheit)
 
@@ -164,6 +163,11 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-09: Kompaktierung Runde 2: totes Modul `model_profiles.py`
+  entfernt (nirgends importiert). Betriebs-Bug gefixt: `infra/scripts/
+  glm2api.sh` startete System-Python 3.12 statt venv-Python 3.14 (App
+  requires >=3.14) — Restart wäre mit ImportError gescheitert. README
+  "Enthalten" gestrafft, Bundle neu gebaut (44 statt 45 Dateien).
 - 2026-09-09: Struktur-Kompaktierung: `work/` aufgelöst — `docs/` nach
   `infra/docs/` (Kontostand-Spec + Reverse-Engineering-Doku). Ein Top-Level-
   Ordner weniger, Referenzen in kontostand.sh / build-bundle.sh angepasst.
