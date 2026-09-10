@@ -4,13 +4,13 @@
 
 - Beim Codespace-Start läuft `.devcontainer/setup.sh` automatisch (`postCreateCommand`):
   Systempakete → opencode → Shell-Aliase → **Secrets-Auto-Unlock** (via `LANDSCAPE_PASSPHRASE`) → **Git-Auth** (via `LANDSCAPE_PAT`) → Browser-Runtime → Benchmark-Kopien.
-- Erste Pflichtlektüre: `README.md` (Layout „was wozu", Betrieb, Proxies, Secrets-Modell, Changelog).
+- Erste Pflichtlektüre: `infrastructure.md` (Layout „was wozu", Betrieb, Proxies, Secrets-Modell, Changelog). `README.md` ist nur die kurze öffentliche GitHub-Übersicht.
 - Repo ist shared für mehrere eigene Accounts. Alles Bleibende liegt unter `/workspaces/MAIN` und wird per `./infra/scripts/save.sh` gepusht. Einmal pro Account: PAT + Passphrase als Codespaces-Secrets hinterlegen, danach ist alles automatisch.
 - **Sicherheitsmodell: Komfort > Sicherheit.** Alle Accounts sind eigene. Die Secrets-Passphrase liegt absichtlich im Repo (`config/passphrase`). Kein „Geheimnis-Schutz"-Purismus, Automatik hat Vorrang.
 
 ## 1. Session-Start
 
-- Lies `README.md` einmal pro Session (Layout-Abschnitt reicht im Alltag).
+- Lies `infrastructure.md` einmal pro Session (Layout-Abschnitt reicht im Alltag).
 - Kein Re-Read vor jedem Edit. Nur erneut lesen, wenn der Task Infrastruktur berührt (Browser, Ports, Display, Profile, Installationen, Dependencies, Persistenzpfade).
 
 ## 2. Was als Infrastruktur-Änderung zählt
@@ -25,7 +25,7 @@ Normale Code-, Doku- und Config-Edits sind keine Infrastruktur-Änderung: keine 
 
 ## 3. Infrastructure
 
-- `README.md` (Abschnitt „Infrastruktur-Soll") beschreibt den Soll-Zustand. Kanonisch ist immer: gepinnte Version im Repo + reproduzierbares Skript unter `infra/scripts/`.
+- `infrastructure.md` (Abschnitt „Infrastruktur-Soll") beschreibt den Soll-Zustand. Kanonisch ist immer: gepinnte Version im Repo + reproduzierbares Skript unter `infra/scripts/`.
 - PIDs, `ss`-Ausgaben und laufende Sitzungen sind ephemeral: vor Wiederverwendung einmal prüfen (`pgrep`, `ss`, `curl`), nie als dauerhaften Zustand dokumentieren oder als Blocker verwenden.
 - Nur verifizierte, tatsächlich ausgeführte Änderungen dokumentieren. Planung und Ist-Zustand getrennt halten.
 - Keine parallele agentspezifische Infrastrukturakte.
@@ -41,4 +41,4 @@ Normale Code-, Doku- und Config-Edits sind keine Infrastruktur-Änderung: keine 
 
 - Fertige Arbeit liegt vollständig unter `/workspaces/MAIN` und wird per Git erfasst. Unfertige/temporäre Inhalte nach `/workspaces` oder `.runtime/`, nie als „fertig" behandeln.
 - `.runtime/`, Browserprofile, Caches und Klartext-Secrets werden nicht committet (siehe `.gitignore`). Ausnahme (Komfort > Sicherheit): `config/passphrase` darf Klartext-Secrets enthalten. Was davon für einen neuen Codespace nötig ist, muss als reproduzierbares Skript unter `infra/scripts/` im Repo liegen.
-- `README.md` (Changelog + Infra-Soll) nur bei tatsächlicher Infrastruktur-Änderung im selben Arbeitsgang aktualisieren. Kein Doku-Update und kein Commit für Nicht-Infra-Änderungen erzwingen. Commits nur auf explizite Aufforderung.
+- `infrastructure.md` (Changelog + Infra-Soll) nur bei tatsächlicher Infrastruktur-Änderung im selben Arbeitsgang aktualisieren. `README.md` (öffentliche Übersicht) nur bei relevanten Strukturänderungen. Kein Doku-Update und kein Commit für Nicht-Infra-Änderungen erzwingen. Commits nur auf explizite Aufforderung.
