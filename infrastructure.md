@@ -186,6 +186,21 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (10): **glm2api: Echo-Filter für gespiegelte native tool_calls (Benchmark-Toolcall-Fix).**
+  Auslöser: SWE-Benchmark-Run (Subagent auf glm2api/glm-5.3) — ~25% „unknown
+  tool call"-Fehler, massive Duplikat-Executions (24 Tools in einem Timestamp-
+  Cluster, write 5x). Root Cause: chatglm.cn spiegelt die Tool-Call-Historie
+  als native `tool_calls`-Parts zurück (bis zu 36 pro Turn, im Proxy-Log als
+  `server_tools=36` sichtbar); `consume_event` leitete jedes Echo als neuen
+  Call an den Client weiter → Duplikat-Loops + halluzinierte Fehlerberichte
+  des Modells. Fix (2 Ebenen, translator.py + glm_client.py): (1) Echo-Filter
+  — native Parts, deren Signatur (Name + normalisierte Argumente) exakt einem
+  bereits ausgeführten Assistant-Call der Request-Historie entspricht, werden
+  verworfen (`extract_history_tool_call_signatures()`); (2) Signatur-Dedup —
+  mehrfach identische Parts kollabieren auf einen (statt nur ID-Dedup).
+  Verifikation: 85/85 Tests (3 neu: Signatur-Extraktion, Echo-Drop, Dedup),
+  Live-Repro (Multi-Turn mit Tool-Result-Runde) sauber, Proxy neu gestartet,
+  Benchmark-Re-Run 6/6 PASS mit 0 Toolcall-Fehlern, Bundle neu gebaut.
 - 2026-09-10 (9): **antigravity-proxy-Autostart repariert (Root Cause: unsichtbares Zero-Width-Space in der go.dev-URL).**
   Nach jedem Codespace-Rebuild fehlte Go: In `setup.sh` steckte in der
   Download-URL ein unsichtbares U+200B (`https://<ZWP>go.dev/...`) — curl

@@ -484,6 +484,41 @@ def resolve_networking(model: str, web_search: object) -> bool:
     return bool(web_search) or model_requests_search(model)
 
 
+def extract_history_tool_call_signatures(messages: list[dict[str, object]]) -> set[str]:
+    """Signatur aller Assistant-Tool-Calls der Request-Historie
+    (name + kanonische Argumente). Dient als Echo-Filter: der Upstream
+    spiegelt fruehere Tool-Calls gern als native 'tool_calls'-Parts
+    zurueck — solche Echos duerfen nie als neue Calls durchgeleitet
+    werden (beobachtet: 36 gespiegelte Parts pro Turn, Duplikat-Loops)."""
+    signatures: set[str] = set()
+    for message in messages:
+        if str(message.get("role", "")) != "assistant":
+            continue
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function", {})
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name", "")).strip()
+            if not name:
+                continue
+            arguments = function.get("arguments", "{}")
+            if isinstance(arguments, str):
+                args_str = arguments
+            else:
+                args_str = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
+            try:
+                normalized = json.dumps(json.loads(args_str), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            except json.JSONDecodeError:
+                normalized = args_str
+            signatures.add(f"{name}:{normalized}")
+    return signatures
+
+
 @dataclass
 class GLMEventAccumulator:
     model: str
@@ -491,6 +526,7 @@ class GLMEventAccumulator:
     fallback_tool_url: str | None = None
     debug_enabled: bool = False
     logger: Logger | None = None
+    history_tool_call_signatures: set[str] = field(default_factory=set)
     conversation_id: str = ""
     created: int = field(default_factory=lambda: int(time.time()))
     parts_by_logic_id: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -510,6 +546,7 @@ class GLMEventAccumulator:
     _cached_part_reasonings: dict[str, str] = field(default_factory=dict)
     _server_side_tool_calls: list[dict[str, object]] = field(default_factory=list)
     _server_side_tool_call_ids: set[str] = field(default_factory=set)
+    _server_side_tool_call_signatures: set[str] = field(default_factory=set)
     _deferred_visible_text: str = ""
     blocked_tool_attempt_names: list[str] = field(default_factory=list)
 
@@ -548,6 +585,37 @@ class GLMEventAccumulator:
                             if self.allowed_tool_names is not None and tool_name not in self.allowed_tool_names:
                                 continue
                             if tool_name and tool_id and tool_id not in self._server_side_tool_call_ids:
+                                # Echo-Filter: der Upstream spiegelt bereits
+                                # ausgefuehrte Assistant-Tool-Calls der Historie
+                                # als native Parts zurueck (bis zu Dutzende pro
+                                # Turn). Eine Signatur, die exakt einem Call aus
+                                # der Request-Historie entspricht, ist ein Echo —
+                                # nie ein neuer Call. Zusaetzlich Signatur-Dedup:
+                                # mehrfach identische Parts kollabieren auf einen.
+                                if isinstance(arguments, str):
+                                    args_str = arguments
+                                else:
+                                    args_str = safe_json_dumps(arguments)
+                                try:
+                                    normalized = json.dumps(json.loads(args_str), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                                except json.JSONDecodeError:
+                                    normalized = args_str
+                                signature = f"{tool_name}:{normalized}"
+                                if signature in self.history_tool_call_signatures:
+                                    if self.logger:
+                                        self.logger.info(
+                                            "Dropped echoed native tool_call (history signature match) tool=%s",
+                                            tool_name,
+                                        )
+                                    continue
+                                if signature in self._server_side_tool_call_signatures:
+                                    if self.logger:
+                                        self.logger.info(
+                                            "Dropped duplicate native tool_call (signature dedup) tool=%s",
+                                            tool_name,
+                                        )
+                                    continue
+                                self._server_side_tool_call_signatures.add(signature)
                                 self._server_side_tool_call_ids.add(tool_id)
                                 self._server_side_tool_calls.append(
                                     {

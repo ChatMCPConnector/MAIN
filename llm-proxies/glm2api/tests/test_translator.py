@@ -3,6 +3,7 @@ from glm2api.services.translator import (
     BLOCKED_NATIVE_TOOL_NAMES,
     GLMEventAccumulator,
     convert_messages,
+    extract_history_tool_call_signatures,
     sanitize_tool_call_payload,
 )
 
@@ -547,6 +548,68 @@ def test_accumulator_repairs_param_name_only_tool_call_with_fallback_url():
         message["tool_calls"][0]["function"]["arguments"]
         == '{"url":"https://opendata.baidu.com/api.php?query=1.1.1.1&co=&resource_id=6006&oe=utf8"}'
     )
+
+
+def test_extract_history_tool_call_signatures():
+    sigs = extract_history_tool_call_signatures([
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "tool_calls": [{"id": "call_1", "function": {"name": "write", "arguments": '{"filePath": "/tmp/x.txt", "content": "hello"}'}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        {"role": "assistant", "tool_calls": [{"id": "call_2", "function": {"name": "bash", "arguments": '{"command": "ls"}'}}]},
+    ])
+    assert sigs == {
+        'write:{"content":"hello","filePath":"/tmp/x.txt"}',
+        'bash:{"command":"ls"}',
+    }
+
+
+def test_accumulator_drops_echoed_native_tool_call():
+    sigs = {'write:{"content":"hello","filePath":"/tmp/x.txt"}'}
+    accumulator = GLMEventAccumulator(
+        model="glm-test",
+        allowed_tool_names={"read", "write"},
+        history_tool_call_signatures=sigs,
+    )
+    accumulator.consume_event(
+        {
+            "conversation_id": "conv_1",
+            "parts": [
+                {
+                    "logic_id": "1",
+                    "content": [
+                        {"type": "tool_calls", "tool_calls": {"id": "call_echo_1", "name": "write", "arguments": '{"content": "hello", "filePath": "/tmp/x.txt"}'}},
+                        {"type": "tool_calls", "tool_calls": {"id": "call_echo_2", "name": "write", "arguments": '{"filePath":"/tmp/x.txt","content":"hello"}'}},
+                        {"type": "tool_calls", "tool_calls": {"id": "call_new", "name": "read", "arguments": '{"filePath":"/tmp/x.txt"}'}},
+                    ],
+                }
+            ],
+        }
+    )
+    response = accumulator.build_response()
+    tool_calls = response["choices"][0]["message"].get("tool_calls", [])
+    assert [tc["function"]["name"] for tc in tool_calls] == ["read"]
+    assert response["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_accumulator_signature_dedup_for_repeated_native_parts():
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"read"})
+    for i in range(36):
+        accumulator.consume_event(
+            {
+                "conversation_id": "conv_1",
+                "parts": [
+                    {
+                        "logic_id": "1",
+                        "content": [
+                            {"type": "tool_calls", "tool_calls": {"id": f"call_dup_{i}", "name": "read", "arguments": '{"filePath":"/a"}'}}
+                        ],
+                    }
+                ],
+            }
+        )
+    response = accumulator.build_response()
+    tool_calls = response["choices"][0]["message"].get("tool_calls", [])
+    assert len(tool_calls) == 1
 
 
 def test_accumulator_ignores_unallowed_native_tool_call_blocks():

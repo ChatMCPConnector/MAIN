@@ -27,6 +27,7 @@ from .translator import (
     GLMEventAccumulator,
     SERVER_SIDE_TOOL_NAMES,
     convert_messages,
+    extract_history_tool_call_signatures,
     extract_recent_user_url,
     filter_tools,
     resolve_chat_mode,
@@ -153,6 +154,9 @@ class GLMWebClient:
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
         max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
+        history_tool_call_signatures = extract_history_tool_call_signatures(
+            list(payload.get("messages", [])) # type: ignore[arg-type]
+        )
         lease = self.request_queue.acquire(f"chat:{payload.get('model', 'unknown')}")
         try:
             response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
@@ -167,6 +171,7 @@ class GLMWebClient:
                 fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
                 debug_enabled=self.config.debug_dump_all,
                 logger=self.logger,
+                history_tool_call_signatures=history_tool_call_signatures,
             )
 
         accumulator = new_accumulator()
@@ -296,6 +301,9 @@ class GLMWebClient:
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
         max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
+        history_tool_call_signatures = extract_history_tool_call_signatures(
+            list(payload.get("messages", [])) # type: ignore[arg-type]
+        )
 
         def new_accumulator() -> GLMEventAccumulator:
             return GLMEventAccumulator(
@@ -304,6 +312,7 @@ class GLMWebClient:
                 fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
                 debug_enabled=self.config.debug_dump_all,
                 logger=self.logger,
+                history_tool_call_signatures=history_tool_call_signatures,
             )
 
         lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")
