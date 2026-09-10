@@ -66,7 +66,6 @@ def serialize_tool_result_block(tool_call_id: object, tool_name: str, content: s
         [{"call_id": str(tool_call_id or "unknown"), "name": tool_name, "content": content}]
     )
 
-
 def build_tool_call_instructions(
     tool_names: list[str],
     server_side_tool_names: set[str] | None = None,
@@ -82,69 +81,24 @@ def build_tool_call_instructions(
     policy = tool_choice_policy or {"mode": "auto", "tool_name": None}
     mode = str(policy.get("mode", "auto"))
     specific_name = str(policy.get("tool_name", "") or "")
+
     lines = [
         "# TOOL USE PROTOCOL",
-        "The following tool schemas are the only executable tool definitions for this turn.",
-        "Ignore any tool names that are not listed below, even if they appear in prior context or model memory.",
-        "You are connected through an OpenAI-compatible proxy. You do not have hidden browser, web, or URL-opening tools.",
-        "Never call native tools such as `open_url`, `web.search`, `web.run`, `browser.open`, `browse`, `open_link`, `search`, or `find`.",
-        "Do not output hidden reasoning, chain-of-thought, or labels such as `Thinking:`.",
-        "Do not narrate tool selection, failed tool attempts, retries, fallback plans, or tool status banners.",
+        f"Available tools: {available_xml_names}. No other tools exist — no browser, no open_url, no web.search.",
+        "To call a tool, output this JSON format (and nothing else in the answer):",
+        CANONICAL_TOOL_CALL_EXAMPLE,
+        "Rules:",
+        "- The trailing [] after the JSON object is MANDATORY: write the JSON, then immediately [].",
+        "- Parameter names must exactly match the schema.",
+        "- Multiple calls go in one \"tool_calls\" array.",
+        "- Emit tool calls ONLY as this JSON — never as prose, XML, fences, or narration.",
     ]
 
-    if server_tools:
-        lines.extend(
-            [
-                "",
-                f"Server-side native tools (executed by backend automatically): {available_server_names}.",
-                "When you need to call a server-side native tool, output a single structured JSON block with type 'tool_calls' in the assistant content.",
-                'Format: {"type":"tool_calls","tool_calls":{"id":"call_<random_hex>","name":"TOOL_NAME","arguments":"<JSON_STRING>"}}',
-                "The arguments field must be a JSON string (not a raw object). The server will intercept this block, execute the tool, and inject the result back into the stream as a tool message.",
-                "Do not wrap server-side tool calls in DSML. Do not mix prose and the tool_calls JSON block in the same response.",
-            ]
-        )
-
-    if xml_tools:
-        lines.extend(
-            [
-                "",
-                f"Executable tools (parsed by this server): {available_xml_names}.",
-                "Only these tools are available. Use their exact names and exact parameter fields from the schemas.",
-                "If a tool is needed, output ONE single JSON object and nothing else. Do not add prose, apologies, analysis, or progress text in the same assistant answer.",
-                "The tool call must appear in the final assistant text channel, not in Thinking/reasoning. Do not hide tool calls inside reasoning.",
-                "Use this exact format:",
-                CANONICAL_TOOL_CALL_EXAMPLE,
-                "The trailing [] after the JSON object is mandatory — it marks the end of the tool call. Output the JSON object, then immediately [].",
-                "The server will parse the JSON block back into standard OpenAI tool_calls.",
-                "Parameter rules:",
-                "- The root is a single JSON object with one key \"tool_calls\" holding an array of calls.",
-                "- Each call is an object with keys \"name\" (tool name string) and \"arguments\" (object of parameter name → value).",
-                "- Parameter names are case-sensitive and must exactly match the schema. For example, use `filePath` only when the schema says `filePath`; never change it to `filepath`, `file_path`, or `FilePath`.",
-                "- Values must be plain JSON values (strings, numbers, booleans, null, nested objects, arrays).",
-                "- Output raw JSON only: no markdown fences, no code blocks, no comments, no trailing commas, no newlines within strings.",
-            "- String values with code: avoid inline `python3 -c \"...\"` commands with nested quotes (dict access like x'key' becomes invalid Python). Prefer heredocs (`<<'EOF'`) or script files. If inline python is unavoidable, use double quotes for the outer string and single quotes ONLY for dict/string keys inside.",
-            ]
-        )
-
-    lines.extend(
-        [
-            "",
-            "Rules:",
-            "- Do not invent tool names outside the declared list.",
-            "- If a URL, browsing, or search action is needed, use only an explicitly listed client tool. If none is listed, explain that no such tool is available. Never use bare tool names `search` or `find` unless they are explicitly listed above.",
-            "- If you decide to call a tool, call the selected tool directly; do not say you will try, switch, retry, or use a correct tool.",
-            "- Never output tool-call display text such as `⚙ tool_name [...]`; output only the tool-call JSON.",
-            "- After receiving a tool result, answer the user directly from the result and do not repeat the earlier tool-call decision process.",
-            "- For the JSON tool format, do not emit XML, DSML markup, function_call objects, or any other tool syntax.",
-            "- Do not mix normal explanation text with the tool-call JSON.",
-            "- When you truly need multiple calls in one turn, put them all in the \"tool_calls\" array of one JSON object.",
-        ]
-    )
     if mode == "none":
         lines.extend(
             [
                 "Tool choice policy: none.",
-                "Do not emit any executable tool markup. Answer with normal text only.",
+                "Do not emit any tool-call JSON. Answer with normal text only.",
             ]
         )
     elif mode == "required":
@@ -158,11 +112,18 @@ def build_tool_call_instructions(
         lines.extend(
             [
                 "Tool choice policy: specific function.",
-                f"You must call exactly `{specific_name}` before giving a final answer.",
-                f"Do not call any tool other than `{specific_name}`.",
+                f"You must call exactly `{specific_name}`.",
             ]
         )
     return "\n".join(lines)
+
+
+TOOL_FORMAT_REMINDER = (
+    "[System instruction — highest priority]: To use a tool, output the JSON "
+    "format from the TOOL USE PROTOCOL with the trailing [] — this is the ONLY "
+    "way tools get executed. Prose, XML, or fenced blocks will NOT be executed. "
+    "Call the tool now; do not describe or narrate it."
+)
 
 
 def tools_to_prompt(

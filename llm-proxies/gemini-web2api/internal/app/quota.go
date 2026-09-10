@@ -60,6 +60,85 @@ func isQuotaText(text string) bool {
 		"i encountered an error doing what you asked")
 }
 
+// cannedGate 延迟流式开闸：把前 220 字节的 delta 扣在缓冲里，攒够了（说明
+// 不是罐头错误——罐头都极短）或流结束时再一次性放行。
+//
+// 为什么需要：罐头错误的检测要等**完整短句**出来才能判定，但真流式会把
+// 前几个 delta 先推给客户端 —— sse.Started() 变 true，检测命中时已吐出去
+// 收不回，只能 Fail，agentic run 就此中断（实测 benchmark turn 7 卡死）。
+// 扣住头 220 字节后：正常回复几乎无感（首屏晚几百毫秒），罐头回复则一个
+// 字都没出门，检测命中就能干净地重试。
+type cannedGate struct {
+	emit    func(string) // 真正的下游（sse.SendContent / SendReasoning）
+	buf     string
+	flushed bool
+	canned  bool
+}
+
+func newCannedGate(emit func(string)) *cannedGate {
+	return &cannedGate{emit: emit}
+}
+
+const cannedGateHold = 220
+
+// Push 吃进一段 delta。缓冲期（未 flush）内攒着；超过保持线说明这不是罐头，
+// 全部放行并进入直通模式。
+func (g *cannedGate) Push(s string) {
+	if g == nil || g.emit == nil {
+		return
+	}
+	if g.flushed {
+		g.emit(s)
+		return
+	}
+	g.buf += s
+	if len(g.buf) > cannedGateHold {
+		g.flush()
+	}
+}
+
+func (g *cannedGate) flush() {
+	if g.flushed {
+		return
+	}
+	g.flushed = true
+	if g.buf != "" {
+		g.emit(g.buf)
+		g.buf = ""
+	}
+}
+
+// Finish 在流结束时调用：短回复（可能罐头）在这里判定。
+// 罐头 → 丢弃缓冲、标记 canned（调用方据此走重试，客户端一个字没收到）；
+// 正常 → 放行。
+func (g *cannedGate) Finish() {
+	if g == nil || g.flushed {
+		return
+	}
+	g.flushed = true
+	if isCannedErrorText(g.buf) {
+		g.canned = true
+		g.buf = ""
+		return
+	}
+	if g.buf != "" {
+		g.emit(g.buf)
+		g.buf = ""
+	}
+}
+
+// Canned 报告 Finish 是否判定为罐头回复。
+func (g *cannedGate) Canned() bool {
+	return g != nil && g.canned
+}
+
+// flushedForStarted 报告是否有真实正文已经放行出门（供 sse.Started 场景区分：
+// 已放行 = 客户端真见过正文，只能 Fail；罐头判定丢弃了缓冲 = 一个字没出门，
+// 还能干净重试）。
+func (g *cannedGate) flushedForStarted() bool {
+	return g == nil || (g.flushed && !g.canned)
+}
+
 // cannedErrorPrefixes 是上游"罐头错误"回复的已知前缀（按账号语言出）。
 // 这些都是 200 + 内容帧里的短句，以前被当正常回复透传。共同特征：极短 +
 // 固定措辞。正常回答不会以这些开头（前缀精确匹配）。
@@ -71,6 +150,16 @@ var cannedErrorPrefixes = []string{
 	"ich bin ein sprachmodell",                    // 瞬态/拒答（de）
 	"leider ist beim verarbeiten",                 // 瞬态故障（de）
 	"es ist ein fehler aufgetreten",               // 瞬态故障（de）
+}
+
+// cannedErrorMarkers 是启发式的第二道网：罐头错误全都含这些词根之一，而
+// 正常回答（尤其带 tool_call 围栏的）几乎不会**又短又含错误词**。上游变体
+// 层出不穷（实测一周内就出了 4 种新措辞），逐条枚举跟不上 —— 两个条件
+// 一起卡误报面：长度 < 150 且命中词根。
+var cannedErrorMarkers = []string{
+	"error", "fehler", "language model", "sprachmodell",
+	"programmierung hinaus", "hard time", "try again", "try something else",
+	"erneut versuchen", "geht über", "can't fulfill", "kann ich nicht",
 }
 
 // isCannedErrorText 判断回复是否是已知的罐头错误（任何一种）。
@@ -85,6 +174,15 @@ func isCannedErrorText(text string) bool {
 	}
 	for _, p := range cannedErrorPrefixes {
 		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	// 启发式：短 + 错误词根。带 ```tool_call 围栏的绝不可能是罐头。
+	if strings.Contains(t, "```") {
+		return false
+	}
+	for _, m := range cannedErrorMarkers {
+		if strings.Contains(t, m) {
 			return true
 		}
 	}

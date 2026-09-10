@@ -112,12 +112,12 @@ The proxy maps incoming OpenAI and Gemini requests to Google's internal CloudCod
 * **`gemini-3.5-flash-light`**: 1M context, up to 32k output tokens. Thinking controlled via `thinkingLevel` (`low`, `medium`, `high`).
 
 ### Claude Models (Anthropic on CloudCode)
-* **`claude-opus-4-6`** (resolves to upstream `claude-opus-4-6-thinking`): 1M context, up to 64k output tokens.
-* **Extended Thinking Budget:** While Google's official Antigravity IDE hardcodes thinking to only 1,024 tokens (~750 words), this proxy allows full extended reasoning via `reasoning_effort`:
-  * `low`: 2,048 thinking tokens
-  * `medium`: 16,000 thinking tokens
-  * `high` *(default)*: 32,000 thinking tokens
-* **Auto Output Budgeting:** Upstream Claude requires `max_tokens > thinking.budget_tokens`. The proxy automatically scales `max_output_tokens` to at least `budget + 8000` to eliminate 400 validation errors.
+* **`claude-opus-4-6`** (resolves to upstream `claude-opus-4-6-thinking`) & **`claude-sonnet-4-6`**: 250k context (Antigravity max), up to 64k output tokens.
+* **Extended Thinking Budget:** While Google's official Antigravity IDE hardcodes thinking to 1,024 tokens (~750 words), this proxy allows tuned reasoning via `reasoning_effort`:
+  * `low`: 1,024 thinking tokens (Google standard)
+  * `medium`: 4,096 thinking tokens
+  * `high` *(default)*: 8,192 thinking tokens
+* **Auto Output Budgeting:** Upstream Claude requires `max_tokens > thinking.budget_tokens`. The proxy automatically scales `max_output_tokens` to at least `budget + 4000` to eliminate 400 validation errors.
 
 ## Endpoints
 

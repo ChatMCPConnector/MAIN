@@ -15,6 +15,7 @@ from ..utils.tool_parser import CODE_FENCE_PATTERN, StreamingToolParser, detect_
 from ..utils.tool_protocol import (
     BLOCKED_NATIVE_TOOL_NAMES,
     CANONICAL_TOOL_CALL_EXAMPLE,
+    TOOL_FORMAT_REMINDER,
     SERVER_SIDE_TOOL_NAMES,
     build_tool_call_instructions as _protocol_build_tool_call_instructions,
     filter_tools,
@@ -413,7 +414,22 @@ def convert_messages(
         transcript_parts.append(f"{title}: {item['content']}".strip())
 
     prompt = "\n\n".join(part for part in transcript_parts if part).strip()
+    # Re-Anchor: nach Tool-Result-Runden verliert das Modell die Format-
+    # Disziplin (prose statt JSON, halluzinierte Limits — Blaupause
+    # gemini-web2api Re-Anchor-Fix). Der Reminder steht damit DIREKT am
+    # Prompt-Ende, wo die []-Terminator-Wahrscheinlichkeit pro generiertem
+    # Token am staerksten wirkt.
+    if tools and tool_choice_policy.get("mode") != "none" and _conversation_has_tool_round(processed):
+        prompt = prompt + "\n\n" + TOOL_FORMAT_REMINDER
     return [{"role": "user", "content": [{"type": "text", "text": prompt + "\n\nAssistant: "}]}]
+
+
+def _conversation_has_tool_round(processed: list[dict[str, str]]) -> bool:
+    for item in processed:
+        content = item.get("content", "")
+        if item.get("role") == "assistant" and content.startswith('{"tool_calls"'):
+            return True
+    return False
 
 
 def resolve_upstream_model(requested_model: str, config: AppConfig) -> tuple[str, str]:

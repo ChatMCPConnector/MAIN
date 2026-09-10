@@ -46,6 +46,9 @@ func resolveModelForThinking(model string, req antigravity.GeminiInternalRequest
 	case isClaudeOpusModel(modelLower):
 		return "claude-opus-4-6-thinking"
 
+	case isClaudeSonnetModel(modelLower):
+		return "claude-sonnet-4-6"
+
 	case isGemini31ProModel(modelLower):
 		switch thinkingLevel {
 		case "high":
@@ -156,6 +159,12 @@ func isClaudeOpusModel(modelLower string) bool {
 	return strings.Contains(modelLower, "claude-opus") ||
 		strings.Contains(modelLower, "opus-4") ||
 		modelLower == "claude-opus-4-6-thinking"
+}
+
+func isClaudeSonnetModel(modelLower string) bool {
+	return strings.Contains(modelLower, "claude-sonnet") ||
+		strings.Contains(modelLower, "sonnet-4") ||
+		modelLower == "claude-sonnet-4-6"
 }
 
 func isGemini31ProModel(modelLower string) bool {

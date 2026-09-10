@@ -9,6 +9,30 @@ from dataclasses import dataclass, field
 from .tool_protocol import BLOCKED_NATIVE_TOOL_NAMES
 
 CODE_FENCE_PATTERN = re.compile(r"```[\s\S]*?```")
+
+# Tolere Protokoll-Suche: {' "tool_calls" ' mit beliebigem Whitespace dazwischen
+# (Pretty-Print / Leerzeichen nach '{' — vom Modell beobachtet).
+_TOOL_CALLS_PROTOCOL_RE = re.compile(r"\{\s*\"tool_calls\"\s*:")
+
+
+def find_tool_calls_protocol(text: str) -> int:
+    """Findet den Start eines JSON-Tool-Protokoll-Objekts (tolerant gegen
+    Pretty-Printing). Gibt -1 zurueck, wenn keines vorhanden ist."""
+    match = _TOOL_CALLS_PROTOCOL_RE.search(_mask_code_fences(text))
+    return match.start() if match else -1
+
+
+def _is_partial_protocol_suffix(text: str) -> int | None:
+    """Wie viele Zeichen am Textende koennen der Anfang von
+    '{ "tool_calls" ...' sein? Gibt die Laenge zurueck (0 = nichts),
+    toleriert whitespace zwischen '{' und 'tool_calls' NICHT (fuer
+    hold-back zu aggressiv) — nur kompakte Praefixe."""
+    protocol = '{"tool_calls'
+    max_hold = min(len(text), len(protocol))
+    for length in range(max_hold, 1, -1):
+        if text.endswith(protocol[:length]):
+            return length
+    return None
 TOOL_RESULT_PATTERN = re.compile(
     r"<(?:(?:\|DSML\|)|ml_)?tool_result\b[\s\S]*?</(?:(?:\|DSML\|)|ml_)?tool_result>",
     re.IGNORECASE,
@@ -545,7 +569,7 @@ def _find_json_tool_call(
     wird NICHT als echter Aufruf geparst. Der Brace-Scan laeuft auf dem
     Original-Text (Argumente duerfen ihrerseits ``` enthalten)."""
     masked = _mask_code_fences(text)
-    start = masked.find('{"tool_calls"')
+    start = find_tool_calls_protocol(text)
     if start == -1:
         # partial am ende halten — NUR suffixe, die praefix des
         # tool-protokolls '{"tool_calls' sein koennen (ab 2 zeichen, also
@@ -553,7 +577,7 @@ def _find_json_tool_call(
         # '}'/'"'-dynamik egal: das hier ist nur hold-back, geparsed wird
         # spaeter ohnehin der komplette block.
         if not final:
-            protocol = '{"tool_calls'
+            protocol = '{"tool_calls":'
             max_hold = min(len(masked), len(protocol))
             for length in range(max_hold, 1, -1):
                 if masked.endswith(protocol[:length]):
@@ -670,7 +694,7 @@ def _split_stream_text(
     #    einer Code-Fence hier als echter Aufruf durchrutschen.
     #    allowed-Filter gilt AUCH hier: wenn Schritt 1 alle Calls gefiltert
     #    hat, darf Schritt 2 sie nicht ungefiltert durchlassen.
-    jstart = _mask_code_fences(text).find('{"tool_calls"')
+    jstart = find_tool_calls_protocol(text)
     if jstart != -1:
         depth = 0
         in_str = False
@@ -775,7 +799,7 @@ def detect_tool_call_names(text: str) -> list[str]:
         return []
     names: list[str] = []
     masked = _mask_code_fences(text)
-    start = masked.find('{"tool_calls"')
+    start = find_tool_calls_protocol(text)
     if start != -1:
         depth = 0
         in_str = False

@@ -74,7 +74,7 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
 | xinjianya | gpt-5.6-sol, kimi-k3, deepseek-v4-pro | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
 | **gemini-web** | gemini-3.1-pro-thinking, gemini-3.8-flash-thinking, gemini-3.5-flash-lite-thinking | lokal, Port 8083, Google AI Pro (Cookie-Pool) |
-| **antigravity** | claude-opus-4-6 (1M, Thinking 2k/16k/32k), gemini-3.8-flash (1M, 64k Output), gemini-3.1-pro (1M, 64k Output), gemini-3.5-flash-light (1M, 32k Output) | lokal, Port 9878, Google Cloud Code OAuth |
+| **antigravity** | claude-opus-4-6 (250k, Thinking 1k/4k/8k), claude-sonnet-4-6 (250k, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output), gemini-3.1-pro (1M, 64k Output), gemini-3.5-flash-light (1M, 32k Output) | lokal, Port 9878, Google Cloud Code OAuth |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,

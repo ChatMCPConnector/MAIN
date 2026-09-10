@@ -53,10 +53,11 @@ def test_convert_messages_injects_json_tool_prompt_and_history():
     assert "# TOOL USE PROTOCOL" in prompt
     assert "tool_calls" in prompt
     assert "arguments" in prompt
-    assert "Parameter names are case-sensitive and must exactly match the schema." in prompt
-    assert "never change it to `filepath`, `file_path`, or `FilePath`." in prompt
+    assert "Parameter names must exactly match the schema." in prompt
     assert "# BLOCKED TOOLS" not in prompt
-    assert "Ignore any tool names that are not listed below" in prompt
+    assert "No other tools exist" in prompt
+    # Re-Anchor nach Tool-Result-Runden aktiv
+    assert "System instruction — highest priority" in prompt
 
 
 def test_accumulator_build_response_maps_xml_to_openai_tool_calls():
@@ -390,7 +391,7 @@ def test_convert_messages_respects_tool_choice_none_and_specific():
         tool_choice={"type": "function", "function": {"name": "get_weather"}},
     )
     specific_prompt = specific_converted[0]["content"][0]["text"]
-    assert "You must call exactly `get_weather` before giving a final answer." in specific_prompt
+    assert "You must call exactly `get_weather`." in specific_prompt
 
 
 def test_convert_messages_filters_native_url_tools_and_reinforces_tool_awareness():
@@ -422,11 +423,7 @@ def test_convert_messages_filters_native_url_tools_and_reinforces_tool_awareness
     assert "Tool: open_url" not in prompt
     assert "Server-side native tools" not in prompt
     assert "Tool: mcp__CherryFetch__fetchJson" in prompt
-    assert "You do not have hidden browser, web, or URL-opening tools." in prompt
-    assert "Never call native tools such as `open_url`" in prompt
-    assert "Do not output hidden reasoning, chain-of-thought, or labels such as `Thinking:`." in prompt
-    assert "Do not narrate tool selection, failed tool attempts, retries, fallback plans, or tool status banners." in prompt
-    assert "Never output tool-call display text such as `⚙ tool_name [...]`" in prompt
+    assert "no browser, no open_url, no web.search" in prompt
 
 
 def test_convert_messages_drops_blocked_tool_call_history():

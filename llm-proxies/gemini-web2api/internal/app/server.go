@@ -293,16 +293,25 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 带 tools 时正文过一道围栏闸门：```tool_call``` 块要完整文本才能解析，
 	// 直接转发会把围栏原文推给客户端，所以只放行确定不在围栏里的部分。
 	// 思考链跟围栏无关，两种情况都直接流。
+	// 正文外面再裹一道罐头闸门（cannedGate）：前 220 字节扣住，攒够才放行 ——
+	// 罐头错误全是一句短话，检测命中时一个字还没出门，可以干净地重试
+	// （不扣的话 sse.Started() 已 true，只能 Fail，run 就此中断）。
 	var sse *sseWriter
 	var gate *toolFenceGate
+	var cgate *cannedGate
 	var onDelta, onReasoning func(string)
 	if stream {
 		sse = newSSEWriter(w, cid, created, modelName)
 		onReasoning = sse.SendReasoning
+		// 罐头闸门包在最外层（无 tools 直接包 SendContent；有 tools 包在围栏
+		// 闸门外）——两条路的正文都要先过罐头扣留，否则工具路径的罐头散文会
+		// 从围栏闸门直接漏给客户端（实测 benchmark turn 7 卡死就是这个）。
+		// 思考链不扣：它不是罐头载体，且重发时思考链重放是无害的。
+		cgate = newCannedGate(sse.SendContent)
 		if len(tools) == 0 {
-			onDelta = sse.SendContent
+			onDelta = cgate.Push
 		} else {
-			gate = newToolFenceGate(sse.SendContent)
+			gate = newToolFenceGate(cgate.Push)
 			onDelta = gate.Push
 		}
 	}
@@ -328,6 +337,11 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	} else {
 		text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, onDelta, onReasoning)
 	}
+	// 流收尾：罐头闸门判定（扣住的 220 字节里是不是罐头短句）。判定完该放行的
+	// 放行；是罐头则一个字都没出门，下面的检测触发干净重试。
+	if cgate != nil {
+		cgate.Finish()
+	}
 	// 额度耗尽的签名回复是 200 + 一句 65 字节的固定措辞（见 quota.go）。以前它被
 	// 当正常回复透传，agentic 客户端拿到没有 tool_call 的散文就中断。这里翻成
 	// 显式错误，让下面的分支走降级/429。流式已吐出的部分无法收回，但签名句
@@ -346,29 +360,33 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if cre, ok := err.(*CannedReplyError); ok {
-			// 瞬态罐头错误：单轮重发一次（流式回调置空，避免重复吐字）。
-			// 再失败就如实报 502——连着罐头说明上游这会儿真不行。
+			// 瞬态罐头错误：单轮重发**最多 3 次**（实测上游连续抖动 2-3 次后恢复；
+			// 只重发一次不够，benchmark 里两次罐头连着出现就把 run 卡死过）。
+			// 重发走 callGemini（全量 prompt），不再续接 conv —— 罐头句已进服务端
+			// 历史，续接会把它当正常轮次，模型容易顺着继续罐头。
+			// 流式已开（sse.Started）就不再重发：吐出去的字收不回。
 			recordRequest("chat.completions", modelName, prompt, "", res, 502, cre.Error(), stream)
-			if sse != nil && sse.Started() {
+			if sse != nil && sse.Started() && (cgate == nil || cgate.flushedForStarted()) {
 				sse.Fail(cre)
 				return
 			}
-			logf("[canned] %s 罐头错误（%q），单轮重发一次", modelName, truncateStr(cre.Text, 60))
-			text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, nil, nil)
-			if err != nil {
-				if isCannedErrorText(text) || text == "" {
-					recordRequest("chat.completions", modelName, prompt, "", res, 502, "canned error retry failed", stream)
-					writeJSON(w, 502, map[string]interface{}{"error": map[string]string{
-						"message": "upstream keeps returning canned error replies; try again later",
-					}})
+			retryOK := false
+			for i := 0; i < 3; i++ {
+				logf("[canned] %s 罐头错误（%q），单轮重发 %d/3", modelName, truncateStr(cre.Text, 60), i+1)
+				text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, nil, nil)
+				if err != nil {
+					recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
+					writeJSON(w, 502, map[string]interface{}{"error": map[string]string{"message": "upstream error: " + err.Error()}})
 					return
 				}
-				recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
-				writeJSON(w, 502, map[string]interface{}{"error": map[string]string{"message": "upstream error: " + err.Error()}})
-				return
+				if !isCannedErrorText(text) {
+					retryOK = true
+					break
+				}
+				logf("[canned] 重发 %d/3 仍是罐头：%q", i+1, truncateStr(text, 60))
 			}
-			if isCannedErrorText(text) {
-				recordRequest("chat.completions", modelName, prompt, "", res, 502, "canned error retry failed", stream)
+			if !retryOK {
+				recordRequest("chat.completions", modelName, prompt, "", res, 502, "canned error retry failed (3x)", stream)
 				writeJSON(w, 502, map[string]interface{}{"error": map[string]string{
 					"message": "upstream keeps returning canned error replies; try again later",
 				}})
@@ -413,7 +431,9 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 不再现 = 瞬态抖动 → 用重发结果正常返回。（/app 横幅方案已废弃，
 			// 那个 out_of_quota 字符串是永久 UTM 链接，额度正常时也在页面里。）
 			recordRequest("chat.completions", modelName, prompt, "", res, 429, qle.Error(), stream)
-			if sse != nil && sse.Started() {
+			// 已开流且闸门已放行（非罐头路径真吐过字）才 Fail；罐头闸门扣住
+			// 头部时 sse 可能还没 start，那就可以干净重试。
+			if sse != nil && sse.Started() && (cgate == nil || cgate.flushedForStarted()) {
 				sse.Fail(qle) // 已开流，只能失败终止
 				return
 			}

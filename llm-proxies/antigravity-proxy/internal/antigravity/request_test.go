@@ -319,3 +319,48 @@ func TestApplyHeadersMatchesAntigravityCLI(t *testing.T) {
 		t.Fatalf("Accept = %q, want empty", got)
 	}
 }
+
+func TestClaudeThinkingBudget(t *testing.T) {
+	tests := []struct {
+		name       string
+		level      string
+		wantBudget int
+	}{
+		{"Claude low", "low", 1024},
+		{"Claude minimal", "minimal", 1024},
+		{"Claude medium", "medium", 4096},
+		{"Claude high", "high", 8192},
+		{"Claude default", "", 8192},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &GenerateContentRequest{
+				Model: "claude-opus-4-6-thinking",
+				Request: GeminiInternalRequest{
+					Contents: []Content{{Role: "user", Parts: []ContentPart{{Text: "hello"}}}},
+					GenerationConfig: &GeminiGenerationConfig{
+						ThinkingConfig: &ThinkingConfig{
+							ThinkingLevel: tt.level,
+						},
+					},
+				},
+			}
+			prepareAntigravityRequest(req)
+
+			tc := req.Request.GenerationConfig.ThinkingConfig
+			if tc == nil {
+				t.Fatal("ThinkingConfig is nil")
+			}
+			if tc.ThinkingLevel != "" {
+				t.Fatalf("ThinkingLevel = %q, want empty", tc.ThinkingLevel)
+			}
+			if tc.ThinkingBudget == nil || *tc.ThinkingBudget != tt.wantBudget {
+				t.Fatalf("ThinkingBudget = %v, want %d", tc.ThinkingBudget, tt.wantBudget)
+			}
+			if req.Request.GenerationConfig.MaxOutputTokens <= *tc.ThinkingBudget {
+				t.Fatalf("MaxOutputTokens = %d, want > %d", req.Request.GenerationConfig.MaxOutputTokens, *tc.ThinkingBudget)
+			}
+		})
+	}
+}

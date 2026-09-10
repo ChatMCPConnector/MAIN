@@ -238,7 +238,23 @@
             "high": { "reasoningEffort": "high" }
           },
           "limit": {
-            "context": 1000000,
+            "context": 250000,
+            "output": 64000
+          }
+        },
+        "claude-sonnet-4-6": {
+          "name": "Claude Sonnet 4.6",
+          "reasoning": true,
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "low": { "reasoningEffort": "low" },
+            "medium": { "reasoningEffort": "medium" },
+            "high": { "reasoningEffort": "high" }
+          },
+          "limit": {
+            "context": 250000,
             "output": 64000
           }
         }
@@ -353,7 +369,6 @@
     }
   },
   "model": "antigravity/gemini-3.8-flash",
-  "small_model": "antigravity/gemini-3.8-flash",
   "disabled_providers": [
     "github-copilot"
   ],
