@@ -101,6 +101,14 @@ func convPut(key string, st *convState) {
 
 // canonicalMessages 把消息列表压成 role+text 的稳定串，用来算会话指纹。
 // 只取 role 和文本内容 —— 客户端每轮重发同样的历史，压出来的串一致才能识别续接。
+//
+// 2026-09-11 修正（Agent-Loop-Support）：tool 消息**进指纹**。原版只压 role+content，
+// agent 的历史是 user / assistant(null+tool_calls) / tool(result) 交替 —— assistant
+// 的 content 为 null 压成空串、tool 的 content 是执行结果。convChildKey 存的是
+// 「我们上次回复后客户端下轮会带来的历史」，那条历史里 tool result 已经在；
+// 两边用同一个 canonical 函数才对得上。此前 tool 消息压出来没差别，assistant-null
+// 前后两轮不一致，续接命中率在 agent 循环里掉到几乎为零（每个 Turn 新会话，
+// 7 Turns → 4+ Sessions，上游当 spam 限流）。
 func canonicalMessages(messages []map[string]interface{}) string {
 	var b strings.Builder
 	for _, m := range messages {
@@ -119,11 +127,56 @@ func hashStr(s string) string {
 
 // convParentKey 是"这轮之前的历史"的指纹：除最后一条消息外的全部。
 // 命中 store 说明这是某路已知会话的延续，只要发最后一条新消息即可。
+//
+// 2026-09-11 Agent-Loop-Support：agent 的历史是 user → assistant(tool_calls) →
+// tool(result) → user 交替。tool 的 result 内容是客户端本地执行出来的，代理
+// 在上一轮存 childKey 时不可能知道 —— 所以除了精确指纹外，convGetByParentKey
+// 还会试「剥掉结尾 tool 消息」的降级指纹。assistant(tool_calls) 在指纹里压成
+// 空串（content 为 null），跟 childKey 存的形状一致，剥掉 tool 后正好对上。
 func convParentKey(messages []map[string]interface{}) string {
 	if len(messages) < 2 {
 		return ""
 	}
 	return hashStr(canonicalMessages(messages[:len(messages)-1]))
+}
+
+// stripTrailingToolMsgs 去掉结尾连续的 tool 消息（assistant 的 tool_calls 块保留，
+// canonical 压它 content=null → 空串，和 childKey 一致）。
+func stripTrailingToolMsgs(messages []map[string]interface{}) []map[string]interface{} {
+	n := len(messages)
+	for n > 0 && getStr(messages[n-1], "role") == "tool" {
+		n--
+	}
+	if n == len(messages) {
+		return messages
+	}
+	return messages[:n]
+}
+
+// parentKeyCandidates 按优先级列出这轮历史的识别指纹：
+//  1. 精确：全部历史（除最后一条新消息）
+//  2. 降级：同上，但剥掉结尾 tool 消息 —— agent 把工具结果带回来的场景
+func parentKeyCandidates(messages []map[string]interface{}) []string {
+	if len(messages) < 2 {
+		return nil
+	}
+	prefix := messages[:len(messages)-1]
+	exact := hashStr(canonicalMessages(prefix))
+	stripped := stripTrailingToolMsgs(prefix)
+	if len(stripped) == len(prefix) {
+		return []string{exact}
+	}
+	return []string{exact, hashStr(canonicalMessages(stripped))}
+}
+
+// convGetByParentKey 按候选指纹找会话：精确命中优先，降级指纹兜底。
+func convGetByParentKey(messages []map[string]interface{}) (*convState, string) {
+	for _, key := range parentKeyCandidates(messages) {
+		if conv := convGet(key); conv != nil {
+			return conv, key
+		}
+	}
+	return nil, ""
 }
 
 // convChildKey 是"这轮之后的历史"的指纹：历史 + 本轮模型回复。
@@ -465,8 +518,10 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 	tools []map[string]interface{}, toolChoice interface{},
 	onDelta, onReasoning func(string)) (string, []ToolCall, *StreamResult, error) {
-	parentKey := convParentKey(messages)
-	conv := convGet(parentKey)
+	// 2026-09-11：候选指纹识别（见 parentKeyCandidates）—— agent 循环里
+	// tool result 在历史里、但我们存 childKey 时不知道它的内容，降级指纹
+	// （剥掉结尾 tool 消息）负责命中。
+	conv, hitKey := convGetByParentKey(messages)
 	fresh := conv == nil
 
 	var prompt string
@@ -503,12 +558,30 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 		logf("[conv] 续接命中 turn=%d，只发 %d 字节（历史留服务端）", conv.turn, len(prompt))
 	}
 
-	res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
-	if err != nil {
-		if !fresh {
-			// 续接失败：这路会话作废，客户端重试时会当新会话全量重发。
-			convDelete(parentKey)
+res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
+	// 续接失败（会话在服务端已死）时**就地重锚**：2026-09-11 之前是删会话 +
+	// 报错给客户端，客户端/重试层再打一次才走新会话 —— 对上游等于多一轮
+	// 无意义请求（还显眼）。现在：作废、当轮内部当新会话全量重发一次，对客
+	// 户端透明。只在**还没往客户端写过任何 delta** 时重锚（res.Emitted 为空；
+	// 流已开始就不能重来，否则内容重复）。
+	if err != nil && !fresh && res != nil && res.Emitted == "" && res.EmittedReasoning == "" {
+		convDelete(hitKey)
+		logf("[conv] 续接失败（%v），本轮就地重锚为新会话", err)
+		conv = &convState{}
+		if !anonFirstEligible(mc, false) {
+			if a, ok := pickCookieAccount(); ok {
+				conv.cookie = a.Cookie
+				conv.sapisid = extractSAPISID(a.Cookie)
+				conv.isLogin = true
+				conv.accountID = a.ID
+				conv.proxyID = a.ProxyID
+			}
 		}
+		prompt, _ = messagesToPrompt(messages, tools, toolChoice)
+		logf("[conv] 重锚，首轮发 %d 字节（tools=%d）", len(prompt), len(tools))
+		res, err = streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
+	}
+	if err != nil {
 		return "", nil, res, err
 	}
 	text := extractResponseText(res.Raw)
@@ -518,12 +591,15 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 	}
 	if text == "" && len(toolCalls) == 0 {
 		if !fresh {
-			convDelete(parentKey)
+			convDelete(hitKey)
 		}
 		return "", nil, res, fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(res.Raw))
 	}
 	// 存续接状态：客户端下一轮把这段回复原样带回来时，parentKey 会命中这里。
 	// 存的是解析掉围栏后的正文 —— 客户端把 assistant 消息带回来时 content 也是这段。
+	// 2026-09-11：agent 循环里客户端接下来还会贴 tool result —— 那部分内容我们
+	// 存键时不知道，下轮靠 parentKeyCandidates 的降级指纹（剥结尾 tool 消息）
+	// 命中，见 callGeminiConv 头部注释。
 	convPut(convChildKey(messages, text), conv)
 	return text, toolCalls, res, nil
 }
