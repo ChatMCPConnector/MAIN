@@ -215,6 +215,14 @@ func recordRequest(endpoint, model, prompt, response string, res *StreamResult, 
 	go insertRequest(r)
 }
 
+// fbNameOrModel 给失败记录选模型名：降级重发失败时记降级目标，否则原模型。
+func fbNameOrModel(fb, model string) string {
+	if fb != "" {
+		return fb
+	}
+	return model
+}
+
 func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -299,17 +307,78 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 5h 额度锁（#quota）：额度用完期间，受约束的模型直接降级 3.5 Flash-Lite，
+	// 省一次注定失败的上游调用。降级必须可见（前置说明），客户端才知道发生了什么。
+	fbPrefix := ""
+	if rtCfg().QuotaFallback && quotaActive() && quotaModelAffected(modelCfg) {
+		if fbName, fbCfg, ok := quotaFallbackModel(modelCfg); ok {
+			logf("[quota] %s 额度受限，本请求降级 %s", modelName, fbName)
+			fbPrefix = quotaFallbackPrefix(modelName, fbName) + "\n\n"
+			modelName, modelCfg = fbName, fbCfg
+		}
+	}
+
 	var text string
 	var toolCalls []ToolCall
 	var res *StreamResult
+	fbName := ""
 	if rtCfg().MultiTurn && len(images) == 0 && modelCfg.Tool == 0 {
 		// 多轮：按历史前缀识别续接，命中就只发新消息、历史留服务端。带 tools 也走这条。
 		text, toolCalls, res, err = callGeminiConv(messages, modelCfg, tools, req["tool_choice"], onDelta, onReasoning)
 	} else {
 		text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, onDelta, onReasoning)
 	}
+	// 额度耗尽的签名回复是 200 + 一句 65 字节的固定措辞（见 quota.go）。以前它被
+	// 当正常回复透传，agentic 客户端拿到没有 tool_call 的散文就中断。这里翻成
+	// 显式错误，让下面的分支走降级/429。流式已吐出的部分无法收回，但签名句
+	// 很短、且我们立刻 sse.Fail，客户端只看到一次干净的失败而不是假成功。
+	if err == nil && isQuotaText(text) {
+		err = &QuotaLimitError{Model: modelName}
+		text = ""
+	}
 	if err != nil {
-		recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
+		if qle, ok := err.(*QuotaLimitError); ok {
+			// 额度耗尽：先拿 /app 横幅二次确认（65 字节签名也可能是瞬态故障，
+			// 不加确认一次抖动就会白锁 5 小时），确认了才记录锁，然后降级或 429。
+			confirmed := quotaBannerConfirmed()
+			if confirmed {
+				markQuotaLimited()
+			} else {
+				logf("[quota] 检出额度签名回复，但 /app 无 out_of_quota 横幅 → 按瞬态处理，不锁")
+			}
+			recordRequest("chat.completions", modelName, prompt, "", res, 429, qle.Error(), stream)
+			if sse != nil && sse.Started() {
+				sse.Fail(qle) // 已开流，只能失败终止
+				return
+			}
+			if fb, fbCfg, ok := quotaFallbackModel(modelCfg); rtCfg().QuotaFallback && ok {
+				// 降级重发一次（走单轮路径：conv 状态已作废，flash-lite 也不受限，
+				// 直接发全量 prompt 最稳）。流式回调置空 —— 前缀说明必须最先出现。
+				logf("[quota] %s 额度耗尽（响应内检出），降级 %s 重发", modelName, fb)
+				fbPrefix = quotaFallbackPrefix(modelName, fb) + "\n\n"
+				text, toolCalls, res, err = callGemini(prompt, latest, fbCfg, tools, images, nil, nil)
+				if err == nil {
+					fbName, modelName = fb, fb
+				}
+			} else {
+				text, res, err = "", nil, qle
+			}
+			if err != nil {
+				if qle2, ok := err.(*QuotaLimitError); ok {
+					writeJSON(w, 429, map[string]interface{}{"error": map[string]string{
+						"message": qle2.Error(),
+						"type":    "rate_limit_exceeded",
+						"code":    "usage_limit_reached",
+					}})
+					return
+				}
+				recordRequest("chat.completions", fbNameOrModel(fbName, modelName), prompt, "", res, 502, err.Error(), stream)
+				writeJSON(w, 502, map[string]interface{}{"error": map[string]string{"message": "upstream error: " + err.Error()}})
+				return
+			}
+		} else {
+			recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
+		}
 		if sse != nil && sse.Started() {
 			sse.Fail(err) // 已经开流，HTTP 状态码改不了了
 			return
@@ -336,6 +405,11 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	msg := map[string]interface{}{"role": "assistant"}
 	if text != "" {
+		// 降级说明前缀：quota fallback 时先告知再正文（流式没发过前缀，这里补）。
+		if fbPrefix != "" && sse != nil && !strings.Contains(sentText(res, gate), quotaFallbackNote) {
+			sse.SendContent(fbPrefix)
+		}
+		text = fbPrefix + text
 		msg["content"] = text
 	} else {
 		msg["content"] = nil

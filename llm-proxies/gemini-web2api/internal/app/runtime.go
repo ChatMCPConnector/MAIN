@@ -55,6 +55,9 @@ type RuntimeConfig struct {
 	// 匿名优先（#20）：不需要登录态能力的请求（纯文本、非思考、无工具、无图）走匿名、
 	// 不占 cookie 账号，省账号额度；需要登录才挑号。默认 false，见 modelNeedsLogin。
 	AnonFirst bool `json:"anon_first"`
+	// QuotaFallback：5h 用量额度耗尽时降级 3.5 Flash-Lite 继续答（带说明前缀），
+	// 关掉则回 429。见 quota.go。加字段必读文件头注释（#27：必须同步 RT_GROUPS）。
+	QuotaFallback bool `json:"quota_fallback"`
 }
 
 const runtimeConfigKey = "runtime_config"
@@ -89,6 +92,7 @@ func initRuntimeConfig() {
 
 		AutoDeleteConversation: cfg.AutoDeleteConversation,
 		AnonFirst:              cfg.AnonFirst,
+		QuotaFallback:          cfg.QuotaFallback,
 	}
 	if raw := kvGet(runtimeConfigKey); raw != "" {
 		saved := base

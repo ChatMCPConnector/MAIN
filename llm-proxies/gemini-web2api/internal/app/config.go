@@ -47,6 +47,9 @@ type Config struct {
 	// 匿名优先（#20）：这次请求不需要登录态能力（纯文本、非思考、无工具、无图）时
 	// 不占用 cookie 账号，走匿名省额度；需要登录才挑号。默认 false。见 modelNeedsLogin。
 	AnonFirst bool `json:"anon_first"`
+	// 5h 用量额度耗尽时是否自动降级 3.5 Flash-Lite 继续答（带降级说明前缀），
+	// 关掉则直接回 429 usage_limit_reached。3.5 Flash-Lite 不受限、永远可用。默认 true。
+	QuotaFallback bool `json:"quota_fallback"`
 }
 
 var (
@@ -88,6 +91,7 @@ func defaultConfig() Config {
 		MultiTurn:              false,
 		AutoDeleteConversation: false,
 		AnonFirst:              false,
+		QuotaFallback:          true,
 	}
 }
 

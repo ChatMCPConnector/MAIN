@@ -949,6 +949,8 @@ const RT_GROUPS = [
         hint: '走 Gemini 原生服务端多轮：按历史前缀认出这是上一轮的续接，命中就只发最新一句、历史留在服务端，同一串对话复用同一个 gemini 会话（不再每发一条就新开一个）。匿名/登录都行，带图或带工具时不生效。首轮/重启/改历史会退回整段重发。默认关' },
       { k: 'anon_first', label: '匿名优先', type: 'bool',
         hint: '这次请求不需要登录态能力时（纯文本、非思考、无工具、不带图）走匿名、不占用 cookie 账号，省账号额度；用到 3.1 Pro / 3.8 Flash / 扩展思考 / 生图 / 传文件这些才挑号。关掉则只要池里有号就一律用号（默认关）' },
+      { k: 'quota_fallback', label: '额度耗尽降级 Flash-Lite', type: 'bool',
+        hint: 'Google 账号的 5 小时用量额度用完时（上游回 65 字节的 "I encountered an error..." 签名回复），自动降级 3.5 Flash-Lite 继续答，回复带 [quota-fallback] 说明前缀和估算的复位时间；关掉则直接回 429 usage_limit_reached。3.5 Flash-Lite 不受额度约束、永远可用（默认开）' },
     ],
   },
   {
