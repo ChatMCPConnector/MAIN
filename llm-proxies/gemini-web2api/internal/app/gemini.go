@@ -168,7 +168,27 @@ func resolveModel(modelName string) (string, ModelConfig, error) {
 		}
 		return "", ModelConfig{}, fmt.Errorf("unknown model: %s", modelName)
 	}
+	// 2026-09-11 起：Gemini-Web 模型**永远**带扩展思考跑（用户指令：「thinking IMMER，
+	// nie ohne」）。做法：有登录态时把 plain 版内部提升成同 hex 的 thinking 版 ——
+	// 对客户端透明（模型名不变），响应里多一条 reasoning_content，正文不变。
+	// 匿名不提升：服务端忽略 inner[80]=2，提了也是白提（thinking 与 inner[96] 是
+	// 登录态开关）。媒体模型（image/music/video/canvas）也不提 —— 它们的产物
+	// 不走文本思考链。
+	mc = applyAlwaysThinking(modelName, mc, hasCookie())
 	return modelName, mc, nil
+}
+
+// applyAlwaysThinking 是 always-thinking 政策的实现（纯函数，测试直接调）。
+// 有登录态 + plain 文本模型 + 存在同 hex 同 mode 的 thinking 版 → 提升。
+func applyAlwaysThinking(modelName string, mc ModelConfig, hasLogin bool) ModelConfig {
+	if hasLogin && !mc.Thinking && mc.Tool == 0 {
+		if think, exists := Models[modelName+"-thinking"]; exists &&
+			think.HexID == mc.HexID && think.Mode == mc.Mode && think.Thinking {
+			logf("[model] %s -> thinking 版（always-thinking 政策）", modelName)
+			return think
+		}
+	}
+	return mc
 }
 
 // StreamResult holds raw body + per-request proxy + timing info.
