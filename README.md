@@ -150,6 +150,10 @@ einem Codespace-Wechsel macht setup.sh automatisch: uv-Install (falls nötig),
   Profil `.runtime/firefox-profile/` enthält evtl. Logins — nie committen.
 - **Systempakete** via setup.sh (idempotent): nodejs, npm, xvfb, x11vnc, novnc,
   websockify, sqlite3, dbus-x11, build-essential, python3-* etc.
+- **Go-Toolchain:** Go 1.25.7 (gepinnt, entspricht `mise.toml` im antigravity-proxy)
+  nach `/usr/local/go` via setup.sh — das Proxy-Binary liegt nicht im Git und wird
+  pro Codespace neu gebaut (`scripts/start.sh` baut automatisch nach, Fallback
+  `/usr/local/go/bin/go`). PATH via `aliases.sh`.
 - **Deprecated (gelöscht 2026-09-10):** kompletter Chromium-Stack entfernt
   (`infra/browser/` Playwright 1.48.2, `.runtime/ms-playwright/`,
   `.runtime/chromium-profile/`, `browser-install.sh`, CDP-Port 9222).
@@ -254,6 +258,14 @@ Proxy bei jedem Start automatisch hoch.
   `blocked_tool_attempt_names` protokolliert. Live-Verifikation: das vorher
   zuverlässig leckende Szenario liefert jetzt einen sauberen strukturierten
   `read`-Tool-Call.
+- 2026-09-10 (6): **Go-Toolchain im Landschafts-Setup verankert.** Root Cause
+  „antigravity-proxy startet nicht": Binary liegt nicht im Git, und weder `go`
+  noch `mise` waren installiert — `run_proxy.sh` und `scripts/start.sh` konnten
+  nicht bauen. Fix: Go 1.25.7 (gepinnt, wie Upstream-`mise.toml`) wird jetzt von
+  `setup.sh` automatisch nach `/usr/local/go` installiert (idempotent),
+  `scripts/start.sh` baut das Binary bei Bedarf selbst nach, `/usr/local/go/bin`
+  im PATH via `aliases.sh`. Autostart-Kette (setup.sh → start-on-boot.sh →
+  proxy-watchdog.sh) greift damit auch nach Rebuild/Resume ohne manuellen Build.
 - 2026-09-10 (3): **Chromium-Stack komplett entfernt, Firefox als VNC-Browser.**
   Root Cause der schnell ablaufenden gemini-web-Cookies: Google hat die Session auf
   DBSC (device-bound session) umgestellt — Chromium-Cookies kann gemini-web2api nicht

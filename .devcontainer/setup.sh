@@ -136,6 +136,20 @@ else
   fi
 fi
 
+echo "==> [landscape] Go-Toolchain installieren (antigravity-proxy-Build)..."
+# antigravity-proxy ist Go und braucht das Binary vor Ort (liegt nicht im Git).
+# start.sh erwartet go unter /usr/local/go/bin/go (Fallback-Pfad dort).
+if [ -x /usr/local/go/bin/go ]; then
+  echo "    Go schon vorhanden: $(/usr/local/go/bin/go version)."
+else
+  GO_VERSION="1.25.7"  # gepinnt, entspricht mise.toml im antigravity-proxy
+  curl -fsSL "https:/​/go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/opencode/go.tgz \
+    && sudo rm -rf /usr/local/go \
+    && sudo tar -C /usr/local -xzf /tmp/opencode/go.tgz \
+    && echo "    Go ${GO_VERSION} nach /usr/local/go installiert." \
+    || echo "    WARN: Go-Install fehlgeschlagen — antigravity-Build evtl. nicht möglich."
+fi
+
 echo "==> [landscape] LLM-Proxy antigravity-proxy wiederherstellen & starten..."
 if ss -tln | grep -q ":9878 "; then
   echo "    Port 9878 belegt — antigravity-proxy läuft bereits."
