@@ -707,6 +707,124 @@ def _recover_tool_calls_json(candidate: str) -> dict[str, object] | None:
         search_from = idx + len(probe)
 
 
+_BARE_ARRAY_START_RE = re.compile(r"\[\s*\{\s*\"name\"\s*:")
+
+
+def _find_bare_tool_call_array(
+    text: str,
+    final: bool,
+    allowed_tool_names: set[str] | None = None,
+) -> tuple[str, str, list[dict[str, object]]] | None:
+    """Leak-Variante D (Final-Run 00:27/00:33): das Modell emittiert
+    Tool-Calls als NACKTES JSON-Array '[{"name": ..., "arguments": ...}]'
+    — ohne {"tool_calls"}-Wrapper, teils mit prosa davor, teils in einem
+    (auch kaputten '``json'-)fence, teils mit '[]' dahinter. Das Wrapper-
+    format erkennt das nicht. Streng: jedes array-element NUR name+arguments.
+    Gibt None zurueck, wenn kein bare-array-protokoll gefunden wurde."""
+    masked = _mask_code_fences(text)
+    match = _BARE_ARRAY_START_RE.search(masked)
+    if match is None:
+        # hold-back: partielle array-anfaenge am textende
+        if not final:
+            probe = '[{"name"'
+            for length in range(min(len(text), 8), 1, -1):
+                if text.endswith(probe[:length] if length <= len(probe) else probe):
+                    return "", text[len(text) - 0 :], []  # unreachable fallback
+        return None
+    start = match.start()
+    # array-grenzen scannen: bracket-balance ueber den gesamttext ab start
+    depth = 0
+    in_str = False
+    esc = False
+    end = -1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end == -1:
+        if not final:
+            return "", text[start:], []
+        end = len(text)
+    candidate = text[start:end]
+    rest = text[end:]
+    # trailing '[]'-terminator + kaputtes/echtes fence-ende tolerieren
+    rest_stripped = rest.lstrip()
+    skipped = len(rest) - len(rest_stripped)
+    consumed = skipped
+    if rest_stripped.startswith("[]"):
+        consumed += 2
+        rest_stripped = rest_stripped[2:]
+    if rest_stripped.lstrip().startswith("```"):
+        consumed += len(rest) - len(rest)
+    rest = rest[consumed:]
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, list) or not parsed:
+        # Recovery: das modell laesst gern die schliessende ']' weg und
+        # haengt direkt einen (kaputten) '``json'-marker + ein duplikat-array
+        # an. name/arguments-paare einzeln extrahieren (strenge key-pruefung
+        # bleibt: keys <= {name, arguments}).
+        inner = candidate.strip()
+        if inner.startswith("["):
+            inner = inner[1:]
+        recovered = _recover_call_elements(inner)
+        if recovered is not None:
+            rec_calls = recovered.get("tool_calls")
+            if isinstance(rec_calls, list):
+                parsed = [
+                    item for item in rec_calls
+                    if isinstance(item, dict) and set(item.keys()) <= {"name", "arguments"}
+                ]
+        if not isinstance(parsed, list) or not parsed:
+            if not final:
+                return "", text[start:], []
+            return None
+    tool_calls: list[dict[str, object]] = []
+    names: list[str] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            return None
+        keys = set(item.keys())
+        if not keys <= {"name", "arguments"} or "name" not in keys:
+            return None
+        name = str(item.get("name", "")).strip()
+        if not name:
+            return None
+        names.append(name)
+        if _is_allowed_tool_name(name, allowed_tool_names) or allowed_tool_names is None:
+            args = item.get("arguments", {})
+            args_str = args if isinstance(args, str) else json.dumps(args or {}, ensure_ascii=False)
+            tool_calls.append({
+                "index": len(tool_calls),
+                "id": f"call_{uuid.uuid4().hex[:24]}",
+                "type": "function",
+                "function": {"name": name, "arguments": args_str or "{}"},
+            })
+    if not tool_calls:
+        # nur gefilterte calls: array strippen, kein leak des rohen protokolls
+        visible = (text[:start] + rest).strip()
+        return visible, "", []
+    visible = (text[:start] + rest).strip()
+    return visible, "", tool_calls
+
+
 def _find_json_tool_call(
     text: str,
     final: bool,
@@ -856,6 +974,13 @@ def _split_stream_text(
             return visible, remainder, tool_calls
         return visible, remainder, []
 
+    # 1b) Leak-Variante D: nacktes JSON-array als tool-protokoll
+    bare = _find_bare_tool_call_array(text, final, allowed_tool_names)
+    if bare is not None:
+        bare_visible, bare_remainder, bare_calls = bare
+        if bare_calls or (bare_remainder and not final):
+            return bare_visible, bare_remainder, bare_calls
+
     # 2) Tool-Calls im think-Feld suchen (Fallback für glm-5.3-think).
     #    Gleichfalls fence-maskiert — sonst wuerde ein Tool-Call-Beispiel in
     #    einer Code-Fence hier als echter Aufruf durchrutschen.
@@ -954,6 +1079,14 @@ def parse_tool_calls_from_text(text: str, allowed_tool_names: set[str] | None = 
     visible, remainder, tool_calls = _find_json_tool_call(text, final=True, allowed_tool_names=allowed_tool_names)
     if tool_calls:
         return visible, tool_calls
+    # Leak-Variante D: nacktes JSON-array als tool-protokoll
+    bare = _find_bare_tool_call_array(text, final=True, allowed_tool_names=allowed_tool_names)
+    if bare is not None:
+        bare_visible, _, bare_calls = bare
+        if bare_calls:
+            return bare_visible, bare_calls
+        if bare_visible != text:
+            return bare_visible, []
     spans, tool_calls = _extract_tool_blocks(text, allowed_tool_names, allow_trailing_close=True)
     return _remove_spans(text, spans), tool_calls
 

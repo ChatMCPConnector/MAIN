@@ -152,3 +152,22 @@ Doppelausgabe (strukturierter Call + Protokoll-Text im selben Turn, beobachtet
 Verifikation: 90/90 Tests (neuer Regressionstest: Midstream-Delta mit
 Protokoll → kein Leak in content-Deltas, Call wird bei finalize extrahiert,
 finish_reason=tool_calls). Proxy neu gestartet (Health OK), Bundle neu gebaut.
+
+---
+
+# Fix zu Leak-Variante D (Final-Run, umgesetzt)
+
+**Final-Run 00:27 + 00:33 (Session ses_f72c95b43ffeXGckO4bwAIk6Cn):** Das Modell
+emittierte Tool-Calls als **NACKTES JSON-Array** `[{"name":...,"arguments":...}]`
+— ohne `{"tool_calls":`-Wrapper. Variante 1: Prosa + Array (00:27). Variante 2:
+kaputter ` ``json `-Marker (2 Backticks → keine Fence-Maskierung!) + Array ohne
+schließende `]` + Duplikat-Array + `[]`-Terminator + echtes Fence-Ende (00:33).
+
+**Fix:** `_find_bare_tool_call_array()` in tool_parser.py — erkennt
+`[\s*{\s*"name"\s*:` (strenge Validierung: Element-Keys ⊆ {name, arguments}),
+bracket-balancierter Scan, Terminator/Fence-Rest-Konsum, und bei invalidem JSON
+Recovery via `_recover_call_elements` (fehlt `]` + Duplikat). Verdrahtet in
+`parse_tool_calls_from_text` UND `_split_stream_text` (Streaming-Pfad 1b).
+Beide Live-Leak-Strings verifiziert: Calls extrahiert, kein Protokoll im Text.
+92/92 Tests (2 neue Regressionstests mit Live-Mustern), Proxy neu gestartet,
+Bundle neu gebaut.

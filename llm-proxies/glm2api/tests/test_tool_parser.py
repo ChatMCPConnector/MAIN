@@ -517,3 +517,36 @@ def test_streaming_normal_inline_json_does_not_hold_until_flush():
     tail, calls = parser.flush()
     assert '"name": "test"' in out + tail
     assert calls == []
+
+
+def test_parse_recovers_bare_json_array_tool_calls():
+    """Leak-Variante D (Final-Run 00:27): Tool-Calls als NACKTES JSON-Array
+    [{"name":..., "arguments":...}] ohne {"tool_calls"}-Wrapper, mit Prosa
+    davor. Vorher lief das komplette Array als sichtbarer Text durch."""
+    text = (
+        "Ich führe die letzte Transformation durch.\n"
+        '[\n  {\n    "name": "bash",\n    "arguments": {\n'
+        '      "command": "ls -la",\n      "workdir": "/tmp"\n    }\n  }\n]'
+    )
+    clean, tool_calls = parse_tool_calls_from_text(text, allowed_tool_names={"bash"})
+    assert clean == "Ich führe die letzte Transformation durch."
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "bash"
+    assert json.loads(tool_calls[0]["function"]["arguments"])["command"] == "ls -la"
+
+
+def test_parse_recovers_bare_array_with_broken_fence_and_duplicate():
+    """Leak-Variante D (Final-Run 00:33): nacktes Array ohne schließende ']'
+    plus kaputter '``json'-Marker plus dupliziertes Array — das Modell
+    wiederholte den Block. Recovery muss die name/arguments-Paare ziehen."""
+    text = (
+        '``json\n[\n  {"name": "bash", "arguments": {"command": "ls -la", '
+        '"workdir": "/tmp"}}\n``json\n[\n  {"name": "bash", "arguments": '
+        '{"command": "ls -la", "workdir": "/tmp"}}\n]\n[]\n```'
+    )
+    clean, tool_calls = parse_tool_calls_from_text(text, allowed_tool_names={"bash"})
+    assert '[{"name"' not in clean
+    assert '"command"' not in clean
+    assert len(tool_calls) >= 1
+    assert all(tc["function"]["name"] == "bash" for tc in tool_calls)
+    assert json.loads(tool_calls[0]["function"]["arguments"])["workdir"] == "/tmp"

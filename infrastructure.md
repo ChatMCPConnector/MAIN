@@ -186,6 +186,17 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-11 (14): **glm2api: Leak-Variante D gefixt — nacktes JSON-Array als Tool-Protokoll.**
+  Auslöser: Final-Run des HARD-Benchmarks — das Modell emittierte Tool-Calls als
+  nacktes Array [{"name":...,"arguments":...}] OHNE {"tool_calls"}-Wrapper
+  (Prosa+Array, und: kaputter ``json-Marker + Array ohne ']' + Duplikat + '[]').
+  Vorher lief beides als sichtbarer Text durch (Parser kannte nur das Wrapper-
+  Format; der kaputte 2-Backtick-Marker umging zusätzlich die Fence-Maskierung).
+  Fix: `_find_bare_tool_call_array()` (strenge Element-Validierung, Bracket-Scan,
+  Terminator/Fence-Konsum, Recovery via _recover_call_elements) in
+  parse_tool_calls_from_text + _split_stream_text (Streaming). Beide Live-Leak-
+  Strings verifiziert, 92/92 Tests (2 neue Regressionstests), Proxy neu
+  gestartet, Bundle neu gebaut. Details: BEFUNDE.md.
 - 2026-09-10 (13): **glm2api: Midstream-Guard gegen Protokoll-Fragmente in content-Deltas (Re-Befund C).**
   Auslöser: Re-Run-Doppelausgabe 22:35 (tool_calls=1 UND text_len=1630 im selben
   Turn — Protokoll lief parallel zum strukturierten Call als Text). Fix in
