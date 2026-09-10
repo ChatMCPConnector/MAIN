@@ -667,7 +667,15 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		// 判据是**有没有内容帧**，不是 BardErrorInfo：正常响应的结束帧里也带错误码
 		// （1096 = 会话未持久化），拿它判错会把每个正常响应都判成失败。
 		if !hasContentFrame(string(raw)) {
-			lastErr = fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(raw))
+			// 1095 = Drosselung/Verweigerung ohne Content-Frames（实测 2026-09-10 深夜：
+			// 同 IP 大量请求后开始出现，间歇性，过一段时间自动恢复）。
+			// 拿它做**消息**（不改判定逻辑——判据仍然是有没有内容帧），让客户端
+			// 能区分「出口抖一下」和「这个 IP 暂时被 Google 限流」。
+			detail := ""
+			if strings.Contains(string(raw), "[1095]") {
+				detail = " (BardErrorInfo 1095: upstream throttling this IP — back off or rotate egress)"
+			}
+			lastErr = fmt.Errorf("upstream returned no content frame (raw %d bytes)%s", len(raw), detail)
 			if pickedOK {
 				// 记进代理健康度：1155 跟出口质量强相关（干净出口 60+ 次 0 发生，
 				// 脏出口一天约 9 次），连续踩中说明这个出口该歇了。
