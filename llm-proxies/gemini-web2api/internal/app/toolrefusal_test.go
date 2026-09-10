@@ -17,6 +17,8 @@ func TestIsToolRefusalText(t *testing.T) {
 		"I don't have access to an execution environment for running commands.",
 		// 拒答 + 挂在后面的替代建议（实测形状，TC3）
 		"I don't have access to a local shell or terminal execution tools to run commands directly. \n\nIf executed in a standard terminal (such as Bash, zsh, or sh), you could run: echo hello-world",
+		// 拒答 + ```bash「自己动手」附录（实测形状，TC4 —— 普通 Fence 不豁免）
+		"I do not have access to a local filesystem, shell environment, or tools like `write_file` to create files on your machine. \n\nTo create `/tmp/bench-x.txt` with that exact content yourself, run this command in your terminal:\n\n```bash\ncat << 'EOF' > /tmp/bench-x.txt\nline1 \"quoted\" & $dollar\n```",
 	}
 	for _, r := range refusals {
 		if !isToolRefusalText(r) {

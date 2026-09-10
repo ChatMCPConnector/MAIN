@@ -60,18 +60,20 @@ var refusalCapability = []string{
 
 // isToolRefusalText 判断一段回复文本是不是 3.6+ 的工具拒答。
 //
-// 长度只看**开头句**：拒答的首句总是自我否定 + 能力声明（≤300 字节），
+// 长度只看**开头句**：拒答的首句总是自我否定 + 能力声明（≤300 字节）。
 // 后面可能还挂着给用户的替代建议（“If you are running in a terminal, you
 // can…”）——那不影响拒答判定。整段长度上限仍留 2000：真做任务的回复
 // 首句不会是 “I cannot … filesystem/shell/execute”。
 func isToolRefusalText(text string) bool {
 	t := strings.TrimSpace(text)
-	if t == "" || len(t) > 2000 {
+	if t == "" || len(t) > 8000 {
 		return false
 	}
 	low := strings.ToLower(t)
-	if strings.Contains(low, "```") {
-		// 围栏（无论哪种）意味着文本里可能有协议块，那是另一类问题
+	// 只排除**协议围栏**（```tool_call）：那意味着模型真的在尝试协议（解析
+	// 层问题，不是拒答）。其他围栏（实测 3.6+ 拒答常带 ```bash「自己动手」
+	// 附录！）不豁免 —— 首句的自我否定才是判据。
+	if strings.Contains(low, "```tool_call") {
 		return false
 	}
 	// 只检查首段/首句（前 300 字节）的否定开头 —— 拒答开头从不绕圈子。
