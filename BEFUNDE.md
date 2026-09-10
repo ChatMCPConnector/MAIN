@@ -136,3 +136,19 @@ Von 5 Anomalie-Klassen im ersten Lauf blieben 3: Leak-B (gefixt),
 Doppelausgabe C (offen, braucht Debug-Dump), Drift D (Modell).
 Duplikat-Loops und „unknown tool call"-Halluzinationen sind vollständig
 verschwunden. Tool-Zuverlässigkeit der Ausführung: 122/122 = 100%.
+
+---
+
+# Fix zu Re-Befund C (umgesetzt)
+
+**Midstream-Guard in translator.py::consume_event:** Ein sichtbares Text-Delta,
+das selbst Protokoll-Fragmente enthält (`{"tool_calls"`, `<ml_tool_call`,
+`<|DSML|tool_call`), wird bei deklarierten Tools NIE sofort als content-Delta
+emittiert — es wandert ins Deferred-Buffer, wo das bestehende finalize-Safety-
+Net es parst (Call-Extraktion) und den bereinigten Text ausgibt. Damit ist die
+Doppelausgabe (strukturierter Call + Protokoll-Text im selben Turn, beobachtet
+22:35) auch ohne exakte Upstream-Rekonstruktion strukturell verhindert.
+
+Verifikation: 90/90 Tests (neuer Regressionstest: Midstream-Delta mit
+Protokoll → kein Leak in content-Deltas, Call wird bei finalize extrahiert,
+finish_reason=tool_calls). Proxy neu gestartet (Health OK), Bundle neu gebaut.

@@ -653,16 +653,30 @@ class GLMEventAccumulator:
         if visible_text_delta:
             fence_pending = self._deferred_visible_text.count("```") % 2 == 1
             fence_opens = "```" in visible_text_delta
+            # Midstream-Guard (Re-Befund C): ein delta, das Protokoll-
+            # fragmente enthaelt, darf NIE sofort als content raus. Der
+            # StreamingToolParser haelt vollstaendige protokolle zurueck,
+            # aber gespiegelte/verstueckelte parts (observed 22:35:
+            # tool_calls=1 UND text_len=1630 gleichzeitig) koennen am
+            # parser vorbei fragmente enthalten. Parken im deferred buffer —
+            # dort greift das finalize-safety-net (parse + cleanup).
+            protocol_fragment = self.allowed_tool_names is not None and (
+                '{"tool_calls"' in visible_text_delta
+                or "<ml_tool_call" in visible_text_delta
+                or "<|DSML|tool_call" in visible_text_delta
+            )
             if self.allowed_tool_names is not None and (
                 self.tool_parser.pending_text
                 or fence_pending
                 or fence_opens
+                or protocol_fragment
             ):
                 # Deferral: (a) parser haelt ein potentielles tool-protokoll-
-                # stueck, (b) ein fence ist offen, oder (c) dieser delta
-                # oeffnet einen fence. Fences koennen das tool-protokoll
-                # umhuellen (```json {"tool_calls":...}); das unwrap passiert
-                # im finalize. Sonst wuerde JEDER text bei deklarierten tools
+                # stueck, (b) ein fence ist offen, (c) dieser delta oeffnet
+                # einen fence, oder (d) der delta enthaelt selbst protokoll-
+                # fragmente. Fences koennen das tool-protokoll umhuellen
+                # (```json {"tool_calls":...}); das unwrap passiert im
+                # finalize. Sonst wuerde JEDER text bei deklarierten tools
                 # bis zum finalize gebuffert (UX-regression).
                 self._deferred_visible_text += visible_text_delta
             else:

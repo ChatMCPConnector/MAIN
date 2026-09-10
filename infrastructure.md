@@ -186,6 +186,16 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (13): **glm2api: Midstream-Guard gegen Protokoll-Fragmente in content-Deltas (Re-Befund C).**
+  Auslöser: Re-Run-Doppelausgabe 22:35 (tool_calls=1 UND text_len=1630 im selben
+  Turn — Protokoll lief parallel zum strukturierten Call als Text). Fix in
+  translator.py::consume_event: Ein sichtbares Delta mit Protokoll-Fragmenten
+  ({"tool_calls", <ml_tool_call, <|DSML|tool_call) wird bei deklarierten Tools
+  ins Deferred-Buffer geparkt statt sofort emittiert; das finalize-Safety-Net
+  extrahiert den Call und gibt nur bereinigten Text aus. 90/90 Tests (neuer
+  Regressionstest), Proxy neu gestartet, Bundle neu gebaut. Damit sind alle
+  drei Leak-Befunde (B, C) aus dem Härtetest-Re-Run geschlossen; offenes
+  Rest-Thema ist nur noch Modell-Drift bei ~150k+ Kontext (kein Proxy-Bug).
 - 2026-09-10 (12): **glm2api: Recovery-Stufe 3 für invalides Tool-JSON (Re-Run-Befund B).**
   Auslöser: HARD-Benchmark-Re-Run (2h, 122 Tool-Calls, 0 Ausführungsfehler)
   reproduzierte einen Leak, bei dem das Modell 6 Calls als ~6,6KB-Block mit

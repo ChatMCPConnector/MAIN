@@ -773,3 +773,64 @@ def test_repair_skips_doubly_broken_commands():
     doubly_broken = 'python3 -c "\n# Kopf\n     kein kommentar\nx = creds\'k\'\n"'
     from glm2api.services.translator import repair_python_command_quotes
     assert repair_python_command_quotes(doubly_broken) == doubly_broken
+
+
+def test_consume_event_defers_text_delta_containing_protocol_fragment():
+    """Re-Befund C (22:35, Doppelausgabe Call+Text): Ein Text-Delta, das
+    Protokoll-Fragmente enthält, darf nie sofort als content-Delta raus —
+    es muss ins Deferred-Buffer (finalize safety-net parst + cleant dort)."""
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"bash"})
+    chunks, _ = accumulator.consume_event(
+        {
+            "conversation_id": "conv_1",
+            "parts": [
+                {
+                    "logic_id": "1",
+                    "content": [{"type": "text", "text": "Ergebnis: "}],
+                }
+            ],
+        }
+    )
+    chunks2, _ = accumulator.consume_event(
+        {
+            "conversation_id": "conv_1",
+            "parts": [
+                {
+                    "logic_id": "2",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": '{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}]}[]',
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    def _payload(c):
+        if c.startswith("data: "):
+            c = c[6:]
+        c = c.strip()
+        if not c or c == "[DONE]":
+            return {"choices": [{}]}
+        return json.loads(c)
+
+
+    all_content = "".join(
+        _payload(c)["choices"][0]["delta"].get("content", "")
+        for c in chunks + chunks2
+        if _payload(c)["choices"][0].get("delta")
+    )
+    assert '{"tool_calls"' not in all_content
+
+    final_chunks = accumulator.finalize("finish")
+    final_content = "".join(
+        _payload(c)["choices"][0].get("delta", {}).get("content", "")
+        for c in final_chunks
+        if _payload(c)["choices"][0].get("delta")
+    )
+    finish_reasons = [
+        _payload(c)["choices"][0].get("finish_reason") for c in final_chunks
+    ]
+    assert '{"tool_calls"' not in final_content
+    assert "tool_calls" in finish_reasons
