@@ -579,7 +579,7 @@ def _find_json_tool_call(
         if not final:
             protocol = '{"tool_calls":'
             max_hold = min(len(masked), len(protocol))
-            for length in range(max_hold, 1, -1):
+            for length in range(max_hold, 0, -1):
                 if masked.endswith(protocol[:length]):
                     idx = len(text) - length
                     return text[:idx], text[idx:], []

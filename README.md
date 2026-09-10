@@ -180,6 +180,30 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (7): **glm2api: Tool-Protokoll verschlankt + Re-Anchor + Pretty-JSON/Fragment-Parser-Fix.**
+  Auslöser: Vergleich mit glmfree (externer glm-free-api-Server, gleicher
+  chatglm.cn-Upstream) — der liefert im selben Killer-Szenario (11 Tools +
+  großer Systemprompt + Multi-Turn) immer perfekt strukturierte tool_calls,
+  während glm2api-Runde um Runde in Text-Abbrüche kippte. Voll-Audit der
+  Pipeline (server/translator/parser/client) mit 4 Fixes:
+  (1) `build_tool_call_instructions` von ~40 auf 9 Zeilen verschlankt
+  (glmfree-Minimum: Format-Beispiel + `[]`-Terminator-Regel — der Terminator
+  wirkt token-weise als Wahrscheinlichkeits-Anker, da das Modell den Prompt
+  bei jedem Output-Token neu liest). (2) Re-Anchor nach Tool-Result-Runden:
+  `TOOL_FORMAT_REMINDER` am Prompt-Ende (Blaupause: gemini-web2api
+  Re-Anchor-Fix, Commit 105480a) — dort am stärksten wirksam. (3) Pretty-JSON:
+  tolerante Regex `\{\s*"tool_calls"\s*:` an allen 3 Parser-Fundstellen —
+  pretty-printed Protokoll wurde vorher als Text geleakt. (4) Fragment-Hold:
+  Präfix-Hold auf `{"tool_calls":` inkl. Länge 0 — das 13-Zeichen-Fragment
+  `{"tool_calls"` (Live-Leak reproduziert) wurde vorher durchgereicht.
+  Verifikation: 82/82 Tests, Fragment-Matrix (1..full) ohne Leak,
+  Live-Killer-Szenarien fresh+multiturn → saubere TOOLCALLs mit text_len=0,
+  Benchmark TOOLCALL-PASS 25/25 beim ersten Harness-Run. Restrisiko
+  (Modell, nicht Proxy): gelegentliche leere Assistant-Turns + halluzinierte
+  „Tool-Limit"-Narrative → Session-Resumes nötig; Hebel wäre opencode-seitiges
+  Auto-Resume. Hinweis: Teile dieser Fixes wurden versehentlich im Commit
+  f8a8aad (feat antigravity) mitcommittet; dieser Commit ergänzt Doku + den
+  finalen Fragment-Hold-Fix.
 - 2026-09-10 (6): **glm2api: Tool-Calls in ```json-Fences werden echte Calls (Benchmark TOOLCALL-PASS).**
   Auslöser: TOOLCALL-360-Benchmark-Run 6 — glm-5.3-think verpackte den Tool-Call in
   einen ```json-Code-Fence; der Parser maskiert Fences bewusst (Doku-Beispiel-Schutz),
