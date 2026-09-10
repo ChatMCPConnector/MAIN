@@ -1,3 +1,5 @@
+import json
+
 from glm2api.utils.tool_parser import StreamingToolParser, parse_tool_calls_from_text
 
 
@@ -177,6 +179,28 @@ def test_stream_parser_recovers_real_live_leak_case():
     assert len(tool_calls) == 1
     assert tool_calls[0]["function"]["name"] == "bash"
     assert "grep -E" in tool_calls[0]["function"]["arguments"]
+
+
+def test_parse_recovers_multi_call_leak_with_unbalanced_braces():
+    """Härtetest-Re-Run 2 (21:55:29): Das Modell emittierte 6 Tool-Calls als
+    invalides JSON — zwischen zwei Call-Objekten fehlte das '}' (16 '{' vs
+    15 '}'). Der Brace-Scan fand kein Ende und der komplette 6,6KB-Block
+    leakte als TEXT-Part. Recovery-Stufe 3 (_recover_call_elements) muss die
+    name/arguments-Paare einzeln extrahieren."""
+    leak = (
+        '{"tool_calls":[{"name":"write","arguments":{"filePath":"/tmp/a.md","content":"# A\\n\\nText"}]},'
+        '{"name":"write","arguments":{"filePath":"/tmp/b.md","content":"# B"}},'
+        '{"name":"bash","arguments":{"command":"ls /tmp"}}]}[]'
+    )
+    clean, tool_calls = parse_tool_calls_from_text(leak, allowed_tool_names=None)
+
+    assert clean == ""
+    assert len(tool_calls) == 3
+    assert tool_calls[0]["function"]["name"] == "write"
+    assert tool_calls[1]["function"]["name"] == "write"
+    assert tool_calls[2]["function"]["name"] == "bash"
+    assert json.loads(tool_calls[0]["function"]["arguments"])["filePath"] == "/tmp/a.md"
+    assert json.loads(tool_calls[2]["function"]["arguments"])["command"] == "ls /tmp"
 
 
 def test_streaming_tool_parser_never_leaks_dsml_markup_fragments():

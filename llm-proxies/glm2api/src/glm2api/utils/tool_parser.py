@@ -557,6 +557,106 @@ def _looks_like_tool_markup_fragment(text: str) -> bool:
     return False
 
 
+def _recover_call_elements(candidate: str) -> dict[str, object] | None:
+    """Recovery-Stufe 3: Das Modell liefert gelegentlich invalides JSON
+    mit unbalancierten klammern (haeufig fehlt das '}' zwischen zwei
+    call-objekten, z.B. '..."arguments":{...}]},{\"name\":...'). Der
+    brace-scan findet dann kein ende und der komplette block leakt als
+    text. Hier: die 'name'/'arguments'-paare einzeln extrahieren —
+    arguments via eigenem string-aware brace-scan — und das objekt neu
+    serialisieren. Robust gegen fehlende kommas/klammern zwischen den
+    call-elementen."""
+    calls: list[dict[str, object]] = []
+    pos = 0
+    len_c = len(candidate)
+    while pos < len_c:
+        name_idx = candidate.find('"name"', pos)
+        if name_idx == -1:
+            break
+        # name-wert lesen (string nach dem colon)
+        colon = candidate.find(":", name_idx + 6)
+        if colon == -1:
+            break
+        j = colon + 1
+        while j < len_c and candidate[j] in " \t\r\n":
+            j += 1
+        if j >= len_c or candidate[j] != '"':
+            pos = name_idx + 6
+            continue
+        j += 1
+        name_chars: list[str] = []
+        while j < len_c:
+            ch = candidate[j]
+            if ch == "\\" and j + 1 < len_c:
+                name_chars.append(ch + candidate[j + 1])
+                j += 2
+                continue
+            if ch == '"':
+                break
+            name_chars.append(ch)
+            j += 1
+        name = "".join(name_chars)
+        if not name:
+            pos = j
+            continue
+        # arguments-objekt: naechstes '{"' nach dem name-wert
+        args_start = candidate.find("{", j)
+        # naechstes '"arguments"' vorziehen, wenn es vor args_start+? liegt —
+        # einfach: arguments-schluessel suchen, danach brace-scan
+        args_key = candidate.find('"arguments"', j)
+        if args_key == -1:
+            break
+        brace = candidate.find("{", args_key + 11)
+        if brace == -1:
+            break
+        depth = 0
+        in_str = False
+        esc = False
+        end = -1
+        k = brace
+        while k < len_c:
+            ch = candidate[k]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                k += 1
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = k + 1
+                    break
+            k += 1
+        if end == -1:
+            # arguments unvollstaendig bis text-ende: bis zum letzten '}' vor
+            # terminator-artigem rest nehmen
+            break
+        args_raw = candidate[brace:end]
+        try:
+            arguments = json.loads(args_raw)
+        except json.JSONDecodeError:
+            arguments = None
+        if arguments is None:
+            # reparaturversuch: array-bracket ergaenzen
+            try:
+                arguments = json.loads(args_raw[:-1] + "]}")
+            except json.JSONDecodeError:
+                arguments = {"_raw": args_raw}
+        calls.append({"name": name, "arguments": arguments})
+        pos = end
+    if not calls:
+        return None
+    return {"tool_calls": calls}
+
+
 def _recover_tool_calls_json(candidate: str) -> dict[str, object] | None:
     """Recovery fuer Snipsel+Finish-Duplikate: Der stream-buffer enthaelt
     '<fragment><volltext>' (upstream streamt token-schnipsel, dann den
@@ -705,6 +805,8 @@ def _find_json_tool_call(
         # kandidaten und nehmen die erste valide, balancierte instanz.
         if parsed is None:
             parsed = _recover_tool_calls_json(candidate)
+        if parsed is None:
+            parsed = _recover_call_elements(candidate)
         if parsed is None:
             return text, "", []
     calls_raw = parsed.get("tool_calls") if isinstance(parsed, dict) else None
