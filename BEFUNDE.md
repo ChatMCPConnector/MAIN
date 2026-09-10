@@ -171,3 +171,34 @@ Recovery via `_recover_call_elements` (fehlt `]` + Duplikat). Verdrahtet in
 Beide Live-Leak-Strings verifiziert: Calls extrahiert, kein Protokoll im Text.
 92/92 Tests (2 neue Regressionstests mit Live-Mustern), Proxy neu gestartet,
 Bundle neu gebaut.
+
+---
+
+# FINAL-RUN Abschluss (Session ses_f72c95b43ffeXGckO4bwAIk6Cn, 23:23–01:2x)
+
+## Ergebnis: ALLE PROXY-LEAKS GESCHLOSSEN
+
+**DB-Verifikation (124 Tool-Parts: bash 50, write 28, read 24, edit 21, invalid 1):**
+- 0 echte Ausführungsfehler (alle completed)
+- 3 Protokoll-Leaks — ALLE vor dem Leak-D-Fix (23:27 kleiner Text-Leak,
+  00:27 + 00:33 Leak-Variante D). NACH Proxy-Restart mit Fix (efbc2e7,
+  ~00:45) und Resume für Phase 5-10: **0 neue Leaks**.
+- Phasen 5-10 liefen nach dem Fix komplett sauber durch (README, fixed3.py
+  mit 6 Bugfixes, loadtest 100 seq + 100 par, recall, final-report).
+
+**Agent-behauptete Anomalien (20):** 15x "leere Turns" (Modell-Wahrnehmung,
+in der DB nicht als Fehler sichtbar — vermutlich Modell-Drift-Erleben bei
+langem Kontext), 2x JSON-Array-Leaks (real, gefixt), 2x SchemaErrors
+(edit-Aufrufe mit falschen Argumenten — Modell-Fehler, harmlos),
+1x Single-JSON-Leak (23:27, real).
+
+**Call-Zahl:** Agent zählte 92 (worklog-basiert) — real 124 Tool-Parts.
+
+## Gesamturteil Härtetest-Kampagne
+
+Vier Läufe (v1-Benchmark, HARD-Run 1, Re-Run, Final-Run) haben nacheinander
+fünf Leak-/Echo-Bug-Klassen ans Licht gebracht — alle gefixt und per
+Regressionstest abgesichert (92/92 Tests). Der Final-Run bestätigt: Proxy
+liest Tool-Protokoll in allen beobachteten Formen (Wrapper-JSON, invalides
+JSON, nacktes Array, kaputte Fences, Duplikate) korrekt und leakt nicht
+mehr. Rest-Themen bleiben Modell-Seite (Encoding, Kontext-Drift ~150k+).
