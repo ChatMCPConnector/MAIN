@@ -27,6 +27,25 @@ func (e *QuotaLimitError) Error() string {
 		e.Model, quotaResetETA())
 }
 
+// CannedReplyError 表示上游回了"罐头错误"短句（瞬态故障或拒答话术，按账号语言出）。
+// 特征：HTTP 200、有内容帧、正文极短且措辞固定（见 cannedErrorPrefixes）。
+// 与额度耗尽不同：这个是瞬态的，重发一次通常就过 —— 所以 handler 层做一次
+// 单轮重发而不是锁窗口。
+type CannedReplyError struct {
+	Text string // 原始罐头回复
+}
+
+func (e *CannedReplyError) Error() string {
+	return fmt.Sprintf("upstream returned a canned error reply (transient): %q", truncateStr(e.Text, 100))
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 // isQuotaText 判断一段回复文本是不是额度耗尽的签名回复。
 //
 // 只认精确措辞：泛化的 "something went wrong" 是真实的上游瞬态故障
@@ -39,6 +58,37 @@ func isQuotaText(text string) bool {
 	// 上游大小写/标点偶有漂移，前缀匹配 + 长度上限收紧误报面。
 	return len(t) < 120 && strings.HasPrefix(strings.ToLower(t),
 		"i encountered an error doing what you asked")
+}
+
+// cannedErrorPrefixes 是上游"罐头错误"回复的已知前缀（按账号语言出）。
+// 这些都是 200 + 内容帧里的短句，以前被当正常回复透传。共同特征：极短 +
+// 固定措辞。正常回答不会以这些开头（前缀精确匹配）。
+var cannedErrorPrefixes = []string{
+	"i encountered an error doing what you asked", // 额度耗尽（en）
+	"sorry, something went wrong",                 // 瞬态故障（en）
+	"i'm a language model",                        // 瞬态/拒答（en）
+	"i am a language model",                       // 同上变体
+	"ich bin ein sprachmodell",                    // 瞬态/拒答（de）
+	"leider ist beim verarbeiten",                 // 瞬态故障（de）
+	"es ist ein fehler aufgetreten",               // 瞬态故障（de）
+}
+
+// isCannedErrorText 判断回复是否是已知的罐头错误（任何一种）。
+// 额度签名是它的子集：quota 是要锁 5h 的，其余按瞬态重试。
+func isCannedErrorText(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+	if len(t) > 200 { // 罐头错误都很短；真实回复几乎必然更长
+		return false
+	}
+	for _, p := range cannedErrorPrefixes {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -93,26 +143,15 @@ func markQuotaLimited() {
 	logf("[quota] 额度耗尽已记录，估算复位 %s", until.Local().Format("15:04"))
 }
 
-// quotaBannerConfirmed 用 /app 页面的 out_of_quota 横幅做二次确认。
+// quotaBannerConfirmed 已废弃：/app 页面里的 "out_of_quota" 是一个**永久存在的
+// UTM 链接**（gemini_out_of_quota_input_inline_upgrade_banner，指向 one.google.com/ai
+// 的升级广告），跟额度是否耗尽无关 —— 实测额度正常时页面照样带它，用它会
+// 把每次瞬态抖动都误锁 5 小时。保留函数签名做占位避免别处报错，恒返回 false。
 //
-// 为什么需要：65 字节签名回复也可能是瞬态故障（下次就好）。拿它直接锁 5 小时，
-// 一次抖动就白白降级半天。而额度真用完时 /app 页面带 out_of_quota 品牌位
-// （实测抓到过 gemini_out_of_quota_input_inline_upgrade_banner）。确认了才锁；
-// 查不到横幅（或没 cookie / 网络失败）就不锁，按瞬态处理。
+// 替代方案在 server 层：retry-based confirmation —— 检出签名后**重发一次**，
+// 签名不再出现 = 瞬态，不锁；再次出现 = 真耗尽，锁。
 func quotaBannerConfirmed() bool {
-	a, ok := pickCookieAccount()
-	if !ok {
-		return false // 没号可查：宁可漏判（不锁），不误判（锁 5h）
-	}
-	proxyURL := ""
-	if a.ProxyID > 0 {
-		proxyURL = proxyURLByID(a.ProxyID)
-	}
-	page, err := fetchAppPage(a.Cookie, proxyURL)
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(page), "out_of_quota")
+	return false
 }
 
 // quotaActive 报告额度锁是否仍在生效。过期的锁顺手清掉。

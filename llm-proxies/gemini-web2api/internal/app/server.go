@@ -336,25 +336,134 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		err = &QuotaLimitError{Model: modelName}
 		text = ""
 	}
+	// 其余罐头错误（"Sorry, something went wrong" / "Ich bin ein Sprachmodell…"
+	// 等瞬态短句，按账号语言出）：同样翻成显式错误，下面走**单轮重发**——
+	// 重发走 callGemini（全量 prompt），不再续接 conv（罐头句已进服务端历史，
+	// 续接会把它当正常轮次，模型容易顺着继续罐头）。
+	if err == nil && isCannedErrorText(text) {
+		err = &CannedReplyError{Text: text}
+		text = ""
+	}
 	if err != nil {
-		if qle, ok := err.(*QuotaLimitError); ok {
-			// 额度耗尽：先拿 /app 横幅二次确认（65 字节签名也可能是瞬态故障，
-			// 不加确认一次抖动就会白锁 5 小时），确认了才记录锁，然后降级或 429。
-			confirmed := quotaBannerConfirmed()
-			if confirmed {
-				markQuotaLimited()
-			} else {
-				logf("[quota] 检出额度签名回复，但 /app 无 out_of_quota 横幅 → 按瞬态处理，不锁")
+		if cre, ok := err.(*CannedReplyError); ok {
+			// 瞬态罐头错误：单轮重发一次（流式回调置空，避免重复吐字）。
+			// 再失败就如实报 502——连着罐头说明上游这会儿真不行。
+			recordRequest("chat.completions", modelName, prompt, "", res, 502, cre.Error(), stream)
+			if sse != nil && sse.Started() {
+				sse.Fail(cre)
+				return
 			}
+			logf("[canned] %s 罐头错误（%q），单轮重发一次", modelName, truncateStr(cre.Text, 60))
+			text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, nil, nil)
+			if err != nil {
+				if isCannedErrorText(text) || text == "" {
+					recordRequest("chat.completions", modelName, prompt, "", res, 502, "canned error retry failed", stream)
+					writeJSON(w, 502, map[string]interface{}{"error": map[string]string{
+						"message": "upstream keeps returning canned error replies; try again later",
+					}})
+					return
+				}
+				recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
+				writeJSON(w, 502, map[string]interface{}{"error": map[string]string{"message": "upstream error: " + err.Error()}})
+				return
+			}
+			if isCannedErrorText(text) {
+				recordRequest("chat.completions", modelName, prompt, "", res, 502, "canned error retry failed", stream)
+				writeJSON(w, 502, map[string]interface{}{"error": map[string]string{
+					"message": "upstream keeps returning canned error replies; try again later",
+				}})
+				return
+			}
+			// 重发成功：走正常返回路径。conv 状态已与客户端历史脱钩，
+			// 下次请求的续接指纹会自然不命中、当新会话全量重发，安全。
+			recordRequest("chat.completions", modelName, prompt, text, res, 200, "canned-error retry ok", stream)
+			if stream {
+				// 重发没带流式回调（置空防重复），这里一次性补发正文+tool_calls。
+				if res != nil && res.Reasoning != "" {
+					sse.SendReasoning(res.Reasoning)
+				}
+				sse.SendContent(text)
+				if len(toolCalls) > 0 {
+					sse.SendToolCalls(toolCalls)
+				}
+				var usage map[string]int
+				if includeUsage {
+					usage = usageOf(prompt, text, res)
+				}
+				sse.Finish(finishFor(toolCalls), usage)
+			} else {
+				writeJSON(w, 200, map[string]interface{}{
+					"id":      "chatcmpl-" + randHex(12),
+					"object":  "chat.completion",
+					"created": time.Now().Unix(),
+					"model":   modelName,
+					"choices": []map[string]interface{}{{
+						"index":         0,
+						"message":       assistantMessage(text, toolCalls, res),
+						"finish_reason": finishFor(toolCalls),
+					}},
+					"usage": usageOf(prompt, text, res),
+				})
+			}
+			return
+		}
+		if qle, ok := err.(*QuotaLimitError); ok {
+			// 额度签名回复（65 字节固定措辞）先按**疑点**处理，retry-based 确认：
+			// 用同一模型原样重发一次，签名再现 = 真耗尽 → 锁 5h + 降级/429；
+			// 不再现 = 瞬态抖动 → 用重发结果正常返回。（/app 横幅方案已废弃，
+			// 那个 out_of_quota 字符串是永久 UTM 链接，额度正常时也在页面里。）
 			recordRequest("chat.completions", modelName, prompt, "", res, 429, qle.Error(), stream)
 			if sse != nil && sse.Started() {
 				sse.Fail(qle) // 已开流，只能失败终止
 				return
 			}
+			logf("[quota] 检出额度签名回复（%s），原模型重发一次确认", modelName)
+			text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, nil, nil)
+			confirmed := err == nil && isQuotaText(text)
+			if !confirmed && err == nil {
+				// 瞬态：重发拿到了正常内容 → 正常返回（不锁、不降级）。
+				recordRequest("chat.completions", modelName, prompt, text, res, 200, "quota-signature transient, retry ok", stream)
+				if stream {
+					if res != nil && res.Reasoning != "" {
+						sse.SendReasoning(res.Reasoning)
+					}
+					sse.SendContent(text)
+					if len(toolCalls) > 0 {
+						sse.SendToolCalls(toolCalls)
+					}
+					var usage map[string]int
+					if includeUsage {
+						usage = usageOf(prompt, text, res)
+					}
+					sse.Finish(finishFor(toolCalls), usage)
+				} else {
+					writeJSON(w, 200, map[string]interface{}{
+						"id":      "chatcmpl-" + randHex(12),
+						"object":  "chat.completion",
+						"created": time.Now().Unix(),
+						"model":   modelName,
+						"choices": []map[string]interface{}{{
+							"index":         0,
+							"message":       assistantMessage(text, toolCalls, res),
+							"finish_reason": finishFor(toolCalls),
+						}},
+						"usage": usageOf(prompt, text, res),
+					})
+				}
+				return
+			}
+			// 签名再现（或重发出错且错误也是额度类）→ 真耗尽，锁 + 降级/429。
+			markQuotaLimited()
+			if err != nil && !isQuotaText(text) {
+				// 重发失败但不是额度签名（网络/上游错）：如实上报，别误导成额度。
+				recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
+				writeJSON(w, 502, map[string]interface{}{"error": map[string]string{"message": "upstream error: " + err.Error()}})
+				return
+			}
 			if fb, fbCfg, ok := quotaFallbackModel(modelCfg); rtCfg().QuotaFallback && ok {
 				// 降级重发一次（走单轮路径：conv 状态已作废，flash-lite 也不受限，
 				// 直接发全量 prompt 最稳）。流式回调置空 —— 前缀说明必须最先出现。
-				logf("[quota] %s 额度耗尽（响应内检出），降级 %s 重发", modelName, fb)
+				logf("[quota] %s 额度耗尽（重发确认），降级 %s 重发", modelName, fb)
 				fbPrefix = quotaFallbackPrefix(modelName, fb) + "\n\n"
 				text, toolCalls, res, err = callGemini(prompt, latest, fbCfg, tools, images, nil, nil)
 				if err == nil {
@@ -471,6 +580,31 @@ func usageOf(prompt, text string, res *StreamResult) map[string]int {
 		r = res.Reasoning
 	}
 	return buildUsageWithReasoning(prompt, text, r, false)
+}
+
+// finishFor 按 tool_calls 有无返回 finish_reason。
+func finishFor(toolCalls []ToolCall) string {
+	if len(toolCalls) > 0 {
+		return "tool_calls"
+	}
+	return "stop"
+}
+
+// assistantMessage 拼一条 assistant 消息体（正文/工具调用/思考链）。
+func assistantMessage(text string, toolCalls []ToolCall, res *StreamResult) map[string]interface{} {
+	msg := map[string]interface{}{"role": "assistant"}
+	if text != "" {
+		msg["content"] = text
+	} else {
+		msg["content"] = nil
+	}
+	if res != nil && res.Reasoning != "" {
+		msg["reasoning_content"] = res.Reasoning
+	}
+	if len(toolCalls) > 0 {
+		msg["tool_calls"] = toolCalls
+	}
+	return msg
 }
 
 // remainingText 返回最终文本里还没通过 onDelta 发出去的部分。
