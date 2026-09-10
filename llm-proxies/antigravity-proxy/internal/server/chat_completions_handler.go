@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/dvcrn/antigravity-oauth-proxy/internal/antigravity"
 	"github.com/dvcrn/antigravity-oauth-proxy/internal/logger"
 	"github.com/dvcrn/antigravity-oauth-proxy/internal/openai"
@@ -460,6 +462,7 @@ func (s *Server) chatCompletionRequest(w http.ResponseWriter, r *http.Request, r
 	// Extract assistant text content from first candidate
 	var contentText string
 	var reasoningText string
+	var toolCalls []map[string]interface{}
 	if resp != nil && resp.Response != nil {
 		if cands, ok := resp.Response["candidates"].([]interface{}); ok && len(cands) > 0 {
 			if first, ok := cands[0].(map[string]interface{}); ok {
@@ -492,6 +495,54 @@ func (s *Server) chatCompletionRequest(w http.ResponseWriter, r *http.Request, r
 								bText.WriteString(txt)
 							}
 						}
+						// Function call parts — previously silently dropped here,
+						// so non-streaming tool requests came back as empty content
+						// with finish_reason=stop (agent loops stall). Mirror the
+						// streaming path: robust args extraction + thoughtSignature
+						// appended to the call ID (round-trips via ensureFunctionResponseIDs).
+						if fc, ok := pm["functionCall"].(map[string]interface{}); ok {
+							rawName, _ := fc["name"].(string)
+							name := strings.TrimSpace(rawName)
+
+							var args map[string]interface{}
+							tryParse := func(val interface{}) bool {
+								switch v := val.(type) {
+								case map[string]interface{}:
+									args = v
+									return true
+								case string:
+									var m map[string]interface{}
+									if err := json.Unmarshal([]byte(v), &m); err == nil {
+										args = m
+										return true
+									}
+								}
+								return false
+							}
+							if !tryParse(fc["args"]) &&
+								!tryParse(fc["argsJson"]) &&
+								!tryParse(fc["arguments"]) &&
+								!tryParse(fc["parameters"]) {
+								args = map[string]interface{}{}
+							}
+
+							callID := "call_" + uuid.New().String()
+							if ts, ok := pm["thoughtSignature"].(string); ok && ts != "" {
+								callID = callID + "|" + ts
+							} else if ts, ok := pm["thought_signature"].(string); ok && ts != "" {
+								callID = callID + "|" + ts
+							}
+
+							argsJSON, _ := json.Marshal(args)
+							toolCalls = append(toolCalls, map[string]interface{}{
+								"id":   callID,
+								"type": "function",
+								"function": map[string]interface{}{
+									"name":      name,
+									"arguments": string(argsJSON),
+								},
+							})
+						}
 					}
 				}
 				contentText = bText.String()
@@ -507,6 +558,11 @@ func (s *Server) chatCompletionRequest(w http.ResponseWriter, r *http.Request, r
 	if reasoningText != "" {
 		message["reasoning_content"] = reasoningText
 	}
+	finishReason := "stop"
+	if len(toolCalls) > 0 {
+		message["tool_calls"] = toolCalls
+		finishReason = "tool_calls"
+	}
 
 	// Build OpenAI-style response
 	created := time.Now().Unix()
@@ -519,7 +575,7 @@ func (s *Server) chatCompletionRequest(w http.ResponseWriter, r *http.Request, r
 			{
 				"index":         0,
 				"message":       message,
-				"finish_reason": "stop",
+				"finish_reason": finishReason,
 			},
 		},
 	}
