@@ -32,7 +32,7 @@ models = data.get("models", {})
 
 pools = [
     {"name": "Claude", "keys": ["claude-opus-4-6-thinking", "claude-sonnet-4-6"]},
-    {"name": "Gemini", "keys": ["gemini-3.8-flash-high", "gemini-3.1-pro-high", "gemini-3.5-flash-lite"]}
+    {"name": "Gemini", "keys": ["gemini-3.8-flash-high", "gemini-pro-agent", "gemini-3.1-pro-high", "gemini-3.5-flash-lite"]}
 ]
 
 indent = "             "
@@ -61,36 +61,65 @@ for p in pools:
             reset = q.get("resetTime")
             break
             
+    if reset is None and rem_frac is None:
+        prefix = p["name"].lower()
+        for k, info in models.items():
+            if prefix in k.lower():
+                q = info.get("quotaInfo")
+                if q:
+                    rem_frac = q.get("remainingFraction")
+                    reset = q.get("resetTime")
+                    break
+
     is_reset_active = False
     is_weekly_lockout = False
     time_str = "—"
+    pct = 100.0
+
     if reset:
         try:
             dt = datetime.fromisoformat(reset.replace("Z", "+00:00"))
             now = datetime.now(timezone.utc)
             diff = dt - now
             sec = int(diff.total_seconds())
-            if sec > 0:
+
+            if sec <= 0:
+                time_str = "Bereit"
+                pct = 100.0
+            else:
                 is_reset_active = True
                 days = sec // 86400
                 hours = (sec % 86400) // 3600
                 mins = (sec % 3600) // 60
+                rem_sec = sec % 60
+
                 if days > 0:
                     is_weekly_lockout = True
                     time_str = f"in {days}d {hours}h"
-                else:
+                elif hours > 0:
                     time_str = f"in {hours}h {mins}m"
+                elif mins > 0:
+                    time_str = f"in {mins}m"
+                else:
+                    time_str = f"in {rem_sec}s"
+
+                if rem_frac is None or rem_frac <= 0.01:
+                    pct = 0.0
+                elif rem_frac is not None:
+                    pct = round(rem_frac * 100, 1)
+                else:
+                    pct = 100.0
         except Exception:
             time_str = reset
-
-    if is_reset_active and (rem_frac is None or rem_frac <= 0.01):
-        pct = 0.0
-    elif rem_frac is not None:
-        pct = round(rem_frac * 100, 1)
+            if rem_frac is not None:
+                pct = round(rem_frac * 100, 1)
     else:
-        pct = 100.0
+        if rem_frac is not None:
+            pct = round(rem_frac * 100, 1)
+        else:
+            pct = 100.0
 
-    bar_len = int(pct / 10)
+    bar_len = min(10, max(0, int(round(pct / 10))))
     bar = "█" * bar_len + "░" * (10 - bar_len)
     quota_display = f"{pct:>5.1f}% [{bar}]"
 
