@@ -56,7 +56,7 @@ Alle weiteren Config-Variablen: `.env.example` (kommentiert).
 
 - Architektur/Komponenten: `structure.md` (dieses Verzeichnis).
 - Betrieb/Setup im Codespace (rebuild, Autostart, Watchdog, Bundle-Bau):
-  Haupt-README des MAIN-Repos, Abschnitte „glm2api" und „Infrastruktur-Soll".
+  Haupt-Doku des MAIN-Repos (`infrastructure.md`), Abschnitte „glm2api" und „Infrastruktur-Soll".
 
 ## Tests
 
