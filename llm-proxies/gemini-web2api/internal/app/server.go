@@ -358,7 +358,37 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		err = &CannedReplyError{Text: text}
 		text = ""
 	}
+	// 3.6+ 工具拒答（见 toolrefusal.go）：模型把注入的工具协议当 prompt
+	// injection 拒了，返回一段「我无法访问文件系统/工具」的散文。tool_choice
+	// 要求了工具（required / 指定函数）却拿到无 tool_calls 的拒答时，翻成
+	// 显式错误 —— agentic 客户端拿到 finish_reason=stop 的散文就会误以为
+	// 任务完成，benchmark 的 run 就是这么卡死的。
+	// 只有「客户端明确要求必须调工具」才报错：tool_choice=auto 下模型选择
+	// 不调工具并解释原因，是合法行为，原样透传。
+	if err == nil && len(tools) > 0 && len(toolCalls) == 0 {
+		if mode, _ := parseToolChoice(req["tool_choice"]); mode == "required" && isToolRefusalText(text) {
+			err = &ToolRefusalError{Model: modelName, Text: text}
+			text = ""
+		}
+	}
 	if err != nil {
+		if tre, ok := err.(*ToolRefusalError); ok {
+			// 流式已开就 Fail（拒答散文通常已被闸门放行一部分）；未开流回 502。
+			// 重试没有意义：十种 prompt 框架实测都改变不了模型的拒答立场。
+			recordRequest("chat.completions", modelName, prompt, "", res, 502, tre.Error(), stream)
+			if sse != nil && sse.Started() {
+				sse.Fail(tre)
+				return
+			}
+			writeJSON(w, 502, map[string]interface{}{"error": map[string]string{
+				"message": tre.Error() + " — this model (Gemini web 3.6+ flash family, same hex as " +
+					"3.8-flash) has anti-injection training that rejects tool_call prompts; " +
+					"use gemini-3.5-flash-lite for tool-based agent loops",
+				"type": "tool_refusal",
+				"code": "model_refuses_tool_protocol",
+			}})
+			return
+		}
 		if cre, ok := err.(*CannedReplyError); ok {
 			// 瞬态罐头错误：单轮重发**最多 3 次**（实测上游连续抖动 2-3 次后恢复；
 			// 只重发一次不够，benchmark 里两次罐头连着出现就把 run 卡死过）。
@@ -379,14 +409,40 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 					writeJSON(w, 502, map[string]interface{}{"error": map[string]string{"message": "upstream error: " + err.Error()}})
 					return
 				}
-				if !isCannedErrorText(text) {
-					retryOK = true
-					break
+if !isCannedErrorText(text) {
+				// 重发拿到了非罐头内容 —— 但可能正是 3.6+ 的工具拒答（罐头
+				// 重试常先抖一两次「I'm having a hard time」，随后模型给出
+				// 拒答散文；isCannedErrorText 放行它，这里补第二道判定）。
+				if len(tools) > 0 && len(toolCalls) == 0 {
+					if mode, _ := parseToolChoice(req["tool_choice"]); mode == "required" && isToolRefusalText(text) {
+						err = &ToolRefusalError{Model: modelName, Text: text}
+						text = ""
+						break // retryOK bleibt false → 拒答处理
+					}
 				}
+				retryOK = true
+				break
+			}
 				logf("[canned] 重发 %d/3 仍是罐头：%q", i+1, truncateStr(text, 60))
 			}
-			if !retryOK {
-				recordRequest("chat.completions", modelName, prompt, "", res, 502, "canned error retry failed (3x)", stream)
+if !retryOK {
+			if tre, ok := err.(*ToolRefusalError); ok {
+				// 罐头重试后出现拒答：同上面的拒答出口，干净报错。
+				recordRequest("chat.completions", modelName, prompt, "", res, 502, tre.Error(), stream)
+				if sse != nil && sse.Started() {
+					sse.Fail(tre)
+					return
+				}
+				writeJSON(w, 502, map[string]interface{}{"error": map[string]string{
+					"message": tre.Error() + " — this model (Gemini web 3.6+ flash family, same hex as " +
+						"3.8-flash) has anti-injection training that rejects tool_call prompts; " +
+						"use gemini-3.5-flash-lite for tool-based agent loops",
+					"type": "tool_refusal",
+					"code": "model_refuses_tool_protocol",
+				}})
+				return
+			}
+			recordRequest("chat.completions", modelName, prompt, "", res, 502, "canned error retry failed (3x)", stream)
 				writeJSON(w, 502, map[string]interface{}{"error": map[string]string{
 					"message": "upstream keeps returning canned error replies; try again later",
 				}})
