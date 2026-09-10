@@ -191,6 +191,9 @@ Proxy bei jedem Start automatisch hoch.
   leere Turns, 30K+-Loops). Neu in `.opencode/opencode.json`:
   `glm2api/glm-5.3` (non-think) mit `reasoningEffort: "max"` — verifiziert:
   Killer-Szenarien fresh+multiturn sauber, Benchmark TOOLCALL-PASS 25/25.
+  `glm-5.3-think` wurde aus der Config ENTFERNT (inkl. Agent-Umstellung),
+  damit es keine Verwirrung gibt — Thinking läuft ab jetzt ausschließlich
+  über `reasoningEffort` beim non-think-Modell.
 - 2026-09-10 (7): **glm2api: Tool-Protokoll verschlankt + Re-Anchor + Pretty-JSON/Fragment-Parser-Fix.**
   Auslöser: Vergleich mit glmfree (externer glm-free-api-Server, gleicher
   chatglm.cn-Upstream) — der liefert im selben Killer-Szenario (11 Tools +

@@ -124,17 +124,6 @@
           },
           "options": {
             "reasoningEffort": "max"
-          }
-        },
-        "glm-5.3-think": {
-          "name": "GLM-5.3",
-          "reasoning": true,
-          "limit": {
-            "context": 128000,
-            "output": 8192
-          },
-          "options": {
-            "reasoningEffort": "max"
           },
           "variants": {
             "low": {
