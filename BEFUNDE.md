@@ -1,15 +1,11 @@
 # BEFUNDE — glm2api Härtetest (HARD Benchmark v2), 2026-09-10
 
-## Kontext
+## Kontext (Re-Run 20:49–22:37, nach Fixes 10+11)
 
-Aufbauend auf dem Echo-Filter-Fix (Commit 3cd794e) wurde der Benchmark
-massiv verschärft (`/workspaces/benchmark/benchmark-hard.md` + Fehlerinjektion
-`/workspaces/benchmark/broken3.py`) und ein ~30-Min-Langlauf über den
-glm2api-Subagent gefahren (Session `ses_f73ad1933ffex8biaYnwMJmM05`,
-Modell glm2api/glm-5.3, ~70 Upstream-Runden, 19:20–20:25 Uhr).
-
-Der Langlauf reproduzierte EINEN neuen, echten Proxy-Bug (Protokoll-Leak)
-plus mehrere Bestätigungen der vorherigen Fixes.
+Zweiter Langlauf (Session `ses_f73591f73ffeTGH4X9kWi6U1QQ`, ~2h, ~77 Upstream-
+Runden). Ergebnis: **122 Tool-Calls, 0 echte Ausführungsfehler**, komplettes
+miniforge-Projekt + broken3-Debugging + Loadtest + finale Berichte. Drei
+Anomalie-Klassen blieben — eine davon ist ein NEUER Proxy-Bug.
 
 ## Befund 1 (NEU, kritisch): Tool-Protokoll leakt als Klartext bei Snipsel+Finish-Duplikat
 
@@ -91,3 +87,52 @@ die Fehlerberichte des Modells sind nach dem Echo-Fix realistisch geworden.
     whitespace-terminator, original-Live-Fall (text_len=216).
 - Live-Verifikation: Proxy neu gestartet (8001), Tool-Call-Request liefert
   strukturierten Call, kein Protokoll im Content. Bundle neu gebaut.
+---
+
+# Re-Run-Befunde (20:49–22:37, nach Fixes 10+11)
+
+## Re-Befund A (FIX WIRKT): 122 Tool-Calls, 0 Fehler
+
+Echo-Filter + Recovery 1+2 hielten über den kompletten ~2h-Lauf: kein
+server_tools-Cluster, keine Duplikat-Loops, alle 122 ausgeführten Calls
+(bash 54, write 31, edit 22, read 15) ohne echten Fehler. Das
+„unknown tool call"-Halluzinations-Narrativ trat nicht mehr auf.
+
+## Re-Befund B (NEU, gefixt): Leak bei invalidem JSON mit unbalancierten Klammern (21:55)
+
+Das Modell emittierte 6 Tool-Calls als ~6,6KB-Block mit FEHLERHAFTem JSON
+(16 `{` vs 15 `}` — zwischen zwei Call-Objekten fehlte das schließende `}`).
+Der Brace-Scan fand kein Ende, alle Recovery-Stufen griffen nicht →
+kompletter Block leakte als TEXT-Part.
+
+**Fix (umgesetzt, Commits folgen):** Recovery-Stufe 3 `_recover_call_elements()`
+in tool_parser.py — extrahiert name/arguments-Paare einzeln per eigenem
+string-aware Scan und re-serialisiert das Objekt; robust gegen fehlende
+Klammern/Kommas zwischen Call-Elementen. Regressionstest mit dem
+Live-Leak-Muster (3 Calls, unbalanciert) vorhanden; 89/89 Tests grün.
+Verifiziert am Original-Leak-String: 6 Calls extrahiert, clean="".
+
+## Re-Befund C (NEU, OFFEN): Doppelausgabe Call + Protokolltext (22:35)
+
+Turn-Finalize: `tool_calls=1` UND `text_len=1630` gleichzeitig — der
+Protokolltext wurde ALSO parallel zum strukturierten Call als Text-Part
+emittiert. Der Leak-String parst non-streaming sauber (Recovery 3, calls=1)
+und in 8 getesteten Streaming-Zerlegungen ebenfalls kein Leak reproduzierbar.
+Vermutung: Part-Doppelverarbeitung im GLMEventAccumulator (gespiegelter
+Text-Part + Tool-Part aus demselben Upstream-Part) — für die Ursachen-
+analyse braucht es DEBUG_DUMP_ALL des Turns (im Re-Run nicht aktiv).
+→ Nächster Schritt: Re-Run mit DEBUG_DUMP_ALL=1 und dann gezielter Fix.
+
+## Re-Befund D (Modell): Antwort-Loops/Drift bei extremem Kontext
+
+Nach ~50 Runden (~150k+ Kontext) wiederholte der Agent alte Antworten und
+missverstand neue Prompts (Extraktions-Halluzination). 4 Resume-Schubser
+nötig. Grenze liegt offenbar bei sehr langen Kontexten mit hoher
+Tool-Dichte — Modell-Thema, kein Proxy-Bug.
+
+## Re-Run Fazit
+
+Von 5 Anomalie-Klassen im ersten Lauf blieben 3: Leak-B (gefixt),
+Doppelausgabe C (offen, braucht Debug-Dump), Drift D (Modell).
+Duplikat-Loops und „unknown tool call"-Halluzinationen sind vollständig
+verschwunden. Tool-Zuverlässigkeit der Ausführung: 122/122 = 100%.

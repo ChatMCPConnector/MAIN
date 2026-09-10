@@ -186,6 +186,17 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (12): **glm2api: Recovery-Stufe 3 für invalides Tool-JSON (Re-Run-Befund B).**
+  Auslöser: HARD-Benchmark-Re-Run (2h, 122 Tool-Calls, 0 Ausführungsfehler)
+  reproduzierte einen Leak, bei dem das Modell 6 Calls als ~6,6KB-Block mit
+  unbalancierten Klammern (16 `{` vs 15 `}`) emittierte — Brace-Scan ohne
+  Ende, kompletter Block leakte als Text. Fix: `_recover_tool_calls_json()`
+  erweitert um `_recover_call_elements()` (name/arguments-Paare einzeln
+  extrahieren + re-serialisieren), verdrahtet als dritte Recovery-Stufe.
+  89/89 Tests (inkl. Live-Leak-Regressionstest), am Original-Leak-String
+  verifiziert (6 Calls, clean=""), Bundle neu gebaut. Offen bleibt
+  Re-Befund C (Doppelausgabe Call+Text bei gespiegelten Parts — Re-Run mit
+  DEBUG_DUMP_ALL nötig). Details: BEFUNDE.md.
 - 2026-09-10 (11): **glm2api: Parser-Recovery gegen Snipsel+Finish-Duplikat und
   Terminator-Whitespace-Leak (HARD-Benchmark-Befunde 1+2).**
   Auslöser: ~30-Min-Langlauf (HARD Benchmark v2, benchmark-hard.md + broken3.py
