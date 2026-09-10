@@ -211,21 +211,6 @@
             "output": 65536
           }
         },
-        "gemini-3.1-pro": {
-          "name": "Gemini 3.1 Pro",
-          "reasoning": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": { "model": "gemini-3.1-pro-low", "reasoningEffort": "low" },
-            "high": { "model": "gemini-3.1-pro-high", "reasoningEffort": "high" }
-          },
-          "limit": {
-            "context": 1000000,
-            "output": 65536
-          }
-        },
         "claude-opus-4-6": {
           "name": "Claude Opus 4.6",
           "reasoning": true,
@@ -268,14 +253,6 @@
         "apiKey": "sk-gemini-pro-local-2026"
       },
       "models": {
-        "gemini-3.1-pro-thinking": {
-          "name": "Gemini 3.1 Pro (Web)",
-          "reasoning": true,
-          "limit": {
-            "context": 128000,
-            "output": 16384
-          }
-        },
         "gemini-3.8-flash-thinking": {
           "name": "Gemini 3.8 Flash (Web)",
           "reasoning": true,
