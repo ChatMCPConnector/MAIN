@@ -11,7 +11,7 @@ from logging import Logger
 from ..config import AppConfig
 from ..logging_utils import debug_dump
 from ..model_variants import model_requests_search, model_requests_thinking, split_model_features
-from ..utils.tool_parser import StreamingToolParser, detect_tool_call_names, parse_tool_calls_from_text
+from ..utils.tool_parser import CODE_FENCE_PATTERN, StreamingToolParser, detect_tool_call_names, parse_tool_calls_from_text
 from ..utils.tool_protocol import (
     BLOCKED_NATIVE_TOOL_NAMES,
     CANONICAL_TOOL_CALL_EXAMPLE,
@@ -567,10 +567,19 @@ class GLMEventAccumulator:
 
         visible_text_delta = self.tool_parser.consume(text_delta)
         if visible_text_delta:
-            if self.allowed_tool_names is not None and self.tool_parser.pending_text:
-                # Deferral nur, wenn der parser tatsaechlich ein potentielles
-                # tool-protokoll-stueck haelt — sonst wuerde JEDER text bei
-                # deklarierten tools bis zum finalize gebuffert (UX-regression).
+            fence_pending = self._deferred_visible_text.count("```") % 2 == 1
+            fence_opens = "```" in visible_text_delta
+            if self.allowed_tool_names is not None and (
+                self.tool_parser.pending_text
+                or fence_pending
+                or fence_opens
+            ):
+                # Deferral: (a) parser haelt ein potentielles tool-protokoll-
+                # stueck, (b) ein fence ist offen, oder (c) dieser delta
+                # oeffnet einen fence. Fences koennen das tool-protokoll
+                # umhuellen (```json {"tool_calls":...}); das unwrap passiert
+                # im finalize. Sonst wuerde JEDER text bei deklarierten tools
+                # bis zum finalize gebuffert (UX-regression).
                 self._deferred_visible_text += visible_text_delta
             else:
                 delta_payload: dict[str, object] = {"content": visible_text_delta}
@@ -592,6 +601,34 @@ class GLMEventAccumulator:
                 )
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE generated delta chunks", chunks)
         return chunks, str(payload.get("status")) if payload.get("status") is not None else None
+
+    def _unwrap_protocol_only_fences(self, text: str) -> str | None:
+        """Entfernt ```-Fences, deren Inhalt (fast) NUR das Tool-Protokoll
+        ist. Ein Agent, der seinen Call in einen ```json-Fence packt, ist ein
+        echter Aufruf; ein Doku-Beispiel mit Prosa im selben Text bleibt
+        maskiert. Gibt None zurueck, wenn nichts entpackt wurde."""
+        matches = list(CODE_FENCE_PATTERN.finditer(text))
+        if not matches:
+            return None
+        result = text
+        for match in reversed(matches):
+            body = match.group(0)
+            stripped = body.strip("`").strip()
+            # Sprache-Praefix wie 'json' tolerieren
+            if stripped.lower().startswith("json"):
+                stripped = stripped[4:].strip()
+            inner = stripped
+            if not inner.lstrip().startswith('{"tool_calls"'):
+                continue
+            # Fences, die das Protokoll umschliessen: nur ungefaehr nothing else
+            # erlauben (trailing []-terminator + whitespace ist ok)
+            remainder = inner.strip()
+            if remainder.startswith('{"tool_calls"'):
+                # nur wenn das GESAMTE fence dem protokoll entspricht
+                result = result[: match.start()] + inner + result[match.end():]
+        if result != text:
+            return result
+        return None
 
     def finalize(self, status: str | None, last_error: dict[str, object] | None = None) -> list[str]:
         tail_text, xml_tool_calls = self.tool_parser.flush()
@@ -625,6 +662,14 @@ class GLMEventAccumulator:
         final_text = self._deferred_visible_text + tail_text
         self._deferred_visible_text = ""
         if final_text and self.allowed_tool_names is not None:
+            # Fence-unwrap: models sometimes wrap the tool-call protocol in
+            # a ```json fence. A fence whose content is (almost) ONLY the
+            # protocol is an agent tool call, not a documentation example —
+            # strip the fence before the protocol scan. Prosa around the
+            # fence keeps it masked (documentation case stays protected).
+            unwrapped = self._unwrap_protocol_only_fences(final_text)
+            if unwrapped is not None:
+                final_text = unwrapped
             # Safety net: if tool-call protocol blocks leaked into the
             # visible text (observed with glm-5.3-think after tool-result
             # rounds: token-snipsel + finish-fulltext part-merge can emit

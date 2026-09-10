@@ -180,6 +180,19 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (6): **glm2api: Tool-Calls in ```json-Fences werden echte Calls (Benchmark TOOLCALL-PASS).**
+  Auslöser: TOOLCALL-360-Benchmark-Run 6 — glm-5.3-think verpackte den Tool-Call in
+  einen ```json-Code-Fence; der Parser maskiert Fences bewusst (Doku-Beispiel-Schutz),
+  also lief der echte Call als Klartext durch → opencode beendete die Session.
+  Fixes (82/82 Tests): (1) Fence-Deferral im Stream — öffnende/unbalancierte
+  Fences werden bei deklarierten Tools im `_deferred_visible_text` gehalten,
+  statt sofort als Content-Delta zu leaken. (2) `_unwrap_protocol_only_fences()`
+  im finalize: Fences, deren Inhalt (fast) nur das Tool-Protokoll ist, werden
+  entpackt und als echte strukturierte Tool-Calls geliefert; Doku-Beispiele mit
+  Prosa bleiben maskiert. Ergebnis: Benchmark glm2api/glm-5.3-think erreicht
+  TOOLCALL-PASS (25/25, 1 Korrekturschleife). Restrisiko dokumentiert: Modell
+  halluziniert gelegentlich ein „3/3-Rundenlimit" und bricht in Text ab —
+  workaround Session-Resume; kein Proxy-Bug.
 - 2026-09-10 (5): **glm2api: Negative Tool-Results für blockierte Tool-Calls + Protokoll-Leak-Stopp.**
   Auslöser: ZEPLAN-Benchmark — glm-5.3-think rief in 4 Testläufen wiederholt das
   halluzinierte native Web-Tool `open_url` auf; glm2api warf diese Calls still weg
