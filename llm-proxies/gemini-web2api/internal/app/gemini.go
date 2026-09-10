@@ -426,6 +426,23 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		logf("[cookie] 试过的 %d 个账号都不可用，本次降级匿名（能力会退化到匿名档）", len(tried))
 		cookieID, cookieLabel = 0, ""
 	}
+	// 匿名请求：拿一份 /app session cookie（NID/COMPASS 等）**仅作传输载体**。
+	//
+	// 2026-09-10 实测：匿名 POST 不带 session cookie 时，内容帧到齐后连接保持
+	// 半开 —— 完结标记帧（[{"37":[0]}]）要等约 60 秒才来（tls-client 复现稳定，
+	// 带 session cookie 的对照立即到）。多轮路径（conversation.go getAnonSession）
+	// 一直这么做；单轮路径漏了，导致每个匿名请求都拖满 readBody 的 idle 预算。
+	// 失败不致命：退化成旧行为（慢），照样发。
+	//
+	// 注意：这是**匿名 session**，不是登录态。绝不能回写 cookieStr —— 后面
+	// prepareContextFile / 媒体下载用 cookieStr=="" 判断「有没有登录态」，匿名
+	// session 混进去会让超长 prompt 走上传路径（匿名引用会被上游 1100 拒）。
+	reqCookie := cookieStr
+	if reqCookie == "" {
+		if c := getAnonSessionCached(proxyURL); c != "" {
+			reqCookie = c
+		}
+	}
 	// 图片附件：上传要 cookie，而且必须走跟正式请求同一个出口，所以排在这里。
 	if len(pending) > 0 {
 		if cookieStr == "" {
@@ -557,7 +574,7 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 	modelHeader := buildModelHeader(mc.HexID, mc.Mode, thinkVal, uuid.NewString())
 	sessionHeader := fmt.Sprintf(`["%s",1]`, reqUUID)
 
-	geminiHeaders := buildGeminiHeaders(cookieStr, sapisid, mc.HexID)
+	geminiHeaders := buildGeminiHeaders(reqCookie, sapisid, mc.HexID)
 	geminiHeaders["x-goog-ext-525001261-jspb"] = modelHeader
 	geminiHeaders["x-goog-ext-525005358-jspb"] = sessionHeader
 	var lastErr error
@@ -841,27 +858,108 @@ func doGeminiRequest(endpoint, body string, headers map[string]string, proxyURL 
 //
 // start 必须是**请求发出前**的时刻，由调用方传入。放在本函数里取 time.Now()
 // 是不对的：那时 client.Do 已经返回、响应头甚至部分 body 都到了，测出来恒为 0。
+//
+// 2026-09-10：上游（匿名路径实测）不再发经典的 `25\n[["e",4,...]]` 完结帧+
+// 关连接 —— 内容帧全部到齐后连接**保持打开**（等 180s 也等不来 EOF，实测
+// 95s timeout 时 6 帧内容早已完整）。直接等 EOF 会让每个匿名请求都撞满
+// RequestTimeout 然后报 502。所以这里做两道保险：
+//   1. isStreamEndLine：看到完结标记帧（经典 [["e",… 或新的 [{"37":[0]}]
+//      尾帧）后，再宽限 streamEndGrace 等可能的后续帧，没动静就视为响应
+//      完整、主动收工（返回已读内容，不报错）。
+//   2. streamIdleAbort：迟迟没有任何新行的兜底 —— 没有 EOF 也没有完结标记的
+//      半开连接，到点按错误处理，交给上层重试。
 func readBody(r io.Reader, onLine func(string), start time.Time) ([]byte, int64, error) {
 	var buf bytes.Buffer
 	sc := bufio.NewScanner(io.TeeReader(r, &buf))
 	// 单帧可能很大（实测见过 40 万字节的响应），默认 64KB 上限不够。
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+
+	type lineMsg struct {
+		text string
+		ok   bool
+	}
+	lines := make(chan lineMsg, 64)
+	scanErrCh := make(chan error, 1)
+	go func() {
+		for sc.Scan() {
+			lines <- lineMsg{sc.Text(), true}
+		}
+		close(lines)
+		scanErrCh <- sc.Err()
+	}()
+
 	var ttfb int64 = -1
-	for sc.Scan() {
-		if ttfb < 0 {
-			ttfb = time.Since(start).Milliseconds()
+	endSeen := false
+	var endGrace <-chan time.Time
+	idle := time.NewTimer(streamIdleAbort)
+	defer idle.Stop()
+	for {
+		select {
+		case <-idle.C:
+			return buf.Bytes(), ttfb, fmt.Errorf(
+				"stream idle timeout (%s): no lines and no EOF (half-open connection)", streamIdleAbort)
+		case <-endGrace:
+			// 完结标记之后 grace 期内没有新行 → 响应完整，主动收工。
+			return buf.Bytes(), ttfb, nil
+		case m, more := <-lines:
+			if !more {
+				if err := <-scanErrCh; err != nil {
+					return buf.Bytes(), ttfb, err
+				}
+				return buf.Bytes(), ttfb, nil
+			}
+			if ttfb < 0 {
+				ttfb = time.Since(start).Milliseconds()
+			}
+			if onLine != nil {
+				onLine(m.text)
+			}
+			if isStreamEndLine(m.text) {
+				endSeen = true
+			}
+			if !idle.Stop() {
+				nonBlockingDrain(idle.C)
+			}
+			idle.Reset(streamIdleAbort)
+			if endSeen {
+				// 有后续帧就继续宽限；最后一帧之后 grace 到期即收工。
+				endGrace = time.After(streamEndGrace)
+			}
 		}
-		if onLine != nil {
-			onLine(sc.Text())
-		}
 	}
-	if ttfb < 0 {
-		ttfb = time.Since(start).Milliseconds()
+}
+
+func nonBlockingDrain(c <-chan time.Time) {
+	select {
+	case <-c:
+	default:
 	}
-	if err := sc.Err(); err != nil {
-		return buf.Bytes(), ttfb, err
+}
+
+const (
+	// streamEndGrace：完结标记帧后还等多久（可能的尾随帧）。
+	streamEndGrace = 1500 * time.Millisecond
+	// streamIdleAbort：一行都没有的兜底中止时长。
+	streamIdleAbort = 45 * time.Second
+)
+
+// isStreamEndLine 判断一行是不是"响应到此结束"的标记帧。
+//
+// 两种形态：
+//   - 经典完结帧：[["e",4,null,null,216]]（旧抓包，服务端随后关连接）
+//   - 新尾帧：[["wrb.fr",null,"[{\\"37\\":[0]}]"]]（2026-09 匿名路径实测：
+//     内容帧发完后连接保持打开，这个帧是最后一条）
+func isStreamEndLine(line string) bool {
+	t := strings.TrimSpace(line)
+	if strings.HasPrefix(t, `[["e"`) {
+		return true
 	}
-	return buf.Bytes(), ttfb, nil
+	if !strings.HasPrefix(t, `[["wrb.fr"`) {
+		return false
+	}
+	// Payload ist JSON-in-JSON："37" erscheint auf dem Draht als \"37\"。两种
+	// 形态都认（带/不带转义），对上游格式微调更稳。
+	return strings.Contains(t, `\"37\":[0]`) || strings.Contains(t, `"37":[0]`)
 }
 
 // reasoningInLine 从单个 wrb.fr 行里取出思考链。

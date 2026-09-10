@@ -187,6 +187,41 @@ func parseConvIDs(raw string) (cid, rid, rcid, tok26 string) {
 // getAnonSession 匿名 GET /app 拿一份 session cookie（NID/COMPASS 等），给匿名多轮当会话
 // 载体。续接请求必须每轮带上它，否则被服务端当新会话（实测不带 0/4 通、带 4/4 通）。
 // 必须走跟正式请求同一出口。
+//
+// 2026-09-10：单轮路径（gemini.go）也开始用它当匿名请求的传输载体（否则上游把
+// 完结标记帧压到 ~60s 才发）。为此加了按出口的进程内缓存（TTL 30 分钟，导出 cookie
+// ~2h 寿命，30 分钟足够安全）——不是每请求都打一次 /app，省一个往返和限流额度。
+// conversation 路径仍然自己拿（conv 绑定自己的 cookie，不共用缓存）。
+var (
+	anonSessMu    sync.Mutex
+	anonSessCache = map[string]anonSessEntry{}
+)
+
+type anonSessEntry struct {
+	cookie string
+	at     time.Time
+}
+
+const anonSessionTTL = 30 * time.Minute
+
+// getAnonSessionCached 按出口缓存的匿名 session；过期或没拿过就现取。
+// 拿不到时返回空串（调用方按无 cookie 继续，不报错）。
+func getAnonSessionCached(proxyURL string) string {
+	anonSessMu.Lock()
+	e, ok := anonSessCache[proxyURL]
+	anonSessMu.Unlock()
+	if ok && time.Since(e.at) < anonSessionTTL {
+		return e.cookie
+	}
+	c, err := getAnonSession(proxyURL)
+	if err != nil {
+		return ""
+	}
+	anonSessMu.Lock()
+	anonSessCache[proxyURL] = anonSessEntry{cookie: c, at: time.Now()}
+	anonSessMu.Unlock()
+	return c
+}
 func getAnonSession(proxyURL string) (string, error) {
 	req := func() (*http.Response, io.ReadCloser, []string, error) {
 		if proxyURL != "" {
