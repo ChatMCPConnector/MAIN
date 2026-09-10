@@ -557,6 +557,56 @@ def _looks_like_tool_markup_fragment(text: str) -> bool:
     return False
 
 
+def _recover_tool_calls_json(candidate: str) -> dict[str, object] | None:
+    """Recovery fuer Snipsel+Finish-Duplikate: Der stream-buffer enthaelt
+    '<fragment><volltext>' (upstream streamt token-schnipsel, dann den
+    volltext als eigenes delta). Der brace-scan bricht dann am ersten
+    oberflaechlich balancierten '}' ab und json.loads scheitert am doppelten
+    prefix. Hier: alle '{"tool_calls'-vorkommen im kandidaten scannen, das
+    erste valide, balancierte objekt extrahieren und parsen."""
+    probe = '{"tool_calls'
+    search_from = 0
+    while True:
+        idx = candidate.find(probe, search_from)
+        if idx == -1:
+            return None
+        depth = 0
+        in_str = False
+        esc = False
+        end = -1
+        for i in range(idx, len(candidate)):
+            ch = candidate[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end != -1:
+            sub = candidate[idx:end]
+            try:
+                parsed = json.loads(sub)
+            except json.JSONDecodeError:
+                try:
+                    parsed = json.loads(sub[:-1] + "]}")
+                except json.JSONDecodeError:
+                    parsed = None
+            if isinstance(parsed, dict) and isinstance(parsed.get("tool_calls"), (list, dict)):
+                return parsed
+        search_from = idx + len(probe)
+
+
 def _find_json_tool_call(
     text: str,
     final: bool,
@@ -619,28 +669,43 @@ def _find_json_tool_call(
     else:
         candidate = text[start:end]
     rest = text[end:] if end != -1 else ""
-    # terminator '[]' oder '.[]' konsumieren (flexibel, um Fehlformatierungen zu tolerieren)
+    # terminator '[]' oder '.[]' konsumieren (flexibel, um Fehlformatierungen
+    # zu tolerieren; fuehrender whitespace zwischen JSON und terminator wird
+    # mitkonsumiert, sonst leakt '[]' als sichtbarer text)
+    rest_stripped = rest.lstrip()
+    skipped_ws = len(rest) - len(rest_stripped)
     terminators = ("[]", ".[]")
     consumed = 0
     for t in terminators:
-        if rest.startswith(t):
-            consumed = len(t)
+        if rest_stripped.startswith(t):
+            consumed = len(t) + skipped_ws
             break
     if consumed:
         rest = rest[consumed:]
-    elif not final and rest.strip() == "":
+    elif not final and rest_stripped == "":
         # warte noch auf den terminator
         return text[:start], text[start:], []
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
-        # GLM sometimes closes the outer object but omits only the tool_calls
-        # array bracket. Repair exactly that boundary without touching any
-        # model text before or after the JSON object.
+        # Recovery 1: GLM schliesst manchmal das aeussere objekt, laesst aber
+        # die ']'-klammer des tool_calls-arrays weg — exakt diese grenze
+        # reparieren, ohne modelltext davor/danach anzufassen.
         repaired = candidate[:-1] + "]}" if candidate.endswith("}") else candidate
+        parsed = None
         try:
             parsed = json.loads(repaired)
         except json.JSONDecodeError:
+            parsed = None
+        # Recovery 2: Snipsel+Finish-Duplikat. Der Upstream streamt Token-
+        # schnipsel und danach den Volltext als eigenes Delta; der buffer
+        # enthaelt dann '<fragment><volltext>'. Der brace-scan endet am
+        # ersten '}'-zurueck auf depth 0 — mitten im fragment, json.loads
+        # scheitert. Hier scannen wir alle '{"tool_calls'-vorkommen im
+        # kandidaten und nehmen die erste valide, balancierte instanz.
+        if parsed is None:
+            parsed = _recover_tool_calls_json(candidate)
+        if parsed is None:
             return text, "", []
     calls_raw = parsed.get("tool_calls") if isinstance(parsed, dict) else None
     if isinstance(calls_raw, dict):

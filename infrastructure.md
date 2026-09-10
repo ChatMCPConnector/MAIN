@@ -186,6 +186,23 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (11): **glm2api: Parser-Recovery gegen Snipsel+Finish-Duplikat und
+  Terminator-Whitespace-Leak (HARD-Benchmark-Befunde 1+2).**
+  Auslöser: ~30-Min-Langlauf (HARD Benchmark v2, benchmark-hard.md + broken3.py
+  unter /workspaces/benchmark) reproduzierte live einen Protokoll-Leak: Der
+  Upstream streamt Token-Schnipsel und danach den Volltext als eigenes Delta;
+  der StreamingToolParser-Buffer enthielt dann `<Fragment><Volltext>`, der
+  Brace-Scan brach am ersten scheinbar balancierten `}` ab, json.loads scheiterte
+  → komplettes `{"tool_calls":[...]}`  leakte als sichtbarer TEXT-Part
+  (text_len=216, tool_calls=0) und der Call ging verloren. Zweiter Leak: `\n`
+  zwischen JSON und `[]`-Terminator ließ das `[]` als Content durchrutschen.
+  Fix in tool_parser.py: (1) `_recover_tool_calls_json()` — bei
+  JSONDecodeError werden alle `{"tool_calls`-Vorkommen im Kandidaten gescannt
+  und die erste valide balancierte Instanz geparst; (2) Terminator-Konsum
+  whitespace-tolerant (lstrip + Skip). Verifikation: 88/88 Tests (3 neue
+  Regressionstests inkl. Original-Live-Fall), Proxy neu gestartet, Live-Check
+  strukturiert, Bundle neu gebaut. Echo-Filter (10) hielt im Langlauf stand
+  (keine server_tools-Cluster, keine Duplikate); Details siehe BEFUNDE.md.
 - 2026-09-10 (10): **glm2api: Echo-Filter für gespiegelte native tool_calls (Benchmark-Toolcall-Fix).**
   Auslöser: SWE-Benchmark-Run (Subagent auf glm2api/glm-5.3) — ~25% „unknown
   tool call"-Fehler, massive Duplikat-Executions (24 Tools in einem Timestamp-

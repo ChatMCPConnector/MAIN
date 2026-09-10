@@ -122,6 +122,63 @@ def test_parse_ignores_dsml_markup_inside_code_fence():
     assert tool_calls == []
 
 
+def test_stream_parser_recovers_snipsel_plus_full_text_duplicate():
+    """Härtetest-Befund 1: Upstream streamt Token-Schnipsel, dann den Volltext
+    als eigenes Delta. Der Buffer enthält dann '<fragment><volltext>' — ohne
+    Recovery leakte das komplette Protokoll als sichtbarer Text und der Call
+    ging verloren."""
+    protocol = (
+        '{"tool_calls":[{"name":"bash","arguments":{"command":"ls -la"}}]}\n[]'
+    )
+    parser = StreamingToolParser()
+    parser.allowed_tool_names = {"bash"}
+
+    visible = parser.consume(protocol[:40])
+    visible += parser.consume(protocol)
+    flush_visible, tool_calls = parser.flush()
+
+    assert '{"tool_calls"' not in visible + flush_visible
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "bash"
+
+
+def test_stream_parser_consumes_terminator_behind_whitespace():
+    """Härtetest-Befund 2: '\n' zwischen JSON-Objekt und '[]'-Terminator —
+    vorher leakte das '[]' als sichtbarer Content."""
+    protocol = (
+        '{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}]}\n[]'
+    )
+    parser = StreamingToolParser()
+    parser.allowed_tool_names = {"bash"}
+
+    visible = parser.consume(protocol)
+
+    assert "[]" not in visible
+    assert visible == ""
+    assert len(parser.flush()[1]) == 1
+
+
+def test_stream_parser_recovers_real_live_leak_case():
+    """Original-Live-Fall aus dem Härtetest (20:25:14, text_len=216): das
+    Protokoll kam komplett als TEXT-Part beim Client an."""
+    protocol = (
+        '{"tool_calls":[{"name":"bash","arguments":{"command":'
+        '"cd /workspaces/benchmark/agent-glm2api-hard/miniforge && '
+        'ls -la *.md *.py 2>/dev/null | grep -E \'(bench-results|load|recall|bugfix|CHANGELOG|LICENSE|README)\'"}}]}[]'
+    )
+    parser = StreamingToolParser()
+    parser.allowed_tool_names = {"bash"}
+
+    visible = parser.consume(protocol[:60])
+    visible += parser.consume(protocol)
+    flush_visible, tool_calls = parser.flush()
+
+    assert '{"tool_calls"' not in visible + flush_visible
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "bash"
+    assert "grep -E" in tool_calls[0]["function"]["arguments"]
+
+
 def test_streaming_tool_parser_never_leaks_dsml_markup_fragments():
     parser = StreamingToolParser(allowed_tool_names={"get_weather"})
     visible_parts: list[str] = []

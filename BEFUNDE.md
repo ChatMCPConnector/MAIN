@@ -71,9 +71,23 @@ die Fehlerberichte des Modells sind nach dem Echo-Fix realistisch geworden.
 
 ## Ausstehende Arbeiten
 
-1. Fix Befund 1 + 2 in `tool_parser.py` (`_find_json_tool_call`) mit
-   Parser-Regressionstests (snipsel+finish, whitespace-terminator).
-2. Proxy-Restart + Bundle-Refresh + ggf. Re-Run des Hard-Benchmarks.
+1. ~~Fix Befund 1 + 2 in `tool_parser.py`~~ — **ERLEDIGT** (siehe unten).
+2. ~~Proxy-Restart + Bundle-Refresh~~ — **ERLEDIGT**.
 3. benchmark-hard.md/broken3.py sind ausgelegt für Wiederholungsläufe
    (bewusst nicht ins Repo-Essentielle committet — liegen unter
    /workspaces/benchmark/).
+
+## Fixes zu Befund 1 + 2 (umgesetzt)
+
+- `tool_parser.py::_find_json_tool_call`:
+  - **Recovery 2** bei JSONDecodeError: neuer `_recover_tool_calls_json()`
+    scannt alle `{"tool_calls`-Vorkommen im Kandidaten und extrahiert die
+    erste valide, balancierte Instanz (deckt Snipsel+Finish-Duplikat ab,
+    inkl. Klammer-Reparatur-Variante). Der brace-scan endet sonst am
+    ersten oberflächlich balancierten `}` mitten im Fragment.
+  - Terminator-Konsum whitespace-tolerant: `rest.lstrip()` + Skip des
+    führenden Whitespace (`...}\n[]` leakte vorher das `[]`).
+- Regressionstests (3 neue, 88/88 grün): snipsel+full-text-duplicate,
+    whitespace-terminator, original-Live-Fall (text_len=216).
+- Live-Verifikation: Proxy neu gestartet (8001), Tool-Call-Request liefert
+  strukturierten Call, kein Protokoll im Content. Bundle neu gebaut.
