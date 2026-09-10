@@ -186,6 +186,17 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (9): **antigravity-proxy-Autostart repariert (Root Cause: unsichtbares Zero-Width-Space in der go.dev-URL).**
+  Nach jedem Codespace-Rebuild fehlte Go: In `setup.sh` steckte in der
+  Download-URL ein unsichtbares U+200B (`https://<ZWP>go.dev/...`) — curl
+  lehnt so eine URL immer ab, der Go-Install-Schritt scheiterte still, und
+  ohne Go kann `antigravity-proxy/scripts/start.sh` das Binary (liegt nicht
+  im Git) nicht bauen. Fixes: (1) U+200B aus setup.sh und start.sh
+  entfernt, (2) setup.sh lädt Go jetzt mit `curl --retry 5 --retry-all-errors`
+  (Boot-Netz transient), (3) `start.sh` installiert Go 1.25.7 selbst nach
+  `/usr/local/go`, falls go nirgends vorhanden ist. Verifiziert mit
+  Go+Binary entfernt: start.sh stellt beides selbst her, Port 9878
+  antwortet mit 200.
 - 2026-09-10 (8): **glm2api: Nicht-Think-Modell mit reasoning_effort als stabiler Standard.**
   Vergleich mit glmfree (externer glm-free-api, gleicher chatglm.cn-Upstream)
   ergab: glmfree aktiviert Thinking über `reasoning_effort` (z.B. `max`) im

@@ -143,7 +143,10 @@ if [ -x /usr/local/go/bin/go ]; then
   echo "    Go schon vorhanden: $(/usr/local/go/bin/go version)."
 else
   GO_VERSION="1.25.7"  # gepinnt, entspricht mise.toml im antigravity-proxy
-  curl -fsSL "https:/​/go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/opencode/go.tgz \
+  # --retry: Boot-Netzwerk ist oft transient instabil; ohne Retry blieb der
+  # antigravity-proxy bei Rebuilds ohne Go und startete nicht (start.sh
+  # installiert go inzwischen selbst als Fallback).
+  curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/opencode/go.tgz \
     && sudo rm -rf /usr/local/go \
     && sudo tar -C /usr/local -xzf /tmp/opencode/go.tgz \
     && echo "    Go ${GO_VERSION} nach /usr/local/go installiert." \
