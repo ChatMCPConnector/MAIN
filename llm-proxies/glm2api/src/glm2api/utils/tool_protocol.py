@@ -92,6 +92,8 @@ def build_tool_call_instructions(
         "- Parameter names must exactly match the schema.",
         "- Multiple calls go in one \"tool_calls\" array.",
         "- Emit tool calls ONLY as this JSON — never as prose, XML, fences, or narration.",
+        "- When calling a tool, do NOT output conversational text, internal thoughts, or preamble before or after the JSON. Start directly with the JSON.",
+        "- Language consistency: Always think and respond in the language of the conversation (e.g. German, English). NEVER output internal monologue, reasoning, or responses in Chinese unless explicitly prompted in Chinese.",
     ]
 
     if mode == "none":
@@ -119,10 +121,11 @@ def build_tool_call_instructions(
 
 
 TOOL_FORMAT_REMINDER = (
-    "[System instruction — highest priority]: To use a tool, output the JSON "
+    "[System instruction — highest priority]: If calling a tool, output the JSON "
     "format from the TOOL USE PROTOCOL with the trailing [] — this is the ONLY "
     "way tools get executed. Prose, XML, or fenced blocks will NOT be executed. "
-    "Call the tool now; do not describe or narrate it."
+    "Do not output any preamble, commentary, or thoughts in Chinese or any other language before the tool call. "
+    "If answering the user directly, provide the answer in the conversation language (e.g. German)."
 )
 
 

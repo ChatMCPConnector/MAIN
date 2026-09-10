@@ -26,6 +26,7 @@ from .translator import (
     BLOCKED_NATIVE_TOOL_NAMES,
     GLMEventAccumulator,
     SERVER_SIDE_TOOL_NAMES,
+    compress_history_messages,
     convert_messages,
     extract_history_tool_call_signatures,
     extract_recent_user_url,
@@ -592,8 +593,23 @@ class GLMWebClient:
         upstream_model, assistant_id = resolve_upstream_model(requested_model, self.config)
         if filtered_tools is None:
             filtered_tools, _ = self._resolve_tools(openai_payload)
+        # H1/THEMA 1 (optimierung.md): chatglm.cn driftet bei aufgeblähter
+        # request-historie. Historie VOR der Konvertierung komprimieren, damit
+        # budget-grenze auf den rohen messages liegt (nicht auf dem
+        # flachen prompt — tools-instructions brauchen ihr eigenes budget).
+        compressed_messages = compress_history_messages(
+            list(openai_payload.get("messages", [])), # type: ignore[arg-type]
+            self.config.glm_history_max_chars,
+        )
+        if len(compressed_messages) != len(list(openai_payload.get("messages", []))): # type: ignore[arg-type]
+            self.logger.info(
+                "Compressed request history messages=%s -> %s (budget=%s chars)",
+                len(list(openai_payload.get("messages", []))), # type: ignore[arg-type]
+                len(compressed_messages),
+                self.config.glm_history_max_chars,
+            )
         converted_messages = convert_messages(
-            messages=list(openai_payload.get("messages", [])), # type: ignore
+            messages=compressed_messages, # type: ignore
             tools=filtered_tools,
             blocked_tool_names={name.strip() for name in self.config.blocked_tool_names if name.strip()},
             tool_choice=openai_payload.get("tool_choice"),

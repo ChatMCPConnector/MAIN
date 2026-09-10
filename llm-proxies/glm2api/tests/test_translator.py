@@ -834,3 +834,120 @@ def test_consume_event_defers_text_delta_containing_protocol_fragment():
     ]
     assert '{"tool_calls"' not in final_content
     assert "tool_calls" in finish_reasons
+
+
+def test_compress_history_noop_under_budget():
+    from glm2api.services.translator import compress_history_messages
+
+    messages = [
+        {"role": "system", "content": "Du bist hilfreich."},
+        {"role": "user", "content": "Hallo"},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+    assert compress_history_messages(messages, 100000) == messages
+    assert compress_history_messages(messages, 0) == messages  # 0 = deaktiviert
+
+
+def test_compress_history_compacts_older_rounds_keeps_recent_intact():
+    from glm2api.services.translator import compress_history_messages
+
+    messages: list[dict[str, object]] = [{"role": "system", "content": "sys"}]
+    for i in range(40):
+        messages.append({"role": "user", "content": f"Runde {i}: " + "x" * 500})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"call_{i}",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": f'{{"command": "echo {i}"}}'},
+                    }
+                ],
+            }
+        )
+        messages.append({"role": "tool", "tool_call_id": f"call_{i}", "name": "bash", "content": f"output {i}" * 20})
+    messages.append({"role": "user", "content": "Finale Frage?"})
+
+    compressed = compress_history_messages(messages, 8000)
+    assert compressed is not messages
+    assert len(compressed) < len(messages)
+    # summary-eintrag ganz vorn
+    assert compressed[0]["role"] == "user"
+    assert "compacted" in str(compressed[0]["content"])
+    # die letzte user-nachricht bleibt unangetastet
+    assert compressed[-1] == {"role": "user", "content": "Finale Frage?"}
+    # kein verwaistes tool-result: jeder tool-rolle in compressed geht ein
+    # assistant-mit-tool_calls voraus
+    for idx, msg in enumerate(compressed):
+        if msg.get("role") == "tool":
+            assert idx > 0 and compressed[idx - 1].get("role") == "assistant" and compressed[idx - 1].get("tool_calls")
+    # budget grob eingehalten (summary-snippets + letzte runden)
+    total = 0
+    for msg in compressed:
+        content = msg.get("content")
+        total += len(content) if isinstance(content, str) else 0
+        calls = msg.get("tool_calls")
+        if isinstance(calls, list):
+            import json as _json
+
+            total += len(_json.dumps(calls))
+    assert total < 20000
+
+
+def test_sanitize_tool_call_payload_unpacks_stringified_json_array_and_dict():
+    # Stringified array (e.g. questions: "[{...}]")
+    raw_array = json.dumps([{"question": "Was tun?", "header": "Auswahl", "options": []}])
+    payload = sanitize_tool_call_payload("question", {"questions": raw_array})
+    assert isinstance(payload, dict)
+    assert isinstance(payload["questions"], list)
+    assert payload["questions"][0]["question"] == "Was tun?"
+
+    # Stringified dict
+    raw_dict = json.dumps({"key": "val"})
+    payload_dict = sanitize_tool_call_payload("custom_tool", {"meta": raw_dict})
+    assert isinstance(payload_dict, dict)
+    assert isinstance(payload_dict["meta"], dict)
+    assert payload_dict["meta"]["key"] == "val"
+
+    # Plain strings remain untouched
+    payload_plain = sanitize_tool_call_payload("read", {"filePath": "/path/to/file"})
+    assert isinstance(payload_plain, dict)
+    assert payload_plain["filePath"] == "/path/to/file"
+
+
+def test_conversation_has_tool_round_detects_preamble_and_tool_call():
+    from glm2api.services.translator import _conversation_has_tool_round
+
+    # Tool call with preceding preamble
+    processed_with_preamble = [
+        {"role": "user", "content": "analysiere den ordner"},
+        {"role": "assistant", "content": 'Hier ist die Analyse:\n{"tool_calls":[{"name":"question","arguments":{}}]}[]'},
+    ]
+    assert _conversation_has_tool_round(processed_with_preamble) is True
+
+    # Tool result turn
+    processed_with_tool_result = [
+        {"role": "user", "content": '[{"call_id":"c1","name":"question","content":"ok"}]'},
+    ]
+    assert _conversation_has_tool_round(processed_with_tool_result) is True
+
+    # Plain conversational turn without tools
+    processed_plain = [
+        {"role": "user", "content": "Hallo"},
+        {"role": "assistant", "content": "Hallo, wie kann ich helfen?"},
+    ]
+    assert _conversation_has_tool_round(processed_plain) is False
+
+
+def test_build_tool_call_instructions_includes_language_lock_and_no_preamble():
+    from glm2api.utils.tool_protocol import build_tool_call_instructions, TOOL_FORMAT_REMINDER
+
+    instructions = build_tool_call_instructions(["question", "read"])
+    assert "When calling a tool, do NOT output conversational text" in instructions
+    assert "Language consistency" in instructions
+    assert "NEVER output internal monologue, reasoning, or responses in Chinese" in instructions
+
+    assert "Do not output any preamble, commentary, or thoughts in Chinese" in TOOL_FORMAT_REMINDER
+

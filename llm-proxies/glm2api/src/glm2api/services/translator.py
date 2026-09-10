@@ -7,6 +7,7 @@ import time
 from bisect import insort
 from dataclasses import dataclass, field
 from logging import Logger
+from typing import Any
 
 from ..config import AppConfig
 from ..logging_utils import debug_dump
@@ -187,13 +188,27 @@ def sanitize_tool_call_payload(
     if not isinstance(parsed_arguments, dict):
         return None
 
-    cleaned = {str(key): value for key, value in parsed_arguments.items()}
+    cleaned: dict[str, Any] = {str(key): value for key, value in parsed_arguments.items()}
     if cleaned == {"param_name": "url"} and fallback_url:
         cleaned = {"url": fallback_url}
     elif cleaned == {"param_name": "url"}:
         cleaned = {}
     if "param_name" in cleaned and "param_value" not in cleaned and len(cleaned) == 1:
         cleaned = {}
+
+    # Repair: stringified JSON arrays or objects inside parameters (e.g. questions: "[{...}]")
+    for key, val in list(cleaned.items()):
+        if isinstance(val, str):
+            stripped_val = val.strip()
+            if (stripped_val.startswith("[") and stripped_val.endswith("]")) or (
+                stripped_val.startswith("{") and stripped_val.endswith("}")
+            ):
+                try:
+                    parsed_nested = json.loads(stripped_val)
+                    if isinstance(parsed_nested, (dict, list)):
+                        cleaned[key] = parsed_nested
+                except json.JSONDecodeError:
+                    pass
 
     if tool_name in {"bash", "shell", "run", "execute"}:
         command = cleaned.get("command")
@@ -305,6 +320,100 @@ build_tool_call_instructions = _protocol_build_tool_call_instructions
 serialize_tool_call_block = _protocol_serialize_tool_call_block
 serialize_tool_result_block = _protocol_serialize_tool_result_block
 tools_to_prompt = _protocol_tools_to_prompt
+
+
+def compress_history_messages(
+    messages: list[dict[str, object]],
+    max_total_chars: int,
+) -> list[dict[str, object]]:
+    """H1/THEMA 1 aus optimierung.md: chatglm.cn driftet bei aufgeblähter
+    request-historie (loops, missdeutungen ab ~150k token) — auch wenn das
+    modell nominell mehr kann. glm-free-api (gleicher upstream) komprimiert
+    serverseitig und bleibt stundenlang stabil.
+
+    Strategie hier (konfigurierbar via GLM_HISTORY_MAX_CHARS, default 120k
+    chars, 0 = aus): die messages-liste wird von NEU nach ALT gesammelt bis
+    das budget ausgeschöpft ist; alles ältere wird zu EINEM summarischen
+    eintrag verdichtet ("system" → user-transkript), tool-JSON überlebt
+    unangetastet im erhaltenen teil. Wichtig:Paarweise assistant-tool-nachrichten
+    nie auseinanderreissen — ein tool-result ohne seinen call verwirrt das
+    modell, ein call ohne result führt zu phantom-erwartungen.
+    """
+    if max_total_chars <= 0:
+        return messages
+
+    def _msg_size(message: dict[str, object]) -> int:
+        content = message.get("content")
+        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False) if content else ""
+        size = len(text)
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            size += len(json.dumps(tool_calls, ensure_ascii=False))
+        return size
+
+    total = sum(_msg_size(m) for m in messages)
+    if total <= max_total_chars:
+        return messages
+
+    # von hinten (neueste) sammeln, paare intakt lassen
+    kept: list[dict[str, object]] = []
+    running = 0
+    boundary = len(messages)
+    i = len(messages) - 1
+    while i >= 0:
+        message = messages[i]
+        size = _msg_size(message)
+        role = str(message.get("role", ""))
+        if role == "tool" and kept and i > 0:
+            # tool-result gehört zum vorherigen assistant-call: nur zusammen
+            # behalten oder zusammen verwerfen (assistant davor prüfen)
+            prev = messages[i - 1]
+            prev_role = str(prev.get("role", ""))
+            if prev_role == "assistant" and prev.get("tool_calls"):
+                size += _msg_size(prev)
+                if running + size > max_total_chars:
+                    boundary = i + 1
+                    break
+                kept.insert(0, prev)
+                kept.insert(1, message)
+                running += size
+                i -= 2
+                continue
+        if running + size > max_total_chars:
+            boundary = i + 1
+            break
+        kept.insert(0, message)
+        running += size
+        i -= 1
+
+    if boundary <= 0 or boundary > len(messages):
+        return messages
+    dropped = messages[: boundary - 1]
+    # summary-budget: die snippets duerfen das gesamt-budget nicht sprengen —
+    # jede gedroppte message maximal budget/8 zeichen, gesamt gedeckelt.
+    per_snippet = max(120, max_total_chars // 8)
+    summary_budget = max(1000, max_total_chars // 2)
+    summary_parts: list[str] = []
+    summary_len = 0
+    for message in dropped:
+        role = str(message.get("role", "user"))
+        content = message.get("content")
+        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False) if content else ""
+        if role == "assistant" and message.get("tool_calls"):
+            text = (text or "") + " " + json.dumps(message.get("tool_calls"), ensure_ascii=False)
+        snippet = text[:per_snippet]
+        part = f"{role}: {snippet}"
+        if summary_len + len(part) > summary_budget:
+            break
+        summary_parts.append(part)
+        summary_len += len(part)
+    summary = (
+        "[Conversation history summary — earlier messages were compacted. "
+        "The full recent conversation follows below.] "
+        + " | ".join(summary_parts)
+    )
+    summary_entry: dict[str, object] = {"role": "user", "content": summary}
+    return [summary_entry] + list(messages[boundary - 1 :])
 
 
 def convert_messages(
@@ -427,7 +536,10 @@ def convert_messages(
 def _conversation_has_tool_round(processed: list[dict[str, str]]) -> bool:
     for item in processed:
         content = item.get("content", "")
-        if item.get("role") == "assistant" and content.startswith('{"tool_calls"'):
+        role = item.get("role", "")
+        if role == "assistant" and '{"tool_calls"' in content:
+            return True
+        if role == "user" and '[{"call_id"' in content:
             return True
     return False
 
