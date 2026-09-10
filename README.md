@@ -180,6 +180,17 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-10 (8): **glm2api: Nicht-Think-Modell mit reasoning_effort als stabiler Standard.**
+  Vergleich mit glmfree (externer glm-free-api, gleicher chatglm.cn-Upstream)
+  ergab: glmfree aktiviert Thinking über `reasoning_effort` (z.B. `max`) im
+  Request — nicht über den `-think`-Modellnamen. glm2api unterstützt das
+  ebenfalls sauber (`resolve_chat_mode` mapped effort → chat_mode). Bei
+  `-think`-Modellen löst opencode beides GLEICHZEITIG aus (Suffix +
+  `reasoningEffort: "max"` aus der Modell-Config) — diese Doppelauslösung
+  korreliert mit den instabilen Reasoning-Streams (Tool-JSON im Reasoning,
+  leere Turns, 30K+-Loops). Neu in `.opencode/opencode.json`:
+  `glm2api/glm-5.3` (non-think) mit `reasoningEffort: "max"` — verifiziert:
+  Killer-Szenarien fresh+multiturn sauber, Benchmark TOOLCALL-PASS 25/25.
 - 2026-09-10 (7): **glm2api: Tool-Protokoll verschlankt + Re-Anchor + Pretty-JSON/Fragment-Parser-Fix.**
   Auslöser: Vergleich mit glmfree (externer glm-free-api-Server, gleicher
   chatglm.cn-Upstream) — der liefert im selben Killer-Szenario (11 Tools +
