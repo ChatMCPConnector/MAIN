@@ -29,15 +29,20 @@ func TestParentKeyCandidatesAgentLoop(t *testing.T) {
 			"name": "read_file", "content": "benchmark-box-01"},
 		map[string]interface{}{"role": "user", "content": "Summarize the hostname."})
 
-	conv, key := convGetByParentKey(next)
+	conv, hitLen := convGetByParentKey(next)
 	if conv == nil {
-		t.Fatalf("Agent-Loop-Fortsetzung wurde nicht erkannt (hitKey leer)")
+		t.Fatalf("Agent-Loop-Fortsetzung wurde nicht erkannt (kein Treffer)")
 	}
-	if key == "" {
-		t.Fatalf("hitKey fehlt")
+	if hitLen == 0 {
+		t.Fatalf("hitLen fehlt")
 	}
 	if conv.cid != "c_1" {
 		t.Errorf("falsche Konversation getroffen: cid=%s", conv.cid)
+	}
+	// hitLen muss auf die assistant(tool_calls)-Nachricht zeigen:
+	// neue Nachrichten = tool(result) + user — genau die, die gesendet werden müssen.
+	if hitLen != 2 {
+		t.Errorf("hitLen=%d, erwartet 2 (Prefix: user + assistant)", hitLen)
 	}
 }
 

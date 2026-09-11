@@ -153,10 +153,17 @@ func stripTrailingToolMsgs(messages []map[string]interface{}) []map[string]inter
 	return messages[:n]
 }
 
+// parentKeyCandidate：一个候选指纹 + 它对应的历史前缀长度（发送新消息时
+// 要知道从哪条开始才是"新的"）。
+type parentKeyCandidate struct {
+	key     string
+	prefixLen int
+}
+
 // parentKeyCandidates 按优先级列出这轮历史的识别指纹：
 //  1. 精确：全部历史（除最后一条新消息）
 //  2. 降级：同上，但剥掉结尾 tool 消息 —— agent 把工具结果带回来的场景
-func parentKeyCandidates(messages []map[string]interface{}) []string {
+func parentKeyCandidates(messages []map[string]interface{}) []parentKeyCandidate {
 	if len(messages) < 2 {
 		return nil
 	}
@@ -164,19 +171,23 @@ func parentKeyCandidates(messages []map[string]interface{}) []string {
 	exact := hashStr(canonicalMessages(prefix))
 	stripped := stripTrailingToolMsgs(prefix)
 	if len(stripped) == len(prefix) {
-		return []string{exact}
+		return []parentKeyCandidate{{key: exact, prefixLen: len(prefix)}}
 	}
-	return []string{exact, hashStr(canonicalMessages(stripped))}
+	return []parentKeyCandidate{
+		{key: exact, prefixLen: len(prefix)},
+		{key: hashStr(canonicalMessages(stripped)), prefixLen: len(stripped)},
+	}
 }
 
 // convGetByParentKey 按候选指纹找会话：精确命中优先，降级指纹兜底。
-func convGetByParentKey(messages []map[string]interface{}) (*convState, string) {
-	for _, key := range parentKeyCandidates(messages) {
-		if conv := convGet(key); conv != nil {
-			return conv, key
+// 返回会话 + 命中的前缀长度（= 服务端历史已覆盖的条数，之后的全要发）。
+func convGetByParentKey(messages []map[string]interface{}) (*convState, int) {
+	for _, cand := range parentKeyCandidates(messages) {
+		if conv := convGet(cand.key); conv != nil {
+			return conv, cand.prefixLen
 		}
 	}
-	return nil, ""
+	return nil, 0
 }
 
 // convChildKey 是"这轮之后的历史"的指纹：历史 + 本轮模型回复。
@@ -521,8 +532,16 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 	// 2026-09-11：候选指纹识别（见 parentKeyCandidates）—— agent 循环里
 	// tool result 在历史里、但我们存 childKey 时不知道它的内容，降级指纹
 	// （剥掉结尾 tool 消息）负责命中。
-	conv, hitKey := convGetByParentKey(messages)
+	conv, hitLen := convGetByParentKey(messages)
 	fresh := conv == nil
+	var hitKeys []string
+	if conv != nil {
+		for _, cand := range parentKeyCandidates(messages) {
+			if convGet(cand.key) != nil {
+				hitKeys = append(hitKeys, cand.key)
+			}
+		}
+	}
 
 	var prompt string
 	if fresh {
@@ -543,11 +562,22 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 		// 首轮带上 tools 指令：模型要靠它知道怎么吐 tool_call 围栏。
 		prompt, _ = messagesToPrompt(messages, tools, toolChoice)
 	} else {
-		// 续接轮：工具围栏格式指令在服务端首轮历史里，但实测几轮后模型会
+		// 续接轮：发**所有命中前缀之后的新消息**（2026-09-11 修正：原来只发
+		// 最后一条 —— agent 循环里新的是 tool(result) + user 两条，tool result
+		// 被吞掉，模型拿不到执行结果只能瞎猜（实测答 localhost 而不是真实
+		// hostname）。降级指纹命中时 hitLen 指到 assistant(tool_calls) 后面，
+		// 从那儿起的全发。命中前的历史留在服务端。
+		var newTurns []string
+		for i := hitLen; i < len(messages); i++ {
+			if s := formatNewTurn(messages[i]); strings.TrimSpace(s) != "" {
+				newTurns = append(newTurns, s)
+			}
+		}
+		prompt = strings.Join(newTurns, "\n\n")
+		// 工具围栏格式指令在服务端首轮历史里，但实测几轮后模型会
 		// 丢失纪律（不再吐 ```tool_call```、直接散文回答）；再往后（~第 9 轮）
 		// 上下文窗口还会把首轮的工具定义挤出去，模型答「没有工具」。所以每轮
 		// 都重发格式规则 + 完整工具 schema（toolsReminderBlock）。
-		prompt = formatNewTurn(messages[len(messages)-1])
 		if reminder := toolsReminderBlock(tools); reminder != "" {
 			prompt += "\n\n" + reminder
 		}
@@ -565,7 +595,9 @@ res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
 	// 户端透明。只在**还没往客户端写过任何 delta** 时重锚（res.Emitted 为空；
 	// 流已开始就不能重来，否则内容重复）。
 	if err != nil && !fresh && res != nil && res.Emitted == "" && res.EmittedReasoning == "" {
-		convDelete(hitKey)
+		for _, k := range hitKeys {
+			convDelete(k)
+		}
 		logf("[conv] 续接失败（%v），本轮就地重锚为新会话", err)
 		conv = &convState{}
 		if !anonFirstEligible(mc, false) {
@@ -591,7 +623,9 @@ res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
 	}
 	if text == "" && len(toolCalls) == 0 {
 		if !fresh {
-			convDelete(hitKey)
+			for _, k := range hitKeys {
+				convDelete(k)
+			}
 		}
 		return "", nil, res, fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(res.Raw))
 	}
