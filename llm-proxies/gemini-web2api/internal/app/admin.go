@@ -476,7 +476,7 @@ func handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 			if n, ok := proxyNames[u.ProxyID]; ok {
 				name = n
 			} else {
-				name = "(已删除)"
+				name = "(deleted)"
 			}
 		}
 		out = append(out, map[string]interface{}{

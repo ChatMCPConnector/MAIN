@@ -101,7 +101,7 @@ func handleAdminCookies(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
-		logf("[cookies] 新增账号 #%d label=%q", id, strings.TrimSpace(p.Label))
+		logf("[cookies] account added #%d label=%q", id, strings.TrimSpace(p.Label))
 		writeJSON(w, 200, map[string]interface{}{"id": id})
 	default:
 		writeJSON(w, 405, map[string]string{"error": "method not allowed"})
@@ -136,7 +136,7 @@ func handleAdminCookieItem(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-		logf("[cookies] 删除账号 #%d", id)
+		logf("[cookies] account deleted #%d", id)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case http.MethodPost:
 		if action == "rotate" {
@@ -147,10 +147,10 @@ func handleAdminCookieItem(w http.ResponseWriter, r *http.Request) {
 						writeJSON(w, 200, map[string]interface{}{"ok": false, "detail": err.Error()})
 						return
 					}
-					detail := "保活成功"
-					if len(names) > 0 {
-						detail = "保活成功，刷新了 " + strings.Join(names, ", ")
-					}
+					detail := "keepalive succeeded"
+				if len(names) > 0 {
+					detail = "keepalive succeeded, refreshed " + strings.Join(names, ", ")
+				}
 					writeJSON(w, 200, map[string]interface{}{
 						"ok": true, "detail": detail, "refreshed": names, "next_sec": int(iv.Seconds())})
 					return
