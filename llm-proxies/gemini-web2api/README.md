@@ -126,7 +126,7 @@ gemini-web2api-go v4.0.0
   Proxy:       none
   Impersonate: chrome_146
   Tokenizer:   tiktoken cl100k_base
-  Per-IP 限流: 并发=5 / RPM=30 / RPH=80
+  Per-IP rate limits: concurrency=5 / RPM=30 / RPH=80
   Retry:       3x / 2s
 ```
 

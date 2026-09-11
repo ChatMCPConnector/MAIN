@@ -38,9 +38,9 @@ import (
 // Firefox and export again.
 
 const (
-	rotatePageURL = "https:/​/accounts.google.com/RotateCookiesPage" +
+	rotatePageURL = "https://accounts.google.com/RotateCookiesPage" +
 		"?og_pid=658&rot=3&origin=https%3A%2F%2Fgemini.google.com&exp_id=0"
-	rotatePostURL = "https:/​/accounts.google.com/RotateCookies"
+	rotatePostURL = "https://accounts.google.com/RotateCookies"
 	// og_pid is the product identifier, fixed at 658 for Gemini; it appears
 	// both as a query on the page above and echoed inside the page.
 	rotateProductID = 658
