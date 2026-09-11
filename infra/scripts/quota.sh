@@ -52,11 +52,11 @@ def format_time(reset_str):
         hours = (sec % 86400) // 3600
         mins = (sec % 3600) // 60
         if days > 0:
-            return f"in {days}d {hours:02d}h"
+            return f"in {days}d {hours:02d}H"
         elif hours > 0:
-            return f"in {hours}h {mins:02d}m"
+            return f"in {hours}:{mins:02d}H"
         else:
-            return f"in {mins}m"
+            return f"in 0:{mins:02d}H"
     except Exception:
         return reset_str
 
@@ -73,24 +73,25 @@ def get_status(pct_sprint, pct_week):
     else:
         return "Aktiv"
 
-indent = "   "
-line_w = 96
-title = "GOOGLE ANTIGRAVITY LIVE QUOTA & STATUS"
+indent = "  "
+line_w = 76
+title = "ANTIGRAVITY QUOTA & STATUS"
 
 print()
 print(indent + "=" * line_w)
 print(indent + title.center(line_w))
 print(indent + "=" * line_w)
-hdr_group = "Modell-Gruppe"
-hdr_sprint = "5-Stunden Sprint"
+hdr_model = "Modell"
+hdr_sprint = "5h-Sprint"
 hdr_week = "Wochen-Limit"
 hdr_status = "Status"
-print(f"{indent}  {hdr_group:<24} | {hdr_sprint:<30} | {hdr_week:<30} | {hdr_status}")
+print(f"{indent} {hdr_model:<8} | {hdr_sprint:<27} | {hdr_week:<27} | {hdr_status}")
 print(indent + "-" * line_w)
 
 if "groups" in data:
     for g in data.get("groups", []):
-        name = g.get("displayName", "Unbekannt")
+        raw_name = g.get("displayName", "")
+        name = "Gemini" if "gemini" in raw_name.lower() else "Claude"
         sprint_b = None
         weekly_b = None
         for b in g.get("buckets", []):
@@ -108,18 +109,18 @@ if "groups" in data:
             pct = round(frac * 100, 1)
             t = format_time(b.get("resetTime"))
             bar = make_bar(pct)
-            return pct, f"{pct:>5.1f}% [{bar}] ({t})"
+            return pct, f"{pct:>5.1f}% [{bar}] {t:<10}"
 
         s_pct, s_disp = parse_bucket(sprint_b)
         w_pct, w_disp = parse_bucket(weekly_b)
         status = get_status(s_pct, w_pct)
-        print(f"{indent}  {name:<24} | {s_disp:<30} | {w_disp:<30} | {status}")
+        print(f"{indent} {name:<8} | {s_disp} | {w_disp} | {status}")
 else:
     # Fallback für flaches fetchAvailableModels
     models = data.get("models", {})
     fallback_pools = [
-        {"name": "Gemini Models", "keys": ["gemini-3.8-flash-high", "gemini-pro-agent"]},
-        {"name": "Claude and GPT models", "keys": ["claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium"]}
+        {"name": "Gemini", "keys": ["gemini-3.8-flash-high", "gemini-pro-agent"]},
+        {"name": "Claude", "keys": ["claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium"]}
     ]
     for p in fallback_pools:
         name = p["name"]
@@ -132,12 +133,12 @@ else:
             pct = round(frac * 100, 1)
             t = format_time(q.get("resetTime"))
             bar = make_bar(pct)
-            disp = f"{pct:>5.1f}% [{bar}] ({t})"
-            bg_msg = "(im Hintergrund aktiv)"
+            disp = f"{pct:>5.1f}% [{bar}] {t:<10}"
+            bg_msg = "    - [----------] aktiv     "
             if "d " in t:
-                print(f"{indent}  {name:<24} | {bg_msg:<30} | {disp:<30} | {get_status(100, pct)}")
+                print(f"{indent} {name:<8} | {bg_msg} | {disp} | {get_status(100, pct)}")
             else:
-                print(f"{indent}  {name:<24} | {disp:<30} | {bg_msg:<30} | {get_status(pct, 100)}")
+                print(f"{indent} {name:<8} | {disp} | {bg_msg} | {get_status(pct, 100)}")
 
 print(indent + "=" * line_w)
 
@@ -163,10 +164,10 @@ if os.path.exists(db_path):
                 g_tokens += tin + tout
         c_str = f"{c_tokens/1_000_000:.2f}M" if c_tokens >= 100_000 else f"{c_tokens:,}"
         g_str = f"{g_tokens/1_000_000:.2f}M" if g_tokens >= 100_000 else f"{g_tokens:,}"
-        print(f"{indent}  Lokaler Token-Verbrauch: Claude & GPT {c_str} Tokens | Gemini {g_str} Tokens")
+        print(f"{indent} Lokaler Opencode-Verbrauch: Claude {c_str} Tokens | Gemini {g_str} Tokens")
     except Exception:
         pass
 
-print(f"{indent}  Hinweis: 5h-Sprint federt Lastspitzen ab. Wochenlimit ist das fixe Kontingent.")
+print(f"{indent} 5h-Sprint federt Lastspitzen ab. Wochenlimit ist das fixe Kontingent.")
 print()
 ' <<< "$RESPONSE"
