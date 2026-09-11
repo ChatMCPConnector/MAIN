@@ -6,8 +6,6 @@
 [![Go Version](https://img.shields.io/badge/go-1.21%2B-00ADD8.svg)](https://golang.org)
 [![Docker](https://img.shields.io/badge/docker-distroless-blue)](Dockerfile)
 
-[中文文档](README.md) | English
-
 Turn the Google Gemini web app into an OpenAI-compatible API. **Single binary**, **no account needed** (anonymous works), **real Chrome 146 fingerprint**, **SQLite persistence**, ships with an **admin dashboard**.
 
 ---
@@ -37,9 +35,8 @@ This is not a wrapper around Google's official API ([generativelanguage.googleap
 
 **Models**
 - `gemini-3.6-flash` and `gemini-3.5-flash-lite` work anonymously, web search included
-- `gemini-3.1-pro` needs a cookie; every reply carries a reasoning chain
+- `gemini-3.1-pro` needs a cookie; every reply carries a reasoning chain (`reasoning_content`)
 - Each of the three models has a `-thinking` variant (extended thinking), available with a cookie
-  (`reasoning_content`)
 - Every response records which model the backend **actually** used, so silent
   downgrades are visible
 
@@ -257,6 +254,8 @@ With a valid cookie it really is Pro: six consecutive calls all had the backend 
 
 Only those three are exposed. The old names `gemini-3.5-flash`, `gemini-3.5-flash-thinking`, `gemini-3.5-flash-thinking-lite`, `gemini-auto` and `gemini-flash-lite` were **removed** (they now return 400): the backend has no entries for them, and keeping them only suggested there were five distinct models to choose from.
 
+The three `-thinking` variants are the web UI's "extended thinking" toggle, orthogonal to the model — it can be enabled on any of the three; they are not three additional models. The name the backend reports carries `Extended` (e.g. `3.6 Flash Extended`), and the reasoning chain gets visibly longer (measured at 2467 / 1059 / 583 characters, versus 0 / 0 / 268 for the plain versions). **Only works signed-in**: anonymous requests carrying the toggle are silently ignored by the backend, which is why they aren't exposed without a cookie.
+
 > **`@think=N` is deprecated.** The suffix was written into `inner[17]` and long treated as "thinking depth", but captures show it is the **turn index within a conversation** (first turn `[[0]]`, the follow-up carrying a conversation id `[[1]]`, incrementing from there) — nothing to do with reasoning depth. We open a fresh conversation for every request, so the value is always 0 and the parameter never did anything. The suffix is still accepted and ignored, so existing client configs don't break.
 
 ### Reasoning chain (`reasoning_content`)
@@ -330,7 +329,6 @@ Saving takes effect **immediately**, no restart. Values live in the database and
 | Detail retention days | only request details expire; aggregates are kept forever |
 | TLS fingerprint | `chrome_146` (default) / `chrome_144` / `chrome_133` / `firefox_147` / `safari_16_0` / `safari_ios_17_0` |
 | Gemini `bl` version | upstream frontend build id, change it here when it expires |
-| Static proxy | fallback when the proxy pool is empty; normally use the Proxy pool page |
 | Request logging | |
 
 Every value is range-checked on the server (for example `retry_attempts` accepts 1-10, timeouts 5-600 seconds) and illegal values are rejected with a reason — browser-side limits are trivial to bypass, so the real gate is server-side.

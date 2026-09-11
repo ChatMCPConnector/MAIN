@@ -1,503 +1,653 @@
-# 更新日志
+# Changelog
 
-本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+This project follows [Semantic Versioning](https://semver.org/).
 
 ## 4.20.0
 
-### 新增
+### Added
 
-- **Cookie 池失效账号标红**（issue #18）。账号鉴权在失败（`fail_count>0`，即 401/403）时，
-  面板状态列标红「疑似失效」、整行红底加左红条，顶部汇总「N 疑似失效」，一眼看出哪些该用
-  Firefox 重新导出。手动「检测」发现失效会立刻转红，检测通过或成功使用后自动转回正常。
-  （#18 里另提的内嵌 mini 浏览器不做，跟单二进制设计冲突。）
+- **Cookie pool flags dead accounts in red** (issue #18). When an account's auth has failed
+  (`fail_count>0`, i.e. 401/403), the panel's status column marks it red as "suspected dead",
+  the whole row gets a red background with a left red bar, and a header summary shows
+  "N suspected dead" — you can see at a glance which ones to re-export from Firefox.
+  A manual "check" that finds it dead turns it red immediately; passing the check or a
+  successful use turns it back to normal automatically. (The embedded mini browser also
+  proposed in #18 won't be done — it conflicts with the single-binary design.)
 
 ## 4.19.0
 
-### 新增
+### Added
 
-- **Cookie 自动续命**（issue #6，合并 @s1oz 的 #25）。以前每 10 分钟的 `RotateCookies` 保活走
-  浏览器 iframe 那条 `[658, session_id]`，只刷 `SIDCC` / `*PSIDCC`，**换不了** `__Secure-1PSIDTS`
-  ——那才是约 30 分钟过期的短命票，所以登录号看着半小时就死、保活按钮也救不回来。现在先用哨兵
-  payload `[000,"-0000000000000000000"]`（只带 `__Secure-1PSID` + `__Secure-1PSIDTS` 两项子集，
-  多带会 401）换发一张新 `*PSIDTS`，再跑原来的 SIDCC 保活；导入后 15 秒先刷一次、同号 60 秒内
-  不重复打（避免 429）。
-- 实测（纯 HTTP、全程无浏览器）：不刷的静态号 20-30 分钟就死，开哨兵连续续命 3 小时不掉。
-  **Firefox 导出的 cookie 可以一直续**；Chrome 新版的设备绑定会话（DBSC）换发会 401，反复 401
-  就改用 Firefox 重新登录再导出。
+- **Automatic cookie renewal** (issue #6, merges @s1oz's #25). Previously the 10-minute
+  `RotateCookies` keepalive used the browser iframe path `[658, session_id]`, which only
+  refreshes `SIDCC` / `*PSIDCC` and **cannot mint** a new `__Secure-1PSIDTS` — that's the
+  short-lived ticket expiring in ~30 minutes, which is why signed-in accounts looked like
+  they died after half an hour and the keepalive button couldn't save them. Now the sentinel
+  payload `[000,"-0000000000000000000"]` is sent first (carrying only the
+  `__Secure-1PSID` + `__Secure-1PSIDTS` subset — more entries cause a 401) to mint a fresh
+  `*PSIDTS`, then the original SIDCC keepalive runs; the first refresh fires 15 seconds
+  after import, and the same account is not pinged twice within 60 seconds (to avoid 429).
+- Measured (pure HTTP, no browser at any point): a static cookie without the sentinel dies
+  in 20-30 minutes; with the sentinel it stayed alive for 3 hours straight. **Cookies exported
+  from Firefox can be renewed indefinitely**; Chrome's new device-bound sessions (DBSC) fail
+  the renewal with 401 — if you see repeated 401s, re-login in Firefox and export again.
 
 ## 4.18.0
 
-### 新增
+### Added
 
-- **匿名优先开关 `anon_first`**（issue #20）。默认关。开启后不需要登录态能力的请求
-  （纯文本、非思考、无工具、不带图）走匿名、不占用 cookie 账号，最大化省账号额度；
-  用到 3.1 Pro / 3.8 Flash / 扩展思考 / 生图·音乐·视频·画布 / 传文件这些才挑号。
-  在设置页勾选。
+- **Anonymous-first switch `anon_first`** (issue #20). Off by default. When on, requests that
+  don't need a signed-in session (plain text, no thinking, no tools, no images) go out
+  anonymously without consuming a cookie account, maximally saving account quota; only
+  3.1 Pro / 3.8 Flash / extended thinking / image·music·video·canvas / file upload etc.
+  pick an account. Toggle it on the Settings page.
 
-### 修复
+### Fixed
 
-- **cookie 挑号并发可能选中同一账号**。挑号是「SELECT 最久未用的号 + UPDATE 标记它
-  刚用过」两步，之前没串起来：并发请求会 SELECT 到同一个号、各自 UPDATE，同一瞬间
-  双双用它，轮转失效。加锁把这两步锁成原子。
+- **Concurrent account picks could select the same account.** Picking is two steps —
+  "SELECT the least-recently-used account + UPDATE to mark it just used" — which previously
+  weren't serialized: concurrent requests would SELECT the same account and each UPDATE it,
+  using it simultaneously and breaking the rotation. A lock now makes the two steps atomic.
 
 ## 4.17.0
 
-### 新增
+### Added
 
-- **面板设置页加「服务端多轮续接」(`multi_turn`) 开关**（issue #27）。这个运行时开关一直存在，
-  但之前只能靠手写 `config.json` 开——面板上没有、也不读环境变量，docker/群晖这类部署尤其别扭。
-  现在设置页直接勾。开启后同一串连续对话复用同一个 gemini 网页会话（按历史前缀认续接，命中只发
-  最新一句、历史留服务端），不再每发一条就新开一个会话。
+- **Settings page gains the "server-side multi-turn continuation" (`multi_turn`) switch**
+  (issue #27). This runtime switch had existed all along, but could previously only be
+  enabled by hand-writing `config.json` — it wasn't on the panel and no environment variable
+  was read, which was especially awkward on docker/Synology-style deployments. Now it's a
+  checkbox on the Settings page. When on, one continuous conversation reuses the same Gemini
+  web session (continuation is recognised by history prefix; on a hit only the newest message
+  is sent while history stays server-side), instead of opening a new session per message.
 
-### 修复
+### Fixed
 
-- **修 `multi_turn` 在面板点「保存并生效」后被静默重置成 `false`**。它是唯一没列进面板配置表单的
-  运行时字段，而保存走的是整体反序列化，表单没带的字段会被解成零值——所以只要在面板保存过一次，
-  `config.json` 里设的 `multi_turn` 也会被冲掉。列进表单一并修掉。
+- **`multi_turn` was silently reset to `false` after clicking "save and apply" in the panel.**
+  It was the only runtime field missing from the panel's config form, and saving went through
+  full deserialisation — fields not carried by the form decoded to zero values, so saving once
+  in the panel would also wipe a `multi_turn` set in `config.json`. Listed in the form and
+  fixed.
 
 ## 4.16.0
 
-### 新增
+### Added
 
-- **`gemini-3.8-flash`（+ `-thinking`）**（issue #26）。Google 把原 3.7 Flash 那个 hex
-  （`56fdd199312815e2`）原地升成了 3.8——同 hex，服务端显示名从 `"3.7 Flash"` 变 `"3.8 Flash"`
-  （付费号 HAR 响应帧确认）。**付费 Gemini 账号专属**（不是灰度）：免费号仍降级成 3.5 Flash-Lite。
-  `gemini-3.7-flash` / `gemini-3.7-flash-thinking` 保留为别名（同 hex），老客户端不受影响。
+- **`gemini-3.8-flash` (+ `-thinking`)** (issue #26). Google bumped the original 3.7 Flash
+  hex (`56fdd199312815e2`) to 3.8 in place — same hex, the server-side display name changed
+  from `"3.7 Flash"` to `"3.8 Flash"` (confirmed via paid-account HAR response frames).
+  **Paid Gemini accounts only** (not a gradual rollout): free accounts still get downgraded
+  to 3.5 Flash-Lite. `gemini-3.7-flash` / `gemini-3.7-flash-thinking` remain as aliases
+  (same hex), so old clients are unaffected.
+
 ## 4.15.0
 
-### 新增
+### Added
 
-- **`/v1/videos` 端点**（issue #24）。OpenAI(Sora) 形状的异步视频生成：`POST /v1/videos`
-  {model, prompt} 建任务、立即返回 `{id, status}`；`GET /v1/videos/{id}` 轮询状态；
-  `GET /v1/videos/{id}/content` 完成后下 MP4。底层复用 `gemini-video` 那条生成链（要登录态 Pro 号）。
-  视频要几十秒到几分钟，异步比 chat/completions 阻塞式更合适。原来 `/v1/chat/completions` +
-  `model=gemini-video`（返回 base64 data URL）仍保留可用。
+- **`/v1/videos` endpoint** (issue #24). OpenAI (Sora)-shaped async video generation:
+  `POST /v1/videos` {model, prompt} creates a job and immediately returns `{id, status}`;
+  `GET /v1/videos/{id}` polls the status; `GET /v1/videos/{id}/content` downloads the MP4
+  once finished. Under the hood it reuses the `gemini-video` generation chain (needs a
+  signed-in Pro account). Video takes tens of seconds to minutes, so async fits better than
+  the blocking chat/completions style. The original `/v1/chat/completions` +
+  `model=gemini-video` (returns a base64 data URL) remains available.
 
 ## 4.14.0
 
-### 新增
+### Added
 
-- **MySQL / PostgreSQL 支持**（issue #22）。设 `SQL_DSN` 环境变量即可，不设仍默认 SQLite、无需改动。
-  `SQL_DSN=mysql://user:pass@host:3306/db` 或 `postgres://user:pass@host:5432/db?sslmode=disable`。
-  建表自动完成，三种库共用一套 schema；方言差异（`?`/`$N` 占位符、upsert、自增主键、TEXT 键列、
-  `IFNULL`/`COALESCE`）全收敛在 `dbdialect.go`，业务层 ~70 条查询不动。用真 mysql8 + pg16 各跑通验证。
+- **MySQL / PostgreSQL support** (issue #22). Just set the `SQL_DSN` environment variable;
+  unset still defaults to SQLite, nothing to change. `SQL_DSN=mysql://user:pass@host:3306/db`
+  or `postgres://user:pass@host:5432/db?sslmode=disable`. Tables are created automatically;
+  all three backends share one schema; dialect differences (`?`/`$N` placeholders, upsert,
+  auto-increment primary keys, TEXT key columns, `IFNULL`/`COALESCE`) are all confined to
+  `dbdialect.go` — the ~70 queries in the business layer are untouched. Verified against real
+  mysql8 and pg16 instances.
 
-### 修复
+### Fixed
 
-- SSE 响应补 `X-Accel-Buffering: no`，避免流式经 nginx 一类反代被整体缓冲成一次性下发
-  （客户端直连本就是流式，仅「自己在前面架了反代」的部署需要）。注：issue #21 里 Dify 的
-  一次性输出不是这个原因——实测经 Dify 的 squid(ssrf_proxy) 是流式透传的，那问题在 Dify 侧。
+- SSE responses now carry `X-Accel-Buffering: no`, so streaming through reverse proxies like
+  nginx is no longer buffered into a single flush (clients connecting directly were already
+  streaming; only deployments "with their own reverse proxy in front" need this). Note: the
+  one-shot output seen with Dify in issue #21 is NOT this — testing showed Dify's squid
+  (ssrf_proxy) passes streams through transparently; that problem is on Dify's side.
 
 ## 4.13.0
 
-### 新增
+### Added
 
-- **读视频**。客户端在 content 里传 `video_url` / `input_video`（data URL）即可让模型分析
-  视频内容，跟读图同一条上传路径（文件元组类型位 2=视频）。要 cookie（匿名引用被上游拒）。
-  实测传红→绿→蓝测试片、问依次哪三色，模型答「红、绿、蓝」——真逐帧看了。
-- **生视频**（`gemini-video`）。`inner[49]=11` 提交异步任务，轮询 hNvQHb 拿
-  `contribution.usercontent.google.com` 下载链，取回 MP4（base64 data URL）。实测「日落
-  海浪」出真 10 秒 720p H.264+AAC 视频。**要 Pro/付费号**（自报 3.7 Flash）；免费号被
-  Google 视频内容政策拒时会明确报错。生成要几十秒到几分钟，客户端记得配长超时。
-- **自动删会话**（issue #19，配置 `auto_delete_conversation`，默认关）。出完结果自动删掉
-  gemini.google.com 上留下的这条会话（rpc GzXR5e），免得账号里堆一堆。只登录态生效，
-  异步 best-effort 不影响响应。
+- **Video input.** Clients pass `video_url` / `input_video` (data URL) in the content and
+  the model can analyse the video — same upload path as image input (file tuple type marker
+  2 = video). Needs a cookie (anonymous references are refused upstream). Tested with a
+  red→green→blue test clip, asking which three colours appear in order; the model answered
+  "red, green, blue" — it really watched it frame by frame.
+- **Video generation** (`gemini-video`). `inner[49]=11` submits an async job; polling hNvQHb
+  yields the `contribution.usercontent.google.com` download link, and the MP4 is fetched back
+  (base64 data URL). Tested with "sunset ocean waves" — produced a real 10-second 720p
+  H.264+AAC video. **Needs a Pro/paid account** (self-reports 3.7 Flash); free accounts get
+  an explicit error when Google's video content policy refuses. Generation takes tens of
+  seconds to minutes, so clients should set a long timeout.
+- **Auto-delete conversation** (issue #19, config `auto_delete_conversation`, off by default).
+  After a result is produced, the conversation it left on gemini.google.com is deleted
+  automatically (rpc GzXR5e), so accounts don't pile them up. Signed-in only; async
+  best-effort, doesn't affect the response.
 
 ## 4.12.0
 
-### 修复
+### Fixed
 
-- **agentic 客户端的工具循环收敛**（承接 #15）。Codex 这类客户端的命令成功结果是一段
-  带「Process exited with code 0 / Output:（空）」的包装文本；写文件、设值这类命令没有
-  stdout，弱模型（尤其匿名 3.6 Flash）把「无输出」当成「没干成」，于是换个写法一遍遍重试
-  ——实测「写 hello 到 a.txt」一个任务试了 26 种命令、90 秒不收敛（文件其实第一次就写对了）。
-  现在把工具结果压成一行清爽的成功/失败信号（✅ exit 0 并说明无输出是正常的、别重跑；
-  ❌ exit N），并在指令里加终止条款（看到成功就停、别重试同一件事）。实测同一任务从
-  26-27 轮降到 2-4 轮、且正常给出最终答复。只加终止条款不配清爽信号无效，两者要一起。
+- **Agentic client tool loops now converge** (follow-up to #15). Command success results from
+  clients like Codex arrive as a wrapped text "Process exited with code 0 / Output: (empty)";
+  commands like writing a file or setting a value have no stdout, and weak models (especially
+  anonymous 3.6 Flash) read "no output" as "didn't work", then retry with a different
+  formulation over and over — measured: the task "write hello to a.txt" tried 26 different
+  commands over 90 seconds without converging (the file was actually correct the first time).
+  Tool results are now condensed into a one-line clean success/failure signal (✅ exit 0 with
+  a note that no output is normal — don't re-run; ❌ exit N), plus a termination clause in the
+  instructions (stop on success; don't retry the same thing). Measured: the same task dropped
+  from 26-27 rounds to 2-4 rounds, with a normal final answer. The termination clause alone
+  without the clean signal does nothing — the two must go together.
 
 ## 4.11.0
 
-### 修复
+### Fixed
 
-- **带 tools 的请求「已读乱回」**（issue #15）。agentic 客户端（Codex 等）发来的请求，中间
-  夹着几十 KB 客户端自带的开发者提示，里面写着「emit function calls to run terminal
-  commands」这类原生工具框架措辞，把我们放在最顶部的 ```tool_call``` 格式指令冲没——模型
-  于是答「我没有工具 / 无法访问文件系统」或答非所问。现在 `buildPrompt` 在所有消息之后
-  （紧挨用户问题）再锚一次工具格式（含一个行为化示例，明确唯一执行通道是 ```tool_call```、
-  不许写 ```powershell 代码块给用户看、一次只发一个），并放宽围栏正则以容错模型吐的 inline
-  变体（无换行）。实测 Codex 真实客户端下工具正常调用；有 tools 时普通对话不误触发。
-- **纯代码产物响应不再返空导致 502**。问数学 / 算式时模型直接跑代码、整条回复只有代码执行
-  产物，清洗掉 `?code_reference/stdout` 标记后为空，会被当「无内容帧」报 502。现在清洗后为空
-  时保留代码和结果、当普通代码块返回。
+- **Requests with tools giving off-topic replies** (issue #15). Requests from agentic clients
+  (Codex etc.) carry tens of KB of the client's own developer prompt in the middle, containing
+  native-tool phrasing like "emit function calls to run terminal commands", which buried our
+  ```tool_call``` format instructions at the very top — the model then answered "I have no
+  tools / cannot access the filesystem" or answered the wrong question. `buildPrompt` now
+  re-anchors the tool format after all messages (right next to the user's question, with a
+  behavioural example making clear that the only execution channel is ```tool_call```, no
+  ```powershell blocks shown to the user, one call at a time), and the fence regex is loosened
+  to tolerate the model's inline variants (no newlines). Verified with the real Codex client:
+  tools invoke correctly; plain chat with tools attached doesn't mis-trigger.
+- **Pure-code-artifact responses no longer come back empty and cause a 502.** On math /
+  expression questions the model runs code directly and the whole reply is just the execution
+  artifact; after scrubbing the `?code_reference/stdout` markers it was empty, which was
+  treated as "no content frame" and reported as 502. Now, if the scrubbed result is empty,
+  the code and its result are kept and returned as a normal code block.
 
 ## 4.10.0
 
-### 新增
+### Added
 
-- **`gemini-canvas`（画布）**。生成 immersive 交互 HTML 文档。跟生图/音乐不同，产物是
-  HTML、**内联在响应里**（一个 ```html 代码块），不用另外下载。要 cookie，没配时不暴露。
-  实测返回完整的 `<!DOCTYPE html>…</html>` 交互网页（含脚本），客户端拿到后可提取渲染。
+- **`gemini-canvas` (canvas).** Generates an immersive interactive HTML document. Unlike
+  image/music generation, the artifact is HTML and **inlined in the response** (a ```html
+  block), no extra download needed. Needs a cookie; not exposed without one. Measured: returns
+  a complete `<!DOCTYPE html>…</html>` interactive page (with scripts); clients can extract
+  and render it.
 
 ## 4.9.0
 
-### 新增
+### Added
 
-- **管理面板中英切换**（issue #13）。顶栏加了个语言按钮，默认中文，点一下切英文
-  （记在 localStorage）。约 190 条词条覆盖导航、KPI、表头、按钮、下拉、状态徽章、
-  运行时配置字段与提示、错误分类、连通性诊断、弹窗、部署表。带数字变量的插值句
-  （如"还能再打约 N 次"）保持中文。
+- **Admin panel language toggle (Chinese/English)** (issue #13). A language button was added
+  to the top bar — Chinese by default, click once to switch to English (remembered in
+  localStorage). About 190 strings covering navigation, KPIs, table headers, buttons,
+  dropdowns, status badges, runtime config fields and hints, error categories, connectivity
+  diagnostics, dialogs, and the deployment table. Interpolated sentences with numeric
+  variables (e.g. "roughly N more requests before the block") stay Chinese.
 
 ## 4.8.0
 
-### 修复
+### Fixed
 
-- **生图取原图**（issue #14）。plain gg-dl 链默认下来是 ~500px（512×279）的缩略图；
-  在链尾加 `=s0` 取原始尺寸后拿到全分辨率（实测 1408×768）。格式仍是 PNG。
-- **媒体模型不再被多轮路径吞掉产物**。4.5.0 起把多轮 gate 放宽到带 tools 的请求时，
-  把媒体模型（生图/音乐）也放进了多轮路径，而多轮只处理文本——于是开了 `multi_turn`
-  再打 `gemini-image` / `gemini-music` 只回一句占位文本、没有图/乐。现在媒体模型始终
-  走带产物取回的那条路，跟 `multi_turn` 开关无关。
+- **Image generation fetches the original image** (issue #14). The plain gg-dl link
+  downloads a ~500px (512×279) thumbnail by default; appending `=s0` to the link fetches
+  the original resolution (measured: 1408×768). Format is still PNG.
+- **Media models no longer lose their artifacts to the multi-turn path.** Since 4.5.0, when
+  the multi-turn gate was widened to requests with tools, media models (image/music) also
+  entered the multi-turn path — but multi-turn only handles text, so with `multi_turn` on,
+  calling `gemini-image` / `gemini-music` returned just a placeholder sentence with no
+  image/music. Media models now always take the artifact-retrieval path, regardless of the
+  `multi_turn` switch.
 
 ## 4.7.0
 
-### 新增
+### Added
 
-- **`gemini-3.7-flash`（含 `-thinking` 版）**。Gemini 网页端按账号灰度放出 3.7 Flash，
-  接进来。要配 cookie，且**账号得已灰度到 3.7**，否则降级成 3.5 Flash-Lite（跟 3.1 Pro
-  一样，没 cookie / 没灰度就不给假成功）。
+- **`gemini-3.7-flash` (including the `-thinking` variant).** Gemini's web app rolls out
+  3.7 Flash per account; wired it in. Needs a cookie, and **the account must be enrolled in
+  the 3.7 rollout**, otherwise it degrades to 3.5 Flash-Lite (same as 3.1 Pro — no cookie /
+  no rollout means no fake success).
 
-  hex 用 3.7 条目的主 hex `56fdd199312815e2`（两个独立已灰度账号的 otAQ7b 清单里都是它、
-  有 3.7 号的用户实测发它回报 "3.7 Flash"）。没用 compat 列表里的 `797f3d0293f288ad`——
-  那是「当前 Flash」泛指针，老批次号发它拿到的是 3.6，会拿 3.6 冒充 3.7。
+  The hex is the 3.7 entry's primary hex `56fdd199312815e2` (it appears in the otAQ7b lists
+  of two independently enrolled accounts, and users with 3.7 tested that sending it reports
+  "3.7 Flash"). Not the compat list's `797f3d0293f288ad` — that's a "current Flash" generic
+  pointer; older accounts sending it get 3.6, which would pass 3.6 off as 3.7.
 
 ## 4.6.0
 
-### 修复
+### Fixed
 
-- **流式 `tool_calls` 补 `index` 字段**（issue #10）。流式 delta 里的每个 tool_call 少了
-  `index`，OpenAI 流式规范要求客户端靠它把分片的 tool_call 拼起来；漏了导致部分客户端
-  拼不起来。现在按顺序给每个补上。
+- **Streaming `tool_calls` now carry the `index` field** (issue #10). Each tool_call in a
+  streaming delta was missing `index`, which the OpenAI streaming spec says clients use to
+  stitch sharded tool_calls together; without it some clients couldn't reassemble them. It's
+  now assigned in order to each one.
 
 ## 4.5.0
 
-### 修复
+### Fixed
 
-- **`/v1/responses` 流式补全 item 生命周期事件**。以前只发 `response.created` 就直接推
-  `output_text.delta`，漏了先用 `response.output_item.added` + `content_part.added` 声明
-  item。严格的 Responses 客户端（Codex、zcode 等）收到不合规的事件序列会中途报错
-  （"OutputTextDelta without active item" / "Turn execution failed"），而 HTTP 请求本身
-  返回 200、chat 模式不受影响，所以面板看着正常、很难定位。现在补齐了 message 和
-  function_call 两种 item 的 added → content_part → done 完整生命周期。
+- **`/v1/responses` streaming completes the item lifecycle events.** Previously it emitted
+  `response.created` and went straight to `output_text.delta`, skipping the
+  `response.output_item.added` + `content_part.added` declarations. Strict Responses clients
+  (Codex, zcode, etc.) abort mid-stream on a non-compliant event sequence ("OutputTextDelta
+  without active item" / "Turn execution failed"), while the HTTP request itself returns 200
+  and chat mode is unaffected — so the panel looks fine and it's very hard to locate. The
+  full lifecycle for both message and function_call items is now emitted: added →
+  content_part → done.
 
-### 新增
+### Added
 
-- **可选多轮（`multi_turn`，默认关）**。开启后走 Gemini 原生 conversation_id 服务端续接：
-  客户端每轮重发全历史，服务端按"除最后一条外的历史"做指纹识别续接，命中就只发最后一句
-  新消息、历史留 Google 服务端，绕开单请求约 13 万字节的墙。登录 / 匿名都可用（匿名首轮
-  就地 GET /app 拿 session cookie 当会话载体，不需要账号）。带 tools 的 agentic 客户端
-  也走这条。
+- **Optional multi-turn (`multi_turn`, off by default).** When on, requests use Gemini's
+  native conversation_id server-side continuation: the client resends the full history each
+  turn, the server fingerprints "history minus the last message" to detect a continuation,
+  and on a hit sends only the newest message while history stays on Google's servers —
+  bypassing the ~130KB single-request wall. Works signed-in or anonymous (anonymously, the
+  first turn does an in-place GET /app to grab a session cookie as the conversation carrier —
+  no account needed). Agentic clients with tools also take this path.
 
-  实测：两轮各 110KB、全量重发会撞字节墙报 400 的场景，续接只发新消息 → 200，长会话
-  不再撞墙。注意多轮**不放大模型的上下文窗口**——超出窗口的早期内容仍会被挤出（滑动窗口
-  留最近），它解决的是"长对话不撞单请求墙 + 保住最近上下文"，不是"喂超长文档"。
+  Measured: two 110KB turns that would hit the byte wall with full resend and get 400 —
+  with continuation only the new message is sent → 200; long conversations no longer hit the
+  wall. Note that multi-turn does **not** enlarge the model's context window — content past
+  the window is still evicted (a sliding window keeps the recent part). It solves "long
+  conversation without hitting the single-request wall + keeping recent context", not
+  "feeding a huge document".
 
 ## 4.4.0
 
-### 新增
+### Added
 
-- **生图 / 音乐**。两个新模型 `gemini-image`（Nano Banana）和 `gemini-music`
-  （Lyria，约 30 秒），走 `/v1/chat/completions`。产物字节以 **base64 data URL** 直接
-  塞进返回的 `content`（图片 `![]`、音频 `[]`），不转外链——外链要 cookie 才下得到，
-  客户端拿不到。都要登录态，没配 cookie 时不进 `/v1/models`。
+- **Image / music generation.** Two new models, `gemini-image` (Nano Banana) and
+  `gemini-music` (Lyria, ~30 seconds), via `/v1/chat/completions`. The artifact bytes are
+  placed directly into the returned `content` as a **base64 data URL** (image `![]`, audio
+  `[]`) — no external link, since links need the cookie to download and clients couldn't
+  fetch them. Both need a signed-in session; not listed in `/v1/models` without a cookie.
 
-  产物取回卡了很久的下载 403，根因三条（抓包 + 实测确认）：下载 host 只认 `.google.com`
-  域那 18 项 cookie（整串塞过去连 accounts 主机专属那几项一起发就 403）；图片链跨域
-  302，客户端默认不把 Cookie 带到新域（手动跟随、每跳重发解决）；图片响应给的是
-  `gg-dl` plain 链、GET 只回 text/plain 指针，真图要改成 `rd-gg-dl` 前缀。
+  Artifact retrieval was stuck for a long time on a download 403; three root causes
+  (confirmed via packet capture + testing): the download host only accepts the 18 cookies
+  from `.google.com` domains (sending the whole string, including the accounts-host-only
+  ones, gets a 403); the image link cross-domain 302 means clients don't carry the Cookie to
+  the new domain by default (solved by following manually and re-sending per hop); the image
+  response returns a `gg-dl` plain link whose GET only yields a text/plain pointer — the real
+  image requires switching to the `rd-gg-dl` prefix.
 
-  base64 不计进 output token——一张图上百万字符，按它计费等于让用户为二进制买单。
+  base64 is not counted in output tokens — a single image is millions of characters; billing
+  by it would charge users for binary data.
 
-  实测：`gemini-image` → 512×279 PNG（106KB，可解码）；`gemini-music` → 744KB 合法 MP3。
+  Measured: `gemini-image` → 512×279 PNG (106KB, decodable); `gemini-music` → 744KB valid
+  MP3.
 
 ## 4.3.0
 
-### 新增
+### Added
 
-- **MCP server（web_search）**。除了 OpenAI 接口，同一个进程、同一个端口现在还挂了一个
-  MCP server 在 `/mcp` 上，把 Gemini 网页端的联网搜索暴露成一个 `web_search` 工具，
-  让 Claude Desktop / Claude Code / Cursor 这类 MCP 客户端「用 Gemini 去搜网」，
-  返回合成答案 + 来源链接。
+- **MCP server (web_search).** Besides the OpenAI API, the same process and port now also
+  serves an MCP server at `/mcp`, exposing Gemini's web-grounded search as a `web_search`
+  tool, letting MCP clients (Claude Desktop / Claude Code / Cursor) "search the web through
+  Gemini" and get a synthesized answer plus source links back.
 
-  传输走 HTTP（Streamable HTTP），部署成服务器后远程客户端连 URL 就能用，复用后端的
-  账号池 / 代理池 / 限流；匿名即可搜，不必挂 cookie。用同一把 API key 鉴权
-  （`Authorization: Bearer <key>`）。手写 JSON-RPC 2.0，不引第三方 SDK。
+  The transport is HTTP (Streamable HTTP); once deployed as a server, remote clients just
+  point at the URL, reusing the backend's account pool / proxy pool / rate limiting; search
+  works anonymously, no cookie required. Authenticated with the same API key
+  (`Authorization: Bearer <key>`). Hand-written JSON-RPC 2.0, no third-party SDK.
 
-  客户端配置见 README 的「MCP」一节。`web_search(query)` 返回答案，末尾附 `Sources:`
-  来源清单。
+  Client configuration is in the README's "MCP" section. `web_search(query)` returns the
+  answer with a `Sources:` list appended.
 
-- **解析联网搜索的来源**。以前只返回答案文本，把 grounding 来源丢了；现在从响应帧里
-  抠出每条来源的 url / 标题 / 摘要，去掉 URL 尾部的 `#:~:text=` 片段锚。当前用在 MCP
-  的 `web_search` 上，OpenAI 接口的响应不受影响。
+- **Grounded search sources are parsed out.** Previously only the answer text was returned
+  and the grounding sources were dropped; now each source's url / title / snippet is
+  extracted from the response frames, with the `#:~:text=` fragment anchor stripped from the
+  URL tail. Currently used by the MCP `web_search` tool; OpenAI API responses are unaffected.
 
 ## 4.2.0
 
-### 新增
+### Added
 
-- **扩展思考：三个模型都能开**。新增 `gemini-3.6-flash-thinking` /
-  `gemini-3.5-flash-lite-thinking` / `gemini-3.1-pro-thinking`，服务端回报的模型名
-  带 `Extended`，思考链实测 2467 / 1059 / 583 字符（对应普通版 0 / 0 / 268）。
-  跟 3.1 Pro 一样只在挂了 cookie 时暴露 —— 匿名请求带上这个开关会被服务端静默忽略
-  （用完整 header 复测过，不是我们发漏了）。
+- **Extended thinking: available on all three models.** Added
+  `gemini-3.6-flash-thinking` / `gemini-3.5-flash-lite-thinking` /
+  `gemini-3.1-pro-thinking`. The model name the backend reports carries `Extended`, and the
+  reasoning chain measured 2467 / 1059 / 583 characters (versus 0 / 0 / 268 for the plain
+  versions). Like 3.1 Pro, only exposed when a cookie is attached — anonymous requests
+  carrying the toggle are silently ignored by the server (re-verified with the complete
+  header; it's not us failing to send it).
 
-  它是网页 UI 上「扩展思考」那个开关，跟模型正交，不是三个额外的模型。
+  It's the web UI's "extended thinking" toggle, orthogonal to the model — not three
+  additional models.
 
-  **开关在模型 header 里，不在 payload。** 我们原来只发 5 个元素的最小形式
-  `[1,null,null,null,"<hex>"]`，浏览器发的是 18 个元素，下标 14 = 模型 MODE、
-  下标 15 = 思考位。只填 payload 里的 `inner[80]=2` 实测三个模型思考链全是 0 字符，
-  补上 header 才生效 —— 跟模型选择本身「header 压过 inner[79]」是同一个规律。
+  **The switch lives in the model header, not the payload.** We originally sent only the
+  5-element minimal form `[1,null,null,null,"<hex>"]`; the browser sends 18 elements, where
+  index 14 = model MODE and index 15 = the thinking bit. Setting only `inner[80]=2` in the
+  payload left all three models' reasoning chains at 0 characters; adding the header is what
+  makes it work — the same rule as model selection itself, where "the header overrides
+  inner[79]".
 
-  配套：`inner` 从 80 槽扩到 97 槽（浏览器就是 97-98 槽，`inner[80]` 在 80 长度的
-  数组里连位置都没有）；补发 `x-goog-ext-525005358-jspb` 以及固定值的
-  `x-goog-ext-73010989-jspb` / `-73010990-jspb`；补 `inner[91]` / `inner[96]`。
-  补完之后跟浏览器逐槽比对只差 `[3,4]` —— botguard token 和它配对的 nonce，
-  那两个服务端不认我们算的，是故意不发的。
+  Alongside: `inner` was widened from 80 to 97 slots (the browser sends 97-98 slots; in an
+  80-length array `inner[80]` has no position at all); `x-goog-ext-525005358-jspb` plus the
+  fixed-value `x-goog-ext-73010989-jspb` / `-73010990-jspb` are now sent; `inner[91]` /
+  `inner[96]` were added. After all that, a slot-by-slot comparison with the browser differs
+  only in `[3,4]` — the botguard token and its paired nonce: the server doesn't accept ours
+  for those two, so they are deliberately not sent.
 
-### 修复
+### Fixed
 
-- **死号自动停用**：连续 3 次鉴权失败（只有 401/403 算）自动改成 disabled。以前
-  `fail_count` 只累加不处理，而挑号是 `ORDER BY fail_count ASC` —— 坏号排在最后，
-  但池子里只剩坏号时照样会被选中，于是每个请求都要先为它付一次 XSRF 往返才轮到
-  报错。停用不删除：cookie 是用户导入的数据，判断可能出错，留着让用户自己决定。
-- **刷新 cookie 前校验身份**：合并 Set-Cookie 后如果 `SAPISID` 或 `__Secure-1PSID`
-  变了就整个丢弃不写。不校验的话，上游若在响应里换掉整套会话，A 号的凭据会被静默
-  写进 B 号那一行 —— 面板上显示的还是原标签，实际发出去的是别人的会话。
-- **cookie 失效前先救一次**：取不到 XSRF token 时先强制轮转一次再重取，救不回来才
-  换下一个账号。以前直接换号，等于放弃一个可能只是 cookie 陈旧的号。
+- **Dead accounts are auto-disabled**: after 3 consecutive auth failures (only 401/403
+  counts), the account is switched to disabled. Previously `fail_count` only ever grew and
+  was never acted on, and picking uses `ORDER BY fail_count ASC` — bad accounts sort last,
+  but when only bad accounts remain they still get picked, so every request had to pay one
+  XSRF round-trip for it before erroring. Disabling doesn't delete: cookies are
+  user-imported data, the judgement can be wrong, and they're left for the user to decide.
+- **Identity is verified before refreshing a cookie**: after merging Set-Cookie, if
+  `SAPISID` or `__Secure-1PSID` changed, the whole merge is discarded. Without the check, an
+  upstream that swapped the entire session in a response would silently write account A's
+  credentials into account B's row — the panel would still show the original label while the
+  session actually sent out is someone else's.
+- **One rescue attempt before declaring a cookie dead**: when the XSRF token can't be
+  fetched, a forced rotation runs first and the fetch is retried; only if that fails does it
+  move to the next account. Previously it switched accounts immediately, giving up on one
+  that might merely be stale.
 
 ## 4.1.1
 
-### 修复
+### Fixed
 
-- **面板反代到子路径下打不开**（比如 `example.com/gemini/admin`）。`index.html` 里
-  30 处地址都是绝对的，浏览器按站点根解析，全落到 `example.com/admin/api/…`，前缀
-  丢了。现在改成相对地址。
+- **Panel couldn't open when reverse-proxied under a sub-path** (e.g.
+  `example.com/gemini/admin`). The 30 URLs in `index.html` were absolute; the browser
+  resolved them against the site root, so they all landed on `example.com/admin/api/…` and
+  the prefix was lost. They are now relative.
 
-  顺带说清一个坑：**光改成相对地址不够**。相对地址是按文档 URL 的**目录**解析的，
-  而 `/admin` 和 `/admin/` 的目录差一层——`api/stats` 在 `/gemini/admin/` 下解析成
-  `/gemini/admin/api/stats`（对），在 `/gemini/admin` 下解析成 `/gemini/api/stats`
-  （错）。所以服务端会把 `/admin` 301 到 `admin/`，把文档 URL 统一到带斜杠的形式。
-  Location 用的是**相对值**——写成 `/admin/` 的话浏览器会跳到站点根，前缀又丢了。
+  One pitfall worth spelling out: **making them relative alone is not enough**. Relative
+  URLs resolve against the document URL's *directory*, and the directories of `/admin` and
+  `/admin/` differ by one level — `api/stats` under `/gemini/admin/` resolves to
+  `/gemini/admin/api/stats` (right), but under `/gemini/admin` it resolves to
+  `/gemini/api/stats` (wrong). So the server 301s `/admin` to `admin/`, normalising the
+  document URL to the trailing-slash form. The Location uses a **relative value** — an
+  absolute `/admin/` would send the browser to the site root and lose the prefix again.
 
-  反代不需要任何额外配置，把 `/前缀/` 转发到本服务的 `/` 即可。
+  No extra configuration is needed for the reverse proxy: just forward `/prefix/` to this
+  service's `/`.
 
 ## 4.1.0
 
-### ⚠️ 破坏性变更
+### ⚠️ Breaking changes
 
-- **代理和 cookie 各自只剩一个入口**：代理只认「代理池」页面，cookie 只认
-  「Cookie 池」页面。「设置」页的「静态代理」输入框、cookie 卡片的单 cookie 输入
-  和 `/admin/api/cookie` 端点都已移除。
+- **Proxies and cookies each have exactly one entrance left**: proxies only via the
+  "Proxy pool" page, cookies only via the "Cookie pool" page. The Settings page's "static
+  proxy" input, the cookie card's single-cookie input, and the `/admin/api/cookie` endpoint
+  have been removed.
 
-  为什么不是"多一个简单选项"而是必须删：这两条单例路径走的都是"ID=0"那条分支，
-  于是跟直连共用同一个限流 slot、健康度回写函数开头就 `id<=0 return` 直接跳过。
-  结果是 fail_count 恒为 0、last_ok_at 恒为空、没有轮转、没有熔断冷却，面板上还
-  看不出流量到底走了代理还是直连（实测：迁移前走静态代理的请求在 requests 表里
-  记的是 `proxy_id=0`，跟真直连无法区分）。池子里放一个，处处严格更好。
+  Why removal instead of "one more simple option": both singleton paths went through the
+  "ID=0" branch, sharing the rate-limit slot with the direct connection, and the health
+  writeback function starts with `id<=0 return`, skipping it entirely. The result:
+  fail_count permanently 0, last_ok_at permanently empty, no rotation, no circuit-breaker
+  cooldown — and the panel couldn't tell whether traffic went through the proxy or direct
+  (measured: pre-migration requests using the static proxy were recorded in the requests
+  table as `proxy_id=0`, indistinguishable from a real direct connection). One entry in the
+  pool is strictly better everywhere.
 
-  **升级时自动迁移，且不动你原来的值**：kv 里存的静态代理和单 cookie 会在首次
-  启动时搬进对应的池子，原值原样留着（所以回滚到 4.0.0 依然可用）。迁移只在
-  **入池成功后**才记"已迁移"，失败就留到下次启动重试 —— 4.0.0 对静态代理字段
-  零校验，存的可能是缺 scheme 的 `1.2.3.4:8080`，先清值再入池会让它凭空消失。
+  **Upgrading migrates automatically and leaves your original values untouched**: the
+  static proxy and single cookie stored in kv are moved into their pools on first startup,
+  with the originals left as-is (so rolling back to 4.0.0 still works). Migration is only
+  marked "done" **after the entry lands in the pool successfully**; on failure it retries on
+  the next startup — 4.0.0 applied zero validation to the static-proxy field and the stored
+  value might be a scheme-less `1.2.3.4:8080`; clearing the value before pooling would make
+  it vanish into thin air.
 
-- **`--proxy` / `--cookie-file` 改成声明式跟随**：值变了替换池子里对应的那一条，
-  而不是再加一条。值没变时完全不碰池子，你在面板上的增删改停用都以面板为准。
-  轮换 `cookie.txt` 的部署尤其要注意这个变化 —— 按值去重的话会一次次往池子里堆
-  死 cookie，而它们仍然 enabled、仍然参与轮转。
+- **`--proxy` / `--cookie-file` became declarative followers**: when the value changes it
+  replaces the corresponding pool entry instead of adding another one. When the value is
+  unchanged the pool is left completely alone; your adds/removes/edits/disables in the panel
+  are authoritative. Deployments that rotate `cookie.txt` should pay special attention —
+  without dedup-by-value, dead cookies would pile up in the pool over and over, still
+  enabled and still taking part in rotation.
 
-- **`--proxy` / `--cookie-file` / `config.json` 降级成播种参数**。它们不再是"第二套
-  配置"，只在启动时把值导入池子（按 URL / cookie 内容去重），之后一律以池子为准。
-  改了重启即生效。原来 `--proxy` 的语义是"代理池为空时的兜底"，而且**一旦你在面板
-  保存过一次设置，kv 里就有了完整记录，`--proxy` 就永远不再生效**——改 compose 会
-  发现没用。现在没有这个坑了。
+- **`--proxy` / `--cookie-file` / `config.json` demoted to seed parameters.** They are no
+  longer "a second config layer"; they only import their values into the pools at startup
+  (deduplicated by URL / cookie contents), and the pools are authoritative afterwards.
+  Change and restart to take effect. The original `--proxy` semantics were "fallback when
+  the proxy pool is empty", and **once you saved settings in the panel, kv held a complete
+  record and `--proxy` never took effect again** — editing compose and finding it did
+  nothing. That pit is gone.
 
-### 新增
+### Added
 
-- **超长请求不再让上游吃掉你刚问的那句**。上游单请求约 **13 万 UTF-8 字节**封顶，
-  超了**从尾部静默截断**且不报错；而我们按顺序拼 prompt、最新消息在末尾 ——
-  被截掉的正好是用户刚问的话，模型只看到前面的系统前言，回一句通用开场白，
-  既不答题也不调工具。表现看着像"模型变笨"或"工具支持不好"。
+- **Over-long requests no longer let the upstream eat your newest question.** The upstream
+  caps a single request at about **130,000 UTF-8 bytes** and **silently truncates from the
+  tail** with no error; we assemble the prompt in order with the newest message last — so
+  exactly the user's just-asked question gets cut, the model sees only the system preamble
+  and replies with a generic opener, answering nothing and calling no tools. It looks like
+  "the model got dumber" or "tool support is broken".
 
-  现在分两种情况：
+  Now there are two cases:
 
-  - **挂了 cookie**：超长的对话自动转成 `message.txt` 附件发上去，请求体里只剩
-    一句短指令，那堵墙就绕过去了。**但附件也有上限**——模型能看到的内容合计
-    约 16 万字节，超出部分传上去了但读不到。所以这条路把可用长度从 13 万提到
-    约 16 万，是有限的改善，真正的长对话仍需客户端自己压缩。
-    （上传失败时**不静默退回内联**：那样上游会截掉最新提问，客户端拿到一个
-    答非所问的 200 却看不出问题，宁可明确报错。）
-  - **没挂 cookie**：直接返回 400 + `context_length_exceeded`，错误信息里提示
-    导入 cookie 可以拿到更长的上限。匿名态能把文件传上去，但在对话里引用会被
-    服务端拒绝，所以匿名没有别的办法。
+  - **With a cookie**: an over-long conversation is automatically converted to a
+    `message.txt` attachment and uploaded, leaving only a short instruction in the request
+    body — that wall is bypassed. **But the attachment has a cap too** — the model can see
+    about 160,000 bytes of content in total; anything past that is uploaded but never read.
+    So this path raises the usable length from 130K to about 160K, a bounded improvement;
+    genuinely long conversations still have to be compacted by the client. (On upload
+    failure it does **not** silently fall back to inline: the upstream would truncate the
+    newest question and the client would get a 200 answering something else with no visible
+    sign — better to fail loudly.)
+  - **Without a cookie**: returns 400 + `context_length_exceeded` immediately, with the
+    error message hinting that importing a cookie buys a higher limit. Anonymous mode CAN
+    upload the file, but referencing it in a conversation is refused server-side, so there
+    is no other way anonymously.
 
-  **不自己丢历史**：那还是静默丢数据，只是换了个地方丢，客户端以为整段都发出去了、
-  模型却忘了东西。`context_length_exceeded` 是 OpenAI 兼容客户端认得的信号，
-  agentic 客户端收到会自己压缩上下文再试，比我们盲丢几段聪明得多。
+  **We don't drop history ourselves**: that would still be silent data loss, just in a
+  different place — the client thinks the whole thing was sent while the model has already
+  forgotten. `context_length_exceeded` is a signal OpenAI-compatible clients understand;
+  agentic clients compact their context and retry on their own, far smarter than us blindly
+  dropping segments.
 
-  上限 `max_prompt_bytes` 默认 128000，可在面板改，0 = 关掉检查。
-  **单位是 UTF-8 字节不是 token**：实测上游的墙按字节走，跟语言无关 —— 中英文
-  对齐到同一字节数各打 3 次，约 129,950 字节各 3/3 通过、135,990 字节各 1/3，
-  而同一批请求的 token 数差 1.9 倍。按 token 设阈值的话，同一个数字对英文偏松、
-  对中文会卡在真实容量的三分之一左右。
+  The cap `max_prompt_bytes` defaults to 128000, editable in the panel; 0 = check disabled.
+  **The unit is UTF-8 bytes, not tokens**: measured, the upstream's wall is byte-based and
+  language-independent — Chinese and English padded to the same byte count each sent 3
+  times, ~129,950 bytes passed 3/3, ~135,990 bytes 1/3, while the token counts of those same
+  requests differed by 1.9×. With a token threshold, the same number is too loose for
+  English and pins Chinese at roughly a third of real capacity.
 
-- **读图（挂 cookie 时）**：`/v1/chat/completions` 的 `image_url` 和 `/v1/responses`
-  的 `input_image` 现在会真的传给模型。支持 `data:` URL 和 http(s) 链接（后者下载
-  下来再传——直接把链接给上游是不行的，它只认自己存储里的附件），单张 12MB 封顶。
-  远程图走跟对话同一个出口，不然等于多暴露一个 IP。匿名态不支持，理由同上。
+- **Image input (with a cookie)**: `image_url` in `/v1/chat/completions` and `input_image`
+  in `/v1/responses` are now actually passed to the model. `data:` URLs and http(s) links
+  are both supported (the latter is downloaded first — handing the link to the upstream
+  directly doesn't work; it only accepts attachments in its own storage), 12MB per image
+  max. Remote images go through the same exit as the conversation, otherwise it would
+  expose an extra IP. Not supported anonymously, for the same reason.
 
-- **Cookie 自动续期**。上游几乎每个响应都会用 `Set-Cookie` 刷新 `SIDCC` /
-  `__Secure-1PSIDCC` / `__Secure-3PSIDCC`，浏览器收下就一直是活的；我们以前只发不收，
-  我们以前只发不收，存的那份就一直是导入时的旧值。现在每次请求都把刷新的项合并
-  回账号，跟浏览器行为一致。
+- **Automatic cookie renewal.** Nearly every upstream response refreshes `SIDCC` /
+  `__Secure-1PSIDCC` / `__Secure-3PSIDCC` via `Set-Cookie`; the browser accepts them and
+  stays alive forever; we previously sent but never received, so the stored copy stayed at
+  the import-time values. The refreshed entries are now merged back into the account on
+  every request, matching browser behaviour.
 
-  **但这没能延长账号寿命**：同一来源的 cookie，带续期+保活的活了 86 分钟，两者都
-  没有的活了 114 分钟（n=3，且都是跟真实浏览器共用同一个会话，很可能是两边各自
-  轮转 SIDCC 撞在一起）。所以这条只声明"跟浏览器行为一致"，不声明"号能活更久"
-  —— 账号到底为什么一两小时就死，还没查清。
+  **But this didn't extend account lifetime**: cookies from the same source lived 86 minutes
+  with renewal+keepalive versus 114 minutes with neither (n=3, and both shared the same
+  session with a real browser — quite possibly the two sides each rotating SIDCC collided).
+  So this only claims "behaves like a browser", not "accounts live longer" — why accounts
+  still die within an hour or two remains unresolved.
 
-- **会话保活**。浏览器每 10 分钟往 `accounts.google.com/RotateCookies` 打一次，
-  间隔由服务端在页面里指定（响应体 `[["identity.hfcr",600],…]` 的 600 秒）。
-  这个调用**也会**返回 Set-Cookie，刷的是跟上一条同一组三项（两份抓包 12 次里 9
-  次、15 次里 14 次），所以同样要合并回账号。整份抓包里没有任何响应重设过
-  `__Secure-1PSIDTS`。失败**不计入 cookie 健康度**：打的是
-  `accounts.google.com`，跟对话能不能用是两码事，网络抖一下就把号标坏会让它在
-  挑号时沉底，反而伤可用性。
+- **Session keepalive.** The browser hits `accounts.google.com/RotateCookies` every 10
+  minutes; the interval is dictated by the server in the page (the 600 seconds in the
+  response body `[["identity.hfcr",600],…]`). This call **also** returns Set-Cookie,
+  refreshing the same three entries as above (in two captures: 9 of 12 and 14 of 15), so
+  they must be merged back too. Across the full capture, no response ever reset
+  `__Secure-1PSIDTS`. Failures **don't count against cookie health**: the target is
+  `accounts.google.com`, which is unrelated to whether conversations work; a network blip
+  marking an account bad would sink it to the bottom of the pick order and hurt
+  availability instead.
 
-- **Cookie 池加「检测」按钮**，点一下就知道这个号还能不能用，不用发一次真实对话去试。
-  区分"登录态有效"和"过期/无效"——后者上游并不拒绝，只是把你当匿名，光看请求成功
-  是分不出来的。
+- **"Check" button in the cookie pool** — one click tells whether the account still works,
+  without spending a real conversation. It distinguishes "still signed in" from
+  "expired/invalid" — the upstream doesn't refuse the latter, it just treats you as
+  anonymous, which you can't tell from a successful request.
 
-- **导入 Cookie 弹窗改成两种填法**，默认「整串粘贴」：直接把浏览器复制的
-  `name=value; name=value; …` 贴进来即可，这也最接近真实浏览器发出去的形态。
-  想逐项填的切到另一个 tab。
+- **The import-cookie dialog now has two input modes**, defaulting to "paste the whole
+  string": just paste the `name=value; name=value; …` copied from the browser — also the
+  form closest to what a real browser sends. Switch tabs for field-by-field entry.
 
-- **cookie 失效时换下一个账号**，不再让整个请求陪葬。以前挑中的号一坏，这次请求
-  就直接失败，池子里其它好号完全没机会——池子越大反而越容易踩雷。
+- **Expired cookies now fall through to the next account** instead of killing the whole
+  request. Previously the picked account going bad failed that request outright while
+  other healthy accounts in the pool never got a chance — the bigger the pool, the more
+  ways to hit a bad one.
 
-- **每个 cookie 账号粘住自己的出口**。以前 cookie 池和代理池各自独立轮转，同一个
-  Google 账号会从几十个不同 IP 发出请求，这在 Google 眼里是账号共享的典型特征。
-  现在账号首次用到哪个出口就绑定下来，之后一直走它，出口不可用了才换。
+- **Each cookie account is pinned to its own exit.** Previously the cookie pool and proxy
+  pool rotated independently, so one Google account would emit requests from dozens of
+  different IPs — exactly what account sharing looks like to Google. Now an account binds
+  to the first exit it uses and stays on it, switching only when that exit becomes
+  unusable.
 
-- **请求记录带上用了哪个 cookie 账号**（失败的记录也带），面板上直接看得到是哪个号
-  在出问题，不用再靠时间去猜。没挂 cookie 的显示「匿名」。
+- **Request records now include the cookie account used** (failed records too), so the
+  panel shows directly which account is misbehaving — no more guessing by timestamp.
+  Requests without a cookie show "anonymous".
 
-- **真流式补齐最后两条路**：`/v1/responses` 现在推 `response.output_text.delta`，
-  带 `tools` 的 `/v1/chat/completions` 也边出边发。以前这两条都是收完再发，因为
-  ```` ```tool_call ```` 围栏要完整文本才能解析。现在正文过一道增量闸门，只放行
-  **确定不在围栏里**的部分——尾巴上压着半个开围栏（`` `` `` 或 `` ```tool_c ``）
-  也要扣住等下一帧，先发出去再发现是围栏就晚了。实测流式与非流式结果逐字相同。
-- **代理熔断改冷却制**：连续失败 5 次熔断后默认歇 120 分钟自动放回池子，时长可在
-  「设置」页改，0 = 退回旧的永久除名。120 这个数照实测来的——被 Google 拦掉的出口
-  106-121 分钟自动恢复。以前熔断即永久除名，也就永远等不到一次成功把计数清零，
-  只能手动重置。
-- **两个降级开关，默认都关**（保持旧行为，打开是明确选择）：
-  - `fallback_direct`：代理池一个出口都用不上时退回直连。关着返回 429，本机 IP
-    不会暴露给上游；开了会写日志说明这次走了直连。
-  - `fallback_anon`：cookie 失效时降级匿名继续跑。关着直接报错——cookie 失效后
-    上游并不拒绝，只是把你当匿名用户，`3.1 Pro` 被静默降级成 `3.5 Flash-Lite`、
-    思考链消失，客户端完全看不出来，所以默认宁可明确失败。
-- **`bl` 版本号自动跟随上游**：每 6 小时从 `/app` 页面抓一次，形状对不上或抓不到
-  就继续用配置里钉的值。可在「设置」页关掉。
+- **Real streaming completed for the last two paths**: `/v1/responses` now emits
+  `response.output_text.delta`, and `/v1/chat/completions` with `tools` streams as content
+  arrives. Both were previously buffered because the ```` ```tool_call ```` fence needs the
+  complete text to parse. The body now passes through an incremental gate that lets through
+  only what is **certainly not inside a fence** — a tail holding half an opening fence
+  (`` `` `` or `` ```tool_c ``) is held back for the next frame; sending it first and
+  discovering it's a fence afterwards would be too late. Measured: streaming and
+  non-streaming results are byte-identical.
+- **Proxy circuit breaker switches to cooldown**: after 5 consecutive failures trip it, the
+  proxy rests for 120 minutes by default and returns to the pool automatically; the duration
+  is configurable on the Settings page, 0 = revert to the old permanent removal. The 120
+  comes from measurement — exits blocked by Google recover after 106-121 minutes. Previously
+  a tripped breaker meant permanent removal, never a success to reset the counter, only a
+  manual reset.
+- **Two fallback switches, both off by default** (old behaviour preserved; enabling is an
+  explicit choice):
+  - `fallback_direct`: fall back to a direct connection when the proxy pool can't serve a
+    request. Off returns 429 and the host IP is never exposed upstream; on, a log line notes
+    the direct connection.
+  - `fallback_anon`: degrade to anonymous when a cookie expires. Off fails loudly — an
+    expired cookie isn't refused upstream, you're just treated as anonymous: `3.1 Pro`
+    silently degrades to `3.5 Flash-Lite`, the reasoning chain vanishes, and the client
+    can't tell at all — so failing explicitly is the safer default.
+- **`bl` version auto-follows the upstream**: fetched from the `/app` page every 6 hours;
+  on a shape mismatch or fetch failure the pinned configured value stays in use. Can be
+  turned off on the Settings page.
 
-### 修复
+### Fixed
 
-- **容器起不来，报 `unable to open database file (14)`**。镜像以 nonroot(uid 65532)
-  运行，而 bind mount 会用宿主目录的属主盖掉镜像里 `/data` 的属主；宿主上目录不
-  存在时 Docker 自动建、属主是 root，于是写不进去。compose 默认改成具名卷，
-  bind mount 保留为注释并写明要先 `sudo chown -R 65532:65532 ./data`。报错信息也
-  改成把当前 uid、目录和两种解法一起打出来 —— 14 是 SQLITE_CANTOPEN，光看字面
-  没人会想到是权限。
+- **Container failing to start with `unable to open database file (14)`**. The image runs
+  as nonroot (uid 65532), but a bind mount overwrites `/data`'s ownership with the host
+  directory's; when the directory doesn't exist on the host Docker creates it owned by
+  root, and the container can't write. Compose now defaults to a named volume, with the
+  bind mount kept as a comment noting to run `sudo chown -R 65532:65532 ./data` first.
+  The error message now prints the current uid, the directory, and both fixes — 14 is
+  SQLITE_CANTOPEN, and nobody would guess permissions from the literal text.
 
-- **设了 `HTTP_PROXY` / `ALL_PROXY` 却没生效且毫无提示**。本程序有意不读这些环境
-  变量（宿主机上随手一个 export 会悄悄改变出口 IP，而面板仍显示直连），但"不读"
-  和"不吭声"是两回事。现在启动时检测到它们、且代理池为空，会打一行说明。
+- **`HTTP_PROXY` / `ALL_PROXY` set but not taking effect, with no hint at all.** The program
+  deliberately ignores these environment variables (a stray export on the host would
+  silently change the exit IP while the panel still shows direct), but "not reading them"
+  and "staying silent" are different things. Startup now detects them and, with an empty
+  proxy pool, prints an explanatory line.
 
-- **偶发绕过代理走直连**。`loadProxies` 的 `Scan` 出错走 `continue`、`rows.Err()`
-  根本不查，遍历中断被当成正常读完，于是代理列表被半截结果甚至空列表覆盖；而
-  「有没有配代理池」正是拿这个列表长度判断的，一空就退回直连，把部署者的真实 IP
-  暴露给上游，日志上只是几条普通请求。触发条件是每个请求结束都全表重读一次代理表，
-  和自己刚发出的 UPDATE 在 WAL 上撞 SQLITE_BUSY。现在读失败保留上一次的池子，
-  且结果回写只改内存里那一条，不再整表重读。
-- **空响应不重试**。上游偶尔返回 HTTP 200 但一个内容帧都没有（瞬时拒绝），旧代码
-  只在非 200 或网络错误时重试，于是一次可自愈的抖动直接变成客户端可见的 502。
-  判据是**有没有内容帧**，不能用 `BardErrorInfo`——正常响应的结束帧里也带错误码。
-- **`inner[41]` 跟浏览器不一致**：我们发 `[2]`，浏览器三种场景抓包全是 `[1]`。
-  这个值是早期抄来的，协议层已被证伪。
+- **Occasional bypassing of the proxy for a direct connection.** In `loadProxies`, a `Scan`
+  error went to `continue` and `rows.Err()` was never checked, so an interrupted iteration
+  was treated as a normal end and the proxy list got overwritten with a partial or empty
+  result; and "is a proxy pool configured" is judged exactly by that list's length — empty
+  meant falling back to direct, exposing the deployer's real IP to the upstream, with only
+  a few ordinary requests in the log. The trigger: the proxy table was fully re-read after
+  every request, colliding with our own just-issued UPDATE on WAL with SQLITE_BUSY. Read
+  failures now keep the previous pool, and the result writeback modifies only the one
+  in-memory row instead of re-reading the whole table.
+- **Empty responses are retried.** The upstream occasionally returns HTTP 200 with no
+  content frame at all (a transient refusal); the old code only retried on non-200 or
+  network errors, so a self-healing blip became a visible 502. The criterion is **whether a
+  content frame exists**, not `BardErrorInfo` — normal responses' closing frames also carry
+  an error code.
+- **`inner[41]` didn't match the browser**: we sent `[2]`; browser captures across three
+  scenarios all show `[1]`. The value was copied early on and has since been disproven at
+  the protocol layer.
 
-### 文档更正
+### Documentation corrections
 
-- **「放慢节奏没用」是错的**。旧判据是住宅出口上突发档 103-177 与慢速档 81-166
-  几乎完全重叠。观察没错，归因错了——住宅出口跑久了自己退化（8 个预筛干净的出口
-  跑慢节奏，6 个中途失败率超 40%），退化的方差盖过了节奏。换静态 IP 排除这个混淆项
-  后：同一个 IP 突发打在 **188 次**被拦，改成 **10 次/分钟连打 800 次、跨 110 分钟
-  一次没被拦**。所以 `per_ip_rph=80` 是突发档的保守下沿，按低速率跑可以调高很多。
-- **被拦后的恢复时长**从「未测」补成实测 **106-121 分钟**。
-- 面板和代码注释里残留的「约 85 次」全部换成实测区间。
+- **"Slowing down doesn't help" was wrong.** The old judgement was based on residential
+  exits where the burst arm (103-177) and slow arm (81-166) overlapped almost completely.
+  The observation was right, the attribution wrong — residential exits degrade over long
+  runs (of 8 pre-screened exits running the slow pace, 6 exceeded a 40% failure rate
+  partway through), and that variance swamped pacing. After switching to a static IP to
+  remove the confound: the same IP bursting was blocked at **188 requests**, while
+  **10 requests/minute ran 800 requests over 110 minutes without a single block**. So
+  `per_ip_rph=80` is a conservative floor for the burst regime; deployments pacing
+  themselves can raise it a lot.
+- **Recovery time after a block** updated from "untested" to a measured **106-121 minutes**.
+- All remaining "about 85 requests" mentions in the panel and code comments were replaced
+  with the measured range.
 
 ## 4.0.0
 
-### ⚠️ 破坏性变更
+### ⚠️ Breaking changes
 
-- **移除 5 个旧模型别名**：`gemini-3.5-flash`、`gemini-3.5-flash-thinking`、
-  `gemini-3.5-flash-thinking-lite`、`gemini-auto`、`gemini-flash-lite` 传了会返回
-  **400**。它们在服务端没有对应条目，实际全都落到同一个后端，留着只会让人以为有
-  五种模型可选。现在只暴露服务端清单里真实存在的三个：`gemini-3.6-flash`、
-  `gemini-3.5-flash-lite`、`gemini-3.1-pro`。
-  **升级前请检查客户端配的模型名。**
+- **5 old model aliases removed**: `gemini-3.5-flash`,
+  `gemini-3.5-flash-thinking`, `gemini-3.5-flash-thinking-lite`, `gemini-auto`,
+  `gemini-flash-lite` now return **400**. The backend has no entries for them — they all
+  fell through to the same backend anyway, and keeping them only suggested there were five
+  distinct models to choose from. Only the three that actually exist in the server-side list
+  are exposed now: `gemini-3.6-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro`.
+  **Check the model names your clients use before upgrading.**
 
-数据库无需迁移，建表语句都是 `IF NOT EXISTS`，老库直接可用。
+No database migration needed — all CREATE TABLE statements are `IF NOT EXISTS`; old
+databases work as-is.
 
-### 新增
+### Added
 
-- **Cookie 池**：可导入多个 Google 登录态账号，请求按最久未用优先自动轮转，池空
-  才回落到「设置」页的单 cookie。列表只显示脱敏摘要（cookie 数量 / 关键项是否齐全 /
-  SAPISID 末 4 位 / 失败次数），完整 cookie 不出网。
-- **思考链（`reasoning_content`）**：`gemini-3.1-pro` 每次回答前的推理过程现在会
-  暴露出来。非流式放 `message.reasoning_content`，流式按 `delta.reasoning_content`
-  推，且思考块全部推完才开始推正文（跟上游顺序一致）。token 单列在
-  `usage.reasoning_tokens`，**不计入 `completion_tokens`**——客户端默认折叠不展示，
-  算进去等于让用户为看不见的输出买单。
-- **管理面板改版**：改用 Gemini 设计语言的亮色主题，列表定高撑满视口 + 分页，
-  错误按「该怎么办」分类，首屏主角换成「距离封禁红线」。
-- **多架构容器镜像**：push 到 main 或打 tag 时自动构建并推送到 ghcr。
+- **Cookie pool**: import multiple signed-in Google accounts; requests rotate through them
+  least-recently-used first, falling back to the Settings page's single cookie only when
+  the pool is empty. The list shows redacted summaries only (cookie count / whether key
+  entries are present / last 4 of SAPISID / failure count); the full cookie never leaves
+  the server.
+- **Reasoning chain (`reasoning_content`)**: `gemini-3.1-pro`'s reasoning process before
+  each answer is now exposed. Non-streaming puts it in `message.reasoning_content`;
+  streaming emits `delta.reasoning_content`, with the whole reasoning chain streamed before
+  any answer text (matching the upstream order). Tokens are listed separately in
+  `usage.reasoning_tokens` and **not counted in `completion_tokens`** — clients collapse it
+  by default, so counting it would charge users for output they never see.
+- **Admin panel redesign**: light theme using Gemini's design language, fixed-height lists
+  filling the viewport + pagination, errors categorised by "what to do about it", and the
+  hero stat is now "requests left before the block line".
+- **Multi-arch container images**: built and pushed to ghcr automatically on push to main
+  or on tag.
 
-### 修复
+### Fixed
 
-- **配了有效 cookie 会导致所有请求 400**。带 cookie 的请求必须额外携带 XSRF token
-  （表单字段 `at`），我们只发了 `f.req`。匿名请求不要求这个字段，所以这个缺陷长期
-  没暴露——只要挂上**有效** cookie，cookie 功能就是 100% 不可用；而挂一个**过期**
-  cookie 反而"正常"（被当匿名处理），正好把问题盖住了。现在会自动从 Gemini 页面取
-  token、按 cookie 缓存、过期自动重取。
-- **Cookie 池的健康度从来没被回写过**。`markAccountResult` 是死代码，`fail_count`
-  恒为 0、`last_ok_at` 恒为空，而面板把这两列显示出来了——等于给运维看一份「永远
-  全部健康」的假报表。现在请求结束会回写，且**只把 401/403 算作 cookie 的错**：
-  网络错误、代理失败、被 Google 拦（302）一律不计，否则住宅代理的高失败率会让
-  这个数字变成代理噪音，好 cookie 反而被记成失败最多的那个。
-- 管理面板若干显示缺陷：趋势图无限变高、登录卡被拉满高、按钮溢出卡片、点击当前
-  页会整页重渲染。
-- 设置页从 2234px 压到 1075px：12 个配置项按语义分成四组、组内自适应多列。
+- **A valid cookie made every request fail with 400.** Requests with a cookie must carry an
+  extra XSRF token (form field `at`), and we only sent `f.req`. Anonymous requests don't
+  require that field, so the defect stayed hidden for a long time — with a **valid** cookie,
+  the cookie feature was 100% broken; an **expired** cookie, ironically, "worked" (treated
+  as anonymous), which covered the problem up perfectly. The token is now fetched from the
+  Gemini page automatically, cached per cookie, and re-fetched on expiry.
+- **Cookie pool health was never written back.** `markAccountResult` was dead code;
+  `fail_count` was permanently 0 and `last_ok_at` permanently empty — while the panel
+  displayed both columns, an ops fake report of "everything healthy, forever". Results are
+  written back now, and **only 401/403 counts as the cookie's fault**: network errors,
+  proxy failures and Google blocks (302) are all excluded — otherwise residential proxies'
+  high failure rates would turn the number into proxy noise and make healthy cookies look
+  like the worst offenders.
+- Several admin panel display bugs: trend chart growing without bound, login card stretched
+  to full height, buttons overflowing their cards, clicking the current page re-rendering
+  the whole page.
+- Settings page compressed from 2234px to 1075px: 12 config items grouped semantically into
+  four sections with adaptive multi-column layout inside each.
 
-### 文档更正（都是被实测推翻的旧结论）
+### Documentation corrections (all old conclusions overturned by measurement)
 
-- **`gemini-3.1-pro` 配了有效 cookie 是真能用的**。旧文档写「免费号即使登录也只
-  拿到 3.6 Flash」——那个观察是在缺 XSRF token 的条件下得到的，当时带 cookie 的
-  请求根本发不出去。补齐后连打 6 次全部回报 `3.1 Pro`，且每次都带思考链。
-- **单 IP 上限**从「约 85 次」改成实测区间 **80–180 次**，并写清它主要由**连接
-  策略和出口质量**决定，不由请求快慢决定：同样并发 10，复用连接池能打到 172/177，
-  每次新建连接只有 106/109。
-- **走代理时 Google 看到的是我们自己的 TLS 指纹**，不是出口节点的（JA3 实测：
-  stdlib 直连与过代理同指纹，同一代理下换 tls-client 则不同）。代码注释原来写反了。
-  但实测这不影响封禁阈值，所以没有因此改实现。
+- **`gemini-3.1-pro` really works with a valid cookie.** The old docs said "free accounts
+  only get 3.6 Flash even when signed in" — that observation was made with the XSRF token
+  missing, when cookie requests couldn't be sent at all. With it fixed, six consecutive
+  calls all reported `3.1 Pro`, each with a reasoning chain.
+- **Per-IP limit** changed from "about 85" to the measured range **80-180 requests**, with
+  the clarification that it's mainly determined by **connection strategy and exit quality**,
+  not request pace: at the same concurrency of 10, a reused connection pool reached
+  172/177 versus 106/109 for a fresh connection per request.
+- **Through a proxy Google sees our own TLS fingerprint**, not the exit node's (JA3
+  measurement: stdlib direct and stdlib via proxy share a fingerprint; swapping in
+  tls-client through the same proxy yields a different one). The code comment had it
+  backwards. Measured, it doesn't change the blocking threshold, so the implementation
+  stayed as-is.
 
 ## 3.0.0
 
-单二进制 OpenAI 兼容反代 + 中文管理面板。
+Single-binary OpenAI-compatible reverse proxy + admin panel.

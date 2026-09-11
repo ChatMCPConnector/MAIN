@@ -1,14 +1,18 @@
-"""生成 README 横幅（docs/banner.svg）。
+"""Generate the README banner (docs/banner.svg).
 
-用法：python docs/banner_gen.py
+Usage: python docs/banner_gen.py
 
-设计取向：字标为主，不玩概念。全图只有一处彩色——字标下那条渐变线，
-用的是管理面板同一套品牌色（#4285F4 → #9B72CB → #D96570），
-在面板里它也只出现在一个地方（封禁红线轨道）。
+Design direction: the wordmark is the hero, no concept play. There is exactly
+one colored element in the whole image — the gradient line under the wordmark,
+using the same brand palette as the admin panel (#4285F4 → #9B72CB → #D96570),
+which in the panel itself also appears in exactly one place (the block-line
+track).
 
-两个约束来自 GitHub 的渲染方式（README 里的 SVG 是当图片渲染的）：
-- 不用滤镜/阴影，糊开的发光在小尺寸下只会变脏
-- 字体走系统等宽栈，不引外部字体（<img> 沙箱会拦外链）
+Both constraints come from how GitHub renders it (SVGs in a README are
+rendered as images):
+- No filters/shadows — a blurred glow just turns to mud at small sizes
+- Fonts use the system monospace stack, no external fonts (the <img> sandbox
+  blocks external links)
 """
 import io
 import os
@@ -37,8 +41,8 @@ p = [
     f'text-anchor="middle">gemini.google.com &#8594; OpenAI-compatible /v1</text>',
 ]
 
-# 一行胶囊，手工居中排版（SVG 没有 flex）
-FW, PAD, GAP = 7.1, 15, 11        # FW = 12px 等宽字的近似字宽
+# One row of chips, laid out and centered by hand (SVG has no flex)
+FW, PAD, GAP = 7.1, 15, 11        # FW = approximate advance width of a 12px monospace char
 widths = [len(c) * FW + PAD * 2 for c in CHIPS]
 x = cx - (sum(widths) + GAP * (len(CHIPS) - 1)) / 2
 for c, w in zip(CHIPS, widths):
@@ -50,4 +54,4 @@ for c, w in zip(CHIPS, widths):
 
 p.append("</svg>")
 io.open(OUT, "w", encoding="utf-8").write("\n".join(p))
-print(f"已写 {OUT}  ({os.path.getsize(OUT)} 字节)")
+print(f"wrote {OUT}  ({os.path.getsize(OUT)} bytes)")

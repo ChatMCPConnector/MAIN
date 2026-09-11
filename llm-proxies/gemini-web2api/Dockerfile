@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
 # ─── Build stage ─────────────────────────────────────────────────────────────
-# --platform=$BUILDPLATFORM: builder 永远跑在构建机的原生架构上,靠 GOARCH 交叉
-# 编译出目标架构的二进制。多架构构建时如果让 builder 跟着目标平台走,arm64 那份
-# 会在 QEMU 里模拟编译,Go 编译是 CPU 密集型,慢一个数量级。
+# --platform=$BUILDPLATFORM: the builder always runs on the build machine's
+# native architecture and cross-compiles the target architecture's binary via
+# GOARCH. In multi-arch builds, if the builder followed the target platform,
+# the arm64 build would compile under QEMU emulation — Go compilation is
+# CPU-intensive and an order of magnitude slower.
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 WORKDIR /src
@@ -14,7 +16,8 @@ RUN go mod download
 
 COPY . .
 
-# TARGETARCH 由 buildx 注入(amd64 / arm64 ...)。经典 builder 不注入,兜底 amd64。
+# TARGETARCH is injected by buildx (amd64 / arm64 ...). The classic builder
+# doesn't inject it; fall back to amd64.
 ARG TARGETARCH
 
 # CGO disabled — modernc/sqlite is pure Go.
@@ -28,8 +31,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} go build \
 # distroless/static: ~2MB base, no shell, no package manager — minimal attack surface.
 # We pre-create /data with nonroot ownership in the builder so distroless
 # (which has no `mkdir`) doesn't choke at startup.
-# 也钉在构建机架构:这一层只是 mkdir + chown(数字 uid,跟架构无关),
-# 没必要为它拉一份目标架构的 alpine 再进 QEMU。
+# Also pinned to the build machine's architecture: this layer is just
+# mkdir + chown (numeric uid, architecture-independent) — no reason to
+# pull a target-architecture alpine for it and go through QEMU.
 FROM --platform=$BUILDPLATFORM alpine:3.20 AS prepare
 RUN mkdir -p /out/data /out/app && chown -R 65532:65532 /out/data /out/app
 
