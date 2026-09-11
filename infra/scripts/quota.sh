@@ -64,7 +64,7 @@ def make_bar(pct):
     bar_len = min(10, max(0, int(round(pct / 10))))
     return "█" * bar_len + "░" * (10 - bar_len)
 
-indent = "  "
+indent = "             "
 line_w = 74
 title = "ANTIGRAVITY QUOTA"
 
@@ -158,5 +158,5 @@ if os.path.exists(db_path):
         pass
 
 print(f"{indent} 5h-Sprint federt Lastspitzen ab. Wochenlimit ist das fixe Kontingent.")
-print()
+print("\n" * 6, end="")
 ' <<< "$RESPONSE"
