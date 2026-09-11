@@ -18,68 +18,39 @@ BEFUNDE.md im Repo-Root hat die Details inkl. Live-Leak-Strings.
 
 ---
 
-## THEMA 1 — Kontext-Management für Lang-Agent-Sessions (OFFEN)
+## THEMA 1 — Kontext-Management für Lang-Agent-Sessions (ERLEDIGT 2026-09-11, Beobachtung läuft)
 
-### Symptom (Härtetest-Re-Run + Final-Run)
+### Umsetzung (P1) — Historien-Kompression + 10040-Auto-Retry + Leer-Turn-Auto-Retry
 
-Bei ~50+ Upstream-Runden (~150k+ Token Kontext) driftet das Modell:
-wortgleiche Antwort-Wiederholungen (Loops), Missdeutung neuer Prompts
-(Benchmark-Auftrag als „Extraktions-Anfrage" fehlinterpretiert), vorzeitige
-Rückfragen/Stopps. 4-6 Resume-Schubser pro 2h-Lauf nötig. Der Proxy leitet
-alles korrekt weiter (DB-Verifikation: Calls kamen sauber an) — reines
-Modellverhalten bei Kontext-Überlast.
+- **H1-Kompression**: `compress_history_messages()` in translator.py —
+  Historie VOR der Konvertierung auf Budget begrenzen (von NEU nach ALT
+  sammeln, assistant+tool-Paare nie trennen, ältere Runden zu einem
+  summarischen Eintrag verdichten). Konfigurierbar: `GLM_HISTORY_MAX_CHARS`
+  (Default 120000, 0 = aus).
+- **10040-Auto-Retry**: chatglm.cn lehnt bei "model response context
+  exceeded" (code 10040) ab — jetzt transient; Retry halbiert das Budget
+  (`_glm_history_budget` im Payload) bis der Upstream mitmacht (min 20k).
+  Beide Pfade (stream + non-stream).
+- **Leer-Turn-Auto-Retry** (Autonomie-Fix): `is_empty_response()` im
+  Accumulator erkennt komplett leere Upstream-Runden (text=0, reasoning=0,
+  calls=0 — zuvor blieb der Agent genau dort STEHEN, z.B. Stresstest
+  10:21). glm_client retryt automatisch mit frischer Conversation, BEVOR
+  die leere Antwort den Client erreicht. Config:
+  `GLM_EMPTY_RESPONSE_MAX_RETRIES` (Default 2). Kondition: nur wenn noch
+  kein Content gestreamt wurde (sonst wäre der Retry unsauber).
 
-### Referenz: es ist lösbar
+### Verifikation (P2)
 
-Der externe glm-free-api (gleicher chatglm.cn-Upstream, gleiche Modell-
-Familie) liefert „gefühlt unendlichen Kontext": Stundenlange Sessions ohne
-Drift. Beweis: diese Agent-Session hier (glm2api-Subagent auf gleicher
-Infra) und Benchmark-Agente auf glmfree arbeiten stundenlang verlustfrei.
-glm-free-api macht also irgendetwas Kontext-seitig, was glm2api nicht tut.
+Autonomie-Lauf (agent-glm2api-hard6, Session ses_f6fc7bff6ffevWATNhrlzCPTYO):
+ALLE Phasen 0-10 durchgelaufen, ~86 Upstream-Runden, 171 Tool-Parts,
+0 Ausführungsfehler, Kompression live (268→52 Messages), keine
+Resume-Schubser während der Arbeit, kein Drift, keine Loops.
+Vorher (ohne Fix): alle 2h-Läufe brauchten 4-6 Schubser und standen
+an Leer-Turns komplett still.
 
-### Hypothesen (zu verifizieren, Reihenfolge = Wahrscheinlichkeit)
-
-H1 **Kontext-Komprimierung/Summarization**: glm-free-api kürzt die
-Historie serverseitig (ältere Turns zusammenfassen, nur最近 N Rounds
-vollständig senden). chatglm.cn verhält sich bei aufgeblähter Historie
-offenbar deutlich schlechter als bei komprimierter — auch wenn das
-Modell nominell 1M Kontext hat.
-   → Verifikation: glm-free-api-Quelle/Verhalten analysieren (endpunkt
-     158.101.162.206:50063, Repo glm-free-api), vergleichender Test:
-     gleiche 60-Runden-Historie einmal voll, einmal komprimiert.
-
-H2 **Turn-Limit im Request**: chatglm.cn-Web-UI sendet pro Anfrage nur
-eine begrenzte Zahl an Turns (Web-Chats werden serverseitig gefenstert).
-glm-free-api imitiert evtl. nur das Web-Fenster.
-   → Verifikation: Web-Capture (DevTools) einer langen gemini.google-…
-     nein — chatglm.cn-Session: wie viele historical Rounds stehen im
-     f.req? Ggf. Feld inner[2]-Session-Fortsetzung statt Vollhistorie.
-
-H3 **Session-Fortsetzung statt Replay**: glm2api sendet JEDE Runde die
-komplette Historie als frischen Kontext (convert_messages → flacher
-Prompt). glm-free-api nutzt evtl. die conversation_id-Fortsetzung des
-Upstreams (wie gemini-web2api multi_turn) — dann sieht das Modell pro
-Runde nur die NEUE Nachricht, nie eine aufgeblähte Historie.
-   → Verifikation: im glm2api-Code prüfen, ob _open_chat_stream je eine
-     Upstream-Conversation WIEDERVERWENDET (conversation_id an
-     Folge-Runden mitsenden) oder immer neu öffnet. Struktur dafür ist
-     vorhanden (conversation_id exists im Accumulator), Nutzung prüfen.
-
-### Umsetzungs-Plan (nach Verifikation)
-
-P0 glm-free-api-Verhalten analysieren (H1/H2/H3 klären) —半 Tag
-P1 Umbau auf Session-Fortsetzung (H3) ODER Historien-Komprimierung (H1)
-   im translator/glm_client, konfigurierbar (AppConfig-Schalter
-   `glm_history_strategy = full|window|summarize`).
-P2 Regressionstests: Lang-Agent-Benchmark-Run (benchmark-hard.md, 60+
-   Runden) muss ohne Resume-Schubser durchlaufen.
-P3 infrastructure.md-Changelog + Commit.
-
-### Akzeptanzkriterium
-
-60+ Runden Benchmark-Langlauf mit 0 Drift-Vorfällen, 0 Resume-Anforderungen.
-
----
+Status: **ERLEDIGT — BEACHTEN** (in künftigen Langläufen auf
+"Empty GLM response — auto-retrying"-Logzeilen und 10040-Halbierungen
+achten; Budget ggf. tunen).
 
 ## THEMA 2 — Encoding-Verderb: Umlaute → Steuerzeichen (OFFEN)
 

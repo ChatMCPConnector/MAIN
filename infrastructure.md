@@ -228,6 +228,21 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-11 (15): **glm2api: Kontext-Management für Lang-Agent-Sessions (THEMA 1, optimierung.md).**
+  Symptom: Ab ~150k Kontext driftete das Modell (Loops, Missdeutungen), Leer-
+  Turns ließen Agents komplett stehen — alle Langläufe brauchten 4-6 externe
+  Resume-Schubser. Drei Fixes: (1) Historien-Kompression `compress_history_
+  messages()` (Budget GLM_HISTORY_MAX_CHARS=120k, paarweise assistant+tool-
+  Nachrichten bleiben zusammen, ältere Runden werden zu einer Summary
+  verdichtet); (2) Upstream-10040 ("context exceeded") ist jetzt transient —
+  Retry halbiert das Budget automatisch bis der Upstream mitmacht (min 20k,
+  beide Pfade); (3) Leer-Turn-Auto-Retry via `is_empty_response()` — komplett
+  leere Upstream-Runden werden mit frischer Conversation retried, BEVOR die
+  leere Antwort den Client erreicht (GLM_EMPTY_RESPONSE_MAX_RETRIES=2, nur
+  wenn noch nichts gestreamt). Verifikation: Autonomie-Lauf hard6 (~86
+  Runden, 171 Tool-Parts, 0 Fehler) lief ohne EINEN Schubser durch,
+  Kompression live (268→52 Messages). 99/99 Tests (2 neue Leer-Turn-Tests),
+  Bundle neu. THEMA 2 (Encoding-Sanitizer) bleibt OFFEN — siehe optimierung.md.
 - 2026-09-11 (17): **Claude/Opus Quota-Schutz: 75k-Kontextdeckel & neu kalibriertes Thinking-Budget.**
   Maßnahmen gegen den Token-Multiplikator bei Claude Opus:
   1. `antigravity-proxy`: Claude Thinking-Budget neu kalibriert (`none`=0, `low`=1024,
