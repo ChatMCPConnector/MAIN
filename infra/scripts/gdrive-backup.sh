@@ -85,6 +85,9 @@ cmd_backup() {
     exit 1
   fi
   echo "$head" > "$STATE_FILE"
+  # Restore-Anleitung immer mit auffrischen (überlebt so auch ohne GitHub auf Drive)
+  runc copyto infra/docs/RESTORE.md "$REMOTE_DIR/RESTORE.md" 2>/dev/null \
+    || echo "[gdrive] Hinweis: RESTORE.md nicht gefunden (infra/docs/RESTORE.md)."
   echo "[gdrive] OK: Drive-Stand = $CURRENT (verifiziert), Backup-Generation = MAIN.backup.bundle"
   rm -f "$BUNDLE_LOCAL"
 }
