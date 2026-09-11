@@ -5,17 +5,22 @@ import (
 	"testing"
 )
 
-// 判据：prompt 超过单请求上限时**明确报错**，绝不悄悄改动内容。
+// Criterion: when the prompt exceeds the per-request cap, **error explicitly** —
+// never silently modify content.
 //
-// 上游超限时从**尾部**静默截断且不报错，而最新消息拼在末尾，所以被吃掉的正好是
-// 用户刚问的那句 —— 模型只看到前面的系统前言，回一句通用开场白，既不答题也不
-// 调工具。实测两个不同客户端的用户都栽在这上面，都被误认成"模型变笨"。
+// When over-length, the upstream silently truncates from the **tail** without error,
+// and the latest message is assembled last, so what gets eaten is exactly what the
+// user just asked — the model sees only the system preamble up front, replies with a
+// generic opener, answering nothing and calling no tools. Observed in practice: users
+// of two different clients fell into this, both mistaking it for "the model got dumber".
 //
-// 我们自己丢历史同样不行：那还是静默丢数据，只是换了个地方丢。客户端以为整段都
-// 发出去了，模型却忘了东西。报 context_length_exceeded 是 OpenAI 兼容客户端认得
-// 的信号，agentic 客户端收到会自己压缩上下文再试。
+// Silently dropping history ourselves is equally wrong: that's still silently losing
+// data, just in a different place. The client believes the whole thing went out while
+// the model has forgotten things. Reporting context_length_exceeded is a signal
+// OpenAI-compatible clients recognize; agentic clients compress their context and
+// retry on their own.
 
-func withBudget(t *testing.T, n int) { // n = 字节预算
+func withBudget(t *testing.T, n int) { // n = byte budget
 	t.Helper()
 	old := rtCfg()
 	next := old
@@ -43,26 +48,26 @@ func longConversation(turns int) []map[string]interface{} {
 }
 
 func TestPromptOverLimitErrors(t *testing.T) {
-	withBudget(t, 20000) // 字节
+	withBudget(t, 20000) // bytes
 
 	prompt, _ := messagesToPrompt(longConversation(200), nil, nil)
 	if len(prompt) <= 20000 {
 		t.Fatalf("测试用例本身没超预算（%d 字节）", len(prompt))
 	}
-	// 错误信息要说清为什么被拒，否则用户只会以为是我们坏了
+	// the error must explain why it was rejected, otherwise users just blame us
 	noCookie := error(&PromptTooLongError{Bytes: len(prompt), Budget: 20000})
 	for _, want := range []string{"truncates", "latest message", "not tokens"} {
 		if !strings.Contains(noCookie.Error(), want) {
 			t.Errorf("错误信息缺少 %q: %v", want, noCookie)
 		}
 	}
-	// 没 cookie 时这不是死路，要告诉用户导一个进来就能走附件
+	// without a cookie this isn't a dead end: tell the user importing one enables the attachment path
 	for _, want := range []string{"Cookie pool", "attachment"} {
 		if !strings.Contains(noCookie.Error(), want) {
 			t.Errorf("没 cookie 时该提示导入 cookie，缺 %q: %v", want, noCookie)
 		}
 	}
-	// 有 cookie 却还超 = 附件那条路也没救回来，就别再让人去导 cookie 了
+	// over limit despite a cookie = the attachment path couldn't rescue it either, so stop telling people to import a cookie
 	withCookie := error(&PromptTooLongError{Bytes: len(prompt), Budget: 20000, HasCookie: true})
 	if strings.Contains(withCookie.Error(), "Cookie pool") {
 		t.Error("已经有 cookie 了还提示去导 cookie")
@@ -72,7 +77,7 @@ func TestPromptOverLimitErrors(t *testing.T) {
 	}
 }
 
-// 没超限时一个字都不能动——包括不能有任何"省略了部分历史"之类的注入。
+// Under the limit, not a single character may change — including no "part of the history omitted"-style injection.
 func TestPromptUnderLimitUntouched(t *testing.T) {
 	withBudget(t, 10000000)
 	msgs := longConversation(3)
@@ -86,7 +91,7 @@ func TestPromptUnderLimitUntouched(t *testing.T) {
 	}
 }
 
-// 0 = 关掉检查，退回旧行为（原样发出，由上游从尾部截断）。
+// 0 = check disabled, reverting to legacy behavior (send verbatim; the upstream truncates the tail).
 func TestPromptLimitDisabled(t *testing.T) {
 	withBudget(t, 0)
 	msgs := longConversation(200)
@@ -97,8 +102,9 @@ func TestPromptLimitDisabled(t *testing.T) {
 	}
 }
 
-// 上限判的是**整个 prompt**，工具定义也算进去——agentic 客户端的工具 schema
-// 往往比对话本身还大，不算进去等于没设防。
+// The cap applies to the **whole prompt**, tool definitions included — agentic
+// clients' tool schemas are often larger than the conversation itself; leaving them
+// out means no defense at all.
 func TestPromptLimitCountsToolDefs(t *testing.T) {
 	withBudget(t, 5000)
 	tools := []map[string]interface{}{{"type": "function", "function": map[string]interface{}{

@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// 打真实上游的连通性探针，只在设了 GW2A_UPLOAD_PROBE=<代理URL> 时跑。
-// 常规 go test 会跳过 —— 上传要页面 token 和真实出口，进不了单测的封闭环境。
+// A connectivity probe against the real upstream; runs only when GW2A_UPLOAD_PROBE=<proxyURL> is set.
+// Regular go test skips it — uploads need a page token and a real egress, which the
+// closed environment of unit tests can't provide.
 func TestUploadProbe(t *testing.T) {
 	proxy := os.Getenv("GW2A_UPLOAD_PROBE")
 	if proxy == "" {

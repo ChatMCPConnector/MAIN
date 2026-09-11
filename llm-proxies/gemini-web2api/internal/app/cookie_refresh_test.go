@@ -5,8 +5,9 @@ import (
 	"testing"
 )
 
-// 服务端几乎每个响应都在刷新 SIDCC / __Secure-1PSIDCC / __Secure-3PSIDCC，
-// 客户端要收下再带回去。一直发旧值会被判定为过期会话——实测号活一两小时就失效。
+// The server refreshes SIDCC / __Secure-1PSIDCC / __Secure-3PSIDCC on nearly every
+// response; the client must accept them and send them back. Keeping stale values gets
+// the session judged expired — observed in practice: accounts die within an hour or two.
 func TestMergeSetCookie(t *testing.T) {
 	base := "SID=a; SAPISID=b; SIDCC=old1; __Secure-1PSIDCC=old2; __Secure-1PSID=c"
 
@@ -19,7 +20,7 @@ func TestMergeSetCookie(t *testing.T) {
 			t.Errorf("没刷新 %q: %s", want, got)
 		}
 	}
-	// 没被下发的项必须原样保留 —— 丢一个就等于把登录态削掉一块
+	// items not re-issued must be preserved verbatim — dropping one shaves a piece off the login state
 	for _, want := range []string{"SID=a", "SAPISID=b", "__Secure-1PSID=c"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("丢了 %q: %s", want, got)
@@ -30,7 +31,7 @@ func TestMergeSetCookie(t *testing.T) {
 	}
 }
 
-// 响应里的新键要追加进来，不能丢。
+// New keys appearing in the response must be appended, not lost.
 func TestMergeSetCookieAddsNew(t *testing.T) {
 	got := mergeSetCookie("SID=a", []string{"__Secure-3PSIDCC=fresh; path=/"})
 	if !strings.Contains(got, "SID=a") || !strings.Contains(got, "__Secure-3PSIDCC=fresh") {
@@ -38,7 +39,7 @@ func TestMergeSetCookieAddsNew(t *testing.T) {
 	}
 }
 
-// 删除指令（空值 + 1970 过期）不能当成新值写进去，否则会把好端端的 cookie 清空。
+// Deletion directives (empty value + 1970 expiry) must not be written in as new values, otherwise an intact cookie gets wiped.
 func TestMergeSetCookieIgnoresDeletion(t *testing.T) {
 	got := mergeSetCookie("SID=a; SIDCC=keepme",
 		[]string{"SIDCC=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/"})
@@ -47,8 +48,8 @@ func TestMergeSetCookieIgnoresDeletion(t *testing.T) {
 	}
 }
 
-// 没有 Set-Cookie 时原样返回 —— 否则每次请求都会重排一遍 cookie 串，
-// 让按内容比对的地方（poolHasCookie / --cookie-file 去重）误判成变了。
+// Without Set-Cookie, return as-is — otherwise every request reorders the cookie
+// string, and content-based comparisons (poolHasCookie / --cookie-file dedup) misjudge it as changed.
 func TestMergeSetCookieNoop(t *testing.T) {
 	base := "SID=a; SAPISID=b"
 	if got := mergeSetCookie(base, nil); got != base {
@@ -59,7 +60,7 @@ func TestMergeSetCookieNoop(t *testing.T) {
 	}
 }
 
-// 值里带 '='（base64 补位）不能被切坏。
+// Values containing '=' (base64 padding) must not be split apart.
 func TestMergeSetCookieKeepsEquals(t *testing.T) {
 	got := mergeSetCookie("SID=a", []string{"SIDCC=AB==; path=/"})
 	if !strings.Contains(got, "SIDCC=AB==") {

@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// 这一组测的是**已经在跑的库升上来会怎样**。判据都围绕一件事：
-// 绝不能让用户原有的代理 / cookie 在升级过程中凭空消失或者被悄悄复制成好几份。
+// This group tests **what happens when an already-running DB is upgraded**: all
+// criteria revolve around one thing: a user's existing proxies / cookies must never
+// vanish or silently get duplicated during the upgrade.
 
 func resetSeedState(t *testing.T) {
 	t.Helper()
@@ -32,7 +33,7 @@ func resetSeedState(t *testing.T) {
 	t.Cleanup(clean)
 }
 
-// ── 遗留值的一次性迁移 ──────────────────────────────────────────────────
+// ── One-time migration of legacy values ─────────────────────────────────
 
 func TestMigrateLegacyCookie(t *testing.T) {
 	resetSeedState(t)
@@ -45,12 +46,12 @@ func TestMigrateLegacyCookie(t *testing.T) {
 	if len(list) != 1 || list[0].Cookie != raw {
 		t.Fatalf("没搬进池子: %+v", list)
 	}
-	// 原值留着：回滚到旧版时那条单 cookie 还能用，行为不变
+	// the original value is kept: rolling back to the old version leaves that single cookie still working, behavior unchanged
 	if kvGet("google_cookie") != raw {
 		t.Errorf("不该动 kv 里的原值")
 	}
 
-	// 用户把它从池子里删掉之后，再启动不该复活
+	// after the user deletes it from the pool, a restart must not resurrect it
 	_ = accountDelete(list[0].ID)
 	seedCookiesFromConfig()
 	if n := len(accountList()); n != 0 {
@@ -58,8 +59,9 @@ func TestMigrateLegacyCookie(t *testing.T) {
 	}
 }
 
-// 缺 SAPISID 的 cookie 也要照收：旧版把它原样当 Cookie 头发出去，能不能用由上游定。
-// 升级不能因为我们新加了校验，就让用户的号悄无声息地退回匿名。
+// A cookie lacking SAPISID must still be accepted: the old version sent it verbatim as the
+// Cookie header, and whether it works is up to the upstream. An upgrade must not silently
+// revert the user's account to anonymous just because we added a new validation.
 func TestMigrateLegacyCookieWithoutSAPISID(t *testing.T) {
 	resetSeedState(t)
 	const raw = "SID=only; HSID=x; __Secure-1PSID=z"
@@ -74,16 +76,16 @@ func TestMigrateLegacyCookieWithoutSAPISID(t *testing.T) {
 	if !hasCookie() {
 		t.Error("池子里有账号，hasCookie 却是 false")
 	}
-	// 但手工从面板加同样的值仍然要拦——那时用户当场看得到错误提示
+	// but manually adding the same value via the panel must still be blocked — the user sees the error right there
 	if _, err := accountAdd("手工", raw, ""); err == nil {
 		t.Error("面板手工添加不该放过缺 SAPISID 的 cookie")
 	}
 }
 
-// 迁移失败**不能**标记完成，否则用户的 cookie 就永远进不了池子了。
+// A failed migration must **not** be marked done, otherwise the user's cookie never gets another chance to enter the pool.
 func TestMigrateLegacyCookieBadValueKeepsRetrying(t *testing.T) {
 	resetSeedState(t)
-	// JSON 形式但取不出 cookie 字段：normalizeCookie 判失败
+	// JSON form but no cookie field extractable: normalizeCookie judges it failed
 	mustKV(t, "google_cookie", `{"sapisid":"x"}`)
 
 	seedCookiesFromConfig()
@@ -99,8 +101,8 @@ func TestMigrateLegacyCookieBadValueKeepsRetrying(t *testing.T) {
 	}
 }
 
-// scheme 大小写不敏感：url.Parse 会把 scheme 转小写，所以 HTTP:// 在 4.0.0
-// 那条不校验的静态代理路径上是能用的，升级时不能被拦下来。
+// scheme is case-insensitive: url.Parse lowercases the scheme, so the uppercase form worked
+// on the 4.0.0 unvalidated static-proxy path and must not be blocked during upgrade.
 func TestProxySchemeCaseInsensitive(t *testing.T) {
 	resetSeedState(t)
 	mustKV(t, runtimeConfigKey, `{"proxy":"HTTP://1.2.3.4:8080"}`)
@@ -113,11 +115,13 @@ func TestProxySchemeCaseInsensitive(t *testing.T) {
 	}
 }
 
-// 缺 scheme 的值确实会被 proxyCreate 拒收，这里保证拒收时不丢原值、不标记完成。
+// A value missing its scheme is indeed rejected by proxyCreate; this ensures rejection
+// doesn't lose the original value or mark the migration done.
 //
-// 跟 cookie 那条的处理不同（那边放宽了校验）：`1.2.3.4:8080` 在 4.0.0 上**本来就没生效过**
-// —— url.Parse 对它直接报错（first path segment in URL cannot contain colon），
-// t.Proxy 保持 nil，请求走的是直连。所以拒收它不构成功能回退，不需要放宽。
+// Unlike the cookie path (where validation was relaxed): a bare host:port value never
+// actually worked on 4.0.0 — url.Parse errors on it directly (first path segment in URL
+// cannot contain colon), the proxy stays nil, and requests go direct. So rejecting it
+// isn't a functional regression; no relaxation needed.
 func TestMigrateLegacyProxyRejectedKeepsRetrying(t *testing.T) {
 	resetSeedState(t)
 	mustKV(t, runtimeConfigKey, `{"proxy":"1.2.3.4:8080","per_ip_rph":80}`)
@@ -130,7 +134,7 @@ func TestMigrateLegacyProxyRejectedKeepsRetrying(t *testing.T) {
 	if kvGet(kvLegacyProxyDone) == "1" {
 		t.Error("入池失败却标记了迁移完成")
 	}
-	// 原始 runtime_config 一个字都不能动：里面还有别的字段
+	// the original runtime_config must not be touched at all: it holds other fields too
 	if got := kvGet(runtimeConfigKey); got != `{"proxy":"1.2.3.4:8080","per_ip_rph":80}` {
 		t.Errorf("runtime_config 被改写了: %s", got)
 	}
@@ -146,21 +150,21 @@ func TestMigrateLegacyProxyOK(t *testing.T) {
 	if len(list) != 1 || list[0].URL != "http://u:p@1.2.3.4:8080" {
 		t.Fatalf("没搬进池子: %+v", list)
 	}
-	// 迁移不改写 runtime_config —— 少动一次已有数据就少一分写坏别的字段的风险
+	// migration doesn't rewrite runtime_config — one less write to existing data means one less risk of corrupting other fields
 	if got := kvGet(runtimeConfigKey); got != `{"proxy":"http://u:p@1.2.3.4:8080","per_ip_rph":80}` {
 		t.Errorf("runtime_config 被改写了: %s", got)
 	}
-	// 幂等：再启动一次不该多出一条
+	// idempotent: a second startup must not add another entry
 	seedProxiesFromConfig()
 	if n := len(listProxies()); n != 1 {
 		t.Errorf("第二次启动又加了一条，池子里 %d 条", n)
 	}
 }
 
-// ── 启动参数的声明式跟随 ────────────────────────────────────────────────
+// ── Declarative following of startup parameters ────────────────────────
 
-// 改 compose 里的 --proxy 应该是**换掉**那条，不是再加一条。
-// 累积的话旧出口会留在池子里继续 enabled、继续接流量，成了僵尸出口。
+// Changing --proxy in compose should **replace** that entry, not add another. With accumulation,
+// the old egress would stay in the pool, still enabled and still taking traffic — a zombie egress.
 func TestSeededProxyReplacedOnChange(t *testing.T) {
 	resetSeedState(t)
 	cfg.Proxy = "http://old:1080"
@@ -169,7 +173,7 @@ func TestSeededProxyReplacedOnChange(t *testing.T) {
 		t.Fatalf("首次播种不对: %+v", list)
 	}
 
-	cfg.Proxy = "http://new:1080" // 用户改了 compose 后重启
+	cfg.Proxy = "http://new:1080" // user changed compose and restarted
 	seedProxiesFromConfig()
 
 	list := listProxies()
@@ -180,7 +184,7 @@ func TestSeededProxyReplacedOnChange(t *testing.T) {
 		t.Errorf("换成了 %s，期望 http://new:1080", list[0].URL)
 	}
 
-	// 参数被彻底去掉 → 我们建的那条也撤下
+	// parameter removed entirely → the entry we created gets withdrawn too
 	cfg.Proxy = ""
 	seedProxiesFromConfig()
 	if n := len(listProxies()); n != 0 {
@@ -188,7 +192,7 @@ func TestSeededProxyReplacedOnChange(t *testing.T) {
 	}
 }
 
-// 参数没变时完全不碰池子：用户在面板上停用/删除这条记录，说了算。
+// When the parameter is unchanged, don't touch the pool at all: if the user disabled/deleted the entry in the panel, that decision stands.
 func TestSeededProxyRespectsPanelEdits(t *testing.T) {
 	resetSeedState(t)
 	cfg.Proxy = "http://seed:1080"
@@ -196,10 +200,10 @@ func TestSeededProxyRespectsPanelEdits(t *testing.T) {
 	id := listProxies()[0].ID
 
 	no := false
-	if err := proxyUpdate(id, "", "", &no, nil); err != nil { // 用户在面板停用它
+	if err := proxyUpdate(id, "", "", &no, nil); err != nil { // user disabled it in the panel
 		t.Fatal(err)
 	}
-	seedProxiesFromConfig() // 重启
+	seedProxiesFromConfig() // restart
 
 	list := listProxies()
 	if len(list) != 1 {
@@ -210,7 +214,7 @@ func TestSeededProxyRespectsPanelEdits(t *testing.T) {
 	}
 }
 
-// 用户自己已经在面板加了同一个出口时，播种不该再建一条重的。
+// When the user has already added the same egress in the panel, seeding must not create a duplicate entry.
 func TestSeededProxySkipsExistingURL(t *testing.T) {
 	resetSeedState(t)
 	if _, err := proxyCreate("手工加的", "http://same:1080", 1); err != nil {
@@ -223,8 +227,8 @@ func TestSeededProxySkipsExistingURL(t *testing.T) {
 	}
 }
 
-// --cookie-file 轮换：替换同一条，不能越堆越多。
-// 堆积的死 cookie 仍然 enabled、仍然参与轮转，等于每 N 个请求就有一个注定失败。
+// --cookie-file rotation: replace the same entry, never accumulate. A pile of dead cookies still
+// enabled and still in rotation means one doomed request every N.
 func TestSeededCookieFileRotates(t *testing.T) {
 	resetSeedState(t)
 	path := filepath.Join(t.TempDir(), "cookie.txt")
@@ -237,7 +241,7 @@ func TestSeededCookieFileRotates(t *testing.T) {
 
 	write("  SAPISID=first; SID=z\n")
 	seedCookiesFromConfig()
-	seedCookiesFromConfig() // 内容没变的第二次启动
+	seedCookiesFromConfig() // a second startup with unchanged content
 	list := accountList()
 	if len(list) != 1 {
 		t.Fatalf("内容没变不该重复插，实际 %d 条", len(list))
@@ -257,7 +261,7 @@ func TestSeededCookieFileRotates(t *testing.T) {
 	}
 }
 
-// 文件读不到（容器少挂了个卷之类）时保持现状，不能把正在用的 cookie 撤下来。
+// When the file can't be read (e.g. a volume missing from the container), keep the current state — don't withdraw a cookie that's actively in use.
 func TestSeededCookieFileMissingKeepsPool(t *testing.T) {
 	resetSeedState(t)
 	dir := t.TempDir()
@@ -271,7 +275,7 @@ func TestSeededCookieFileMissingKeepsPool(t *testing.T) {
 		t.Fatal("前置条件不成立")
 	}
 
-	_ = os.Remove(path) // 卷没挂上
+	_ = os.Remove(path) // volume not mounted
 	seedCookiesFromConfig()
 
 	if n := len(accountList()); n != 1 {
@@ -279,8 +283,9 @@ func TestSeededCookieFileMissingKeepsPool(t *testing.T) {
 	}
 }
 
-// 旧单 cookie 路径吃 JSON 形式，入池前必须归一化成裸 cookie 串，
-// 否则池子里存的是一整段 JSON，SAPISID 提取和后续请求全错。
+// The legacy single-cookie path accepted JSON form; before entering the pool it must be normalized
+// into a bare cookie string, otherwise the pool stores a whole JSON blob and SAPISID extraction
+// and subsequent requests all break.
 func TestMigrateLegacyCookieJSONForm(t *testing.T) {
 	resetSeedState(t)
 	mustKV(t, "google_cookie", `{"cookie":"SAPISID=fromjson; SID=w","sapisid":"fromjson"}`)
@@ -299,7 +304,7 @@ func TestMigrateLegacyCookieJSONForm(t *testing.T) {
 	}
 }
 
-// 全新部署：没有任何遗留配置，不该凭空造出账号或代理。
+// Fresh deployment: no legacy config at all, no accounts or proxies must be created out of thin air.
 func TestSeedNoop(t *testing.T) {
 	resetSeedState(t)
 	seedCookiesFromConfig()

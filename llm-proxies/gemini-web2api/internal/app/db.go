@@ -145,14 +145,14 @@ func getDB() *dbx {
 		conn.SetMaxOpenConns(8)
 		conn.SetMaxIdleConns(4)
 		conn.SetConnMaxLifetime(0)
-		// mysql/pg 驱动默认不接受多语句 Exec，按方言逐条建表。
+		// The mysql/pg drivers do not accept multi-statement Exec by default; create tables one statement per dialect.
 		for _, stmt := range schemaStatements(curDialect) {
 			if _, err := conn.Exec(stmt); err != nil {
-				// mysql 的 CREATE INDEX 没有 IF NOT EXISTS，重启时重复报错，容忍。
+				// mysql's CREATE INDEX has no IF NOT EXISTS; on restart it errors on duplicates, which is tolerated.
 				if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(stmt)), "CREATE INDEX") {
 					continue
 				}
-				// sqlite 最常见 SQLITE_CANTOPEN(14)：目录能进但写不了，判据+解法一起打。
+				// sqlite's most common failure is SQLITE_CANTOPEN(14): the directory is accessible but not writable; print the diagnosis and the fix together.
 				hint := ""
 				if curDialect == dialectSQLite {
 					hint = dbPermHint(sqliteDir)
@@ -161,7 +161,7 @@ func getDB() *dbx {
 				os.Exit(1)
 			}
 		}
-		// 老 sqlite 库的列迁移。新库/mysql/pg 不需要（跑了也只是报错忽略），只在 sqlite 上做。
+		// Column migrations for old sqlite databases. New databases/mysql/pg don't need them (running them only produces ignorable errors), so they run on sqlite only.
 		if curDialect == dialectSQLite {
 			_, _ = conn.Exec(`ALTER TABLE requests ADD COLUMN upstream_model TEXT`)
 			_, _ = conn.Exec(`ALTER TABLE requests ADD COLUMN account_id INTEGER`)
@@ -254,14 +254,14 @@ func kvSet(k, v string) error {
 	return err
 }
 
-// dbPermHint 在数据库打不开时给出可操作的提示。
+// dbPermHint returns an actionable hint when the database cannot be opened.
 //
-// 判据：容器镜像是 distroless + USER nonroot（uid 65532），而 bind mount 会用宿主
-// 目录的属主整个盖掉镜像里 /data 的属主。宿主上目录不存在时 Docker 自动建、属主是
-// root，于是容器里的 65532 写不进去 —— 实测这就是 `unable to open database file (14)`
-// 的成因（同一条命令只把属主 chown 成 65532 就能起来）。
+// Diagnosis: the container image is distroless + USER nonroot (uid 65532), while a bind mount overrides
+// the ownership of /data from the image with the host directory's owner. If the directory does not
+// exist on the host, Docker creates it as root, so uid 65532 inside the container cannot write — observed
+// in practice this is exactly the cause of `unable to open database file (14)` (the same command starts once the owner is chowned to 65532).
 func dbPermHint(dir string) string {
-	uid := os.Getuid() // Windows 上返回 -1，那边不涉及这个问题
+	uid := os.Getuid() // returns -1 on Windows, which is not affected by this problem
 	return fmt.Sprintf(""+
 		"      当前进程 uid=%d，写不进目录 %s。\n"+
 		"      Docker 部署最常见的原因是 bind mount 的宿主目录属主是 root，\n"+

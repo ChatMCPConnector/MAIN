@@ -461,10 +461,10 @@ func handleAdminProxyItem(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// /admin/api/usage — 返回每个 IP slot 的当前限流用量。
+// /admin/api/usage — returns the current rate-limit usage per IP slot.
 func handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 	usage := allSlotUsage()
-	// 加上代理名字以便 UI 显示
+	// add proxy names so the UI can display them
 	proxyNames := map[int64]string{}
 	for _, p := range listProxies() {
 		proxyNames[p.ID] = p.Name
@@ -541,14 +541,14 @@ func handleAdminAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// /admin/api/test — 端到端连通性诊断。
+// /admin/api/test — end-to-end connectivity diagnostics.
 //
-// 走完整协议路径（chrome146 指纹 + 真 StreamGenerate）但：
-//   - 不消耗限流 slot（admin 诊断不算业务流量）
-//   - 不写入 requests 表（不污染业务统计）
-//   - 返回详细原因码 + 延迟 + 上游响应片段
+// Runs the full protocol path (chrome146 fingerprint + real StreamGenerate) but:
+//   - consumes no rate-limit slot (admin diagnostics don't count as business traffic)
+//   - writes nothing to the requests table (doesn't pollute business stats)
+//   - returns a detailed reason code + latency + an upstream response snippet
 //
-// 可选参数 ?proxy_id=N 测某个代理（id=0 测直连 / 留空 = 自动按调度规则挑一个）。
+// Optional parameter ?proxy_id=N tests a specific proxy (id=0 tests direct / empty = auto-pick one per scheduling rules).
 func handleAdminTest(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	proxyIDStr := q.Get("proxy_id")
@@ -561,7 +561,7 @@ func handleAdminTest(w http.ResponseWriter, r *http.Request) {
 	var proxyID int64
 	useDirect := false
 	if proxyIDStr == "" {
-		// 自动模式：仿照 acquireSlot 优先代理池里第一个 enabled
+		// automatic mode: mimic acquireSlot, prefer the first enabled proxy in the pool
 		for _, p := range listProxies() {
 			if p.Enabled && p.FailCount < 5 {
 				proxyURL = p.URL
@@ -614,22 +614,22 @@ func handleAdminTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, res)
 }
 
-// handleAdminConfig 读写运行时配置。GET 返回当前值 + 各项允许范围，
-// PUT 校验后立刻生效并持久化到 kv。
+// handleAdminConfig reads and writes the runtime config. GET returns current values + allowed ranges per item,
+// PUT validates, applies immediately and persists to kv.
 func handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, 200, map[string]interface{}{
 			"config": rtCfg(),
 			"models": modelNamesSorted(),
-			// 部署期配置只读展示，改这些要动 docker-compose.yml 并重启
+			// deploy-time config is read-only here; changing these requires editing docker-compose.yml and restarting
 			"deploy": map[string]interface{}{
 				"host":        cfg.Host,
 				"port":        cfg.Port,
 				"db_path":     cfg.DBPath,
 				"cookie_file": cfg.CookieFile,
 				"admin_auth":  cfg.AdminToken != "",
-				// 面板的部署配置表要展示 Key 是否被启动参数锁死
+				// the deploy-config table in the panel needs to show whether the key is locked by startup parameters
 				"api_key_locked": apiKeyLocked,
 			},
 		})
@@ -658,18 +658,21 @@ func modelNamesSorted() []string {
 	return names
 }
 
-// classifyError 把 requests.error 归到几个可行动的类别。
+// classifyError maps requests.error into a few actionable categories.
 //
-// 分类的意义在于"看到之后该做什么不一样"：上游瞬时拒绝只能重试、代理层失败
-// 该换代理或熔断、slot 满说明该加代理、协议错误才需要看代码。全混在一列原始
-// 错误串里，排查时分不出是被限流了还是真出故障。
+// Categories matter because "what to do on seeing them" differs: a transient upstream
+// rejection can only be retried, a proxy-layer failure means switching proxies or
+// circuit-breaking, a full slot means adding proxies, and only protocol errors need
+// code inspection. All mixed into one column of raw error strings, you can't tell
+// rate limiting apart from a real outage while debugging.
 func classifyError(errStr string) string {
 	switch {
 	case errStr == "":
 		return ""
 	case strings.Contains(errStr, "no content frame"):
-		// 上游返回 200 但一个内容帧都没有。实测是瞬时拒绝，隔几分钟自行恢复，
-		// 跟频率/并发/累积次数都无关，重试即可。
+// Upstream returned 200 but not a single content frame. Observed in practice to be
+	// a transient rejection that recovers on its own after a few minutes, independent
+	// of frequency/concurrency/cumulative counts; retrying is enough.
 		return "upstream_rejected"
 	case strings.Contains(errStr, "slot full") || strings.Contains(errStr, "limit reached"):
 		return "rate_limited_local"
@@ -682,12 +685,12 @@ func classifyError(errStr string) string {
 	case strings.Contains(errStr, "unknown model"), strings.Contains(errStr, "not supported"):
 		return "bad_request"
 	default:
-		// 连不上代理 / DNS / TLS 握手失败之类
+		// proxy unreachable / DNS / TLS handshake failure and the like
 		return "network"
 	}
 }
 
-// errorBreakdown 统计窗口内各类错误的次数。
+// errorBreakdown counts occurrences of each error kind within the window.
 func errorBreakdown(since int64) []map[string]interface{} {
 	rows, err := getDB().Query(
 		`SELECT COALESCE(error,''), COUNT(*) FROM requests

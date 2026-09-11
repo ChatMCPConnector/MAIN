@@ -2,13 +2,13 @@ package app
 
 import "testing"
 
-// 2026-09-11 用户指令：Gemini-Web 模型永远带扩展思考跑。
-// applyAlwaysThinking 在有登录态时把 plain 版提升成同 hex 的 thinking 版。
+// 2026-09-11 user directive: Gemini-Web models always run with extended thinking.
+// applyAlwaysThinking promotes the plain version to the same-hex thinking version when logged in.
 func TestApplyAlwaysThinking(t *testing.T) {
 	lite := Models["gemini-3.5-flash-lite"]
 	liteThink := Models["gemini-3.5-flash-lite-thinking"]
 
-	// 有登录态：提升
+	// logged in: promoted
 	got := applyAlwaysThinking("gemini-3.5-flash-lite", lite, true)
 	if !got.Thinking {
 		t.Errorf("Login-State: Thinking=false, erwartet true (always-thinking)")
@@ -17,25 +17,25 @@ func TestApplyAlwaysThinking(t *testing.T) {
 		t.Errorf("Promotion weicht von thinking-Variante ab (Hex/Mode)")
 	}
 
-	// 匿名：不提升（服务端忽略 inner[80]=2）
+	// anonymous: not promoted (the server ignores inner[80]=2)
 	got = applyAlwaysThinking("gemini-3.5-flash-lite", lite, false)
 	if got.Thinking {
 		t.Errorf("Anonym: Thinking=true, erwartet false (Upstream ignoriert es)")
 	}
 
-	// -thinking direkt：bleibt
+	// -thinking directly: stays as-is
 	got = applyAlwaysThinking("gemini-3.5-flash-lite-thinking", liteThink, true)
 	if !got.Thinking {
 		t.Errorf("-thinking direkt: Thinking=false")
 	}
 
-	// 3.8-flash：提升 (Paid-Account vorausgesetzt, gleiche Logik)
+	// 3.8-flash: promoted (assuming a paid account, same logic)
 	got = applyAlwaysThinking("gemini-3.8-flash", Models["gemini-3.8-flash"], true)
 	if !got.Thinking {
 		t.Errorf("gemini-3.8-flash mit Login: Thinking=false, erwartet true")
 	}
 
-	// 媒体模型不提升（产物不走思考链）
+	// media models are not promoted (their output doesn't go through the reasoning chain)
 	img := Models["gemini-image"]
 	got = applyAlwaysThinking("gemini-image", img, true)
 	if got.Thinking {
@@ -43,8 +43,8 @@ func TestApplyAlwaysThinking(t *testing.T) {
 	}
 }
 
-// resolveModel-Integration：plain-Anfrage mit Pool-Cookie bekommt die
-// Thinking-Config（Modellname bleibt für den Client unverändert）。
+// resolveModel integration: a plain request with a pool cookie gets the
+// thinking config (the model name stays unchanged for the client).
 func TestResolveModelPromotesWithCookie(t *testing.T) {
 	if !hasCookie() {
 		t.Skip("kein Cookie im Pool — Thinking-Promotion braucht Login-State")

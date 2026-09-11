@@ -21,8 +21,9 @@ func startScheduler() {
 		daily := time.NewTicker(1 * time.Hour)
 		retention := time.NewTicker(6 * time.Hour)
 		proxyReload := time.NewTicker(60 * time.Second)
-		// 会话保活：启动后先尽快刷一次 1PSIDTS（导入的票可能已经快到期），
-		// 之后按服务端在轮转页里指定的间隔走（实测 600 秒）。
+		// conversation keep-alive: refresh 1PSIDTS as soon as possible after boot (imported
+		// tickets may be close to expiry), then follow the interval the server specifies on
+		// the rotation page (observed in practice: 600 seconds).
 		rotate := time.NewTimer(firstRotateDelay)
 		defer hourly.Stop()
 		defer daily.Stop()

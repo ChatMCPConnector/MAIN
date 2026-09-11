@@ -7,19 +7,25 @@ import (
 	"time"
 )
 
-// QuotaLimitError 表示 Google 账号的 5 小时用量额度用完了。
+// QuotaLimitError signals that a Google account's 5-hour usage quota is
+// exhausted.
 //
-// 上游的表现极其隐蔽：HTTP 200、有内容帧，但正文只有一句
+// The upstream's manifestation is extremely subtle: HTTP 200, content
+// frames, but the body is just one sentence:
 // "I encountered an error doing what you asked. Could you try again?"
-// （实测 65 字节，requests 表里能看到）。以前这句被当成正常回复原样透传，
-// agentic 客户端拿到一段没有 tool_call 的散文就中断整个 loop —— 这就是
-// benchmark 里"I encountered an error"一闪而过的真正死因。
+// (measured in practice at 65 bytes, visible in the requests table).
+// Previously this sentence was passed through as a normal reply; an
+// agentic client receiving prose without a tool_call aborts the whole loop —
+// that is the real cause of death behind the fleeting "I encountered an
+// error" in benchmarks.
 //
-// 额度窗口是滚动的 5 小时（Pro/Flash 付费模型受限；3.5 Flash-Lite 不受限，
-// 永远可用）。上游不告诉我们复位时间，只能估：窗口内**第一条**请求的时间
-// + 5h —— 从 requests 表里查。
+// The quota window is a rolling 5 hours (paid Pro/Flash models are limited;
+// 3.5 Flash-Lite is unlimited and always available). The upstream doesn't
+// tell us the reset time, so it has to be estimated: the time of the
+// **first** request within the window + 5h — looked up from the requests
+// table.
 type QuotaLimitError struct {
-	Model string // 触发限额的模型名
+	Model string // model name that hit the limit
 }
 
 func (e *QuotaLimitError) Error() string {
@@ -27,12 +33,16 @@ func (e *QuotaLimitError) Error() string {
 		e.Model, quotaResetETA())
 }
 
-// CannedReplyError 表示上游回了"罐头错误"短句（瞬态故障或拒答话术，按账号语言出）。
-// 特征：HTTP 200、有内容帧、正文极短且措辞固定（见 cannedErrorPrefixes）。
-// 与额度耗尽不同：这个是瞬态的，重发一次通常就过 —— 所以 handler 层做一次
-// 单轮重发而不是锁窗口。
+// CannedReplyError signals that the upstream replied with a short "canned
+// error" sentence (a transient failure or a refusal phrase, issued in the
+// account's language).
+// Signature: HTTP 200, content frames, an extremely short body with fixed
+// wording (see cannedErrorPrefixes).
+// Unlike quota exhaustion: this one is transient, and resending once usually
+// gets through — hence the handler layer does a single-turn retry instead
+// of locking the window.
 type CannedReplyError struct {
-	Text string // 原始罐头回复
+	Text string // the original canned reply
 }
 
 func (e *CannedReplyError) Error() string {
@@ -46,30 +56,39 @@ func truncateStr(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// isQuotaText 判断一段回复文本是不是额度耗尽的签名回复。
+// isQuotaText decides whether a reply text is the signature reply for quota
+// exhaustion.
 //
-// 只认精确措辞：泛化的 "something went wrong" 是真实的上游瞬态故障
-// （实测下一次请求就恢复），把它也当额度会把 5 小时的降级锁误触发。
+// Only the exact wording counts: a generalized "something went wrong" is a
+// real upstream transient failure (measured in practice, the next request
+// recovers); treating it as quota too would falsely trigger the 5-hour
+// downgrade lock.
 func isQuotaText(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" {
 		return false
 	}
-	// 上游大小写/标点偶有漂移，前缀匹配 + 长度上限收紧误报面。
+	// The upstream occasionally drifts in case/punctuation; prefix matching +
+// a length cap tightens the false-positive surface.
 	return len(t) < 120 && strings.HasPrefix(strings.ToLower(t),
 		"i encountered an error doing what you asked")
 }
 
-// cannedGate 延迟流式开闸：把前 220 字节的 delta 扣在缓冲里，攒够了（说明
-// 不是罐头错误——罐头都极短）或流结束时再一次性放行。
+// cannedGate delays opening the stream: it holds the first 220 bytes of
+// delta in a buffer, releasing them all at once once enough accumulate
+// (meaning it's not a canned error — canned ones are all extremely short)
+// or when the stream ends.
 //
-// 为什么需要：罐头错误的检测要等**完整短句**出来才能判定，但真流式会把
-// 前几个 delta 先推给客户端 —— sse.Started() 变 true，检测命中时已吐出去
-// 收不回，只能 Fail，agentic run 就此中断（实测 benchmark turn 7 卡死）。
-// 扣住头 220 字节后：正常回复几乎无感（首屏晚几百毫秒），罐头回复则一个
-// 字都没出门，检测命中就能干净地重试。
+// Why it's needed: detecting a canned error requires the **complete short
+// sentence**, but true streaming pushes the first few deltas to the client
+// already — sse.Started() turns true, and once detection hits, what was
+// emitted can't be taken back; all that's left is Fail, and the agentic run
+// breaks off right there (measured in practice, benchmark turn 7 hung). With
+// the first 220 bytes held back: normal replies barely notice (first paint
+// a few hundred ms later), while a canned reply never leaves the door at
+// all, so a hit allows a clean retry.
 type cannedGate struct {
-	emit    func(string) // 真正的下游（sse.SendContent / SendReasoning）
+	emit    func(string) // the real downstream (sse.SendContent / SendReasoning)
 	buf     string
 	flushed bool
 	canned  bool
@@ -81,8 +100,9 @@ func newCannedGate(emit func(string)) *cannedGate {
 
 const cannedGateHold = 220
 
-// Push 吃进一段 delta。缓冲期（未 flush）内攒着；超过保持线说明这不是罐头，
-// 全部放行并进入直通模式。
+// Push ingests a delta. During the buffering phase (not yet flushed) it
+// accumulates; crossing the hold line means this is not canned — release
+// everything and switch to pass-through mode.
 func (g *cannedGate) Push(s string) {
 	if g == nil || g.emit == nil {
 		return
@@ -108,9 +128,11 @@ func (g *cannedGate) flush() {
 	}
 }
 
-// Finish 在流结束时调用：短回复（可能罐头）在这里判定。
-// 罐头 → 丢弃缓冲、标记 canned（调用方据此走重试，客户端一个字没收到）；
-// 正常 → 放行。
+// Finish is called when the stream ends: short replies (possibly canned)
+// are judged here.
+// Canned → discard the buffer and set the canned flag (the caller retries
+// accordingly; the client received not a single character);
+// normal → release.
 func (g *cannedGate) Finish() {
 	if g == nil || g.flushed {
 		return
@@ -127,49 +149,57 @@ func (g *cannedGate) Finish() {
 	}
 }
 
-// Canned 报告 Finish 是否判定为罐头回复。
+// Canned reports whether Finish judged the reply to be canned.
 func (g *cannedGate) Canned() bool {
 	return g != nil && g.canned
 }
 
-// flushedForStarted 报告是否有真实正文已经放行出门（供 sse.Started 场景区分：
-// 已放行 = 客户端真见过正文，只能 Fail；罐头判定丢弃了缓冲 = 一个字没出门，
-// 还能干净重试）。
+// flushedForStarted reports whether real body text has already been
+// released out the door (for distinguishing the sse.Started scenario:
+// already released = the client truly saw body text, only Fail remains;
+// canned verdict discarded the buffer = not a single character left the
+// door, a clean retry is still possible).
 func (g *cannedGate) flushedForStarted() bool {
 	return g == nil || (g.flushed && !g.canned)
 }
 
-// cannedErrorPrefixes 是上游"罐头错误"回复的已知前缀（按账号语言出）。
-// 这些都是 200 + 内容帧里的短句，以前被当正常回复透传。共同特征：极短 +
-// 固定措辞。正常回答不会以这些开头（前缀精确匹配）。
+// cannedErrorPrefixes are the known prefixes of upstream "canned error"
+// replies (issued in the account's language). These are all short sentences
+// inside 200 + content frames, previously passed through as normal replies.
+// Common signature: extremely short + fixed wording. Normal answers never
+// start with these (exact prefix match).
 var cannedErrorPrefixes = []string{
-	"i encountered an error doing what you asked", // 额度耗尽（en）
-	"sorry, something went wrong",                 // 瞬态故障（en）
-	"i'm a language model",                        // 瞬态/拒答（en）
-	"i am a language model",                       // 同上变体
-	"ich bin ein sprachmodell",                    // 瞬态/拒答（de）
-	"leider ist beim verarbeiten",                 // 瞬态故障（de）
-	"es ist ein fehler aufgetreten",               // 瞬态故障（de）
+	"i encountered an error doing what you asked", // quota exhausted (en)
+	"sorry, something went wrong",                 // transient failure (en)
+	"i'm a language model",                        // transient/refusal (en)
+	"i am a language model",                       // same, variant
+	"ich bin ein sprachmodell",                    // transient/refusal (de)
+	"leider ist beim verarbeiten",                 // transient failure (de)
+	"es ist ein fehler aufgetreten",               // transient failure (de)
 }
 
-// cannedErrorMarkers 是启发式的第二道网：罐头错误全都含这些词根之一，而
-// 正常回答（尤其带 tool_call 围栏的）几乎不会**又短又含错误词**。上游变体
-// 层出不穷（实测一周内就出了 4 种新措辞），逐条枚举跟不上 —— 两个条件
-// 一起卡误报面：长度 < 150 且命中词根。
+// cannedErrorMarkers is the heuristic's second net: canned errors all
+// contain one of these word stems, while normal answers (especially those
+// with tool_call fences) are almost never **both short and containing an
+// error word**. Upstream variants keep appearing (measured in practice,
+// 4 new wordings within one week); enumerating them one by one can't keep
+// up — the two conditions together clamp the false-positive surface:
+// length < 150 plus a word-stem hit.
 var cannedErrorMarkers = []string{
 	"error", "fehler", "language model", "sprachmodell",
 	"programmierung hinaus", "hard time", "try again", "try something else",
 	"erneut versuchen", "geht über", "can't fulfill", "kann ich nicht",
 }
 
-// isCannedErrorText 判断回复是否是已知的罐头错误（任何一种）。
-// 额度签名是它的子集：quota 是要锁 5h 的，其余按瞬态重试。
+// isCannedErrorText decides whether the reply is a known canned error (any
+// kind). The quota signature is a subset of it: quota gets a 5h lock, the
+// rest are retried as transient.
 func isCannedErrorText(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
 	if t == "" {
 		return false
 	}
-	if len(t) > 200 { // 罐头错误都很短；真实回复几乎必然更长
+	if len(t) > 200 { // canned errors are all short; real replies are almost certainly longer
 		return false
 	}
 	for _, p := range cannedErrorPrefixes {
@@ -177,7 +207,8 @@ func isCannedErrorText(text string) bool {
 			return true
 		}
 	}
-	// 启发式：短 + 错误词根。带 ```tool_call 围栏的绝不可能是罐头。
+	// Heuristic: short + error word stem. Anything with a ```tool_call fence can
+	// never be canned.
 	if strings.Contains(t, "```") {
 		return false
 	}
@@ -197,8 +228,10 @@ const (
 
 var quotaMu sync.Mutex
 
-// quotaResetETA 估算额度窗口的复位时间（本地时区的 HH:MM）。
-// 依据：窗口是滚动的 5h，从窗口内第一条请求算起。
+// quotaResetETA estimates the quota window's reset time (HH:MM in local
+// timezone).
+// Basis: the window is a rolling 5h counted from the first request within
+// it.
 func quotaResetETA() string {
 	if until, ok := quotaUntil(); ok {
 		return until.Local().Format("15:04")
@@ -206,7 +239,7 @@ func quotaResetETA() string {
 	return "unknown"
 }
 
-// quotaUntil 读 kv 里记录的额度复位时刻。
+// quotaUntil reads the quota reset timestamp recorded in kv.
 func quotaUntil() (time.Time, bool) {
 	v := kvGet(quotaKVKey)
 	if v == "" || v == "0" {
@@ -219,12 +252,14 @@ func quotaUntil() (time.Time, bool) {
 	return time.Unix(unix, 0), true
 }
 
-// markQuotaLimited 记录"额度用完了"：估算复位时刻并落 kv。
-// 后续请求（quotaActive 为真时）直接降级，省一次注定失败的上游调用。
+// markQuotaLimited records "quota exhausted": estimates the reset time and
+// persists it in kv. Later requests (while quotaActive is true) downgrade
+// immediately, saving an upstream call that is doomed to fail.
 func markQuotaLimited() {
 	quotaMu.Lock()
 	defer quotaMu.Unlock()
-	// 窗口内第一条请求 + 5h。查不到（表空/全是旧数据）就保守取 now+5h。
+	// First request within the window + 5h. If the lookup fails (empty table /
+	// all stale data), conservatively use now+5h.
 	first := time.Now().Add(-quotaWindow).Unix()
 	if db != nil {
 		var minTS int64
@@ -235,24 +270,30 @@ func markQuotaLimited() {
 	}
 	until := time.Unix(first, 0).Add(quotaWindow)
 	if !until.After(time.Now()) {
-		until = time.Now().Add(quotaWindow) // 估算已过期（理论不该发生）→ 保守再等 5h
+		until = time.Now().Add(quotaWindow) // estimate already expired (theoretically impossible) → conservatively wait another 5h
 	}
 	_ = kvSet(quotaKVKey, fmt.Sprintf("%d", until.Unix()))
 	logf("[quota] 额度耗尽已记录，估算复位 %s", until.Local().Format("15:04"))
 }
 
-// quotaBannerConfirmed 已废弃：/app 页面里的 "out_of_quota" 是一个**永久存在的
-// UTM 链接**（gemini_out_of_quota_input_inline_upgrade_banner，指向 one.google.com/ai
-// 的升级广告），跟额度是否耗尽无关 —— 实测额度正常时页面照样带它，用它会
-// 把每次瞬态抖动都误锁 5 小时。保留函数签名做占位避免别处报错，恒返回 false。
+// quotaBannerConfirmed is deprecated: the "out_of_quota" in the /app page is
+// a **permanently present UTM link** (gemini_out_of_quota_input_inline_
+// upgrade_banner, pointing to an upgrade ad on one.google.com/ai) that has
+// nothing to do with whether quota is exhausted — measured in practice, the
+// page carries it even when quota is fine; using it would falsely lock 5
+// hours on every transient blip. The function signature is kept as a
+// placeholder to avoid errors elsewhere; always returns false.
 //
-// 替代方案在 server 层：retry-based confirmation —— 检出签名后**重发一次**，
-// 签名不再出现 = 瞬态，不锁；再次出现 = 真耗尽，锁。
+// The replacement lives in the server layer: retry-based confirmation —
+// upon detecting the signature, **resend once**; if the signature doesn't
+// reappear it was transient, no lock; if it reappears, quota is really
+// exhausted, lock.
 func quotaBannerConfirmed() bool {
 	return false
 }
 
-// quotaActive 报告额度锁是否仍在生效。过期的锁顺手清掉。
+// quotaActive reports whether the quota lock is still in effect. An expired
+// lock is cleared along the way.
 func quotaActive() bool {
 	quotaMu.Lock()
 	defer quotaMu.Unlock()
@@ -263,18 +304,20 @@ func quotaActive() bool {
 	if until.After(time.Now()) {
 		return true
 	}
-	_ = kvSet(quotaKVKey, "0") // 已复位
+	_ = kvSet(quotaKVKey, "0") // reset
 	logf("[quota] 额度窗口已复位，恢复正常模型")
 	return false
 }
 
-// quotaModelAffected 判断模型是否受 5h 额度约束（3.5 Flash-Lite 不受限）。
+// quotaModelAffected decides whether the model is subject to the 5h quota
+// (3.5 Flash-Lite is not).
 func quotaModelAffected(mc ModelConfig) bool {
 	return mc.HexID != hexFlashLite
 }
 
-// quotaFallbackModel 选降级目标：3.5 Flash-Lite（原模型带思考且池里有号时用
-// thinking 版）。返回 (目标模型名, 目标配置, 是否可用)。
+// quotaFallbackModel picks the fallback target: 3.5 Flash-Lite (the
+// thinking variant when the original model has thinking and the pool has an
+// account). Returns (target model name, target config, available).
 func quotaFallbackModel(mc ModelConfig) (string, ModelConfig, bool) {
 	name := "gemini-3.5-flash-lite"
 	if mc.Thinking && hasCookie() {
@@ -284,7 +327,8 @@ func quotaFallbackModel(mc ModelConfig) (string, ModelConfig, bool) {
 	return name, fb, ok
 }
 
-// quotaFallbackPrefix 拼降级回复的前置说明，客户端看得见发生了什么。
+// quotaFallbackPrefix assembles the preamble for the fallback reply so the
+// client can see what happened.
 func quotaFallbackPrefix(origModel, fbModel string) string {
 	return fmt.Sprintf("%s Google 账号的 %s 用量额度已用完（滚动 5h 窗口，估算 %s 复位）。"+
 		"本回复由 %s 降级生成；额度复位后自动切回 %s。",

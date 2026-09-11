@@ -6,35 +6,46 @@ import (
 	"time"
 )
 
-// IPSlot 标识一个独立 IP（id=0 = 直连主机 IP；id>0 = 代理池里的代理）。
-// 每个 slot 独立维护并发数 + 滑动窗口 RPM/RPH 计数。
+// IPSlot identifies a distinct IP (id=0 = the direct host IP; id>0 = a
+// proxy in the proxy pool).
+// Each slot independently maintains a concurrency count + sliding-window
+// RPM/RPH counts.
 //
-// 限额来自 cfg.PerIP* 字段，默认基于实测 Google 单 IP 容忍度：
-//   - 瞬时并发：5（实测 50 并发即时全过，但中长期会触发 sorry）
-//   - 每分钟：30（留 2× 余量给突发）
-//   - 每小时：80（实测区间 80-180 的下沿，见下）
+// The limits come from the cfg.PerIP* fields, defaulted from the measured
+// per-IP tolerance of Google:
+//   - instantaneous concurrency: 5 (measured in practice, 50 concurrent all
+//     passed immediately, but mid/long term triggers sorry)
+//   - per minute: 30 (leaving 2x headroom for bursts)
+//   - per hour: 80 (the lower edge of the measured 80-180 range, see below)
 //
-// 单出口能打多少次没有单一数字，主要由**连接策略和出口质量**决定，判据只认
-// 302 → /sorry/：并发 10 复用连接池 151/172/177，每次新建连接 106/109（两臂同时
-// 起跑、同批出口、全程 80 秒，臂内极差只有 3 和 5）；静态 IP 上 188。
+// There is no single number for how many hits one egress can take; it is
+// mostly determined by **connection strategy and egress quality**. The
+// criterion only recognizes 302 → /sorry/: at concurrency 10 with a reused
+// connection pool, 151/172/177; with a fresh connection every time,
+// 106/109 (both arms started simultaneously, same batch of egresses, 80
+// seconds end to end; within-arm spread only 3 and 5); on a static IP, 188.
 //
-// 而**节奏比这些都关键**：10 次/分钟的平缓节奏连打 800 次、跨 110 分钟，一次没被拦。
-// 被拦之后是硬拦，106-121 分钟自动恢复。
+// And **pacing matters more than any of these**: a calm rhythm of 10
+// requests/minute fired 800 times over 110 minutes without ever being
+// blocked. Once blocked it's a hard block, auto-recovering after 106-121
+// minutes.
 //
-// 所以 hourWin 这个滚动 1 小时窗口是保守假设而不是实测结论——真正的阈值形态更接近
-// "突发打满就拦、慢慢打不拦"，而不是"每小时 N 次"。默认取区间下沿，宁可少发。
-// 明确按低速率跑的部署可以把 RPH 调高很多。
+// So the rolling 1-hour hourWin window is a conservative assumption, not a
+// measured conclusion — the real threshold behaves more like "burst to the
+// max and get blocked, go slowly and don't" rather than "N per hour". The
+// default takes the range's lower edge; better to send less. Deployments
+// that knowingly run at low rates can raise RPH a lot.
 
 type ipSlot struct {
 	mu        sync.Mutex
 	inflight  int
-	minuteWin []int64 // 滑动窗口里每个请求的 unix 时间戳（秒）
+	minuteWin []int64 // unix timestamp (seconds) of each request in the sliding window
 	hourWin   []int64
 }
 
 var (
 	slotsMu sync.RWMutex
-	slots   = map[int64]*ipSlot{} // proxy_id -> slot；0 = direct
+	slots   = map[int64]*ipSlot{} // proxy_id -> slot; 0 = direct
 )
 
 func getSlot(proxyID int64) *ipSlot {
@@ -54,19 +65,20 @@ func getSlot(proxyID int64) *ipSlot {
 	return s
 }
 
-// trySlotAcquire 尝试占一个 slot；超额返回 false + 原因码。
-// 调用方拿到 true 必须 deferred 调 slotRelease()。
+// trySlotAcquire tries to occupy a slot; over the limit it returns false +
+// a reason code.
+// A caller receiving true must call slotRelease() deferred.
 //
-//	"concurrent" — 已达瞬时并发上限
-//	"rpm"        — 每分钟超限
-//	"rph"        — 每小时超限
+//	"concurrent" — instantaneous concurrency cap reached
+//	"rpm"        — per-minute limit exceeded
+//	"rph"        — per-hour limit exceeded
 func trySlotAcquire(proxyID int64) (bool, string) {
 	s := getSlot(proxyID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now().Unix()
-	// 清掉过期窗口
+	// Clear expired windows
 	cutMin := now - 60
 	cutHour := now - 3600
 	s.minuteWin = pruneTimestamps(s.minuteWin, cutMin)
@@ -88,7 +100,8 @@ func trySlotAcquire(proxyID int64) (bool, string) {
 	return true, ""
 }
 
-// slotRelease 释放并发计数（窗口计数自然过期，不在这里清）。
+// slotRelease releases the concurrency count (window counts expire
+// naturally; not cleared here).
 func slotRelease(proxyID int64) {
 	s := getSlot(proxyID)
 	s.mu.Lock()
@@ -98,7 +111,7 @@ func slotRelease(proxyID int64) {
 	}
 }
 
-// SlotUsage admin UI 看用量用。
+// SlotUsage is for viewing usage in the admin UI.
 type SlotUsage struct {
 	ProxyID   int64 `json:"proxy_id"`
 	Inflight  int   `json:"inflight"`
@@ -127,13 +140,18 @@ func slotUsage(proxyID int64) SlotUsage {
 	}
 }
 
-// allSlotUsage 返回所有 slot 的用量快照（直连 + 全部代理）。
-// allSlotUsage 列出当前**可被调度到**的所有 IP slot，包括一次都还没用过的。
+// allSlotUsage returns a usage snapshot of all slots (direct + all
+// proxies).
+// allSlotUsage lists every IP slot that can currently **be scheduled to**,
+// including ones never used even once.
 //
-// 只返回 slots map 里已存在的是不够的：那个 map 是首次用到时才懒创建的，
-// 服务刚重启时是空的，面板上「距离封禁红线」会整块空白——而那恰恰是部署时
-// 最该盯的一屏。这里按 acquireSlot 的同一套规则枚举：配了代理就只列代理
-// （代理存在时不会退回直连），否则列直连。
+// Returning only what already exists in the slots map is not enough: that
+// map is lazily created on first use and is empty right after a service
+// restart, leaving the panel's "distance to the ban red line" entirely
+// blank — precisely the screen most worth watching at deployment time.
+// Here we enumerate by the same rules as acquireSlot: with proxies
+// configured, list only the proxies (when proxies exist there is no
+// fallback to direct); otherwise list direct.
 func allSlotUsage() []SlotUsage {
 	seen := map[int64]bool{}
 	var ids []int64
@@ -153,7 +171,8 @@ func allSlotUsage() []SlotUsage {
 		seen[0] = true
 	}
 
-	// 已有计数但已从池中移除/禁用的 slot 也带上，否则它的用量会凭空消失
+	// Also include slots that have counts but were removed/disabled from the
+	// pool, otherwise their usage would vanish into thin air
 	slotsMu.RLock()
 	for id := range slots {
 		if !seen[id] && (hasProxies == (id != 0)) {
@@ -171,7 +190,8 @@ func allSlotUsage() []SlotUsage {
 }
 
 func pruneTimestamps(ts []int64, cutoff int64) []int64 {
-	// ts 是按时间递增追加的，找第一个 >= cutoff 的位置切掉前面
+	// ts is appended in increasing time order; find the first position
+	// >= cutoff and cut off everything before it
 	i := 0
 	for i < len(ts) && ts[i] < cutoff {
 		i++

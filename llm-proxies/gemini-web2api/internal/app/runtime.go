@@ -6,18 +6,26 @@ import (
 	"sync"
 )
 
-// RuntimeConfig 是面板里能随时改、改完立刻生效的那部分配置。
+// RuntimeConfig is the part of the configuration that can be changed in the
+// panel at any time and takes effect immediately.
 //
-// 部署期配置（监听地址、DB 路径、admin token、API key、cookie 文件）**不在这里**：
-// 那些改了本来就要重启进程，放 docker-compose.yml 的 environment / command 更合适，
-// 也避免把凭证放进一个网页表单。这里只放调优参数——为了改个超时重启一次服务太蠢。
+// Deployment-time configuration (listen address, DB path, admin token, API
+// key, cookie file) is **not here**: those already require a process
+// restart to change, so docker-compose.yml's environment / command is the
+// right home — it also keeps credentials out of a web form. This struct
+// only holds tuning parameters — restarting the service to change a timeout
+// would be silly.
 //
-// 取值优先级：面板改过的（存 kv 表） > config.json / CLI flag > 内置默认。
+// Value precedence: changed in the panel (stored in the kv table) >
+// config.json / CLI flag > built-in defaults.
 //
-// 加字段必读：面板保存走整体反序列化（admin.go 的 Decode(&RuntimeConfig)），而前端
-// saveRtCfg 只按 admin_ui 的 RT_GROUPS 拼 PUT body。新加的字段必须同步进 RT_GROUPS，
-// 否则它不在 body 里、每次点「保存并生效」都被解成零值冲掉（multi_turn 就这么被静默
-// 重置过，连 config.json 里设的都白设，见 #27）。
+// Required reading before adding a field: panel saves go through whole-
+// struct deserialization (Decode(&RuntimeConfig) in admin.go), while the
+// frontend saveRtCfg builds the PUT body only from admin_ui's RT_GROUPS. A
+// new field must be added to RT_GROUPS in sync, otherwise it won't be in
+// the body and every click of "save and apply" decodes it as a zero value
+// and wipes it (multi_turn was silently reset this way, even wiping what
+// was set in config.json, see #27).
 type RuntimeConfig struct {
 	RetryAttempts   int    `json:"retry_attempts"`
 	RetryDelaySec   int    `json:"retry_delay_sec"`
@@ -30,33 +38,54 @@ type RuntimeConfig struct {
 	LogRequests     bool   `json:"log_requests"`
 	Impersonate     string `json:"impersonate"`
 	GeminiBL        string `json:"gemini_bl"`
-	// ProxyCooldownMin 是代理连续失败熔断后隔多久放回池子，单位分钟。
-	// 0 = 不恢复（熔断即永久除名，要手动重置）。默认按实测的封禁恢复时长取 120。
+	// ProxyCooldownMin is how many minutes a circuit-broken proxy waits before
+	// going back into the pool.
+	// 0 = no recovery (circuit-broken = permanently removed, manual reset
+	// required). Default is 120, based on the measured ban-recovery duration.
 	ProxyCooldownMin int `json:"proxy_cooldown_min"`
-	// FallbackDirect 决定代理池一个出口都用不上时是退回直连还是直接 429。
-	// 默认 false：配了代理池就意味着不想暴露本机 IP，悄悄直连会把这个前提废掉。
+	// FallbackDirect decides whether, when no egress in the proxy pool can
+	// be used, we fall back to direct connection or return 429 outright.
+	// Default false: configuring a proxy pool implies not wanting to expose
+	// this machine's IP; silently going direct would nullify that premise.
 	FallbackDirect bool `json:"fallback_direct"`
-	// FallbackAnon 决定 cookie 失效时是降级成匿名继续跑还是直接报错。
-	// 默认 false：匿名档拿不到 3.1 Pro / 扩展思考 / 生图，降级了客户端也看不出来。
+	// FallbackAnon decides whether a stale cookie downgrades to anonymous
+	// and keeps going, or errors out directly.
+	// Default false: the anonymous tier gets no 3.1 Pro / extended thinking /
+	// image generation, and the client can't tell it was downgraded.
 	FallbackAnon bool `json:"fallback_anon"`
-	// GeminiBLAuto 决定是否定期从 /app 页面抓最新的 bl 版本号覆盖上面钉死的值。
+	// GeminiBLAuto decides whether to periodically fetch the latest bl
+	// version from the /app page to override the pinned value above.
 	GeminiBLAuto bool `json:"gemini_bl_auto"`
-	// MaxPromptBytes 是单次请求 prompt 的 UTF-8 字节上限，超了直接报错。
-	// 单位是字节不是 token：实测上游的墙按字节走，跟语言无关，见 messages.go。
-	// 0 = 关掉检查（原样发出，由上游从尾部静默截断）。
+	// MaxPromptBytes is the per-request UTF-8 byte cap on the prompt; over
+	// it, an error is returned directly.
+	// The unit is bytes, not tokens: measured in practice, the upstream's
+	// wall is byte-based and language-independent, see messages.go.
+	// 0 = disable the check (send as-is; the upstream silently truncates
+	// from the tail).
 	MaxPromptBytes int `json:"max_prompt_bytes"`
-	// MultiTurn 开启后走 Gemini 原生 conversation_id 服务端多轮：按历史前缀识别续接，
-	// 命中就只发最新一句、历史留服务端，绕开单请求字节墙。匿名/登录都行，见 conversation.go。
-	// 默认 false（保持现有"每轮拼全量 prompt"行为）。实测多轮不放大上下文窗口，只让长
-	// 对话不撞单请求墙——对 Codex 这类长会话有用，对"喂长文档"没用。
+	// MultiTurn enables Gemini's native conversation_id server-side
+	// multi-turn: continuations are recognized by history prefix, and on a
+	// hit only the latest message is sent while history stays server-side,
+	// bypassing the per-request byte wall. Works for both anonymous and
+	// logged-in, see conversation.go.
+	// Default false (keeps the current "assemble the full prompt every
+	// turn" behavior). Measured in practice, multi-turn does not enlarge
+	// the context window; it only keeps long conversations from hitting the
+	// per-request wall — useful for long sessions like Codex, useless for
+	// "feeding long documents".
 	MultiTurn bool `json:"multi_turn"`
-	// 出完结果自动删掉 gemini.google.com 上的这条会话（#19）。只登录态生效。默认 false。
+	// Automatically delete this conversation on gemini.google.com after the
+	// result is done (#19). Only effective when logged in. Default false.
 	AutoDeleteConversation bool `json:"auto_delete_conversation"`
-	// 匿名优先（#20）：不需要登录态能力的请求（纯文本、非思考、无工具、无图）走匿名、
-	// 不占 cookie 账号，省账号额度；需要登录才挑号。默认 false，见 modelNeedsLogin。
+	// Anonymous first (#20): requests not needing logged-in capabilities
+	// (plain text, non-thinking, no tools, no images) go anonymous and
+	// don't occupy a cookie account, saving account quota; accounts are
+	// picked only when login is needed. Default false, see modelNeedsLogin.
 	AnonFirst bool `json:"anon_first"`
-	// QuotaFallback：5h 用量额度耗尽时降级 3.5 Flash-Lite 继续答（带说明前缀），
-	// 关掉则回 429。见 quota.go。加字段必读文件头注释（#27：必须同步 RT_GROUPS）。
+	// QuotaFallback: when the 5h usage quota is exhausted, downgrade to
+	// 3.5 Flash-Lite and keep answering (with an explanatory prefix);
+	// when off, return 429 instead. See quota.go. Required reading before
+	// adding a field: the file-header comment (#27: must sync RT_GROUPS).
 	QuotaFallback bool `json:"quota_fallback"`
 }
 
@@ -67,8 +96,9 @@ var (
 	rtVal RuntimeConfig
 )
 
-// initRuntimeConfig 用启动配置做基线，再把面板改过的值盖上去。
-// 必须在 DB 打开之后调用。
+// initRuntimeConfig uses the startup configuration as the baseline, then
+// overlays the values changed in the panel.
+// Must be called after the DB is opened.
 func initRuntimeConfig() {
 	base := RuntimeConfig{
 		RetryAttempts:   cfg.RetryAttempts,
@@ -109,18 +139,20 @@ func initRuntimeConfig() {
 	rtMu.Unlock()
 }
 
-// rtCfg 返回当前运行时配置的快照。
+// rtCfg returns a snapshot of the current runtime configuration.
 func rtCfg() RuntimeConfig {
 	rtMu.RLock()
 	defer rtMu.RUnlock()
 	return rtVal
 }
 
-// validateRuntimeConfig 校验面板传来的值。
+// validateRuntimeConfig validates the values coming from the panel.
 //
-// 这些数字直接决定重试次数、超时和限流额度，是外部输入进敏感落点：
-// 0 或负数会让限流器永远拒绝或永远放行，超大值能把单个请求挂死几小时。
-// 上界给得比任何合理用法都宽，只挡明显离谱的输入。
+// These numbers directly determine retry counts, timeouts, and rate-limit
+// quotas — external input flowing into sensitive spots: a zero or negative
+// value makes the rate limiter reject forever or admit forever, and a huge
+// value can hang a single request for hours. The upper bounds are looser
+// than any reasonable use, only blocking obviously absurd input.
 func validateRuntimeConfig(c RuntimeConfig) error {
 	type rangeCheck struct {
 		name     string
@@ -154,7 +186,8 @@ func validateRuntimeConfig(c RuntimeConfig) error {
 	return nil
 }
 
-// saveRuntimeConfig 校验并持久化，成功后立刻生效。
+// saveRuntimeConfig validates and persists; takes effect immediately on
+// success.
 func saveRuntimeConfig(next RuntimeConfig) error {
 	if err := validateRuntimeConfig(next); err != nil {
 		return err

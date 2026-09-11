@@ -14,13 +14,16 @@ import (
 	fhttp "github.com/bogdanfinn/fhttp"
 )
 
-// Gemini 在带登录 cookie 时要求 batchexecute 请求多带一个表单字段 at（XSRF token），
-// 不带就直接 400，响应体形如 [["er",...,400,...,[{"48448350":["xsrf", ...]}]]]。
-// 匿名请求不需要它，所以这个坑一直没暴露——一挂上有效 cookie，所有请求立刻全挂。
+// When login cookies are present, Gemini requires batchexecute requests to carry an
+// extra form field "at" (the XSRF token); without it you get an immediate 400 with a
+// body like [["er",...,400,...,[{"48448350":["xsrf", ...]}]]].
+// Anonymous requests don't need it, which is why this pitfall stayed hidden — the
+// moment a valid cookie is attached, every request starts failing.
 //
-// token 来自 /app 页面 HTML 里的 "SNlM0e":"<token>:<毫秒时间戳>"，跟 cookie 会话
-// 绑定，所以按 cookie 分别缓存。实测同一 token 可以复用，过期后服务端还是回 xsrf
-// 错误，调用方拿到这个错要 invalidate 再取一次。
+// The token comes from "SNlM0e":"<token>:<millisecond timestamp>" in the /app page
+// HTML and is bound to the cookie session, so it is cached per cookie. Observed in
+// practice: the same token can be reused; once expired the server still returns the
+// xsrf error, and the caller must invalidate and fetch a fresh one on seeing it.
 var (
 	xsrfMu    sync.Mutex
 	xsrfCache = map[string]xsrfEntry{}
@@ -28,28 +31,28 @@ var (
 
 type xsrfEntry struct {
 	token   string
-	pushID  string // 上传文件用的 Push-ID 头
-	pctx    string // 上传文件用的 X-Client-Pctx 头
+	pushID  string // Push-ID header used for file uploads
+	pctx    string // X-Client-Pctx header used for file uploads
 	fetched time.Time
 }
 
-// 页面上的 token 没写明有效期，取个保守值定期重取。
+// The page doesn't state an expiry for the token, so re-fetch periodically with a conservative TTL.
 const xsrfTTL = 20 * time.Minute
 
 var snlm0eRe = regexp.MustCompile(`"SNlM0e":"([^"]{10,200})"`)
 
-// 上传要的两个页面参数，跟 XSRF token 同页取，省一次页面请求。
+// Two page parameters needed for uploads, extracted from the same page as the XSRF token to save one page request.
 var pushIDRe = regexp.MustCompile(`"qKIAYe":"([^"]{4,400})"`)
 
 var pctxRe = regexp.MustCompile(`"Ylro7b":"([^"]{4,400})"`)
 
-// cookieKey 用 cookie 的短摘要当缓存键，避免把整串凭证塞进 map key。
+// cookieKey uses a short digest of the cookie as cache key, avoiding the full credential string in a map key.
 func cookieKey(cookie string) string {
 	sum := sha1.Sum([]byte(cookie))
 	return hex.EncodeToString(sum[:8])
 }
 
-// invalidateXSRF 丢掉某个 cookie 的缓存 token，下次取会重新抓页面。
+// invalidateXSRF drops the cached token for a cookie; the next fetch re-fetches the page.
 func invalidateXSRF(cookie string) {
 	if cookie == "" {
 		return
@@ -59,8 +62,8 @@ func invalidateXSRF(cookie string) {
 	xsrfMu.Unlock()
 }
 
-// getXSRF 取该 cookie 对应的 XSRF token；命中缓存且没过期就直接返回。
-// cookie 为空（匿名）时返回空串——匿名请求不需要这个字段。
+// getXSRF returns the XSRF token for a cookie; a cache hit within TTL is returned directly.
+// An empty cookie (anonymous) yields an empty string — anonymous requests don't need this field.
 func getXSRF(cookie, proxyURL string) (string, error) {
 	if cookie == "" {
 		return "", nil
@@ -84,7 +87,7 @@ func getXSRF(cookie, proxyURL string) (string, error) {
 	return e.token, nil
 }
 
-// getUploadTokens 取上传要用的 Push-ID / X-Client-Pctx，跟 XSRF token 同一份缓存。
+// getUploadTokens returns the Push-ID / X-Client-Pctx needed for uploads, from the same cache as the XSRF token.
 func getUploadTokens(cookie, proxyURL string) (pushID, pctx string, err error) {
 	key := cookieKey(cookie)
 
@@ -105,10 +108,11 @@ func getUploadTokens(cookie, proxyURL string) (pushID, pctx string, err error) {
 	return e.pushID, e.pctx, nil
 }
 
-// fetchAppPage 抓 gemini.google.com/app 的 HTML。
-// 走跟主请求相同的出口：配了代理走 stdlib，没配走 tls-client，
-// 免得页面里取到的 token 和后续请求来自两个不同 IP。
-// cookie 传空串就是匿名抓（页面照样返回，只是没有登录态字段）。
+// fetchAppPage fetches the HTML of gemini.google.com/app.
+// It uses the same egress (proxy) as the main request: with a proxy configured it goes
+// through stdlib, without one through tls-client, so the token from the page and the
+// subsequent requests don't come from two different IPs.
+// An empty cookie means an anonymous fetch (the page still returns, just without logged-in fields).
 func fetchAppPage(cookie, proxyURL string) ([]byte, error) {
 	const pageURL = "https://gemini.google.com/u/1/app"
 	headers := map[string]string{
@@ -210,7 +214,7 @@ func fetchAppPage(cookie, proxyURL string) ([]byte, error) {
 	return body, nil
 }
 
-// fetchAppTokens 抓一次 /app 页面，把三个 token 一起抠出来。
+// fetchAppTokens fetches the /app page once and extracts all three tokens together.
 func fetchAppTokens(cookie, proxyURL string) (xsrfEntry, error) {
 	body, err := fetchAppPage(cookie, proxyURL)
 	if err != nil {
@@ -220,7 +224,7 @@ func fetchAppTokens(cookie, proxyURL string) (xsrfEntry, error) {
 	if m := snlm0eRe.FindSubmatch(body); m != nil {
 		e.token = string(m[1])
 	} else if cookie != "" {
-		// 带 cookie 却拿不到 token = cookie 已失效被当成匿名。匿名本就没这字段，不算错。
+		// a cookie present but no token = the cookie expired and we're being treated as anonymous. Anonymous never has this field, so that's not an error.
 		return xsrfEntry{}, fmt.Errorf("no SNlM0e in page (cookie expired or not signed in)")
 	}
 	if p := pushIDRe.FindSubmatch(body); p != nil {
@@ -232,8 +236,8 @@ func fetchAppTokens(cookie, proxyURL string) (xsrfEntry, error) {
 	return e, nil
 }
 
-// isXSRFError 判断上游 400 是不是 XSRF token 的问题。
-// 响应体形如：[["er",null,...,400,...,[{"48448350":["xsrf","<新token>",...]}]]]
+// isXSRFError checks whether an upstream 400 is an XSRF token problem.
+// Response body looks like: [["er",null,...,400,...,[{"48448350":["xsrf","<newtoken>",...]}]]]
 func isXSRFError(raw string) bool {
 	return strings.Contains(raw, `"xsrf"`)
 }

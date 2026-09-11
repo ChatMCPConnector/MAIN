@@ -16,42 +16,42 @@ type Config struct {
 	DefaultModel   string `json:"default_model"`
 	LogRequests    bool   `json:"log_requests"`
 	CookieFile     string `json:"cookie_file"`
-	Proxy          string `json:"proxy"` // 只用于启动时播种代理池，见 seedProxiesFromConfig
+	Proxy          string `json:"proxy"` // only used to seed the proxy pool at startup, see seedProxiesFromConfig
 	Impersonate    string `json:"impersonate"`
 	DBPath         string `json:"db_path"`
 	AdminToken     string `json:"admin_token"`
 	AdminEnabled   bool   `json:"admin_enabled"`
 	RetentionDays  int    `json:"retention_days"`
 
-	// Per-IP rate limit (一个 slot = 直连/或一个代理),0 表示不限。
-	// 默认值取实测区间 80-180 的下沿，详见 ratelimit.go 的说明。
-	PerIPConcurrent int `json:"per_ip_concurrent"` // 瞬时并发上限
-	PerIPRPM        int `json:"per_ip_rpm"`        // 每分钟请求上限
-	PerIPRPH        int `json:"per_ip_rph"`        // 每小时请求上限
+	// Per-IP rate limit (one slot = direct connection or one proxy); 0 means unlimited.
+	// Default takes the lower edge of the measured 80-180 range; see the notes in ratelimit.go.
+	PerIPConcurrent int `json:"per_ip_concurrent"` // instantaneous concurrency cap
+	PerIPRPM        int `json:"per_ip_rpm"`        // requests-per-minute cap
+	PerIPRPH        int `json:"per_ip_rph"`        // requests-per-hour cap
 
-	// 代理连续失败熔断后隔多久放回池子（分钟），0 = 不恢复。
+	// How long (minutes) a proxy is held out of the pool after consecutive-failure circuit breaking; 0 = never returns.
 	ProxyCooldownMin int `json:"proxy_cooldown_min"`
-	// 代理池无可用出口时是否退回直连。默认 false。
+	// Whether to fall back to a direct connection when the proxy pool has no available egress. Default false.
 	FallbackDirect bool `json:"fallback_direct"`
-	// cookie 失效时是否降级成匿名继续跑。默认 false。
+	// Whether to downgrade to anonymous and keep going when the cookie expires. Default false.
 	FallbackAnon bool `json:"fallback_anon"`
-	// 是否自动从 /app 页面抓最新 bl 版本号。默认 true。
+	// Whether to auto-fetch the latest bl version from the /app page. Default true.
 	GeminiBLAuto bool `json:"gemini_bl_auto"`
-	// 单次请求 prompt 的 UTF-8 字节上限，0 = 不限。
+	// Per-request UTF-8 byte cap on the prompt; 0 = unlimited.
 	MaxPromptBytes int `json:"max_prompt_bytes"`
-	// 是否走 Gemini 原生 conversation_id 服务端多轮。默认 true（2026-09-10 起）：
-	// 每请求新开一条会话不仅浪费上游配额，也丢掉同串对话的服务端上下文。
-	// 曾经的坑：默认 false + 面板里手改的 true 只存在 DB kv 里，换机器/新
-	// Codespace 就静默回退 —— 这个默认值就是当年丢失的修复，现在钉进代码。
+	// Whether to use Gemini's native conversation_id server-side multi-turn. Default true (since 2026-09-10):
+	// opening a new conversation per request wastes upstream quota and loses the server-side context of the same dialogue.
+	// Past pitfall: default false + a true manually set in the panel lived only in the DB kv, so on a new machine/Codespace
+	// it silently reverted — this default is that once-lost fix, now pinned into code.
 	MultiTurn bool `json:"multi_turn"`
-	// 出完结果是否自动删掉 gemini.google.com 上留下的这条会话（#19，rpc GzXR5e）。
-	// 只登录态生效（删除要 XSRF）；异步 best-effort，删失败只记日志不影响响应。默认 false。
+	// Whether to auto-delete the conversation left on gemini.google.com after the result is produced (#19, rpc GzXR5e).
+	// Login-only (deletion needs XSRF); async best-effort, a failed delete only logs and never affects the response. Default false.
 	AutoDeleteConversation bool `json:"auto_delete_conversation"`
-	// 匿名优先（#20）：这次请求不需要登录态能力（纯文本、非思考、无工具、无图）时
-	// 不占用 cookie 账号，走匿名省额度；需要登录才挑号。默认 false。见 modelNeedsLogin。
+	// Anonymous first (#20): when a request needs no logged-in capabilities (plain text, non-thinking, no tools, no images),
+	// it skips the cookie account and goes anonymous to save quota; an account is picked only when login is needed. Default false. See modelNeedsLogin.
 	AnonFirst bool `json:"anon_first"`
-	// 5h 用量额度耗尽时是否自动降级 3.5 Flash-Lite 继续答（带降级说明前缀），
-	// 关掉则直接回 429 usage_limit_reached。3.5 Flash-Lite 不受限、永远可用。默认 true。
+	// Whether to auto-downgrade to 3.5 Flash-Lite when the 5h usage quota is exhausted (with a downgrade notice prefix),
+	// otherwise a 429 usage_limit_reached is returned directly. 3.5 Flash-Lite is unmetered and always available. Default true.
 	QuotaFallback bool `json:"quota_fallback"`
 }
 
@@ -77,19 +77,19 @@ func defaultConfig() Config {
 		AdminToken:     "",
 		AdminEnabled:   true,
 		RetentionDays:  30,
-		// 单出口实测 80-180 次不等（连接策略和出口质量决定），静态 IP 上 188。
-		// RPH 取下沿 80 保守留量；按低速率跑的部署可以调高很多 ——
-		// 10 次/分钟连打 800 次、跨 110 分钟一次没被拦。
+		// Measured 80-180 per egress (depending on connection strategy and egress quality); 188 on a static IP.
+		// RPH takes the lower edge 80 as conservative headroom; low-rate deployments can raise it a lot —
+		// 10 requests/minute fired 800 times over 110 minutes without ever being blocked.
 		PerIPConcurrent: 5,
 		PerIPRPM:        30,
 		PerIPRPH:        80,
-		// 实测被拦的出口 106-121 分钟自动恢复，冷却取 120 分钟。
+		// Observed in practice: blocked egresses recover automatically after 106-121 minutes; the cooldown is 120 minutes.
 		ProxyCooldownMin: 120,
 		FallbackDirect:   false,
 		FallbackAnon:     false,
 		GeminiBLAuto:     true,
-		// 实测上游的墙在约 13 万 UTF-8 字节：129,950 字节中英文各 3/3 过，
-		// 135,990 字节各 1/3，141,920 字节各 1/3。取 128000 留一点余量。
+		// Measured in practice the upstream wall sits at ~130k UTF-8 bytes: 129,950 bytes passed 3/3 for both Chinese and English,
+		// 135,990 bytes 1/3 each, 141,920 bytes 1/3 each. 128000 leaves a little margin.
 		MaxPromptBytes:         128000,
 		MultiTurn:              true,
 		AutoDeleteConversation: false,

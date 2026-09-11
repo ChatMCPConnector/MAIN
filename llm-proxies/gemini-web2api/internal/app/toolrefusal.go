@@ -34,7 +34,7 @@ func (e *ToolRefusalError) Error() string {
 		truncateStr(e.Text, 120)
 }
 
-// refusalStarters：开头的自我否定句式。
+// refusalStarters: self-negating sentence patterns at the start.
 var refusalStarters = []string{
 	"i cannot", "i can't", "i can not",
 	"i do not have access", "i don't have access",
@@ -47,8 +47,9 @@ var refusalStarters = []string{
 	"i do not have a", "i don't have a",
 }
 
-// refusalCapability：拒的是工具/执行能力，而不是别的东西（拒绝违规内容
-// 的「I cannot help with…」不属于这里，那要透传给客户端）。
+// refusalCapability: the refusal targets tool/execution capability, not something else
+// ("I cannot help with…" refusals of disallowed content don't belong here; those get
+// passed through to the client).
 var refusalCapability = []string{
 	"tool", "function call", "function-call", "tool call",
 	"filesystem", "file system", "local file", "files on",
@@ -58,25 +59,27 @@ var refusalCapability = []string{
 	"system execution", "environment to",
 }
 
-// isToolRefusalText 判断一段回复文本是不是 3.6+ 的工具拒答。
+// isToolRefusalText decides whether a reply text is a 3.6+ tool refusal.
 //
-// 长度只看**开头句**：拒答的首句总是自我否定 + 能力声明（≤300 字节）。
-// 后面可能还挂着给用户的替代建议（“If you are running in a terminal, you
-// can…”）——那不影响拒答判定。整段长度上限仍留 2000：真做任务的回复
-// 首句不会是 “I cannot … filesystem/shell/execute”。
+// Length only looks at the **opening sentence**: a refusal's first sentence is always
+// self-negation + a capability statement (≤300 bytes). What follows may still hang a
+// fallback suggestion for the user ("If you are running in a terminal, you can…") —
+// that doesn't affect the refusal verdict. The overall length cap stays at 2000: a
+// reply that actually does the task never opens with "I cannot … filesystem/shell/execute".
 func isToolRefusalText(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" || len(t) > 8000 {
 		return false
 	}
 	low := strings.ToLower(t)
-	// 只排除**协议围栏**（```tool_call）：那意味着模型真的在尝试协议（解析
-	// 层问题，不是拒答）。其他围栏（实测 3.6+ 拒答常带 ```bash「自己动手」
-	// 附录！）不豁免 —— 首句的自我否定才是判据。
+	// only exclude the **protocol fence** (```tool_call): that means the model is genuinely
+	// attempting the protocol (a parsing-layer issue, not a refusal). Other fences (observed
+	// in practice: 3.6+ refusals often carry a ```bash "do it yourself" appendix!) get no
+	// exemption — the self-negating opening sentence is the criterion.
 	if strings.Contains(low, "```tool_call") {
 		return false
 	}
-	// 只检查首段/首句（前 300 字节）的否定开头 —— 拒答开头从不绕圈子。
+	// only check the first paragraph/sentence (first 300 bytes) for the negating opener — refusals never beat around the bush.
 	head := low
 	if len(head) > 300 {
 		head = head[:300]

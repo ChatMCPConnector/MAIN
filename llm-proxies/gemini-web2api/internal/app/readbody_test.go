@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// readBody 的完结标记检测：经典 [["e",… 帧、新 [{"37":[0]}] 尾帧。
+// readBody's end-marker detection: the classic [["e",… frame and the new [{"37":[0]}] tail frame.
 func TestIsStreamEndLine(t *testing.T) {
 	cases := []struct {
 		line string
@@ -28,8 +28,9 @@ func TestIsStreamEndLine(t *testing.T) {
 	}
 }
 
-// 半开连接场景：内容帧 + 完结尾帧之后没有 EOF —— readBody 必须在
-// grace 之后主动收工并返回已读内容（不报错）。
+// Half-open connection scenario: after content frames + end tail frame there's no
+// EOF — readBody must actively wrap up after the grace period and return what it
+// read (without error).
 func TestReadBodyHalfOpenTerminates(t *testing.T) {
 	r := strings.NewReader(")]}'\n\n123\n" +
 		`[["wrb.fr",null,"[null,[\"c_x\",\"r_y\"],null,null,[[\"rc_z\",[\"Hello!\"]]]]"]]` + "\n" +
@@ -49,7 +50,7 @@ func TestReadBodyHalfOpenTerminates(t *testing.T) {
 	}
 }
 
-// 内容帧 ohne End-Marker + sofortiges EOF: normales Verhalten bleibt.
+// Content frames without an end marker + immediate EOF: normal behavior is kept.
 func TestReadBodyNormalEOF(t *testing.T) {
 	r := strings.NewReader("line1\nline2\n")
 	raw, ttfb, err := readBody(r, nil, time.Now())

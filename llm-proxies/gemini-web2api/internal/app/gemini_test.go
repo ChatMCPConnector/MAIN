@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// 确认每个模型名解析出的 hex id 和 header 值正确。
+// Verify that each model name resolves to the correct hex id and header value.
 func TestModelHeader(t *testing.T) {
-	withPoolCookie(t) // 让 3.1 Pro 可选，见 TestProHiddenWithoutCookie
+	withPoolCookie(t) // make 3.1 Pro selectable, see TestProHiddenWithoutCookie
 
 	cases := []struct{ name, wantHex string }{
 		{"gemini-3.6-flash", hexFlash36},
@@ -33,24 +33,24 @@ func TestModelHeader(t *testing.T) {
 		t.Logf("%-32s -> mode=%d header=%s", name, mc.Mode, got)
 	}
 
-	// @think=N 是历史遗留的假参数，剥掉后忽略，不报错也不改变路由
+	// @think=N is a legacy fake parameter: strip it and ignore, no error and no routing change
 	name, mc, err := resolveModel("gemini-3.6-flash@think=2")
 	if err != nil || name != "gemini-3.6-flash" || mc.HexID != hexFlash36 {
 		t.Errorf("@think 后缀应被忽略, got name=%s hex=%s err=%v", name, mc.HexID, err)
 	}
-	// 未知模型仍然报错，不静默回落
+	// unknown models must still error, no silent fallback
 	if _, _, err := resolveModel("no-such-model"); err == nil {
 		t.Error("unknown model should error")
 	}
-	// 已移除的旧别名必须明确报错，不能悄悄回落到 3.6 Flash
+	// removed legacy aliases must explicitly error, not silently fall back to 3.6 Flash
 	for _, gone := range []string{"gemini-3.5-flash", "gemini-3.5-flash-thinking",
 		"gemini-3.5-flash-thinking-lite", "gemini-auto", "gemini-flash-lite"} {
 		if _, _, err := resolveModel(gone); err == nil {
 			t.Errorf("已移除的别名 %s 应该报错", gone)
 		}
 	}
-	// 守的是「不许冒出假模型」：thinking 版复用同样的 hex，所以看**去重后的 hex 数**，
-	// 不是条目数。服务端清单（otAQ7b）里 3.6/3.5-lite/3.1-pro + 灰度放出的 3.7 = 4 个。
+	// the invariant guarded here is "no fake models may appear": thinking versions reuse
+	// the same hex, so count **deduplicated hexes**, not entries. The server list (otAQ7b)
 	hexes := map[string]bool{}
 	for _, m := range Models {
 		hexes[m.HexID] = true
@@ -58,7 +58,7 @@ func TestModelHeader(t *testing.T) {
 	if len(hexes) != 4 {
 		t.Errorf("只应存在 4 个真模型 hex, got %d", len(hexes))
 	}
-	// 反过来：每个真 hex 都应该有一个 thinking 版
+	// and conversely: every real hex should have a thinking version
 	for _, base := range []string{hexFlash36, hexFlashLite, hexPro31, hexFlash38} {
 		found := false
 		for _, m := range Models {
@@ -72,15 +72,15 @@ func TestModelHeader(t *testing.T) {
 	}
 }
 
-// 抓包里真实的"被拒绝"响应：只有结束帧，没有内容帧（216 字节）。
-// 注意结束帧里带 BardErrorInfo[1096]，但正常响应的结束帧同样带这个码，
-// 所以判据只能是"有没有内容帧"。
+// A real "rejected" response from a packet capture: only an end frame, no content
+// frame (216 bytes). Note the end frame carries BardErrorInfo[1096], but end frames
+// present or not".
 const rejectedRaw = ")]}'\n\n122\n" +
 	`[["wrb.fr",null,null,null,null,[13,null,[["type.googleapis.com/assistant.boq.bard.application.BardErrorInfo",[1096]]]]]]` +
 	"\n56\n" + `[["di",192],["af.httprm",191,"8196459853603899163",2]]` +
 	"\n25\n" + `[["e",4,null,null,216]]` + "\n"
 
-// 正常响应：有内容帧，[39] 是模型 hex id、[42] 是显示名，结束帧同样带 1096。
+// A normal response: content frame present, [39] is the model hex id, [42] the
 const okRaw = ")]}'\n\n900\n" +
 	`[["wrb.fr",null,"[null,[\"c_x\",\"r_y\"],null,null,[[\"rc_z\",[\"banana\"],null,null,null,null,null,null,[2],\"en\"]],null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,\"fbb127bbb056c959\",null,null,\"3.6 Flash\",true]"]]` +
 	"\n122\n" +
@@ -95,10 +95,10 @@ func TestEmptyFrameDetection(t *testing.T) {
 	}
 }
 
-// usage 必须跟 requests 表口径一致（都走 tiktoken），不能退回 chars/4。
+// usage must match the requests table's accounting (both use tiktoken), never
 func TestUsageUsesTokenizer(t *testing.T) {
 	initTokenizer()
-	// 取一段 tiktoken 与 chars/4 结果明显不同的样本，否则断言区分不出新旧实现。
+	// pick a sample where tiktoken and chars/4 clearly differ, otherwise the
 	prompt := "请详细解释注意力机制的计算过程，并说明多头注意力为什么有效。"
 	text := "自注意力通过查询、键、值三组投影计算token之间的相关性权重。"
 
@@ -151,16 +151,16 @@ func TestToolChoice(t *testing.T) {
 	}
 	msgs := []map[string]interface{}{{"role": "user", "content": "hi"}}
 
-	// none：工具定义完全不进 prompt
+	// none: tool definitions never enter the prompt at all
 	if p := mustPrompt(t, msgs, tools, "none"); strings.Contains(p, "get_weather") {
 		t.Errorf("tool_choice=none 不该注入工具定义: %s", p)
 	}
-	// required：必须出现强制措辞
+	// required: the forcing wording must appear
 	p := mustPrompt(t, msgs, tools, "required")
 	if !strings.Contains(p, "MUST call one of the tools") {
 		t.Errorf("tool_choice=required 缺强制指令: %s", p)
 	}
-	// 指定函数：只留该函数，且点名它
+	// named function: keep only that function and call it out by name
 	p = mustPrompt(t, msgs, tools, map[string]interface{}{"type": "function",
 		"function": map[string]interface{}{"name": "get_weather"}})
 	if !strings.Contains(p, `MUST call the tool "get_weather"`) {
@@ -169,15 +169,15 @@ func TestToolChoice(t *testing.T) {
 	if strings.Contains(p, "send_email") {
 		t.Errorf("指定函数时不该带上其它工具: %s", p)
 	}
-	// auto：保持原来的宽松措辞
+	// auto: keep the original permissive wording
 	if p := mustPrompt(t, msgs, tools, "auto"); !strings.Contains(p, "when needed") {
 		t.Errorf("auto 应保持宽松措辞: %s", p)
 	}
 }
 
-// 流式的核心不变量：所有增量拼起来必须精确等于最终文本，既不能丢也不能重复。
+// Core streaming invariant: all deltas concatenated must equal the final text
 func TestDeltaTrackerAccumulates(t *testing.T) {
-	// 上游每帧是累积全文，逐帧变长
+	// the upstream sends the accumulated full text per frame, growing frame by frame
 	frames := []string{
 		"Transformer",
 		"Transformer 的核心",
@@ -197,15 +197,15 @@ func TestDeltaTrackerAccumulates(t *testing.T) {
 		t.Errorf("emitted=%q want %q", d.emitted, want)
 	}
 
-	// 重复帧不得再次发出
+		// a repeated frame must not be emitted again
 	if extra := d.Push(frames[len(frames)-1]); extra != "" {
 		t.Errorf("重复帧不该产生增量, got %q", extra)
 	}
-	// 变短的帧（乱序到达）也不发
+		// a shorter frame (out-of-order arrival) isn't emitted either
 	if extra := d.Push("Transformer"); extra != "" {
 		t.Errorf("更短的帧不该产生增量, got %q", extra)
 	}
-	// 前缀对不上时跳过，emitted 保持不变
+		// when the prefix doesn't match, skip; emitted stays unchanged
 	before := d.emitted
 	if extra := d.Push("完全不同的一段文本，比原来的还要长很多很多很多很多"); extra != "" {
 		t.Errorf("非前缀帧不该产生增量, got %q", extra)
@@ -214,48 +214,48 @@ func TestDeltaTrackerAccumulates(t *testing.T) {
 		t.Errorf("非前缀帧不该改动 emitted")
 	}
 
-	// remainingText 负责补齐 tracker 跳过的尾巴
+	// remainingText fills in the tail the tracker skipped
 	full := want + "补充的尾巴"
 	if r := remainingText(full, &StreamResult{Emitted: d.emitted}); r != "补充的尾巴" {
 		t.Errorf("remainingText=%q want %q", r, "补充的尾巴")
 	}
-	// 非真流式（Emitted 为空）时应返回全文
+	// non-true-streaming (empty Emitted) should return the full text
 	if r := remainingText(full, &StreamResult{}); r != full {
 		t.Errorf("Emitted 为空时应返回全文")
 	}
-	// 前缀对不上时不补发，避免重复
+	// when the prefix doesn't match, don't re-send, to avoid duplication
 	if r := remainingText("另一段内容", &StreamResult{Emitted: d.emitted}); r != "" {
 		t.Errorf("前缀对不上时不该补发, got %q", r)
 	}
 }
 
-// 服务端会静默降级（匿名请求 3.1 Pro 实际给 3.5 Flash-Lite），只看请求名发现
-// 不了，所以要从响应帧里把它自报的模型名取出来单独记录。
+// The server silently downgrades (an anonymous 3.1 Pro request actually returns
+// 3.5 Flash-Lite); that's undetectable from the request name alone, so the
 func TestExtractUpstreamModel(t *testing.T) {
 	if got := extractUpstreamModel(okRaw); got != "3.6 Flash" {
 		t.Errorf("正常响应应取到 '3.6 Flash', got %q", got)
 	}
-	// 带"扩展"后缀的模型名也要能取全，不能在空格处截断
+	// model names with an "扩展" (extended) suffix must be extracted whole, not truncated at the space
 	downgraded := `[["wrb.fr",null,"[null,[\"c_x\",\"r_y\"],null,null,[[\"rc_z\",[\"hi\"]]],null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,\"fbb127bbb056c959\",null,null,\"3.6 Flash 扩展\",true]"]]`
 	if got := extractUpstreamModel(downgraded); got != "3.6 Flash 扩展" {
 		t.Errorf("应取到 '3.6 Flash 扩展', got %q", got)
 	}
-	// 被拒的响应没有模型名，不能瞎猜
+	// rejected responses carry no model name; no guessing allowed
 	if got := extractUpstreamModel(rejectedRaw); got != "" {
 		t.Errorf("被拒响应应返回空, got %q", got)
 	}
 }
 
-// 没配 cookie 时 3.1 Pro 必然被静默降级成 Flash-Lite，不如干脆不暴露：
-// 让客户端在选型时就拿到明确错误，而不是拿到一个"成功但其实不是 Pro"的回复。
-// （配了有效 cookie 时它是真能用的，见 availableModels 注释。）
+// Without a cookie configured, 3.1 Pro is invariably silently downgraded to
+// Flash-Lite, so we'd rather not expose it at all: the client gets a clear error
+// (With a valid cookie it genuinely works, see the availableModels comment.)
 func TestProHiddenWithoutCookie(t *testing.T) {
-	// cookie 池此时是空的（TestMain 给的是全新临时库）
+	// the cookie pool is empty at this point (TestMain provides a fresh temp DB)
 	if _, ok := availableModels()["gemini-3.1-pro"]; ok {
 		t.Error("无 cookie 时不该暴露 3.1 Pro")
 	}
-	// inner[80]（扩展思考）只在登录态生效，匿名带上服务端静默忽略，
-	// 所以 thinking 版跟 3.1 Pro 一样不能暴露
+	// inner[80] (extended thinking) only takes effect when logged in; sent
+	// anonymously the server silently ignores it, so thinking versions can't be
 	for name, m := range availableModels() {
 		if m.Thinking {
 			t.Errorf("无 cookie 时不该暴露 thinking 版: %s", name)
@@ -268,7 +268,7 @@ func TestProHiddenWithoutCookie(t *testing.T) {
 	if err == nil {
 		t.Fatal("无 cookie 时选 3.1 Pro 应该报错")
 	}
-	// 错误信息要说清为什么、以及怎么办，不能只是 unknown model
+	// the error message must explain why and what to do, not just "unknown model"
 	if !strings.Contains(err.Error(), "cookie") ||
 		!strings.Contains(err.Error(), "downgraded") ||
 		!strings.Contains(err.Error(), "admin panel") {
@@ -288,15 +288,15 @@ func TestProHiddenWithoutCookie(t *testing.T) {
 			t.Errorf("配了 cookie 时应暴露 %s", n)
 		}
 	}
-	// 真正不存在的模型仍然是 unknown model，不能被 cookie 提示盖掉
+	// a model that truly doesn't exist is still "unknown model"; the cookie hint must not mask it
 	if _, _, err := resolveModel("no-such-model"); err == nil ||
 		!strings.Contains(err.Error(), "unknown model") {
 		t.Errorf("未知模型应报 unknown model, got %v", err)
 	}
 }
 
-// modelNeedsLogin 是「没 cookie 时排除哪些模型」和「#20 匿名优先要不要占号」
-// 共用的单一判据，逐个模型钉死：纯文本非思考的 3.6/3.5-lite 匿名可用，其余全需登录。
+// modelNeedsLogin is the single shared criterion for "which models to exclude
+// without a cookie" and "whether anon-first (#20) should occupy an account",
 func TestModelNeedsLogin(t *testing.T) {
 	anon := map[string]bool{"gemini-3.6-flash": true, "gemini-3.5-flash-lite": true}
 	for name, mc := range Models {
@@ -305,7 +305,7 @@ func TestModelNeedsLogin(t *testing.T) {
 			t.Errorf("%s: modelNeedsLogin=%v want %v", name, got, want)
 		}
 	}
-	// 跟 availableModels 的排除口径必须一致：无 cookie 时暴露的正好是匿名可用那批
+	// must match availableModels' exclusion criteria: what's exposed without a cookie
 	for name := range availableModels() {
 		if modelNeedsLogin(Models[name]) {
 			t.Errorf("%s 被 availableModels 暴露却判为需登录，两处判据不一致", name)
@@ -313,8 +313,8 @@ func TestModelNeedsLogin(t *testing.T) {
 	}
 }
 
-// cookieAcctView 的 health 派生（#18 面板标红）：fail_count>0 一律红（含被自动停用的死号），
-// 手动停用且无失败=灰，没成功过=待检测，其余=正常。
+// health derivation for cookieAcctView (#18 panel red marking): fail_count>0 is
+// always red (including dead accounts auto-disabled), manually disabled with no
 func TestCookieHealthView(t *testing.T) {
 	cases := []struct {
 		a    CookieAccount
@@ -334,9 +334,9 @@ func TestCookieHealthView(t *testing.T) {
 	}
 }
 
-// pickCookieAccount 的 SELECT+UPDATE 必须原子：N 个号被 N 个并发请求挑，
-// 每个都该拿到不同的号。没加锁时两个请求会 SELECT 到同一个"最久未用"的号、
-// 双双用它（跑 -race 更容易暴露）。
+// pickCookieAccount's SELECT+UPDATE must be atomic: N accounts picked by N
+// concurrent requests, each must get a distinct account. Without locking, two
+// (running with -race exposes this more easily.)
 func TestPickCookieConcurrentDistinct(t *testing.T) {
 	const n = 8
 	for i := 0; i < n; i++ {
@@ -360,7 +360,7 @@ func TestPickCookieConcurrentDistinct(t *testing.T) {
 			}
 		}(i)
 	}
-	close(start) // 让所有 goroutine 尽量同时冲挑号
+		close(start) // make all goroutines rush the pick simultaneously
 	wg.Wait()
 
 	seen := map[int64]int{}
@@ -374,8 +374,8 @@ func TestPickCookieConcurrentDistinct(t *testing.T) {
 	}
 }
 
-// 匿名优先（#20）的挑号判据：开关关时恒 false（保持旧行为）；开时只有纯文本、
-// 非思考、无工具、不带附件的请求才走匿名，其余一律挑号。
+// Account-picking criterion for anon-first (#20): with the switch off, always
+// false (legacy behavior); with it on, only plain-text, non-thinking, toolless,
 func TestAnonFirstEligible(t *testing.T) {
 	set := func(on bool) { rtMu.Lock(); rtVal.AnonFirst = on; rtMu.Unlock() }
 	defer set(false)
@@ -408,8 +408,8 @@ func TestAnonFirstEligible(t *testing.T) {
 	}
 }
 
-// 错误分类要按"看到之后该做什么"分，尤其得把"上游瞬时拒绝"和"出口被封"
-// 分开——前者重试即可，后者必须换 IP，混在一起排查时判断不了。
+// Error classification must follow "what to do upon seeing it", especially
+// separating "transient upstream rejection" from "egress blocked" — the former
 func TestClassifyError(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"", ""},
@@ -430,7 +430,7 @@ func TestClassifyError(t *testing.T) {
 	}
 }
 
-// mustPrompt 是测试里的便捷包装：messagesToPrompt 现在会在 prompt 超长时返回错误。
+// mustPrompt is a test convenience wrapper: messagesToPrompt now returns an error
 func mustPrompt(t *testing.T, msgs []map[string]interface{}, tools []map[string]interface{},
 	toolChoice interface{}) string {
 	t.Helper()

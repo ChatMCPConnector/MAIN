@@ -11,14 +11,17 @@ import (
 	fhttp "github.com/bogdanfinn/fhttp"
 )
 
-// 两步 resumable，对齐浏览器抓包。也存在单次 multipart 打 content-push.googleapis.com
-// 那条路（同样能传成功），选两步只为跟浏览器一致。
+// Two-step resumable upload, matching the browser packet capture. A single-shot
+// multipart POST to content-push.googleapis.com also exists (it works too); the
+// two-step flow was chosen only to mirror the browser.
 const uploadHost = "https://push.clients6.google.com/upload/"
 
-// uploadBytes 上传字节，返回引用路径（形如 /contrib_service/ttl_1d/…）。上传不带 mime。
+// uploadBytes uploads bytes and returns the reference path (like /contrib_service/ttl_1d/…). No mime on upload.
 //
-// 匿名也能传成功，但传上去的文件在对话里引用会被回 1100，所以调用方要自己确保有 cookie。
-// proxyURL 必须跟正式请求同一出口，否则在 Google 眼里是两个会话共用文件。
+// Anonymous uploads succeed too, but referencing the uploaded file in a conversation
+// returns 1100, so callers must ensure a cookie is present.
+// proxyURL must use the same egress as the main request, otherwise Google sees two
+// sessions sharing one file.
 func uploadBytes(cookie, proxyURL string, data []byte, filename string) (string, error) {
 	pushID, pctx, err := getUploadTokens(cookie, proxyURL)
 	if err != nil {
@@ -55,8 +58,8 @@ func uploadBytes(cookie, proxyURL string, data []byte, filename string) (string,
 		return h
 	}
 
-	// start 拿一次性上传 URL。body 是纯文本 "File name: xxx"——尽管 Content-Type
-	// 写的是 urlencoded，别按它去猜 body 形态。
+	// start fetches a one-time upload URL. The body is plain text "File name: xxx" —
+	// even though Content-Type says urlencoded, don't infer the body shape from it.
 	startHeaders := with(map[string]string{
 		"Content-Type":                        "application/x-www-form-urlencoded;charset=UTF-8",
 		"X-Goog-Upload-Command":               "start",
@@ -76,7 +79,7 @@ func uploadBytes(cookie, proxyURL string, data []byte, filename string) (string,
 		return "", fmt.Errorf("上传 start 没返回 x-goog-upload-url")
 	}
 
-	// 发字节并 finalize
+	// send the bytes and finalize
 	upHeaders := with(map[string]string{
 		"Content-Type":          "application/x-www-form-urlencoded;charset=utf-8",
 		"X-Goog-Upload-Command": "upload, finalize",
@@ -89,8 +92,9 @@ func uploadBytes(cookie, proxyURL string, data []byte, filename string) (string,
 	if status != 200 {
 		return "", fmt.Errorf("上传 finalize 返回 HTTP %d: %s", status, truncate(string(body), 160))
 	}
-	// 响应体就是引用路径。不以 "/" 开头说明拿到的是错误页，填进 payload 服务端
-	// 未必报错，但模型看到的附件是空的。
+	// The response body is the reference path. If it doesn't start with "/", we got an
+	// error page; putting it into the payload may not fail server-side, but the model
+	// sees an empty attachment.
 	ref := strings.TrimSpace(string(body))
 	if !strings.HasPrefix(ref, "/") {
 		return "", fmt.Errorf("上传返回的不是引用路径: %s", truncate(ref, 160))
@@ -98,7 +102,7 @@ func uploadBytes(cookie, proxyURL string, data []byte, filename string) (string,
 	return ref, nil
 }
 
-// sanitizeUploadName 去掉会破坏请求体的字符——文件名原样进 start 的 body。
+// sanitizeUploadName strips characters that would break the request body — the filename goes verbatim into the start body.
 func sanitizeUploadName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -107,7 +111,7 @@ func sanitizeUploadName(name string) string {
 	return strings.NewReplacer("\r", "", "\n", "").Replace(name)
 }
 
-// uploadPost 走跟主请求相同的出口发 POST，响应头一起带回（start 要取 x-goog-upload-url）。
+// uploadPost POSTs through the same egress as the main request and returns the response headers too (start needs x-goog-upload-url).
 func uploadPost(url string, headers map[string]string, body []byte, proxyURL string) (
 	int, map[string]string, []byte, error) {
 	if proxyURL != "" {

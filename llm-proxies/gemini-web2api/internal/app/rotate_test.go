@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// 哨兵必须是这串 JSPB，不能走 json.Marshal：后者会把 000 收成 0，服务端不认。
+// The sentinel must be this exact JSPB string, not json.Marshal output: the latter collapses 000 to 0, which the server rejects.
 func TestRotate1PSIDTSBodyIsJSPBSentinel(t *testing.T) {
 	const want = `[000,"-0000000000000000000"]`
 	if rotate1PSIDTSBody != want {

@@ -5,20 +5,22 @@ import (
 	"strings"
 )
 
-// Source 是一条联网搜索引用的来源。
+// Source is one cited source from a web search.
 type Source struct {
 	URL     string `json:"url"`
 	Title   string `json:"title,omitempty"`
 	Snippet string `json:"snippet,omitempty"`
 }
 
-// extractGrounding 从 StreamGenerate 原始响应里抠出联网搜索的来源。
+// extractGrounding pulls the web-search sources out of the raw StreamGenerate response.
 //
-// 位置：帧的 inner[4][0][2][1] 是一组 grounding chunk，每个 chunk 的 [2] 是来源列表，
-// 每条来源形如 [url, title, favicon, snippet]。逐字取自抓包，跟 textsInLine 走同一条
-// wrb.fr → inner 的解析路径。没有联网搜索时该结构不存在，返回 nil。
+// Location: a frame's inner[4][0][2][1] is a set of grounding chunks; each chunk's [2]
+// is the source list, and each source looks like [url, title, favicon, snippet]. Taken
+// verbatim from packet captures, using the same wrb.fr → inner parsing path as
+// textsInLine. Without web search this structure doesn't exist and nil is returned.
 //
-// URL 常带 `#:~:text=` 文字片段锚（Google 搜索的"滚动到指定文字"），展示时截掉更干净。
+// URLs often carry a `#:~:text=` text-fragment anchor (Google search's "scroll to the
+// specified text"); stripping it makes display cleaner.
 func extractGrounding(raw string) []Source {
 	var out []Source
 	seen := map[string]bool{}
@@ -75,7 +77,7 @@ func extractGrounding(raw string) []Source {
 	return out
 }
 
-// groundingChunks 取 inner[4][0][2][1]，任何一层缺失都返回 nil。
+// groundingChunks returns inner[4][0][2][1]; nil if any level is missing.
 func groundingChunks(inner []interface{}) []interface{} {
 	f4, ok := inner[4].([]interface{})
 	if !ok || len(f4) == 0 {
@@ -96,7 +98,7 @@ func groundingChunks(inner []interface{}) []interface{} {
 	return chunks
 }
 
-// stripTextFragment 去掉 URL 尾部的 `#:~:text=...` 片段锚。
+// stripTextFragment removes a trailing `#:~:text=...` fragment anchor from a URL.
 func stripTextFragment(u string) string {
 	if i := strings.Index(u, "#:~:text="); i >= 0 {
 		return u[:i]

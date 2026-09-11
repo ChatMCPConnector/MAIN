@@ -83,21 +83,25 @@ func getTLSClient() tls_client.HttpClient {
 
 // ─── Stdlib HTTP client for proxied requests ─────────────────────────────────
 //
-// 走代理时改用 stdlib 而不是 tls-client，因为：
-// 1. stdlib 的 http.ProxyURL 原生支持 socks5:// / socks5h:// / http:// / https://，
-//    已知能过我们手头的代理。
-// 2. tls-client 自带的 SOCKS 实现在某些代理端会 EOF（已实测）。
+// When going through a proxy we switch to stdlib instead of tls-client, because:
+// 1. stdlib's http.ProxyURL natively supports socks5:// / socks5h:// / http:// / https://,
+//    known to work with the proxies we have on hand.
+// 2. tls-client's built-in SOCKS implementation hits EOF on some proxy endpoints (observed in practice).
 //
-// 代价要写清楚：走代理时 Google 看到的是**我们自己的 TLS 指纹**，即 Go 标准库的，
-// 不是 Chrome 146 的。HTTP CONNECT 只建隧道，TLS 是我们跟目标端到端握的。
-// JA3 回显实测：stdlib 直连和过代理是同一个 JA3（03117a8e…），而同一个代理下换成
-// tls-client 就变成另一个（2d25c563…）——两条判据都说明代理不介入 TLS。
+// The trade-off, stated plainly: through a proxy Google sees **our own TLS fingerprint**,
+// i.e. the Go standard library's, not Chrome 146's. HTTP CONNECT only builds the tunnel;
+// TLS is negotiated end-to-end between us and the target.
+// JA3 echo, measured: stdlib direct and stdlib through the proxy show the same JA3
+// (03117a8e…), while swapping to tls-client on the same proxy yields a different one
+// (2d25c563…) — both criteria confirm the proxy doesn't touch TLS.
 //
-// 但这不构成换回 tls-client 的理由：同时起跑的对照里 tls-client Chrome_146 打到
-// 111 次被拦、Go stdlib 103 次，差 8 次；而同配置换个出口的方差能到 36%
-// （151 vs 111）。指纹差异真实存在，对封禁阈值没有可观测影响。
+// But this is no reason to switch back to tls-client: in a simultaneous head-to-head,
+// tls-client Chrome_146 got blocked at 111 requests vs Go stdlib at 103 — a gap of 8;
+// meanwhile the same config on a different egress varies by up to 36% (151 vs 111).
+// The fingerprint difference is real but has no observable impact on the blocking threshold.
 //
-// 不走代理时仍然用 getTLSClient（保留 utls/chrome146 真指纹优势）。
+// Without a proxy we still use getTLSClient (keeping the genuine utls/chrome146
+// fingerprint advantage).
 
 var (
 	stdlibClientCache sync.Map // proxyURL -> *http.Client
@@ -114,7 +118,7 @@ func getStdlibClient(proxyURL string) *http.Client {
 		MaxIdleConnsPerHost: 20,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  false,
-		// 走代理时不强求 HTTP/2，部分代理不支持。
+		// don't insist on HTTP/2 through a proxy; some proxies don't support it.
 		ForceAttemptHTTP2: false,
 	}
 	if u, err := url.Parse(proxyURL); err == nil {
@@ -123,7 +127,7 @@ func getStdlibClient(proxyURL string) *http.Client {
 	c := &http.Client{
 		Timeout:   time.Duration(rtCfg().RequestTimeout) * time.Second,
 		Transport: t,
-		// 跟 tls-client 一致：不自动跟随重定向（302 是诊断信号）
+		// same as tls-client: don't follow redirects automatically (302 is a diagnostic signal)
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -133,14 +137,17 @@ func getStdlibClient(proxyURL string) *http.Client {
 }
 
 // loadCookie reads the cookie file (Netscape one-line format or JSON).
-// loadCookie 返回 (cookie 串, SAPISID)。只有旁路探测在用 —— 正式请求那条路
-// 在 streamGenerate 里自己挑号，因为它还要挨个换号和绑定出口。
+// loadCookie returns (cookie string, SAPISID). Only the bypass probe uses it — the
+// main request path picks its own account inside streamGenerate, because it also
+// needs to rotate accounts one by one and bind an egress.
 //
-// cookie 只有 cookie 池一个来源：挑一个 enabled 账号（最久未用优先，自动轮转
-// 分散单 IP 上限）。池空 = 匿名。原来那条「池空回落单 cookie」的路径已经取消，
-// 它的值在启动时被 seedCookiesFromConfig 并进池子了。
+// Cookies come from exactly one source: the cookie pool. Pick an enabled account
+// (least recently used first, auto-rotation spreads the per-IP cap). Empty pool =
+// anonymous. The old "empty pool falls back to a single cookie" path has been
+// removed; its value is merged into the pool at startup by seedCookiesFromConfig.
 //
-// 第三个返回值是池里那条记录的 ID，请求结束后拿它调 markCookieByStatus 回写健康度。
+// The third return value is the pool record's ID, used after the request finishes
+// to call markCookieByStatus and write back health.
 func loadCookie() (cookie, sapisid string) {
 	if a, ok := pickCookieAccount(); ok {
 		return a.Cookie, extractSAPISID(a.Cookie)
@@ -154,11 +161,11 @@ func makeSAPISIDHash(sapisid string) string {
 	return fmt.Sprintf("SAPISIDHASH %d_%s", ts, hex.EncodeToString(h[:]))
 }
 
-// ChromeUA 是给 stdlib 走代理时用的 Chrome 146 真实 UA 模板。
+// ChromeUA is the genuine Chrome 146 UA template used for stdlib requests through a proxy.
 const ChromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 
-// applyChromeHeaders 给 stdlib 请求填上模拟 Chrome 146 的应用层 header。
-// utls 那层做 TLS/HTTP2 指纹我们做不到（走代理），但 header 一定要齐。
+// applyChromeHeaders fills stdlib requests with the application-layer headers of a simulated Chrome 146.
+// The utls layer's TLS/HTTP2 fingerprinting isn't achievable through a proxy, but the headers must be complete.
 func applyChromeHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", ChromeUA)
 	req.Header.Set("Sec-CH-UA", `"Chromium";v="146", "Google Chrome";v="146", "Not?A_Brand";v="24"`)

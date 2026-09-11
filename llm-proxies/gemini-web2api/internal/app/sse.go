@@ -6,11 +6,12 @@ import (
 	"net/http"
 )
 
-// sseWriter 把 chat.completion.chunk 按 OpenAI 规范的顺序写出去：
-// 先 delta{role} → 若干 delta{content} → delta{} + finish_reason → 可选 usage → [DONE]。
+// sseWriter writes chat.completion.chunk in OpenAI-spec order:
+// first delta{role} → several delta{content} → delta{} + finish_reason → optional usage → [DONE].
 //
-// header 是懒发的：第一次真要写 chunk 时才 WriteHeader(200)。这样上游在出第一个
-// 字之前就失败的话，还能退回正常的 502 JSON，而不是留给客户端半个流。
+// Headers are sent lazily: WriteHeader(200) happens only when the first chunk is
+// actually written. This way, if the upstream fails before the first byte, we can
+// still fall back to a normal 502 JSON instead of leaving the client with half a stream.
 type sseWriter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
@@ -27,7 +28,7 @@ func newSSEWriter(w http.ResponseWriter, id string, created int64, model string)
 
 func (s *sseWriter) Started() bool { return s.started }
 
-// start 发送 SSE 响应头和首个 delta{"role":"assistant"} chunk。幂等。
+// start sends the SSE response headers and the first delta{"role":"assistant"} chunk. Idempotent.
 func (s *sseWriter) start() {
 	if s.started {
 		return
@@ -36,8 +37,9 @@ func (s *sseWriter) start() {
 	s.w.Header().Set("Content-Type", "text/event-stream")
 	s.w.Header().Set("Cache-Control", "no-cache")
 	s.w.Header().Set("Connection", "keep-alive")
-	// 关掉反代（nginx 等）对 SSE 的整体缓冲：不发这个头，客户端直连能看到流式，
-	// 但一旦经过反代就会被攒成一坨一次性下发（Dify 那种接法就是这么变非流式的）。
+	// disable full buffering of SSE by reverse proxies (nginx etc.): without this header
+	// a directly connected client sees streaming, but through a reverse proxy it gets
+	// buffered up and delivered in one blob (that's how Dify-style setups turn non-streaming).
 	s.w.Header().Set("X-Accel-Buffering", "no")
 	s.w.Header().Set("Access-Control-Allow-Origin", "*")
 	s.w.WriteHeader(200)
@@ -66,9 +68,10 @@ func (s *sseWriter) chunk(delta map[string]interface{}, finish interface{}, usag
 	}
 }
 
-// SendContent 发一段正文增量，供 streamGenerate 的 onDelta 回调直接使用。
-// SendReasoning 推思考链增量。上游先把思考链推完才开始推正文，所以客户端会
-// 先看到「思考过程」再看到答案，跟网页端的观感一致。
+// SendContent sends a content delta, for direct use by streamGenerate's onDelta callback.
+// SendReasoning sends reasoning-chain deltas. The upstream pushes the reasoning chain
+// before starting the content, so the client sees the "thinking process" first and
+// then the answer, matching the web app's behavior.
 func (s *sseWriter) SendReasoning(delta string) {
 	if delta == "" {
 		return
@@ -87,8 +90,9 @@ func (s *sseWriter) SendContent(delta string) {
 
 func (s *sseWriter) SendToolCalls(tcs []ToolCall) {
 	s.start()
-	// 流式 delta 里每个 tool_call 必须带 index，客户端靠它把分片的 tool_call 拼起来
-	// （OpenAI 流式规范要求）。ToolCall 结构本身没有 index，这里按顺序补上。
+	// every tool_call in a streaming delta must carry an index; clients use it to
+	// reassemble the sharded tool_call (OpenAI streaming spec requirement).
+	// The ToolCall struct itself has no index, so we fill it in sequentially here.
 	out := make([]map[string]interface{}, len(tcs))
 	for i, tc := range tcs {
 		out[i] = map[string]interface{}{
@@ -104,12 +108,12 @@ func (s *sseWriter) SendToolCalls(tcs []ToolCall) {
 	s.chunk(map[string]interface{}{"tool_calls": out}, nil, nil)
 }
 
-// Finish 收尾：空 delta + finish_reason，可选 usage chunk，最后 [DONE]。
+// Finish wraps up: empty delta + finish_reason, an optional usage chunk, then [DONE].
 func (s *sseWriter) Finish(reason string, usage map[string]int) {
 	s.start()
 	s.chunk(map[string]interface{}{}, reason, nil)
 	if usage != nil {
-		// OpenAI 的 usage chunk：choices 为空数组
+		// OpenAI's usage chunk: choices is an empty array
 		c := map[string]interface{}{
 			"id": s.id, "object": "chat.completion.chunk",
 			"created": s.created, "model": s.model,
@@ -125,8 +129,8 @@ func (s *sseWriter) Finish(reason string, usage map[string]int) {
 	}
 }
 
-// Fail 在已经开流之后出错时用：发一个带 error 的 chunk 再收尾。
-// 此时 HTTP 状态码已经是 200，改不了了。
+// Fail is used when an error occurs after the stream has already opened: send a chunk
+// carrying the error, then wrap up. The HTTP status code is already 200 and can't be changed.
 func (s *sseWriter) Fail(err error) {
 	s.start()
 	c := map[string]interface{}{

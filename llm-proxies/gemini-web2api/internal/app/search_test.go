@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// 用一份真实抓下来的联网搜索响应，验证 grounding 来源能被解析出来。
+// Uses a real captured web-search response to verify grounding sources get parsed.
 func TestExtractGrounding(t *testing.T) {
 	raw, err := os.ReadFile("testdata/search_raw.txt")
 	if err != nil {

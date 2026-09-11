@@ -29,7 +29,7 @@ func maskKey(k string) string {
 	return k[:12] + "..." + k[len(k)-4:]
 }
 
-// Run 是进程入口，由根目录的 main.go 调用。
+// Run is the process entry point, called by main.go in the repo root.
 func Run() {
 	port := flag.Int("port", 0, "listening port (default: 8083 or config.json)")
 	configPath := flag.String("config", "", "path to config.json")
@@ -75,10 +75,10 @@ func Run() {
 
 	// boot DB and load proxy pool
 	getDB()
-	initRuntimeConfig() // 面板改过的运行时配置盖在启动配置之上
+	initRuntimeConfig() // runtime config changed via the panel overrides startup config
 	loadProxies()
-	seedProxiesFromConfig() // --proxy / 遗留静态代理并进代理池
-	seedCookiesFromConfig() // --cookie-file / 遗留单 cookie 并进 cookie 池
+	seedProxiesFromConfig() // --proxy / legacy static proxies get merged into the proxy pool
+	seedCookiesFromConfig() // --cookie-file / legacy single cookie gets merged into the cookie pool
 	resolvedAPIKey := initAPIKey(*apiKey)
 	initTokenizer()
 	startScheduler()
@@ -114,11 +114,11 @@ func Run() {
 			writeJSON(w, 405, map[string]string{"error": "method not allowed"})
 		}
 	}))
-	// /v1/videos —— OpenAI(Sora) 形状的异步视频生成。POST 建任务，GET 轮询，GET .../content 下 MP4。
+	// /v1/videos — OpenAI (Sora)-style async video generation. POST creates a job, GET polls, GET .../content downloads the MP4.
 	mux.HandleFunc("/v1/videos", requireAPIKey(handleCreateVideo))
 	mux.HandleFunc("/v1/videos/", requireAPIKey(handleVideoItem))
-	// MCP over HTTP（Streamable HTTP）：跟 OpenAI 接口同进程同端口，暴露 web_search。
-	// 用同一把 API key 鉴权，客户端配 Authorization: Bearer <key> 连这个 URL。
+	// MCP over HTTP (Streamable HTTP): same process and port as the OpenAI interface, exposing web_search.
+	// Authenticated with the same API key; clients configure Authorization: Bearer <key> against this URL.
 	mux.HandleFunc("/mcp", requireAPIKey(handleMCPHTTP))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
@@ -203,16 +203,20 @@ func Run() {
 	}
 }
 
-// warnEnvProxyIgnored 在设了代理环境变量、但代理池是空的时候提醒一句。
+// warnEnvProxyIgnored prints a reminder when proxy environment variables are set but the proxy pool is empty.
 //
-// Linux 上的惯例是 HTTP 客户端自动读 HTTP_PROXY / ALL_PROXY（Go 标准库有现成的
-// http.ProxyFromEnvironment），我们用的是显式 http.ProxyURL，一个都不读。这是
-// 有意的：宿主机上随手一个 export 会悄悄改变出口 IP，而面板仍显示直连，排查时
-// 会被带偏。但"没生效且毫无反馈"同样难查 —— 有用户按 systemd drop-in 的常规做法
-// 注入了这几个变量，折腾很久才发现要在面板配。所以不读归不读，得说一声。
+// The Linux convention is for HTTP clients to auto-read HTTP_PROXY / ALL_PROXY (the Go
+// standard library has http.ProxyFromEnvironment built in), but we use an explicit
+// http.ProxyURL and read none of them. This is deliberate: a casual export on the host
+// would silently change the egress IP while the panel still shows direct, misleading
+// debugging. But "silently not taking effect" is just as hard to diagnose — one user
+// injected these variables following the usual systemd drop-in approach and spent a
+// long time figuring out they had to configure the panel instead. So: we don't read
+// them, but we say so.
 func warnEnvProxyIgnored() {
-	// 大小写两种写法都查，但只报一个名字：Windows 的环境变量大小写不敏感，
-	// 全列出来会变成 "HTTPS_PROXY / https_proxy" 这种看着像两个变量的噪音。
+	// check both upper and lower case spellings, but report only one name: Windows
+	// environment variables are case-insensitive, and listing all of them turns into
+	// noise like "HTTPS_PROXY / https_proxy" that looks like two separate variables.
 	var set []string
 	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"} {
 		if os.Getenv(k) != "" || os.Getenv(strings.ToLower(k)) != "" {

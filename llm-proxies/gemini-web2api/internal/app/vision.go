@@ -10,35 +10,35 @@ import (
 	fhttp "github.com/bogdanfinn/fhttp"
 )
 
-// 读图 / 读视频：把客户端传来的图片或视频上传成附件，再在对话里引用。
+// Image / video reading: upload the client-supplied image or video as an attachment, then reference it in the conversation.
 //
-// 只有登录态可用 —— 匿名能把文件传上去，但一引用就被服务端回 1100。
-// 附件类型位：1=图片、2=视频、3=文本文件，跟上传和引用共用一套（见 gemini.go 文件元组）。
-// 视频实测（抓包）：上传同一条 resumable、payload 文件元组第 2 位填 2、mime video/mp4，
-// 模型能读出视频内容（回「这是一个包含图标动画的短片」）。
+// Login-only — anonymous can upload the file, but referencing it gets 1100 from the server.
+// Attachment kind bit: 1=image, 2=video, 3=text file; shared by upload and reference (see the file tuple in gemini.go).
+// Video, observed in practice (packet capture): same resumable upload, file tuple's 2nd slot set to 2, mime video/mp4 —
+// the model reads the video content (replied "this is a short clip with an icon animation").
 
-// 单张图的大小上限。上游没给明确数字，取一个既能覆盖正常截图、又不至于让一次
-// 请求拖太久的值。超了直接报错而不是硬传 —— 传上去被拒的话错误信息更难懂。
+// Size cap for a single image. The upstream gives no explicit number; pick a value that covers normal
+// screenshots without dragging a request out too long. Over the cap: error out instead of uploading anyway — a server-side rejection is harder to read.
 const maxImageBytes = 12 * 1024 * 1024
 
-// 视频体积上限。视频 base64 塞进 JSON 请求体，太大会让一次请求拖很久，取一个
-// 既能覆盖常见短片、又不至于把请求挂死的值。超了直接报错。
+// Size cap for video. Video is base64-embedded into the JSON request body, so too large a value drags a request out; pick a
+// value that covers common short clips without hanging the request. Over the cap: error out.
 const maxVideoBytes = 50 * 1024 * 1024
 
-// pendingUpload 是还没上传的附件。真正上传要等挑完账号和出口，
-// 所以从 handler 到 streamGenerate 之间先这样带着。
+// pendingUpload is an attachment not yet uploaded. The real upload must wait until the account and egress are picked,
+// so it is carried along as-is between the handler and streamGenerate.
 type pendingUpload struct {
 	Data []byte
 	Name string
 	Mime string
-	Kind int // 1=图片，2=视频，3=文本/普通文件
+	Kind int // 1=image, 2=video, 3=text/plain file
 }
 
-// collectImages 从 OpenAI 格式的 messages 里把图片抠出来。
+// collectImages extracts the images from OpenAI-format messages.
 //
-// 认两种写法：content 数组里的 image_url（OpenAI Chat）和 input_image（Responses）。
-// 图片来源支持 data URL 和 http(s) 链接，后者会下载下来再传 —— 直接把链接给上游
-// 是不行的，它只认自己存储里的附件。
+// Two forms are recognized: image_url in the content array (OpenAI Chat) and input_image (Responses).
+// Sources support data URLs and http(s) links; the latter are downloaded and then uploaded — passing the link
+// to the upstream directly doesn't work, it only recognizes attachments in its own storage.
 func collectImages(messages []map[string]interface{}, proxyURL string) ([]pendingUpload, error) {
 	var out []pendingUpload
 	for _, m := range messages {
@@ -94,7 +94,7 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// materializeImage 把一个图片来源变成待上传的字节。
+// materializeImage turns an image source into bytes ready for upload.
 func materializeImage(src, proxyURL string, idx int) (pendingUpload, error) {
 	if strings.HasPrefix(src, "data:") {
 		return decodeDataURL(src, idx)
@@ -105,7 +105,7 @@ func materializeImage(src, proxyURL string, idx int) (pendingUpload, error) {
 	return pendingUpload{}, fmt.Errorf("image %d: unsupported source (want a data: URL or http(s) link)", idx)
 }
 
-// decodeDataURL 解析 data:<mime>;base64,<数据>。
+// decodeDataURL parses data:<mime>;base64,<payload>.
 func decodeDataURL(src string, idx int) (pendingUpload, error) {
 	comma := strings.Index(src, ",")
 	if comma < 0 {
@@ -131,8 +131,8 @@ func decodeDataURL(src string, idx int) (pendingUpload, error) {
 	return newMediaUpload(data, mime, idx)
 }
 
-// fetchImage 下载远程图片。走跟正式请求同一个出口：图从别的 IP 拉、对话从这个 IP 发，
-// 除了慢一点没别的好处，还多暴露一个出口。
+// fetchImage downloads a remote image through the same egress as the real request: pulling the image from another IP
+// and sending the conversation from this one has no benefit beyond being slower, and exposes one more egress.
 func fetchImage(src, proxyURL string, idx int) (pendingUpload, error) {
 	var body []byte
 	var ctype string
@@ -183,10 +183,10 @@ func fetchImage(src, proxyURL string, idx int) (pendingUpload, error) {
 	return newMediaUpload(body, ctype, idx)
 }
 
-// newMediaUpload 按 mime 决定这是图片还是视频：
-//   - video/* → 附件类型位 2（跟抓包一致：文件元组 [路径,2,null,"video/mp4"]），上限 maxVideoBytes；
-//   - 其余当图片 → 类型位 1，上限 maxImageBytes。
-// 类型位 1/2 是服务端认媒体种类的开关，填错模型就按错的类型解析附件。
+// newMediaUpload decides image vs video by mime:
+//   - video/* → attachment kind bit 2 (matching the packet capture: file tuple [path,2,null,"video/mp4"]), capped at maxVideoBytes;
+//   - everything else treated as image → kind bit 1, capped at maxImageBytes.
+// The kind bit 1/2 is the server's switch for the media type; a wrong value makes the model parse the attachment as the wrong type.
 func newMediaUpload(data []byte, mime string, idx int) (pendingUpload, error) {
 	if len(data) == 0 {
 		return pendingUpload{}, fmt.Errorf("media %d: empty", idx)
@@ -211,7 +211,7 @@ func newMediaUpload(data []byte, mime string, idx int) (pendingUpload, error) {
 	}, nil
 }
 
-// mediaExt 按 mime 给个扩展名。文件名会显示给模型看，扩展名对不上容易让它误判。
+// mediaExt returns an extension by mime. The filename is shown to the model, and a mismatched extension easily misleads it.
 func mediaExt(mime string) string {
 	switch mime {
 	case "image/jpeg", "image/jpg":

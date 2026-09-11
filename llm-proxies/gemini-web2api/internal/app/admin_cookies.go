@@ -8,16 +8,17 @@ import (
 	"strings"
 )
 
-// keyCookieWants 是判断一条 cookie 是否"复制全了"要看的关键项。
+// keyCookieWants lists the key items checked to judge whether a cookie was "copied in full".
 //
-// 抓包实测浏览器每次发往 gemini.google.com 的有 30 个 cookie，其中 16 个是
-// 每请求必带的登录态项。这里只挑最能反映"复制全没全"的几个来展示，不是说
-// 别的不重要 —— 我们把整串原样转发，少一个就是少发一个。
+// Packet capture showed browsers send 30 cookies to gemini.google.com each time,
+// 16 of which are login-state items present on every request. We only surface the
+// few that best reflect "fully copied or not" — not that the others don't matter:
+// we forward the whole string as-is, and one missing means one not sent.
 var keyCookieWants = []string{"SID", "HSID", "SSID", "APISID", "SAPISID",
 	"__Secure-1PSID", "__Secure-1PSIDTS", "__Secure-1PAPISID", "__Secure-1PSIDCC"}
 
-// cookieAcctView 是账号的脱敏视图：**不含完整 cookie 值**，只回状态摘要。
-// 凭证没必要从服务端再发回浏览器一次（跟旧 handleAdminCookie 同原则）。
+// cookieAcctView is a redacted account view: **no full cookie values**, status summary only.
+// Credentials have no business being sent back to the browser by the server (same principle as the old handleAdminCookie).
 func cookieAcctView(a CookieAccount) map[string]interface{} {
 	names := cookieNames(a.Cookie)
 	nameSet := map[string]bool{}
@@ -34,13 +35,14 @@ func cookieAcctView(a CookieAccount) map[string]interface{} {
 	if s := extractSAPISID(a.Cookie); len(s) >= 4 {
 		tail = s[len(s)-4:]
 	}
-	// health 是给面板标红用的派生健康度（#18）。判据用 fail_count：markAccountResult
-	// 成功会把它清零、失败才 +1，而且只有 401/403 才算失败（见 markCookieByStatus），
-	// 所以 fail_count>0 就是「当前鉴权在失败」= 多半 cookie 过期了，直接标红提示重导。
-	//   dead     鉴权失败中（红）—— 不管启用还是被自动停用，只要 fail_count>0
-	//   disabled 用户手动停用且没有失败记录（灰）
-	//   unknown  还没成功用过/检测过（待检测）
-	//   ok       在用、没失败（绿）
+	// health is a derived health value for coloring the panel red (#18). It uses fail_count:
+	// markAccountResult resets it to zero on success and only increments on failure, and only
+	// 401/403 count as failures (see markCookieByStatus), so fail_count>0 means "auth currently
+	// failing" = most likely an expired cookie — mark red and prompt for re-import.
+	//   dead     auth failing (red) — regardless of enabled or auto-disabled, whenever fail_count>0
+	//   disabled manually disabled by the user with no failures recorded (grey)
+	//   unknown  never used/checked successfully yet (pending check)
+	//   ok       in use, no failures (green)
 	health := "ok"
 	switch {
 	case a.FailCount > 0:
@@ -70,7 +72,7 @@ func cookieAcctView(a CookieAccount) map[string]interface{} {
 	}
 }
 
-// handleAdminCookies — GET 列出池 / POST 新增一条。
+// handleAdminCookies — GET lists the pool / POST adds one entry.
 func handleAdminCookies(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -108,9 +110,9 @@ func handleAdminCookies(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminCookieItem — /admin/api/cookies/{id}[/toggle]
 //
-//	DELETE          删除
-//	POST .../toggle 翻转 enabled/disabled
-//	PATCH           改 label / note / status
+//	DELETE          delete
+//	POST .../toggle flip enabled/disabled
+//	PATCH           update label / note / status
 func handleAdminCookieItem(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/admin/api/cookies/")
 	parts := strings.Split(rest, "/")
@@ -205,7 +207,7 @@ func handleAdminCookieItem(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if p.Label != nil || p.Note != nil {
-			// 只改传了的字段：没传的沿用当前值。
+			// only modify fields that were sent: unsent ones keep their current values.
 			var curLabel, curNote string
 			for _, a := range accountList() {
 				if a.ID == id {
