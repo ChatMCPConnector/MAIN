@@ -89,3 +89,16 @@ The codebase supports two deployment modes:
 - **IMPORTANT**: Request body compression is intentionally disabled. Testing revealed that CloudCode API has severe performance issues with gzip-compressed requests (50+ seconds vs 2.6 seconds without compression).
 - The proxy sends all requests uncompressed to ensure optimal streaming performance.
 - This was discovered through debugging where direct `curl` requests to CloudCode API (without compression) were significantly faster than proxy requests with compression.
+
+## Quota Architecture & Claude/Opus Token Economics
+
+### Quota API Endpoints
+- **`v1internal:retrieveUserQuotaSummary`**: Canonical endpoint returning the full 2x2 quota matrix:
+  - `Gemini Models`: `gemini-5h` (rolling 5h sprint) + `gemini-weekly` (weekly limit)
+  - `Claude and GPT models`: `3p-5h` (rolling 5h sprint) + `3p-weekly` (weekly limit)
+  - Unlike `v1internal:fetchAvailableModels` (which only returns a single bottleneck quota per model), `retrieveUserQuotaSummary` gives explicit `remainingFraction` and `resetTime` for all windows.
+
+### Claude/Opus Token Multiplier in Tool Loops
+- In agentic workflows (like OpenCode), multi-step tool calls re-send the full conversation context on every single turn.
+- A 10-step tool call in a 52k-token session generates **520,000+ input tokens** in under 60 seconds, which rapidly drains the weekly 3p quota.
+- **Thinking Budget**: CloudCode defaults or proxy defaults of `thinkingBudget: 8192` for `claude-opus-4-6-thinking` generate up to 8k output tokens per turn. CloudCode actually supports `thinkingBudget: 0` (no thinking) and `1024` (low/minimal), reducing output token burn by up to 87%.

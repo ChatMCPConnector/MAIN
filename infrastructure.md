@@ -133,6 +133,39 @@ einem Codespace-Wechsel macht setup.sh automatisch: uv-Install (falls nötig),
 - setup.sh rebuilt nur bei `LANDSCAPE_REBUILD_LLM_PROXIES=1` (sonst manuell).
 - Upstream-Limit ist pro Guest-Token (~5 Nachrichten) — der Pool rotiert das weg.
 
+## Antigravity Quota-Architektur & Token-Multiplikator (Befunde)
+
+### 1. Dual-Bucket Quota-Architektur bei Google Antigravity
+Google teilt Modelle in zwei getrennte Pools ein:
+- **`Gemini Models`** (`gemini-3.8-flash`, `gemini-pro`, `gemini-flash-lite` etc.)
+- **`Claude and GPT models`** (`claude-opus-4-6`, `claude-sonnet-4-6`, `gpt-oss-120b` etc.)
+
+Jeder Pool besitzt zwei voneinander unabhängige Kontingente:
+1. **5-Stunden-Sprint (`window: "5h"`):** Glättet globale Lastspitzen; setzt sich alle 5 Stunden wieder auf 100% zurück.
+2. **Wochen-Limit (`window: "weekly"`):** Das harte vertragliche Tier-Kontingent; setzt sich erst nach 7 Tagen zurück (Rolling-Window).
+
+**Kanonischer Endpunkt:**
+`POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
+Liefert die vollständige 2×2-Matrix (beide Fenster mit Restquoten `remainingFraction` und sekundengenauem `resetTime`).
+*Hinweis:* Der bisherige Endpunkt `fetchAvailableModels` liefert pro Modell nur ein einzelnes `quotaInfo` (das jeweils restriktivste), was dazu führte, dass das Claude-Wochenlimit irrtümlich als 5h-Sprint interpretiert wurde.
+
+### 2. Der Claude/Opus Token-Multiplikator in Tool-Loops (Befund)
+In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürzester Zeit hunderttausende Tokens verbrennen:
+- **Live-Messung 1:** Ein Folge-Prompt (*„ist das dokumentiert?“*) in einer Session mit ~32k Historie führte zu 7 Tool-Calls à ~50k Kontext = **333.905 Input-Tokens in 57 Sekunden**.
+- **Live-Messung 2:** Ein Folge-Prompt in einer Session mit ~52k Historie führte zu 10 Tool-Calls à ~52k Kontext = **523.966 Input-Tokens in 48 Sekunden** (-18% im 5h-Sprint, -6% im Wochenlimit).
+- **Ursache:** Agenten-Frameworks wie opencode senden bei **jedem einzelnen Tool-Call in einer Kette die vollständige bisherige Konversationshistorie** erneut an das Modell.
+- **Thinking-Budget-Overhead:** `antigravity-proxy` erzwang bei `claude-opus-4-6-thinking` standardmäßig ein `thinkingBudget: 8192`. Dadurch fielen bei jedem Zwischenschritt bis zu 8k Output-Tokens an.
+
+### 3. Gegenmaßnahmen & Optimierungen für Antigravity-Proxy & Opencode
+1. **Opus-Kontext in Opencode deckeln (`limit.context`):**
+   In `.opencode/opencode.json` unter `provider.antigravity.models["claude-opus-4-6"].limit.context` von 250.000 auf **48.000 bis 64.000** reduzieren. Opencode compactet dann frühzeitig und verhindert, dass Tool-Loops mit 50k+ Historie explodieren. (Gemini behält 1.000.000 Tokens).
+2. **Thinking-Budget steuern:**
+   Google Antigravity unterstützt `claude-opus-4-6-thinking` auch mit `thinkingBudget: 0` (kein Thinking) oder `1024` (minimal/low). Ein Default auf `low` oder `none` reduziert die Output-Tokens um bis zu 87%.
+3. **Subagenten auf günstige Modelle pinnen:**
+   Dateisuchen (`@explore`) oder Zusammenfassungen dürfen nicht mit Opus laufen (ein Explore-Lauf verbrannte 524k Opus-Tokens), sondern auf `gemini-3.8-flash` oder `@glm2api` (Free).
+4. **Session-Hygiene:**
+   In langen Sessions (>30k Tokens) keine kurzen Nachfragen stellen, sondern `/new` oder `/compact` nutzen.
+
 ## Infrastruktur-Soll (Details Betrieb)
 
 - **Kanonisch ist:** gepinnte Version im Repo + reproduzierbares Skript.
