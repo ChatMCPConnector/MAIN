@@ -36,21 +36,27 @@ type ToolCallFunction struct {
 // prompt string for Gemini. Tool schemas are embedded as a system instruction
 // telling the model to emit ```tool_call``` blocks.
 //
-// toolChoice 是 OpenAI 的 tool_choice 字段（"none"/"auto"/"required" 或
-// {"type":"function","function":{"name":...}}）。上游没有协议层的工具调用，
-// 只能把约束写进指令。"required" 尤其必要：实测 Gemini 对自己能回答的问题
-// （查天气之类）会直接作答而不调工具，不强制就拿不到 tool_call。
-// 返回 (拼好的 prompt, 最新那条用户消息)。
+// toolChoice is OpenAI's tool_choice field ("none"/"auto"/"required" or
+// {"type":"function","function":{"name":...}}). The upstream has no
+// protocol-level tool calling, so the constraint has to be written into the
+// instruction. "required" is especially necessary: measured in practice,
+// Gemini answers questions it can handle itself (like weather lookups)
+// directly without calling a tool; without forcing, no tool_call is produced.
+// Returns (assembled prompt, latest user message).
 //
-// 超长检查不在这里做 —— 挂了 cookie 时超长会转成文本附件，而那要等挑完账号和
-// 出口才知道能不能做，所以判断放在 streamGenerate 里。最新那条消息单独返回，
-// 转附件时用来内联，好让模型不必去文件里找问题。
+// The over-length check is not done here — with a cookie attached, an
+// oversized prompt is converted into a text attachment, and whether that is
+// possible can only be known after the account and egress (proxy) have been
+// picked, so the check lives in streamGenerate. The latest message is
+// returned separately so it can be inlined when converting to an attachment,
+// sparing the model from having to dig through the file for the question.
 func messagesToPrompt(messages []map[string]interface{}, tools []map[string]interface{},
 	toolChoice interface{}) (string, string) {
 	return buildPrompt(messages, tools, toolChoice), latestUserMessage(messages)
 }
 
-// latestUserMessage 取最后一条 user 消息的正文，没有则返回空串。
+// latestUserMessage returns the body of the last user message, or an empty
+// string if there is none.
 func latestUserMessage(messages []map[string]interface{}) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		role := getStr(messages[i], "role")
@@ -63,13 +69,15 @@ func latestUserMessage(messages []map[string]interface{}) string {
 	return ""
 }
 
-// toolsReminderBlock baut den kompakten Re-Anker für多轮续接轮：
-// Format-Regel + die vollständigen Tool-Definitionen。
+// toolsReminderBlock builds the compact re-anchor for multi-turn continuation
+// turns: the format rule + the full tool definitions.
 //
-// 为什么连工具定义也要重发：上游的上下文窗口有限，多轮服务端历史会把首轮的
-// 工具定义挤出去（实测第 9 轮左右，模型开始答「我没有文件系统工具」——它记得
-// 要吐围栏，但已经看不见有哪些工具了）。所以每轮都带 schema，几百字节换
-// 工具纪律不丢。
+// Why the tool definitions must be resent too: the upstream's context window
+// is limited, and the multi-turn server-side history pushes the first turn's
+// tool definitions out (measured in practice, around turn 9 the model starts
+// answering "I don't have filesystem tools" — it remembers it must emit the
+// fence, but can no longer see which tools exist). So every turn carries the
+// schema: a few hundred bytes to keep tool discipline from slipping.
 func toolsReminderBlock(tools []map[string]interface{}) string {
 	if len(tools) == 0 {
 		return ""
@@ -114,9 +122,9 @@ func buildPrompt(messages []map[string]interface{}, tools []map[string]interface
 				}
 			}
 			name := getStr(fn, "name")
-			if forced != "" && name != forced {
-				continue // 指定了函数名，其余不进 prompt
-			}
+if forced != "" && name != forced {
+			continue // a function name was specified; the rest stays out of the prompt
+		}
 			defs = append(defs, map[string]interface{}{
 				"name":        name,
 				"description": getStr(fn, "description"),
@@ -187,18 +195,28 @@ func buildPrompt(messages []map[string]interface{}, tools []map[string]interface
 		}
 	}
 
-	// 工具格式指令放在最前，但 agentic 客户端（Codex/rikkahub 等）的开发者提示动辄
-	// 40KB，还自带「emit function calls」这种原生工具框架的措辞，压在中间把顶部那条
-	// 格式指令冲没了 —— 模型于是要么答「我没有工具」要么答非所问（用户报的「已读乱回」）。
-	// 判据：拿 Codex 真实 42KB prompt 原样重放，模型说「无法查看本地文件系统」、不吐围栏；
-	// 同一份末尾追加提醒后立刻吐 ```tool_call```。所以末尾再锚一次格式、明确「没有别的
-	// 工具通道」，压过客户端的原生框架。
-	// 两个进一步判据（弱模型 anon 3.6 Flash、多命令任务、各 4 次）：
-	//  ① 只放格式指令、不带示例：0/4 命中，全部退化成写 ```powershell 代码块给用户看；
-	//  ② 带一个「用户问 X → 正确回复是这个 tool_call 块」的具体示例：3-4/4 命中。
-	// 所以必须给行为化的 few-shot。示例用中性工具名（run_command），实测模型仍用真实
-	// 工具名（shell_command）0/4 抄假名 —— 示例教的是「动作」不是名字，故不必按客户端
-	// 动态生成 schema。
+	// The tool format instruction goes first, but developer prompts from agentic
+	// clients (Codex/rikkahub etc.) easily run 40KB and carry their own wording
+	// like "emit function calls" from native tool frameworks, burying the format
+	// instruction at the top when squeezed in between — the model then either
+	// answers "I have no tools" or answers off-topic (the "reads but replies
+	// garbage" users reported).
+	// Evidence: replaying a real 42KB Codex prompt as-is, the model said "cannot
+	// access the local filesystem" and emitted no fence; appending the reminder
+	// at the end of the same prompt made it emit ```tool_call``` immediately.
+	// So the format is re-anchored once more at the end, stating explicitly
+	// "there is no other tool channel", to override the client's native framing.
+	// Two further data points (weak model anon 3.6 Flash, multi-command task,
+	// 4 runs each):
+	//  ① format instruction only, no example: 0/4 hits, all degenerated into
+	//     writing ```powershell code blocks to show the user;
+	//  ② with one concrete example of "user asks X → the correct reply is this
+	//     tool_call block": 3-4/4 hits.
+	// So a behavioral few-shot is required. The example uses a neutral tool
+	// name (run_command); measured in practice the model still used the real
+	// tool name (shell_command), copying the fake name 0/4 — the example
+	// teaches the "action", not the name, so there is no need to generate the
+	// schema dynamically per client.
 	if toolsInjected {
 		parts = append(parts,
 			"[System instruction — highest priority]: To run a command or read a file you MUST "+
@@ -261,24 +279,32 @@ func getStr(m map[string]interface{}, k string) string {
 	return ""
 }
 
-// exitCodeRe 从工具结果里抠退出码。Codex 的 shell 结果是一段带
-// "Process exited with code N" 的包装文本。
+// exitCodeRe digs the exit code out of a tool result. Codex's shell result is
+// a wrapper text containing "Process exited with code N".
 var exitCodeRe = regexp.MustCompile(`(?i)exit(?:ed with|\s*code)?\s*(?:code\s*)?(\d+)`)
 
-// formatToolResult 把工具结果渲染进 prompt，关键是让弱模型认得出「成功」。
-//
-// 为什么要重写：agentic 客户端（Codex）的成功结果长这样——
-//
-//	Chunk ID: 0cdbf0\nWall time: 0.07s\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n
-//
-// 写文件/设值这类命令没有 stdout，"Output:" 后面是空的。弱模型（anon 3.6 Flash）
-// 把「无输出」当成「没干成」，于是换个写法一遍遍重试——实测「写 hello 到 a.txt」
-// 一个任务里试了 26 种命令、90s 不收敛，文件其实第一次就写对了。exit 0 就明摆在
-// 结果里，但被 Chunk ID / Wall time / token count 这些噪音埋了，且没告诉它「无输出
-// 是正常的」。这里把它压成一行清爽的成功/失败信号，并显式说明无输出正常、别重跑。
-//
-// 只加终止指令（提醒里那句 "Know when to STOP"）实测没用（26→27 命令），要配合
-// 这个清爽信号一起才压得住循环。
+// formatToolResult renders a tool result into the prompt; the key is making
+	// weak models recognize "success".
+	//
+	// Why rewrite it: a successful result from an agentic client (Codex) looks
+	// like this —
+	//
+	//	Chunk ID: 0cdbf0\nWall time: 0.07s\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n
+	//
+	// Commands like file writes/setting values have no stdout, so "Output:" is
+	// followed by nothing. Weak models (anon 3.6 Flash) take "no output" as
+	// "didn't work" and retry with a different formulation over and over —
+	// measured in practice, the task "write hello to a.txt" saw 26 command
+	// variants in one run without converging after 90s, while the file was
+	// actually written correctly the first time. The exit 0 was right there in
+	// the result, but buried under noise like Chunk ID / Wall time / token
+	// count, and nothing told it "no output is normal". Here it is compressed
+	// into one clean success/failure signal, explicitly stating that no output
+	// is normal and that it must not rerun.
+	//
+	// Adding only the stop instruction (the "Know when to STOP" sentence in the
+	// reminder) did not help in practice (26→27 commands); only together with
+	// this clean signal does it suppress the loop.
 func formatToolResult(name, raw string) string {
 	label := "Tool result"
 	if name != "" {
@@ -288,7 +314,7 @@ func formatToolResult(name, raw string) string {
 	if trimmed == "" {
 		return fmt.Sprintf("[%s]: ✅ 完成，无输出（正常，动作已生效，不要重复执行）。", label)
 	}
-	// Codex 风格包装：末尾 "Output:" 后是真正的 stdout。
+	// Codex-style wrapper: the real stdout follows the trailing "Output:".
 	out := trimmed
 	if i := strings.LastIndex(trimmed, "Output:"); i >= 0 {
 		out = strings.TrimSpace(trimmed[i+len("Output:"):])
@@ -310,22 +336,29 @@ const (
 	toolFenceClose = "```"
 )
 
-// toolFenceGate 让带 tools 的请求也能真流式。
-//
-// 问题：上游没有协议层的工具调用，我们让模型吐 ```tool_call``` 围栏，而围栏要
-// 完整文本才能解析。边出边转发会把围栏原文推给客户端 —— 客户端看到的是一段
-// markdown 代码块，不是 tool_calls。所以这条路以前退化成收完再发。
-//
-// 解法：只发**确定不属于围栏**的部分。围栏内的全部扣住，最后由 parseToolCalls
-// 统一转成 tool_calls。关键是尾巴上可能压着半个开围栏（比如只到两个反引号，
-// 或者到 tool_c 就断了），那部分也得扣住等下一帧 —— 否则先发出去，下一帧才发现
-// 它是围栏的开头，而已发出的内容收不回来。
-//
-// Sent() 是**实际发给客户端**的文本，跟 deltaTracker 的 emitted 不是一回事
-// （后者含围栏原文）。收尾补发尾巴时必须拿这个比，否则前缀对不上，尾巴会丢。
+// toolFenceGate lets requests with tools stream for real.
+	//
+	// Problem: the upstream has no protocol-level tool calling; we make the
+	// model emit ```tool_call``` fences, and a fence needs the complete text
+	// to parse. Forwarding as it streams would push the raw fence text to the
+	// client — the client would see a markdown code block, not tool_calls. So
+	// this path used to degrade into receive-then-send.
+	//
+	// Solution: only send the parts that are **certainly not part of a
+	// fence**. Everything inside a fence is held back and converted into
+	// tool_calls by parseToolCalls at the end. The tricky part is that the
+	// tail may hold half of an opening fence (e.g. only two backticks, or cut
+	// off at "tool_c") — that part must also be held back for the next frame —
+	// otherwise it gets sent first, and only the next frame reveals it was
+	// the start of a fence, while what was already sent cannot be taken back.
+	//
+	// Sent() is the text **actually sent to the client**, not the same as
+	// deltaTracker's emitted (the latter includes raw fence text). When
+	// flushing the tail at the end, comparison must use this, or the prefix
+	// won't line up and the tail gets lost.
 type toolFenceGate struct {
 	emit    func(string)
-	buf     string // 还没判定完的尾巴
+	buf     string // tail not yet fully classified
 	sent    strings.Builder
 	inFence bool
 }
@@ -334,7 +367,7 @@ func newToolFenceGate(emit func(string)) *toolFenceGate {
 	return &toolFenceGate{emit: emit}
 }
 
-// Sent 返回到目前为止实际发给客户端的全部文本。
+// Sent returns all text actually sent to the client so far.
 func (g *toolFenceGate) Sent() string {
 	if g == nil {
 		return ""
@@ -350,14 +383,15 @@ func (g *toolFenceGate) send(s string) {
 	g.emit(s)
 }
 
-// Push 吃进一段增量文本，把确定不在围栏里的部分立刻发出去。
+// Push ingests a chunk of incremental text and immediately sends out the
+// parts that are certainly not inside a fence.
 func (g *toolFenceGate) Push(delta string) {
 	g.buf += delta
 	for {
 		if g.inFence {
 			j := strings.Index(g.buf, toolFenceClose)
 			if j < 0 {
-				return // 围栏还没闭合，整段扣住
+				return // fence not closed yet; hold the whole segment
 			}
 			g.buf = g.buf[j+len(toolFenceClose):]
 			g.inFence = false
@@ -376,10 +410,12 @@ func (g *toolFenceGate) Push(delta string) {
 	}
 }
 
-// partialPrefixLen 返回 s 的末尾有多少字节是 marker 的前缀（不含完整匹配）。
-//
-// marker 全是 ASCII，所以匹配到的后缀必然也全是 ASCII，切点不会落在多字节
-// 字符中间 —— UTF-8 的续字节 >=0x80，永远不等于 marker 里的任何字节。
+// partialPrefixLen returns how many trailing bytes of s are a prefix of
+	// marker (excluding a full match).
+	//
+	// marker is all ASCII, so any matched suffix is necessarily all ASCII too
+	// and the cut point never lands in the middle of a multi-byte character —
+	// UTF-8 continuation bytes are >=0x80 and never equal any byte in marker.
 func partialPrefixLen(s, marker string) int {
 	max := len(marker) - 1
 	if len(s) < max {
@@ -393,10 +429,14 @@ func partialPrefixLen(s, marker string) int {
 	return 0
 }
 
-// 放宽：围栏内不强求前后换行——模型有时吐 ```tool_call\n{...}\n```、有时
-// ```tool_call {...}``` 甚至一行内。老正则死磕 \n…\n，格式一变就漏解析，漏了就把
-// 整个 ```tool_call``` 块当正文发给客户端 = 用户看到的「已读乱回」。这里只认围栏、
-// 内容交给 JSON 解析兜底（非围栏内容里不会有 ```，非贪婪停在第一个闭合围栏）。
+// Relaxed: fences are not required to have surrounding newlines — the model
+// sometimes emits ```tool_call\n{...}\n```, sometimes ```tool_call {...}```
+// or even all on one line. The old regex insisted on \n…\n; when the format
+// varied, parsing missed the block, and a missed block sent the entire
+// ```tool_call``` fence to the client as body text = the "reads but replies
+// garbage" users saw. Here we only recognize the fence and let JSON parsing
+// handle the content as a fallback (non-fence content contains no ```, and
+// the non-greedy match stops at the first closing fence).
 var toolCallRe = regexp.MustCompile("(?s)```tool_call(.*?)```")
 
 // parseToolCalls extracts ```tool_call``` blocks. Returns clean text + tool_calls.
@@ -427,9 +467,9 @@ func parseToolCalls(text string) (string, []ToolCall) {
 	return strings.TrimSpace(clean), toolCalls
 }
 
-// parseToolChoice 解析 OpenAI 的 tool_choice。
-// 返回 (mode, forcedName)：mode ∈ {"auto","none","required"}；
-// forcedName 非空表示客户端点名了某个函数。
+// parseToolChoice parses OpenAI's tool_choice.
+	// Returns (mode, forcedName): mode ∈ {"auto","none","required"};
+	// a non-empty forcedName means the client named a specific function.
 func parseToolChoice(tc interface{}) (string, string) {
 	switch v := tc.(type) {
 	case string:
@@ -448,32 +488,47 @@ func parseToolChoice(tc interface{}) (string, string) {
 	return "auto", ""
 }
 
-// PromptTooLongError 表示 prompt 超过了单次请求能塞的上限。
-//
-// 为什么是报错而不是我们自己截：上游超限时**从尾部静默截断**且不报错，而最新
-// 消息拼在末尾，所以被吃掉的正好是用户刚问的那句 —— 模型只看到前面的系统前言，
-// 回一句通用开场白，既不答题也不调工具。
-//
-// 也不自己丢历史：那仍然是静默丢数据，只是换了个地方丢。客户端以为整段都发出去
-// 了，模型却忘了东西，答案微妙地错而没人知道。报 context_length_exceeded 是
-// OpenAI 兼容客户端认得的信号，agentic 客户端收到会自己压缩上下文再试 ——
-// 它比我们盲丢最旧的几段聪明得多。
-//
-// **为什么按字节而不是按 token 判**：静态 IP 上把中英文对齐到同一字节数实测，
-// 两者的墙落在完全相同的位置 —— 约 129,950 字节各 3/3 通过、135,990 字节各 1/3、
-// 141,920 字节各 1/3；而同一批请求的 tiktoken 计数差了 1.9 倍（英文 24,273 对
-// 中文 46,591）。按 token 设阈值的话，同一个数字对英文太松、对中文卡在真实容量的
-// 三分之一左右。
-//
-// 顺带排除了"墙在传输层"：prompt 进 f.req 要先 JSON 再 urlencode，中文每个字节
-// 变成 %XX（3 倍膨胀）、英文基本原样，两者的线上体积差近 3 倍却撞同一堵墙，
-// 所以计的是 prompt 内容的字节数，不是请求体大小。
-//
-// 真要撑住长上下文得走另一条路：把内容转成文件附件。但那需要登录态（匿名能上传、
-// 对话里引用会被服务端回 1100 拒绝），所以现在只能报错。
+// PromptTooLongError signals that the prompt exceeded the per-request cap.
+	//
+	// Why an error instead of truncating ourselves: when over the limit the
+	// upstream **silently truncates from the tail** without an error, and the
+	// latest message is assembled at the end, so what gets eaten is exactly
+	// what the user just asked — the model only sees the system preamble
+	// above and replies with a generic opener, neither answering nor calling
+	// a tool.
+	//
+	// Nor do we drop history ourselves: that would still be silently losing
+	// data, just in a different place. The client believes the whole thing was
+	// sent, while the model has forgotten things; answers are subtly wrong
+	// with nobody the wiser. Reporting context_length_exceeded is a signal
+	// OpenAI-compatible clients recognize; agentic clients respond by
+	// compressing the context themselves and retrying — much smarter than us
+	// blindly dropping the oldest chunks.
+	//
+	// **Why judge by bytes, not tokens**: with Chinese and English aligned to
+	// the same byte count on a static IP, measured in practice both hit the
+	// wall at exactly the same position — about 129,950 bytes passed 3/3 each,
+	// 135,990 bytes 1/3 each, 141,920 bytes 1/3 each; meanwhile tiktoken
+	// counts for the same batch of requests differed by 1.9x (English 24,273
+	// vs Chinese 46,591). With a token-based threshold, the same number would
+	// be too loose for English and would strangle Chinese at about a third of
+	// the real capacity.
+	//
+	// This also rules out "the wall is at the transport layer": the prompt
+	// entering f.req must first be JSON'd then urlencoded — each Chinese byte
+	// becomes %XX (3x expansion) while English passes through nearly as-is;
+	// their on-the-wire sizes differ by nearly 3x yet both hit the same wall,
+	// so what is counted is the prompt content's bytes, not the request body
+	// size.
+	//
+	// Actually sustaining long context requires a different route: converting
+	// the content into a file attachment. But that needs a logged-in state
+	// (anonymous can upload, yet referencing it in the conversation is
+	// rejected by the server with 1100), so for now only an error can be
+	// reported.
 type PromptTooLongError struct {
 	Bytes, Budget int
-	HasCookie     bool // 有 cookie 却还超，说明附件那条路也没救回来
+	HasCookie     bool // over the limit even with a cookie; the attachment route couldn't save it either
 }
 
 func (e *PromptTooLongError) Error() string {
@@ -484,8 +539,10 @@ func (e *PromptTooLongError) Error() string {
 			"unrelated answer, so this request is rejected instead.",
 		e.Bytes, e.Budget)
 	if !e.HasCookie {
-		// 没 cookie 时这不是死路：导一个进来就能走附件，长度限制基本就没了。
-		// 不说这句的话用户只会以为"这项目撑不住长上下文"。
+		// Without a cookie this is not a dead end: import one and the
+		// attachment route opens up, largely removing the length limit.
+		// Omitting this sentence, users would just assume "this project
+		// can't handle long context".
 		return base + " Add a Google account cookie in the admin panel (Cookie pool) — " +
 			"with one configured, oversized conversations are uploaded as a text " +
 			"attachment instead and this limit largely goes away."

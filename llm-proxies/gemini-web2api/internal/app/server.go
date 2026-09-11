@@ -52,21 +52,21 @@ func handleOptions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-// buildUsage 用 tiktoken 算 token 数，跟 requests 表里记的口径保持一致。
-// responsesAPI=true 时用 /v1/responses 的字段名（input_tokens/output_tokens）。
+// buildUsage computes token counts with tiktoken, consistent with what the requests table records.
+// responsesAPI=true uses the /v1/responses field names (input_tokens/output_tokens).
 func buildUsage(prompt, text string, responsesAPI bool) map[string]int {
 	return buildUsageWithReasoning(prompt, text, "", responsesAPI)
 }
 
-// buildUsageWithReasoning 在 usage 里单列思考链的 token 数。
+// buildUsageWithReasoning lists the reasoning chain's token count separately in usage.
 //
-// 思考链**不计入** completion_tokens：它是模型自己的推理过程，客户端默认不展示，
-// 算进去等于让用户为看不见的输出买单（下游 newapi 是按 completion_tokens 计费的）。
-// 单列在 completion_tokens_details.reasoning_tokens 里，跟 OpenAI 的做法一致，
-// 想计费的人自己加。
+// The reasoning chain is **not counted** in completion_tokens: it is the model's own
+// inference process, hidden by default on the client; counting it makes users pay for output
+// they never see (downstream newapi bills by completion_tokens). Listed separately in
+// completion_tokens_details.reasoning_tokens, matching OpenAI's approach; whoever wants to bill for it adds it themselves.
 func buildUsageWithReasoning(prompt, text, reasoning string, responsesAPI bool) map[string]int {
-	// 媒体产物是 base64 data URL，上百万字符。不计进 output token：那是二进制内容，
-	// 按 token 计费等于让用户为看不见的字节买单，下游 newapi 按 output token 收钱。
+	// Media artifacts are base64 data URLs, millions of characters. Not counted as output tokens:
+	// that is binary content; billing it as tokens makes users pay for bytes they never see, and downstream newapi charges by output token.
 	in, out := countTokens(prompt), countTokens(stripDataURLs(text))
 	if responsesAPI {
 		return map[string]int{
@@ -86,11 +86,11 @@ func buildUsageWithReasoning(prompt, text, reasoning string, responsesAPI bool) 
 	return u
 }
 
-// rejectUnsupported 检查客户端传了但我们兑现不了的字段。
+// rejectUnsupported checks for fields the client sent that we cannot honor.
 //
-// 只拦"静默忽略会让客户端拿到错误结果"的：n>1 少给候选、图片输入被丢掉会
-// 让模型答非所问。采样类参数（temperature/top_p/max_tokens/...）上游根本
-// 没有对应旋钮，收下忽略即可，报错反而会挡住正常客户端。
+// Only blocks cases where "silently ignoring" hands the client a wrong result: n>1 returns fewer candidates,
+// and dropped image input makes the model answer the wrong question. Sampling parameters
+// (temperature/top_p/max_tokens/...) have no corresponding upstream knob at all — accept and ignore them; erroring would only block well-behaved clients.
 func rejectUnsupported(req map[string]interface{}, messages []map[string]interface{}) error {
 	if n, ok := req["n"].(float64); ok && n > 1 {
 		return fmt.Errorf("n=%d not supported: upstream returns a single candidate", int(n))
@@ -107,15 +107,15 @@ func rejectUnsupported(req map[string]interface{}, messages []map[string]interfa
 			}
 			switch getStr(cm, "type") {
 			case "image_url", "input_image":
-				// 有 cookie 就能收：图会被上传成附件再引用。匿名不行 —— 传得上去，
-				// 但一引用就被服务端拒，收下只会让客户端拿到一个看不懂的失败。
+				// With a cookie these are fine: images get uploaded as attachments and referenced.
+				// Anonymous is not — they upload fine, but the first reference is rejected by the server, so accepting only hands the client an incomprehensible failure.
 				if !hasCookie() {
 					return fmt.Errorf("image input needs a Google account cookie: anonymous " +
 						"uploads succeed but referencing them in a conversation is rejected " +
 						"upstream. Add a cookie in the admin panel (Cookie pool)")
 				}
 			case "video_url", "input_video":
-				// 视频跟图片同理：登录态才能引用，匿名一引用就 1100。
+				// Videos work like images: referencing needs a signed-in state; anonymous references get 1100.
 				if !hasCookie() {
 					return fmt.Errorf("video input needs a Google account cookie: anonymous " +
 						"uploads succeed but referencing them in a conversation is rejected " +
@@ -133,25 +133,24 @@ func callGemini(prompt, latest string, mc ModelConfig, tools []map[string]interf
 	images []pendingUpload, onDelta, onReasoning func(string)) (string, []ToolCall, *StreamResult, error) {
 	res, err := streamGenerateWithFiles(prompt, latest, mc, images, onDelta, onReasoning)
 	if err != nil {
-		// res 非 nil：失败时它只带归属（哪个号 / 哪个出口），给 recordRequest 用
+		// res non-nil: on failure it carries only attribution (which account / which egress), for recordRequest
 		return "", nil, res, err
 	}
 	text := extractResponseText(res.Raw)
-	// 画布：HTML 文档内联在响应里（不像图/乐要下载），从 immersive 结构里抠出来。
-	// 标准文本提取只拿到 preamble（"I will generate…"），文档在 inner[4][0][30]…，
-	// 用 extractCanvasDoc 单独取。
+	// Canvas: the HTML document is inline in the response (unlike image/music, no download),
+	// extracted from the immersive structure. Standard text extraction only gets the preamble
+	// ("I will generate…"); the document sits at inner[4][0][30]… and is pulled out separately by extractCanvasDoc.
 	if mc.Tool == toolCanvas {
 		doc := extractCanvasDoc(res.Raw)
 		if doc == "" {
 			return "", nil, res, fmt.Errorf("canvas generation failed: no HTML document in response (raw %d bytes)", len(res.Raw))
 		}
 		if text != "" && !strings.Contains(doc, text) {
-			return text + "\n\n" + doc, nil, res, nil // preamble + 文档
+			return text + "\n\n" + doc, nil, res, nil // preamble + document
 		}
 		return doc, nil, res, nil
 	}
-	// 媒体模型（生图/音乐）：生成 200 了但产物字节没取回来，直接报错而不是返回一个
-	// 只有文字没有图的半成品 —— 客户端要的就是那张图/那段乐。
+	// Media models (image/music): generation returned 200 but the artifact bytes were not retrieved — error out instead of returning a half product with text but no image; the client wants exactly that image / that piece of music.
 	if mc.Tool == toolImage || mc.Tool == toolMusic || mc.Tool == toolVideo {
 		if len(res.Artifacts) == 0 {
 			msg := res.MediaErr
@@ -160,15 +159,15 @@ func callGemini(prompt, latest string, mc ModelConfig, tools []map[string]interf
 			}
 			return "", nil, res, fmt.Errorf("media generation succeeded but artifact retrieval failed: %s", msg)
 		}
-		// 产物以 base64 data URL 追加到正文（可能没正文，只有图/乐/视频）。
+		// Artifacts are appended to the body as base64 data URLs (there may be no body at all, only image/music/video).
 		text = appendArtifactMarkdown(text, res.Artifacts)
 		return text, nil, res, nil
 	}
 	if text == "" {
-		// 上游拒绝时只回一个结束帧、没有内容帧（实测被拒时 raw 仅 216
-		// 字节）。这种情况必须报错：以前会当成空回复返回 200 + content:null，
-		// 客户端看不出请求其实失败了。
-		// 注意不能用 BardErrorInfo 判错 —— 正常响应的结束帧里也带这个码。
+		// On upstream rejection only an end frame comes back, no content frame (measured:
+		// raw is just 216 bytes when rejected). This must error: it used to be returned as an
+		// empty reply with 200 + content:null, and the client could not tell the request had failed.
+		// Note: don't use BardErrorInfo to detect errors — normal responses' end frames also carry that code.
 		return "", nil, res, fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(res.Raw))
 	}
 	var toolCalls []ToolCall
@@ -182,8 +181,7 @@ func callGemini(prompt, latest string, mc ModelConfig, tools []map[string]interf
 // Privacy: the prompt/response strings themselves are never persisted —
 // only their length, model name, latency, status, and proxy info.
 func recordRequest(endpoint, model, prompt, response string, res *StreamResult, status int, errStr string, stream bool) {
-	// 媒体产物是超长 base64，剥掉再算 token/长度：既不让它污染统计，也免得在请求线程里
-	// 对上百万字符跑 tiktoken 白白拖慢。
+	// Media artifacts are huge base64 strings; strip them before counting tokens/length: keeps them out of the statistics and avoids running tiktoken over millions of characters on the request thread for nothing.
 	response = stripDataURLs(response)
 	r := &RequestRow{
 		TS:            time.Now().Unix(),
@@ -215,7 +213,7 @@ func recordRequest(endpoint, model, prompt, response string, res *StreamResult, 
 	go insertRequest(r)
 }
 
-// fbNameOrModel 给失败记录选模型名：降级重发失败时记降级目标，否则原模型。
+// fbNameOrModel picks the model name for failure records: on a failed downgrade retry, record the downgrade target; otherwise the original model.
 func fbNameOrModel(fb, model string) string {
 	if fb != "" {
 		return fb
@@ -267,7 +265,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 图片先解出来带着，真正上传要等挑完账号和出口（见 streamGenerate）。
+	// Decode images up front and carry them along; the actual upload waits until account and egress are picked (see streamGenerate).
 	images, err := collectImages(messages, "")
 	if err != nil {
 		writeJSON(w, 400, map[string]interface{}{"error": map[string]string{
@@ -290,12 +288,12 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	cid := "chatcmpl-" + randHex(12)
 	created := time.Now().Unix()
 
-	// 带 tools 时正文过一道围栏闸门：```tool_call``` 块要完整文本才能解析，
-	// 直接转发会把围栏原文推给客户端，所以只放行确定不在围栏里的部分。
-	// 思考链跟围栏无关，两种情况都直接流。
-	// 正文外面再裹一道罐头闸门（cannedGate）：前 220 字节扣住，攒够才放行 ——
-	// 罐头错误全是一句短话，检测命中时一个字还没出门，可以干净地重试
-	// （不扣的话 sse.Started() 已 true，只能 Fail，run 就此中断）。
+	// With tools, the body passes through a fence gate: ```tool_call``` blocks need the full
+	// text to parse; forwarding directly would push the raw fence to the client, so only parts
+	// certainly outside the fence are let through. The reasoning chain is unrelated to the fence
+	// and always streams. Outside that, the body is wrapped in a canned gate (cannedGate):
+	// hold back the first 220 bytes, release only once enough accumulated — canned errors
+	// are all one short sentence, so on detection nothing has left the building and a clean retry is possible (without holding back, sse.Started() is already true and only Fail remains, killing the run).
 	var sse *sseWriter
 	var gate *toolFenceGate
 	var cgate *cannedGate
@@ -303,10 +301,8 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if stream {
 		sse = newSSEWriter(w, cid, created, modelName)
 		onReasoning = sse.SendReasoning
-		// 罐头闸门包在最外层（无 tools 直接包 SendContent；有 tools 包在围栏
-		// 闸门外）——两条路的正文都要先过罐头扣留，否则工具路径的罐头散文会
-		// 从围栏闸门直接漏给客户端（实测 benchmark turn 7 卡死就是这个）。
-		// 思考链不扣：它不是罐头载体，且重发时思考链重放是无害的。
+		// The canned gate wraps the outermost layer (without tools directly around SendContent; with tools around the fence gate) — the body on both paths must pass the canned hold first, otherwise canned prose from the tool path leaks straight through the fence gate to the client (measured: the benchmark turn 7 hang was exactly this). The reasoning
+		// chain is not held: it is not a canned carrier, and replaying it on retry is harmless.
 		cgate = newCannedGate(sse.SendContent)
 		if len(tools) == 0 {
 			onDelta = cgate.Push
@@ -316,8 +312,8 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 5h 额度锁（#quota）：额度用完期间，受约束的模型直接降级 3.5 Flash-Lite，
-	// 省一次注定失败的上游调用。降级必须可见（前置说明），客户端才知道发生了什么。
+	// 5h quota lock (#quota): while quota is exhausted, affected models downgrade directly to
+	// 3.5 Flash-Lite, saving one doomed upstream call. The downgrade must be visible (prefix note) so the client knows what happened.
 	fbPrefix := ""
 	if rtCfg().QuotaFallback && quotaActive() && quotaModelAffected(modelCfg) {
 		if fbName, fbCfg, ok := quotaFallbackModel(modelCfg); ok {
@@ -332,39 +328,35 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	var res *StreamResult
 	fbName := ""
 	if rtCfg().MultiTurn && len(images) == 0 && modelCfg.Tool == 0 {
-		// 多轮：按历史前缀识别续接，命中就只发新消息、历史留服务端。带 tools 也走这条。
+		// Multi-turn: detect a continuation by history prefix; on a hit, send only the new message and leave the history on the server. Also taken with tools.
 		text, toolCalls, res, err = callGeminiConv(messages, modelCfg, tools, req["tool_choice"], onDelta, onReasoning)
 	} else {
 		text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, onDelta, onReasoning)
 	}
-	// 流收尾：罐头闸门判定（扣住的 220 字节里是不是罐头短句）。判定完该放行的
-	// 放行；是罐头则一个字都没出门，下面的检测触发干净重试。
+	// Stream finalization: canned-gate verdict (are the held 220 bytes a canned sentence?). After the verdict, release what should be released; if canned, nothing has left yet, and the detection below triggers a clean retry.
 	if cgate != nil {
 		cgate.Finish()
 	}
-	// 额度耗尽的签名回复是 200 + 一句 65 字节的固定措辞（见 quota.go）。以前它被
-	// 当正常回复透传，agentic 客户端拿到没有 tool_call 的散文就中断。这里翻成
-	// 显式错误，让下面的分支走降级/429。流式已吐出的部分无法收回，但签名句
-	// 很短、且我们立刻 sse.Fail，客户端只看到一次干净的失败而不是假成功。
+	// The quota-exhausted signature reply is 200 + one fixed 65-byte sentence (see quota.go). It used to be passed through as a normal reply, and agentic clients aborted on prose without a tool_call. Translated here into an explicit error so the branches below take the downgrade/429 path. Parts already streamed can't be taken back, but the signature sentence is short and we sse.Fail immediately — the client sees one clean failure instead of a fake success.
 	if err == nil && isQuotaText(text) {
 		err = &QuotaLimitError{Model: modelName}
 		text = ""
 	}
-	// 其余罐头错误（"Sorry, something went wrong" / "Ich bin ein Sprachmodell…"
-	// 等瞬态短句，按账号语言出）：同样翻成显式错误，下面走**单轮重发**——
-	// 重发走 callGemini（全量 prompt），不再续接 conv（罐头句已进服务端历史，
-	// 续接会把它当正常轮次，模型容易顺着继续罐头）。
+	// Other canned errors ("Sorry, something went wrong" / "Ich bin ein Sprachmodell…", short
+	// transient sentences in the account's language): also translated into explicit errors,
+	// handled below with a **single-turn retry** — the retry goes through callGemini (full prompt),
+	// not a conv continuation (the canned sentence is already in the server-side history; continuing would treat it as a normal turn, and the model tends to keep canning).
 	if err == nil && isCannedErrorText(text) {
 		err = &CannedReplyError{Text: text}
 		text = ""
 	}
-	// 3.6+ 工具拒答（见 toolrefusal.go）：模型把注入的工具协议当 prompt
-	// injection 拒了，返回一段「我无法访问文件系统/工具」的散文。tool_choice
-	// 要求了工具（required / 指定函数）却拿到无 tool_calls 的拒答时，翻成
-	// 显式错误 —— agentic 客户端拿到 finish_reason=stop 的散文就会误以为
-	// 任务完成，benchmark 的 run 就是这么卡死的。
-	// 只有「客户端明确要求必须调工具」才报错：tool_choice=auto 下模型选择
-	// 不调工具并解释原因，是合法行为，原样透传。
+	// 3.6+ tool refusal (see toolrefusal.go): the model treats the injected tool protocol as a
+	// prompt injection and refuses, returning prose like "I cannot access the filesystem/tools".
+	// When tool_choice requires tools (required / named function) but the reply has no
+	// tool_calls, translate into an explicit error — agentic clients receiving finish_reason=stop
+	// prose would mistake the task for done; that is how benchmark runs got stuck.
+	// Only error when "the client explicitly required a tool call": under tool_choice=auto,
+	// the model choosing not to call tools and explaining why is legitimate and is passed through as-is.
 	if err == nil && len(tools) > 0 && len(toolCalls) == 0 {
 		if mode, _ := parseToolChoice(req["tool_choice"]); mode == "required" && isToolRefusalText(text) {
 			err = &ToolRefusalError{Model: modelName, Text: text}
@@ -373,8 +365,8 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if tre, ok := err.(*ToolRefusalError); ok {
-			// 流式已开就 Fail（拒答散文通常已被闸门放行一部分）；未开流回 502。
-			// 重试没有意义：十种 prompt 框架实测都改变不了模型的拒答立场。
+			// If streaming already started, Fail (the refusal prose usually got partly through the gate);
+			// without a stream, 502. Retrying is pointless: ten prompt framings measured, none changed the model's refusal stance.
 			recordRequest("chat.completions", modelName, prompt, "", res, 502, tre.Error(), stream)
 			if sse != nil && sse.Started() {
 				sse.Fail(tre)
@@ -390,11 +382,11 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if cre, ok := err.(*CannedReplyError); ok {
-			// 瞬态罐头错误：单轮重发**最多 3 次**（实测上游连续抖动 2-3 次后恢复；
-			// 只重发一次不够，benchmark 里两次罐头连着出现就把 run 卡死过）。
-			// 重发走 callGemini（全量 prompt），不再续接 conv —— 罐头句已进服务端
-			// 历史，续接会把它当正常轮次，模型容易顺着继续罐头。
-			// 流式已开（sse.Started）就不再重发：吐出去的字收不回。
+			// Transient canned error: single-turn retry, **at most 3 times** (measured, the upstream
+			// recovers after 2-3 consecutive blips; one retry is not enough — two canned errors in a
+			// row once froze a benchmark run). The retry goes through callGemini (full prompt), not
+			// a conv continuation — the canned sentence is already in the server-side history;
+			// continuing would treat it as a normal turn, and the model tends to keep canning. No retry once the stream started (sse.Started): what left can't be taken back.
 			recordRequest("chat.completions", modelName, prompt, "", res, 502, cre.Error(), stream)
 			if sse != nil && sse.Started() && (cgate == nil || cgate.flushedForStarted()) {
 				sse.Fail(cre)
@@ -410,14 +402,14 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 if !isCannedErrorText(text) {
-				// 重发拿到了非罐头内容 —— 但可能正是 3.6+ 的工具拒答（罐头
-				// 重试常先抖一两次「I'm having a hard time」，随后模型给出
-				// 拒答散文；isCannedErrorText 放行它，这里补第二道判定）。
+				// The retry got non-canned content — but it may be exactly the 3.6+ tool refusal
+				// (canned retries often blip once or twice with "I'm having a hard time" first, then
+				// the model produces refusal prose; isCannedErrorText lets it through, so add a second check here).
 				if len(tools) > 0 && len(toolCalls) == 0 {
 					if mode, _ := parseToolChoice(req["tool_choice"]); mode == "required" && isToolRefusalText(text) {
 						err = &ToolRefusalError{Model: modelName, Text: text}
 						text = ""
-						break // retryOK bleibt false → 拒答处理
+						break // retryOK stays false → refusal handling
 					}
 				}
 				retryOK = true
@@ -427,7 +419,7 @@ if !isCannedErrorText(text) {
 			}
 if !retryOK {
 			if tre, ok := err.(*ToolRefusalError); ok {
-				// 罐头重试后出现拒答：同上面的拒答出口，干净报错。
+				// Refusal after canned retries: same refusal exit as above, clean error.
 				recordRequest("chat.completions", modelName, prompt, "", res, 502, tre.Error(), stream)
 				if sse != nil && sse.Started() {
 					sse.Fail(tre)
@@ -448,11 +440,10 @@ if !retryOK {
 				}})
 				return
 			}
-			// 重发成功：走正常返回路径。conv 状态已与客户端历史脱钩，
-			// 下次请求的续接指纹会自然不命中、当新会话全量重发，安全。
+			// Retry succeeded: take the normal return path. The conv state is already decoupled from the client history; the next request's continuation fingerprint simply won't match, and it re-sends everything as a new conversation. Safe.
 			recordRequest("chat.completions", modelName, prompt, text, res, 200, "canned-error retry ok", stream)
 			if stream {
-				// 重发没带流式回调（置空防重复），这里一次性补发正文+tool_calls。
+				// The retry ran without streaming callbacks (nulled to avoid duplicates); send body + tool_calls here in one shot.
 				if res != nil && res.Reasoning != "" {
 					sse.SendReasoning(res.Reasoning)
 				}
@@ -482,22 +473,19 @@ if !retryOK {
 			return
 		}
 		if qle, ok := err.(*QuotaLimitError); ok {
-			// 额度签名回复（65 字节固定措辞）先按**疑点**处理，retry-based 确认：
-			// 用同一模型原样重发一次，签名再现 = 真耗尽 → 锁 5h + 降级/429；
-			// 不再现 = 瞬态抖动 → 用重发结果正常返回。（/app 横幅方案已废弃，
-			// 那个 out_of_quota 字符串是永久 UTM 链接，额度正常时也在页面里。）
+			// The quota signature reply (fixed 65-byte wording) is first treated as a **suspect**, confirmed by a retry: re-send once with the same model verbatim; the signature reappears = truly exhausted → lock 5h + downgrade/429; doesn't reappear = transient blip → return the retry result normally. (The /app banner approach was dropped: its out_of_quota string is a permanent UTM link, present in the page even when quota is fine.)
 			recordRequest("chat.completions", modelName, prompt, "", res, 429, qle.Error(), stream)
-			// 已开流且闸门已放行（非罐头路径真吐过字）才 Fail；罐头闸门扣住
-			// 头部时 sse 可能还没 start，那就可以干净重试。
+			// Fail only if the stream is already open and the gate has released (non-canned path
+			// really wrote something); while the canned gate holds the head, sse may not have started yet, and a clean retry is possible.
 			if sse != nil && sse.Started() && (cgate == nil || cgate.flushedForStarted()) {
-				sse.Fail(qle) // 已开流，只能失败终止
+				sse.Fail(qle) // stream already open, can only fail out
 				return
 			}
 			logf("[quota] 检出额度签名回复（%s），原模型重发一次确认", modelName)
 			text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, nil, nil)
 			confirmed := err == nil && isQuotaText(text)
 			if !confirmed && err == nil {
-				// 瞬态：重发拿到了正常内容 → 正常返回（不锁、不降级）。
+				// Transient: the retry got normal content → return normally (no lock, no downgrade).
 				recordRequest("chat.completions", modelName, prompt, text, res, 200, "quota-signature transient, retry ok", stream)
 				if stream {
 					if res != nil && res.Reasoning != "" {
@@ -528,17 +516,16 @@ if !retryOK {
 				}
 				return
 			}
-			// 签名再现（或重发出错且错误也是额度类）→ 真耗尽，锁 + 降级/429。
+			// Signature reappeared (or the retry errored with a quota-class error) → truly exhausted: lock + downgrade/429.
 			markQuotaLimited()
 			if err != nil && !isQuotaText(text) {
-				// 重发失败但不是额度签名（网络/上游错）：如实上报，别误导成额度。
+				// The retry failed but not with the quota signature (network/upstream error): report it as-is, don't mislead as a quota issue.
 				recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
 				writeJSON(w, 502, map[string]interface{}{"error": map[string]string{"message": "upstream error: " + err.Error()}})
 				return
 			}
 			if fb, fbCfg, ok := quotaFallbackModel(modelCfg); rtCfg().QuotaFallback && ok {
-				// 降级重发一次（走单轮路径：conv 状态已作废，flash-lite 也不受限，
-				// 直接发全量 prompt 最稳）。流式回调置空 —— 前缀说明必须最先出现。
+				// One downgrade retry (single-turn path: the conv state is invalidated, flash-lite is not quota-limited, so sending the full prompt is safest). Streaming callbacks nulled — the prefix note must come first.
 				logf("[quota] %s 额度耗尽（重发确认），降级 %s 重发", modelName, fb)
 				fbPrefix = quotaFallbackPrefix(modelName, fb) + "\n\n"
 				text, toolCalls, res, err = callGemini(prompt, latest, fbCfg, tools, images, nil, nil)
@@ -565,12 +552,12 @@ if !retryOK {
 			recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
 		}
 		if sse != nil && sse.Started() {
-			sse.Fail(err) // 已经开流，HTTP 状态码改不了了
+			sse.Fail(err) // stream already open, the HTTP status code can't be changed anymore
 			return
 		}
 		if ptl, ok := err.(*PromptTooLongError); ok {
-			// 明确报 400 而不是发出去让上游把用户的问题截掉 —— 那样客户端拿到的是
-			// 一个答非所问的 200，根本看不出请求其实没送到。
+			// Report 400 explicitly rather than sending it and letting the upstream truncate the
+			// user's question — that hands the client an off-topic 200 with no hint the request never got through.
 			writeJSON(w, 400, map[string]interface{}{"error": map[string]string{
 				"message": ptl.Error(), "type": "invalid_request_error",
 				"code": "context_length_exceeded"}})
@@ -590,7 +577,7 @@ if !retryOK {
 
 	msg := map[string]interface{}{"role": "assistant"}
 	if text != "" {
-		// 降级说明前缀：quota fallback 时先告知再正文（流式没发过前缀，这里补）。
+		// Downgrade note prefix: on quota fallback, notify first, then the body (the prefix was never streamed; add it here).
 		if fbPrefix != "" && sse != nil && !strings.Contains(sentText(res, gate), quotaFallbackNote) {
 			sse.SendContent(fbPrefix)
 		}
@@ -599,8 +586,7 @@ if !retryOK {
 	} else {
 		msg["content"] = nil
 	}
-	// 思考链走 reasoning_content —— DeepSeek-R1 带起来的事实标准，newapi 和
-	// 主流客户端都认，会渲染成可折叠的「思考过程」。只有 3.1 Pro 有，其余为空。
+	// The reasoning chain goes into reasoning_content — the de-facto standard popularized by DeepSeek-R1; newapi and mainstream clients recognize it and render it as a collapsible "thought process". Only 3.1 Pro has one; the rest are empty.
 	if res != nil && res.Reasoning != "" {
 		msg["reasoning_content"] = res.Reasoning
 	}
@@ -616,15 +602,13 @@ if !retryOK {
 		if includeUsage {
 			usage = usageOf(prompt, text, res)
 		}
-		// 真流式已发出的不重发，只补尾巴；有 tools 时没走真流式，这里发全量。
-		// 思考链同理，且要在正文之前补——保持「先思考后回答」的顺序。
+		// What true streaming already sent is not re-sent; only the tail is made up. With tools, true streaming never ran, so the full text is sent here. Same for the reasoning chain, which must be made up before the body — keeping the "think first, then answer" order.
 		if res != nil && res.Reasoning != "" {
 			if rest := remainingOf(res.Reasoning, res.EmittedReasoning); rest != "" {
 				sse.SendReasoning(rest)
 			}
 		}
-		// 补尾巴要跟**实际发给客户端的内容**比。走了闸门时 res.Emitted 含围栏
-		// 原文，拿它比前缀会对不上，尾巴会整段丢掉。
+		// The tail must compare against **what was actually sent to the client**. Through the gate, res.Emitted contains the raw fence; prefix-comparing against it fails to match, and the whole tail would be dropped.
 		if rest := remainingOf(text, sentText(res, gate)); rest != "" {
 			sse.SendContent(rest)
 		}
@@ -649,7 +633,7 @@ if !retryOK {
 	})
 }
 
-// usageOf 是 buildUsageWithReasoning 的便捷包装，res 可能为 nil。
+// usageOf is a convenience wrapper around buildUsageWithReasoning; res may be nil.
 func usageOf(prompt, text string, res *StreamResult) map[string]int {
 	r := ""
 	if res != nil {
@@ -658,7 +642,7 @@ func usageOf(prompt, text string, res *StreamResult) map[string]int {
 	return buildUsageWithReasoning(prompt, text, r, false)
 }
 
-// finishFor 按 tool_calls 有无返回 finish_reason。
+// finishFor returns the finish_reason based on whether tool_calls exist.
 func finishFor(toolCalls []ToolCall) string {
 	if len(toolCalls) > 0 {
 		return "tool_calls"
@@ -666,7 +650,7 @@ func finishFor(toolCalls []ToolCall) string {
 	return "stop"
 }
 
-// assistantMessage 拼一条 assistant 消息体（正文/工具调用/思考链）。
+// assistantMessage assembles one assistant message body (text/tool calls/reasoning chain).
 func assistantMessage(text string, toolCalls []ToolCall, res *StreamResult) map[string]interface{} {
 	msg := map[string]interface{}{"role": "assistant"}
 	if text != "" {
@@ -683,8 +667,8 @@ func assistantMessage(text string, toolCalls []ToolCall, res *StreamResult) map[
 	return msg
 }
 
-// remainingText 返回最终文本里还没通过 onDelta 发出去的部分。
-// 真流式下通常只剩末尾一点或为空；没走真流式时 Emitted 为空，返回全文。
+// remainingText returns the part of the final text not yet sent via onDelta. In true
+// streaming usually only a tail bit or nothing; without true streaming, Emitted is empty and the full text is returned.
 func remainingText(text string, res *StreamResult) string {
 	if res == nil {
 		return text
@@ -692,9 +676,9 @@ func remainingText(text string, res *StreamResult) string {
 	return remainingOf(text, res.Emitted)
 }
 
-// sentText 返回本次实际发给客户端的正文。
-// 没走围栏闸门时就是 deltaTracker 发出的那些；走了闸门时以闸门为准 ——
-// 闸门扣掉了围栏，跟 res.Emitted 不是同一份文本。
+// sentText returns the body actually sent to the client this time. Without the fence
+// gate it's what the deltaTracker emitted; through the gate, the gate is authoritative —
+// it withheld the fence, so it is not the same text as res.Emitted.
 func sentText(res *StreamResult, gate *toolFenceGate) string {
 	if gate != nil {
 		return gate.Sent()
@@ -705,7 +689,7 @@ func sentText(res *StreamResult, gate *toolFenceGate) string {
 	return res.Emitted
 }
 
-// remainingOf 返回 full 里还没发出去的尾巴。emitted 为空时返回全文。
+// remainingOf returns the not-yet-sent tail of full. With emitted empty, returns the full text.
 func remainingOf(full, emitted string) string {
 	if emitted == "" {
 		return full
@@ -713,7 +697,7 @@ func remainingOf(full, emitted string) string {
 	if strings.HasPrefix(full, emitted) {
 		return full[len(emitted):]
 	}
-	// 前缀对不上（上游中途改写过），已发的收不回，不再补发以免重复。
+	// Prefix doesn't match (the upstream rewrote mid-stream); what was sent can't be taken back, and nothing more is sent to avoid duplication.
 	return ""
 }
 
@@ -859,17 +843,14 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 	rid := "resp_" + randHex(16)
 	mid := "msg_" + randHex(12)
 
-	// Responses 流式协议要求先 response.output_item.added 声明 item，才能对它发
-	// output_text.delta；漏了 Codex 这类严格客户端会报 "OutputTextDelta without active
-	// item"。msgIndex/nextIdx 给每个 output item 分配序号，ensureMsg 惰性声明 message
-	// item（首个 delta 时才发，纯工具调用轮不发空 message）。
+	// The Responses streaming protocol requires a response.output_item.added event declaring the item before sending output_text.delta on it; skipping it makes strict clients like Codex report "OutputTextDelta without active item". msgIndex/nextIdx assign each output item a number; ensureMsg lazily declares the message item (only on the first delta; a pure tool-call turn sends no empty message).
 	msgIndex := -1
 	nextIdx := 0
 	var ensureMsg func()
 
-	// 流式要先把头和 response.created 发出去，才能边收边推 delta。
-	// 代价是一旦开了流 HTTP 状态码就改不了了，上游失败只能用 response.failed
-	// 事件告知 —— 跟 /v1/chat/completions 那条路的取舍一致。
+	// Streaming must send the headers and response.created first so deltas can be pushed as
+	// they arrive. The cost: once the stream opens, the HTTP status code is fixed; upstream
+	// failures can only be reported via a response.failed event — the same trade-off as the /v1/chat/completions path.
 	var writeEvent func(string, interface{})
 	var emitDelta func(string)
 	var gate *toolFenceGate
@@ -877,7 +858,7 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("X-Accel-Buffering", "no") // 关掉反代对 SSE 的缓冲，见 sse.go
+		w.Header().Set("X-Accel-Buffering", "no") // disables reverse-proxy SSE buffering, see sse.go
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(200)
 		flusher, _ := w.(http.Flusher)
@@ -928,7 +909,7 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 				"delta":         d,
 			})
 		}
-		// 跟 chat 那条路同一套围栏闸门：带 tools 时只放行确定不在围栏里的部分。
+		// Same fence gate as the chat path: with tools, only parts certainly outside the fence are let through.
 		if len(tools) == 0 {
 			onDelta = emitDelta
 		} else {
@@ -937,8 +918,8 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// onReasoning 传 nil：Responses API 有自己的 reasoning 事件形状，跟 chat 的
-	// reasoning_content 不通用，这条路目前不暴露思考链。
+	// onReasoning is nil: the Responses API has its own reasoning event shape, incompatible
+	// with chat's reasoning_content; this path does not expose the reasoning chain for now.
 	var text string
 	var toolCalls []ToolCall
 	var res *StreamResult
@@ -963,8 +944,8 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if ptl, ok := err.(*PromptTooLongError); ok {
-			// 明确报 400 而不是发出去让上游把用户的问题截掉 —— 那样客户端拿到的是
-			// 一个答非所问的 200，根本看不出请求其实没送到。
+			// Report 400 explicitly rather than sending it and letting the upstream truncate the
+			// user's question — that hands the client an off-topic 200 with no hint the request never got through.
 			writeJSON(w, 400, map[string]interface{}{"error": map[string]string{
 				"message": ptl.Error(), "type": "invalid_request_error",
 				"code": "context_length_exceeded"}})
@@ -1009,14 +990,14 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	recordRequest("responses", modelName, prompt, text, res, 200, "", stream)
 	if stream {
-		// 补上闸门扣住、或前缀 diff 跳过的尾巴，再发终态事件。
+		// Make up the tail the gate withheld or the prefix diff skipped, then send the terminal events.
 		if rest := remainingOf(text, sentText(res, gate)); rest != "" {
 			emitDelta(rest)
 		}
 		for _, item := range output {
 			switch item["type"] {
 			case "function_call":
-				// 工具调用 item 也要 added → done 包起来，Codex 才认。
+				// Tool-call items must also be wrapped added → done, or Codex won't accept them.
 				idx := nextIdx
 				nextIdx++
 				writeEvent("response.output_item.added", map[string]interface{}{
@@ -1033,7 +1014,7 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 					"type": "response.output_item.done", "output_index": idx, "item": item,
 				})
 			case "message":
-				ensureMsg() // 没有 delta 但有正文时，这里补声明 message item
+				ensureMsg() // with a body but no delta, declare the message item here
 				if cps, ok := item["content"].([]map[string]interface{}); ok {
 					for ci, cp := range cps {
 						writeEvent("response.output_text.done", map[string]interface{}{

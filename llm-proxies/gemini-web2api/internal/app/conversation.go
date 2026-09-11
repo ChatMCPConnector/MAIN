@@ -17,13 +17,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// convState 是一路 Gemini 原生会话的状态。整条会话绑定同一个 cookie / 出口，中途不换
-// —— 换了 Gemini 就当成另一个会话，续接的 cid 失效。
+// convState is the state of one native Gemini conversation. The whole conversation is bound
+// to one cookie / egress and never switches mid-way — a switch makes Gemini treat it as a different conversation and the continuation cid becomes invalid.
 type convState struct {
 	cid, rid, rcid, tok26 string
-	turn                  int    // 会话内轮次索引，填 inner[17]，逐轮 +1
-	cookie                string // 会话绑定 cookie：登录号的 cookie，或匿名 /app 拿的 session
-	sapisid               string // 登录态算 SAPISIDHASH 用；匿名为空
+	turn                  int    // turn index within the conversation, goes into inner[17], +1 per turn
+	cookie                string // conversation-bound cookie: a signed-in account's cookie, or the session from an anonymous /app fetch
+	sapisid               string // for computing SAPISIDHASH when signed in; empty for anonymous
 	isLogin               bool
 	accountID             int64
 	proxyID               int64
@@ -32,7 +32,7 @@ type convState struct {
 }
 
 const (
-	// convTTL 跟导出 cookie ~2 小时寿命对齐，过期的会话状态没有复用价值。
+	// convTTL aligns with the ~2-hour lifetime of exported cookies; an expired conversation state has no reuse value.
 	convTTL = 90 * time.Minute
 	convMax = 4000
 )
@@ -42,7 +42,7 @@ var (
 	convStore = map[string]*convState{}
 )
 
-// convDelete 作废一路会话（续接失败时用，避免客户端重试还撞同一路死会话）。
+// convDelete invalidates one conversation (used on continuation failure, so client retries don't hit the same dead conversation again).
 func convDelete(key string) {
 	if key == "" {
 		return
@@ -52,7 +52,7 @@ func convDelete(key string) {
 	convMu.Unlock()
 }
 
-// convGet 取一路会话，顺带清掉过期的。
+// convGet fetches one conversation and prunes expired ones along the way.
 func convGet(key string) *convState {
 	if key == "" {
 		return nil
@@ -70,7 +70,7 @@ func convGet(key string) *convState {
 	return st
 }
 
-// convPut 存一路会话，超量就按最旧的淘汰一批。
+// convPut stores one conversation; over the limit, evicts a batch of the oldest.
 func convPut(key string, st *convState) {
 	if key == "" {
 		return
@@ -80,7 +80,7 @@ func convPut(key string, st *convState) {
 	st.updated = time.Now()
 	convStore[key] = st
 	if len(convStore) > convMax {
-		// 简单淘汰：删掉过期的；还超就删最旧的一小批。
+		// Simple eviction: drop expired ones; still over, drop a small batch of the oldest.
 		var oldestK string
 		var oldestT time.Time
 		first := true
@@ -99,16 +99,16 @@ func convPut(key string, st *convState) {
 	}
 }
 
-// canonicalMessages 把消息列表压成 role+text 的稳定串，用来算会话指纹。
-// 只取 role 和文本内容 —— 客户端每轮重发同样的历史，压出来的串一致才能识别续接。
+// canonicalMessages flattens the message list into a stable role+text string for
+// conversation fingerprinting. Only role and text content are taken — clients
 //
-// 2026-09-11 修正（Agent-Loop-Support）：tool 消息**进指纹**。原版只压 role+content，
-// agent 的历史是 user / assistant(null+tool_calls) / tool(result) 交替 —— assistant
-// 的 content 为 null 压成空串、tool 的 content 是执行结果。convChildKey 存的是
-// 「我们上次回复后客户端下轮会带来的历史」，那条历史里 tool result 已经在；
-// 两边用同一个 canonical 函数才对得上。此前 tool 消息压出来没差别，assistant-null
-// 前后两轮不一致，续接命中率在 agent 循环里掉到几乎为零（每个 Turn 新会话，
-// 7 Turns → 4+ Sessions，上游当 spam 限流）。
+// 2026-09-11 fix (Agent-Loop-Support): tool messages **are included in the fingerprint**.
+// The original only flattened role+content, but an agent's history alternates
+// user / assistant(null+tool_calls) / tool(result) — the assistant's content is null,
+// flattened to an empty string; the tool's content is the execution result.
+// convChildKey stores "the history the client will bring next turn after our reply",
+// and the tool result is already in that history; both sides must use the same canonical function to match.
+// Previously tool messages flattened identically and the assistant-null differed between turns, so continuation hit rates in agent loops dropped to nearly zero (every turn a new conversation; 7 turns → 4+ sessions; the upstream rate-limits it as spam).
 func canonicalMessages(messages []map[string]interface{}) string {
 	var b strings.Builder
 	for _, m := range messages {
@@ -125,14 +125,14 @@ func hashStr(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// convParentKey 是"这轮之前的历史"的指纹：除最后一条消息外的全部。
-// 命中 store 说明这是某路已知会话的延续，只要发最后一条新消息即可。
+// convParentKey is the fingerprint of "the history before this turn": everything
+// except the last message. A store hit means this is the continuation of a known conversation; only the last new message needs sending.
 //
-// 2026-09-11 Agent-Loop-Support：agent 的历史是 user → assistant(tool_calls) →
-// tool(result) → user 交替。tool 的 result 内容是客户端本地执行出来的，代理
-// 在上一轮存 childKey 时不可能知道 —— 所以除了精确指纹外，convGetByParentKey
-// 还会试「剥掉结尾 tool 消息」的降级指纹。assistant(tool_calls) 在指纹里压成
-// 空串（content 为 null），跟 childKey 存的形状一致，剥掉 tool 后正好对上。
+// 2026-09-11 Agent-Loop-Support: an agent's history alternates user →
+// assistant(tool_calls) → tool(result) → user. The tool's result content is
+// produced locally on the client and unknowable when the proxy stores the
+// childKey last turn — so besides the exact fingerprint, convGetByParentKey also tries a fallback fingerprint with the trailing tool messages stripped.
+// assistant(tool_calls) flattens to an empty string in the fingerprint (content
 func convParentKey(messages []map[string]interface{}) string {
 	if len(messages) < 2 {
 		return ""
@@ -140,8 +140,8 @@ func convParentKey(messages []map[string]interface{}) string {
 	return hashStr(canonicalMessages(messages[:len(messages)-1]))
 }
 
-// stripTrailingToolMsgs 去掉结尾连续的 tool 消息（assistant 的 tool_calls 块保留，
-// canonical 压它 content=null → 空串，和 childKey 一致）。
+// stripTrailingToolMsgs removes the trailing run of tool messages (the assistant's
+// tool_calls block stays; canonical flattens its content=null → empty string, matching childKey).
 func stripTrailingToolMsgs(messages []map[string]interface{}) []map[string]interface{} {
 	n := len(messages)
 	for n > 0 && getStr(messages[n-1], "role") == "tool" {
@@ -153,16 +153,16 @@ func stripTrailingToolMsgs(messages []map[string]interface{}) []map[string]inter
 	return messages[:n]
 }
 
-// parentKeyCandidate：一个候选指纹 + 它对应的历史前缀长度（发送新消息时
-// 要知道从哪条开始才是"新的"）。
+// parentKeyCandidate: one candidate fingerprint plus the history prefix length it
+// corresponds to (when sending the new message, we need to know where "new" starts).
 type parentKeyCandidate struct {
 	key     string
 	prefixLen int
 }
 
-// parentKeyCandidates 按优先级列出这轮历史的识别指纹：
-//  1. 精确：全部历史（除最后一条新消息）
-//  2. 降级：同上，但剥掉结尾 tool 消息 —— agent 把工具结果带回来的场景
+// parentKeyCandidates lists this turn's identification fingerprints by priority:
+//  1. exact: the whole history (minus the last new message)
+//  2. fallback: same, with trailing tool messages stripped — the agent-brings-tool-results-back case
 func parentKeyCandidates(messages []map[string]interface{}) []parentKeyCandidate {
 	if len(messages) < 2 {
 		return nil
@@ -179,8 +179,8 @@ func parentKeyCandidates(messages []map[string]interface{}) []parentKeyCandidate
 	}
 }
 
-// convGetByParentKey 按候选指纹找会话：精确命中优先，降级指纹兜底。
-// 返回会话 + 命中的前缀长度（= 服务端历史已覆盖的条数，之后的全要发）。
+// convGetByParentKey finds a conversation by candidate fingerprints: exact hit first, fallback fingerprint as backstop.
+// Returns the conversation plus the matched prefix length (= how many messages the server-side history already covers; everything after must be sent).
 func convGetByParentKey(messages []map[string]interface{}) (*convState, int) {
 	for _, cand := range parentKeyCandidates(messages) {
 		if conv := convGet(cand.key); conv != nil {
@@ -190,8 +190,8 @@ func convGetByParentKey(messages []map[string]interface{}) (*convState, int) {
 	return nil, 0
 }
 
-// convChildKey 是"这轮之后的历史"的指纹：历史 + 本轮模型回复。
-// 下一轮请求的 parentKey 会正好等于它（客户端把我们的回复原样带回来），从而续上。
+// convChildKey is the fingerprint of "the history after this turn": history + this
+// turn's model reply. The next request's parentKey equals it exactly (the client brings our reply back verbatim), which continues the conversation.
 func convChildKey(messages []map[string]interface{}, responseText string) string {
 	full := append(append([]map[string]interface{}{}, messages...),
 		map[string]interface{}{"role": "assistant", "content": responseText})
@@ -200,8 +200,8 @@ func convChildKey(messages []map[string]interface{}, responseText string) string
 
 var rcidRe = regexp.MustCompile(`"(rc_[A-Za-z0-9_-]{6,})"`)
 
-// parseConvIDs 从 StreamGenerate 响应里取续接要用的四样：cid=[1][0]、rid=[1][1]、
-// tok26=帧[26]、rcid=正文里的 rc_xxx（登录态续接第 3 位要用它，匿名为空）。
+// parseConvIDs extracts the four things continuation needs from a StreamGenerate
+// response: cid=[1][0], rid=[1][1], tok26=frame[26], rcid=the rc_xxx in the body (needed as the 3rd element when continuing signed in; empty for anonymous).
 func parseConvIDs(raw string) (cid, rid, rcid, tok26 string) {
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
@@ -248,14 +248,13 @@ func parseConvIDs(raw string) (cid, rid, rcid, tok26 string) {
 	return
 }
 
-// getAnonSession 匿名 GET /app 拿一份 session cookie（NID/COMPASS 等），给匿名多轮当会话
-// 载体。续接请求必须每轮带上它，否则被服务端当新会话（实测不带 0/4 通、带 4/4 通）。
-// 必须走跟正式请求同一出口。
+// getAnonSession does an anonymous GET /app for a session cookie (NID/COMPASS etc.),
+// the conversation carrier for anonymous multi-turn. Continuation requests must
+// carry it every turn, or the server treats it as a new conversation (measured: without it 0/4 pass, with it 4/4).
 //
-// 2026-09-10：单轮路径（gemini.go）也开始用它当匿名请求的传输载体（否则上游把
-// 完结标记帧压到 ~60s 才发）。为此加了按出口的进程内缓存（TTL 30 分钟，导出 cookie
-// ~2h 寿命，30 分钟足够安全）——不是每请求都打一次 /app，省一个往返和限流额度。
-// conversation 路径仍然自己拿（conv 绑定自己的 cookie，不共用缓存）。
+// 2026-09-10: the single-turn path (gemini.go) also uses it as the transport vehicle for anonymous requests (otherwise the upstream delays the end-marker frame to ~60s).
+// Hence an in-process per-egress cache (TTL 30 minutes; exported cookies live ~2h, so 30 minutes is safely inside) — not one /app hit per request,
+// saving a round trip and rate-limit quota. The conversation path still fetches its own (the conv binds its own cookie; the cache is not shared).
 var (
 	anonSessMu    sync.Mutex
 	anonSessCache = map[string]anonSessEntry{}
@@ -268,8 +267,8 @@ type anonSessEntry struct {
 
 const anonSessionTTL = 30 * time.Minute
 
-// getAnonSessionCached 按出口缓存的匿名 session；过期或没拿过就现取。
-// 拿不到时返回空串（调用方按无 cookie 继续，不报错）。
+// getAnonSessionCached: the anonymous session cached per egress; fetched fresh
+// when expired or never obtained. Returns an empty string on failure (the caller
 func getAnonSessionCached(proxyURL string) string {
 	anonSessMu.Lock()
 	e, ok := anonSessCache[proxyURL]
@@ -336,13 +335,13 @@ func getAnonSession(proxyURL string) (string, error) {
 	return strings.Join(pairs, "; "), nil
 }
 
-// webUA 是匿名 GET /app 的 User-Agent（tls-client 路径要手动带）。
+// webUA is the User-Agent for the anonymous GET /app (the tls-client path must set it manually).
 const webUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
 	"(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 
-// streamGenerateConv 发一路会话的一轮。turn==0 是首轮（建会话），>0 是续接（只发新消息）。
-// 整条会话绑定 conv.cookie / conv.proxyID，中途不换号不换出口。成功后回填 conv 的
-// cid/rid/rcid/tok26 和 turn+1，供下一轮续接。
+// streamGenerateConv sends one turn of a conversation. turn==0 is the first turn (creating the conversation), >0 is a continuation (only the new message).
+// The whole conversation is bound to conv.cookie / conv.proxyID, never switching account or egress mid-way.
+// On success, fills the conv's cid/rid/rcid/tok26 and turn+1 for the next continuation.
 func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 	onDelta, onReasoning func(string)) (*StreamResult, error) {
 	p, slotOK, slotErr := acquireSlot(conv.proxyID)
@@ -353,12 +352,12 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 	proxyURL := p.URL
 	pickedOK := p.ID > 0
 
-	// 首轮定出口；续接沿用会话原出口（acquireSlot 已优先，但拿不到原出口时只能换，
-	// 换了续接大概率失败，靠调用方回退到全量重发兜底）。
+	// The first turn fixes the egress; continuations reuse the conversation's original
+	// egress (acquireSlot already prefers it, but if unavailable it must switch —
 	if conv.turn == 0 {
 		conv.proxyID = p.ID
 		conv.proxyURL = proxyURL
-		// 匿名首轮：没有登录 cookie，就地拿一份 session cookie 当会话载体。
+		// Anonymous first turn: no signed-in cookie; fetch a session cookie on the spot as the conversation carrier.
 		if conv.cookie == "" && !conv.isLogin {
 			c, err := getAnonSession(proxyURL)
 			if err != nil {
@@ -368,7 +367,7 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 		}
 	}
 
-	// 登录态每轮要带 at（XSRF）；匿名不要。
+	// Signed-in turns must carry at (XSRF); anonymous doesn't.
 	xsrf := ""
 	if conv.isLogin && conv.cookie != "" {
 		if tok, err := getXSRF(conv.cookie, proxyURL); err == nil {
@@ -385,7 +384,7 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 	if conv.turn == 0 {
 		inner[2] = []interface{}{"", "", "", nil, nil, nil, nil, nil, nil, ""}
 	} else {
-		// 续接：[cid, rid, rcid(登录)/""(匿名), null×6, tok26]
+		// Continuation: [cid, rid, rcid(signed-in)/""(anonymous), null×6, tok26]
 		inner[2] = []interface{}{conv.cid, conv.rid, conv.rcid,
 			nil, nil, nil, nil, nil, nil, conv.tok26}
 	}
@@ -489,7 +488,7 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 			}
 			continue
 		}
-		// 成功：回填续接状态。
+		// Success: fill in the continuation state.
 		cid, rid, rcid, tok26 := parseConvIDs(string(raw))
 		if cid != "" {
 			conv.cid = cid
@@ -500,7 +499,7 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 		if rcid != "" {
 			conv.rcid = rcid
 		}
-		conv.tok26 = tok26 // 每轮更新（可能为空）
+		conv.tok26 = tok26 // updated every turn (may be empty)
 		conv.turn++
 		if pickedOK {
 			recordProxyResult(p.ID, true, "")
@@ -521,17 +520,17 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 	return &StreamResult{ProxyID: p.ID, ProxyName: p.Name, AccountID: conv.accountID}, lastErr
 }
 
-// callGeminiConv 是多轮开启时的入口：按历史前缀识别续接。
-//   - 命中已知会话 → 只发最后一条新消息（user 或 tool 结果），历史留服务端（绕开字节墙）。
-//   - 没命中 → 新建会话，首轮发全量拼接的历史（含 tools 指令，把当前上下文交给服务端）。
+// callGeminiConv is the multi-turn entry point: identifies continuations by history prefix.
+//   - Hit on a known conversation → send only the last new message (user or tool result); the history stays on the server (bypassing the byte wall).
+//   - No hit → create a new conversation and send the fully assembled history on the first turn (including tools instructions, handing the current context to the server).
 //
-// 支持 tools（续接里也解析 ```tool_call``` 围栏）；图片走原单轮路径（callGemini）。
+// Tools are supported (```tool_call``` fences are parsed in continuations too); images go through the original single-turn path (callGemini).
 func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 	tools []map[string]interface{}, toolChoice interface{},
 	onDelta, onReasoning func(string)) (string, []ToolCall, *StreamResult, error) {
-	// 2026-09-11：候选指纹识别（见 parentKeyCandidates）—— agent 循环里
-	// tool result 在历史里、但我们存 childKey 时不知道它的内容，降级指纹
-	// （剥掉结尾 tool 消息）负责命中。
+	// 2026-09-11: candidate-fingerprint identification (see parentKeyCandidates) —
+	// in agent loops the tool result is in the history, but we didn't know its content
+	// when storing the childKey; the fallback fingerprint (trailing tool messages stripped) does the hitting.
 	conv, hitLen := convGetByParentKey(messages)
 	fresh := conv == nil
 	var hitKeys []string
@@ -546,10 +545,10 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 	var prompt string
 	if fresh {
 		conv = &convState{}
-		// 有 cookie 池就用登录号（能力更全），否则匿名（首轮就地拿 session cookie）。
-		// #20 匿名优先：模型不需要登录态时不占号（多轮已被 gate 限成无图无工具，附件
-		// 恒无，所以第二个参数传 false）。必须在调用前短路：pickCookieAccount 会更新
-		// last_used_at，调了不用等于白占一轮。
+		// With a cookie pool, use a signed-in account (fuller capabilities); otherwise anonymous (first turn fetches a session cookie on the spot).
+		// #20 anon-first: when the model needs no signed-in state, don't occupy an account (multi-turn is already gated to no-images-no-tools,
+		// so attachments are never present and the second argument is false). Must short-circuit before the call:
+		// pickCookieAccount updates last_used_at, calling it without using the account wastes a rotation slot.
 		if !anonFirstEligible(mc, false) {
 			if a, ok := pickCookieAccount(); ok {
 				conv.cookie = a.Cookie
@@ -559,14 +558,14 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 				conv.proxyID = a.ProxyID
 			}
 		}
-		// 首轮带上 tools 指令：模型要靠它知道怎么吐 tool_call 围栏。
+		// The first turn carries the tools instructions: the model needs them to know how to emit tool_call fences.
 		prompt, _ = messagesToPrompt(messages, tools, toolChoice)
 	} else {
-		// 续接轮：发**所有命中前缀之后的新消息**（2026-09-11 修正：原来只发
-		// 最后一条 —— agent 循环里新的是 tool(result) + user 两条，tool result
-		// 被吞掉，模型拿不到执行结果只能瞎猜（实测答 localhost 而不是真实
-		// hostname）。降级指纹命中时 hitLen 指到 assistant(tool_calls) 后面，
-		// 从那儿起的全发。命中前的历史留在服务端。
+		// Continuation turn: send **all new messages after the matched prefix** (2026-09-11
+		// fix: previously only the last one — in agent loops the new part is two messages,
+		// tool(result) + user, and the tool result was swallowed, leaving the model to
+		// guess without the execution result (measured: it answered localhost instead of the real hostname). When the fallback fingerprint hits, hitLen points after the
+		// assistant(tool_calls); everything from there is sent. The history before the hit stays on the server.
 		var newTurns []string
 		for i := hitLen; i < len(messages); i++ {
 			if s := formatNewTurn(messages[i]); strings.TrimSpace(s) != "" {
@@ -574,10 +573,10 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 			}
 		}
 		prompt = strings.Join(newTurns, "\n\n")
-		// 工具围栏格式指令在服务端首轮历史里，但实测几轮后模型会
-		// 丢失纪律（不再吐 ```tool_call```、直接散文回答）；再往后（~第 9 轮）
-		// 上下文窗口还会把首轮的工具定义挤出去，模型答「没有工具」。所以每轮
-		// 都重发格式规则 + 完整工具 schema（toolsReminderBlock）。
+		// The tool-fence format instructions live in the server-side first-turn history,
+		// but measured, the model loses discipline after a few turns (no more
+		// ```tool_call```, plain prose answers); later (~turn 9) the context window even
+		// pushes the first turn's tool definitions out, and the model answers "no tools". So every turn re-sends the format rules + the complete tool schema (toolsReminderBlock).
 		if reminder := toolsReminderBlock(tools); reminder != "" {
 			prompt += "\n\n" + reminder
 		}
@@ -589,11 +588,10 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 	}
 
 res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
-	// 续接失败（会话在服务端已死）时**就地重锚**：2026-09-11 之前是删会话 +
-	// 报错给客户端，客户端/重试层再打一次才走新会话 —— 对上游等于多一轮
-	// 无意义请求（还显眼）。现在：作废、当轮内部当新会话全量重发一次，对客
-	// 户端透明。只在**还没往客户端写过任何 delta** 时重锚（res.Emitted 为空；
-	// 流已开始就不能重来，否则内容重复）。
+	// On continuation failure (the conversation is dead server-side), **re-anchor in place**: before 2026-09-11 it deleted the conversation and errored to the client,
+	// and only the client's/retry layer's next attempt took the new-conversation path — one extra meaningless (and conspicuous) upstream request.
+	// Now: invalidate, and within this turn resend everything once as a new conversation, transparent to the client.
+	// Re-anchor only when **no delta has been written to the client yet** (res.Emitted empty; once the stream started there's no redo, or content duplicates).
 	if err != nil && !fresh && res != nil && res.Emitted == "" && res.EmittedReasoning == "" {
 		for _, k := range hitKeys {
 			convDelete(k)
@@ -629,17 +627,16 @@ res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
 		}
 		return "", nil, res, fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(res.Raw))
 	}
-	// 存续接状态：客户端下一轮把这段回复原样带回来时，parentKey 会命中这里。
-	// 存的是解析掉围栏后的正文 —— 客户端把 assistant 消息带回来时 content 也是这段。
-	// 2026-09-11：agent 循环里客户端接下来还会贴 tool result —— 那部分内容我们
-	// 存键时不知道，下轮靠 parentKeyCandidates 的降级指纹（剥结尾 tool 消息）
-	// 命中，见 callGeminiConv 头部注释。
+	// Store the continuation state: when the client brings this reply back verbatim
+	// next turn, its parentKey hits here. What's stored is the fence-parsed body — the
+	// client brings back the same text as the assistant message content. 2026-09-11: in agent loops the client next appends the tool result — that content is unknown
+	// to us when storing the key; next turn hits via parentKeyCandidates' fallback fingerprint (trailing tool messages stripped), see the callGeminiConv header comment.
 	convPut(convChildKey(messages, text), conv)
 	return text, toolCalls, res, nil
 }
 
-// formatNewTurn 把续接要发的那条新消息格式化，跟 messagesToPrompt 里各角色的写法对齐，
-// 好让服务端历史里的模型认得出这是工具结果还是用户新话。
+// formatNewTurn formats the new message a continuation sends, aligned with how messagesToPrompt writes each role,
+// so the model in the server-side history can tell whether it's a tool result or a new user message.
 func formatNewTurn(msg map[string]interface{}) string {
 	content := contentToString(msg["content"])
 	if getStr(msg, "role") == "tool" {

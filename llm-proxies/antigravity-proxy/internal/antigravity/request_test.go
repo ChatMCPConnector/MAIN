@@ -328,9 +328,9 @@ func TestClaudeThinkingBudget(t *testing.T) {
 	}{
 		{"Claude low", "low", 1024},
 		{"Claude minimal", "minimal", 1024},
-		{"Claude medium", "medium", 4096},
-		{"Claude high", "high", 8192},
-		{"Claude default", "", 8192},
+		{"Claude medium", "medium", 2048},
+		{"Claude high", "high", 4096},
+		{"Claude default", "", 2048},
 	}
 
 	for _, tt := range tests {

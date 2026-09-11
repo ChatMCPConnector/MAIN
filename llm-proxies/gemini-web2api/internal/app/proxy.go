@@ -28,16 +28,22 @@ var (
 	proxyCursor uint64
 )
 
-// loadProxies 从 DB 刷新内存里的代理列表。
+// loadProxies refreshes the in-memory proxy list from the DB.
 //
-// 读一半失败时**保留上一次的池子**，绝不用半截结果覆盖。
-// 旧写法有两个静默失效点：Scan 出错 continue（悄悄漏掉一个代理）、rows.Err()
-// 完全不查（遍历中断当成正常读完）。两者都会让 proxyCache 变短甚至变空，而
-// acquireSlot 用 len(proxyCache)==0 判断"没配代理池"，于是**池子一空就退回直连**
-// —— 部署者的真实 IP 直接暴露给上游，日志上只看到偶发的直连请求。
+// If the read fails halfway, **keep the previous pool** — never overwrite
+// with a partial result. The old code had two silent failure points: Scan
+// error with continue (quietly dropping a proxy), and rows.Err() not checked
+// at all (a broken iteration treated as a normal finish). Both could make
+// proxyCache shorter or even empty, while acquireSlot uses
+// len(proxyCache)==0 to decide "no proxy pool configured", so **an empty
+// pool fell back to direct connection** — the deployer's real IP was exposed
+// to the upstream, with only occasional direct-connection requests showing
+// in the logs.
 //
-// 这条路径每个请求都会走（recordProxyResult 结束就调），而 WAL 模式下并发
-// UPDATE 期间 rows.Next() 完全可能返回 SQLITE_BUSY，所以"偶发"就是这么来的。
+// This path runs on every request (called as soon as recordProxyResult
+// finishes), and under WAL mode rows.Next() can perfectly well return
+// SQLITE_BUSY during a concurrent UPDATE — that's where the "occasional"
+// comes from.
 func loadProxies() {
 	rows, err := getDB().Query(`SELECT id, name, url, enabled, weight, fail_count,
         COALESCE(last_used,0), COALESCE(last_error,''), created_at FROM proxies ORDER BY id`)
@@ -67,17 +73,22 @@ func loadProxies() {
 	proxyMu.Unlock()
 }
 
-// 连续失败到这个次数就把代理熔断，等冷却期过了再放回池子。
+// After this many consecutive failures the proxy is circuit-broken; it goes
+// back into the pool once the cooldown has elapsed.
 const proxyFailThreshold = 5
 
-// proxyUsable 判断这条代理现在能不能用。
+// proxyUsable decides whether this proxy can be used right now.
 //
-// 熔断不是永久除名：被 Google 拦掉的出口实测 106-121 分钟就自动恢复，而旧写法
-// 只认 fail_count<5，一旦超了就再也选不中，也就永远等不到一次成功把 fail_count
-// 清零 —— 只能去面板手动重置。冷却期从 last_used（也就是最后一次尝试）算起，
-// 放回去再失败一次就重新计时。
+// Circuit-breaking is not permanent removal: egresses blocked by Google
+// recover automatically after a measured 106-121 minutes, but the old code
+// only checked fail_count<5 — once exceeded, the proxy could never be picked
+// again and would never get a success to reset fail_count to zero — the only
+// way out was a manual reset in the panel. The cooldown counts from
+// last_used (i.e. the last attempt); if it fails again after being put back,
+// the timer restarts.
 //
-// cooldownMin<=0 表示关掉冷却，退回"熔断即永久除名"的旧行为。
+// cooldownMin<=0 disables the cooldown and reverts to the old behavior of
+// "circuit-broken = permanently removed".
 func proxyUsable(p Proxy, now int64, cooldownMin int) bool {
 	if !p.Enabled {
 		return false
@@ -91,43 +102,56 @@ func proxyUsable(p Proxy, now int64, cooldownMin int) bool {
 	return now-p.LastUsed >= int64(cooldownMin)*60
 }
 
-// kv 里记迁移/播种状态的键。
+// kv keys recording migration/seeding state.
 const (
 	kvLegacyProxyDone = "legacy_static_proxy_migrated"
 	kvSeededProxyID   = "seeded_proxy_id"
 	kvSeededProxyURL  = "seeded_proxy_url"
 )
 
-// seedProxiesFromConfig 把启动参数和历史遗留的「静态代理」并进代理池。
+// seedProxiesFromConfig merges the startup flag and the legacy "static
+// proxy" into the proxy pool.
 //
-// 以前代理有两个入口：代理池，和「设置」页那个单独的静态代理文本框（池空时才用）。
-// 后者不是"简单版"而是**残废版** —— 它走的是 picked.ID=0 这条路，于是跟直连共用
-// 同一个限流 slot、recordProxyResult 压根不会被调用，也就没有失败计数、没有熔断、
-// 没有冷却、面板上看不到任何状态。池子里放一个，处处严格更好。
+// Proxies used to have two entry points: the proxy pool, and a separate
+// static proxy text field on the "Settings" page (used only when the pool
+// was empty). The latter was not a "simple version" but a **crippled
+// version** — it went down the picked.ID=0 path, so it shared the same
+// rate-limit slot as direct connections, recordProxyResult was never called,
+// and there was no failure counting, no circuit-breaking, no cooldown, and
+// no visible status in the panel. One entry in the pool is strictly better
+// in every respect.
 //
-// 现在请求路径只认池子，这个函数负责把旧入口的值搬进来。
+// Now the request path only knows the pool; this function moves the values
+// from the old entry point into it.
 func seedProxiesFromConfig() {
 	migrateLegacyStaticProxy()
 	syncSeededProxy()
 }
 
-// migrateLegacyStaticProxy 一次性把 kv 里遗留的静态代理搬进池子。
+// migrateLegacyStaticProxy moves the legacy static proxy from kv into the
+// pool, once.
 //
-// 两条保命规则，都是针对"用户的库已经在跑"这个前提：
+// Two survival rules, both aimed at the premise "the user's DB is already
+// running":
 //
-//  1. **入池成功才标记完成**，失败就原样留着下次再试。旧版的
-//     validateRuntimeConfig 对这个字段零校验，用户完全可能存的是 `1.2.3.4:8080`
-//     这种缺 scheme 的值，而 proxyCreate 会拒收它 —— 先清值再入池的话，用户升级
-//     后代理凭空消失，流量全转直连然后被上游拦。
-//  2. 用**独立的迁移标记**，不去改写 runtime_config 那个 JSON。少动一次已有数据
-//     就少一分把别的字段写坏的风险；顺带回滚到旧版时那条静态代理还在，行为不变。
+//  1. **Mark done only after successful insertion into the pool**; on
+//     failure leave everything as-is and retry next time. The old
+//     validateRuntimeConfig did zero validation on this field, so users may
+//     well have stored a scheme-less value like `1.2.3.4:8080`, which
+//     proxyCreate would reject — clearing the value before inserting would
+//     make the proxy vanish into thin air after upgrade, sending all traffic
+//     to direct connection only to be blocked by the upstream.
+//  2. Use a **dedicated migration marker** instead of rewriting the
+//     runtime_config JSON. Touching existing data one less time is one less
+//     chance of corrupting another field; and as a bonus, rolling back to
+//     the old version keeps the static proxy intact, behavior unchanged.
 func migrateLegacyStaticProxy() {
 	if kvGet(kvLegacyProxyDone) == "1" {
 		return
 	}
 	v := strings.TrimSpace(legacyStaticProxy())
 	if v == "" {
-		_ = kvSet(kvLegacyProxyDone, "1") // 本来就没有，标记掉免得每次启动都解析一遍
+		_ = kvSet(kvLegacyProxyDone, "1") // there was none to begin with; mark it done so we don't re-parse on every startup
 		return
 	}
 	if !poolHasProxyURL(v) {
@@ -140,8 +164,9 @@ func migrateLegacyStaticProxy() {
 	_ = kvSet(kvLegacyProxyDone, "1")
 }
 
-// legacyStaticProxy 只读地取 kv 里遗留的 runtime_config.proxy。
-// RuntimeConfig 已经没有这个字段了，所以只能直接看原始 JSON。
+// legacyStaticProxy read-only fetches the legacy runtime_config.proxy from
+// kv. RuntimeConfig no longer has this field, so the raw JSON is all we can
+// look at.
 func legacyStaticProxy() string {
 	raw := kvGet(runtimeConfigKey)
 	if raw == "" {
@@ -155,13 +180,17 @@ func legacyStaticProxy() string {
 	return v
 }
 
-// syncSeededProxy 让池子里跟着 --proxy / config.json 走一条记录。
+// syncSeededProxy keeps one pool entry tracking --proxy / config.json.
 //
-// 启动参数是**声明式**的：值变了就更新同一条，而不是再加一条。按 URL 去重的写法
-// 挡不住这个 —— 用户把 compose 里的代理换掉，旧那条会留在池子里继续 enabled、
-// 继续接流量，成了一条谁也不知道还在用的僵尸出口。
+// The startup flag is **declarative**: when the value changes, the same
+// entry is updated rather than another one added. A dedup-by-URL approach
+// cannot prevent this — if the user swaps the proxy in their compose file,
+// the old entry stays in the pool, still enabled, still taking traffic, a
+// zombie egress nobody knows is still in use.
 //
-// 值没变时**完全不碰池子**：用户在面板上对这条记录的增删改停用，都以面板为准。
+// When the value is unchanged, **the pool is left completely untouched**:
+// any edits, deletions or disabling of that entry the user does in the
+// panel are authoritative.
 func syncSeededProxy() {
 	url := strings.TrimSpace(cfg.Proxy)
 	prev := kvGet(kvSeededProxyURL)
@@ -176,7 +205,8 @@ func syncSeededProxy() {
 		return
 	}
 	if poolHasProxyURL(url) {
-		// 用户自己已经在面板加过同一个出口，不重复建，只记下来
+		// The user already added the same egress themselves in the panel;
+		// don't create a duplicate, just record it
 		_ = kvSet(kvSeededProxyURL, url)
 		_ = kvSet(kvSeededProxyID, "")
 		return
@@ -184,16 +214,18 @@ func syncSeededProxy() {
 	id, err := proxyCreate("启动参数", url, 1)
 	if err != nil {
 		logf("[proxy] --proxy 入池失败: %v", err)
-		return // 不记 URL，下次启动还会再试
+		return // URL not recorded; next startup will retry
 	}
 	_ = kvSet(kvSeededProxyURL, url)
 	_ = kvSet(kvSeededProxyID, strconv.FormatInt(id, 10))
 	logf("[proxy] --proxy / config.json 的代理已加入代理池")
 }
 
-// dropSeededProxy 撤掉上一次由启动参数建的那条。
-// 只在这条记录**还是我们建时那个 URL** 时才删 —— 用户在面板上把它改成别的出口了，
-// 就说明他接管了这条记录，不该被启动参数的变更连坐删掉。
+// dropSeededProxy removes the entry previously created by the startup flag.
+// It deletes only if that entry **still has the URL we created it with** — if
+// the user changed it to a different egress in the panel, they have taken
+// over the entry, and it must not be collaterally deleted by a startup-flag
+// change.
 func dropSeededProxy(prevURL string) {
 	idStr := kvGet(kvSeededProxyID)
 	if idStr == "" || prevURL == "" {
@@ -221,7 +253,7 @@ func dropSeededProxy(prevURL string) {
 	}
 }
 
-// poolHasProxyURL 池子里有没有这个 URL。
+// poolHasProxyURL reports whether the pool contains this URL.
 func poolHasProxyURL(url string) bool {
 	proxyMu.RLock()
 	defer proxyMu.RUnlock()
@@ -233,18 +265,23 @@ func poolHasProxyURL(url string) bool {
 	return false
 }
 
-// pickProxyWithCapacity 找一个可用（enabled + 没熔断或已过冷却）且限流没满的代理。
-// 返回 (proxy, ok)。所有代理都不可用或都满时返回 ok=false。
+// pickProxyWithCapacity finds a usable proxy (enabled + not circuit-broken
+// or past cooldown) whose rate limit isn't saturated.
+// Returns (proxy, ok). When all proxies are unusable or saturated, ok=false.
 //
-// 跟旧的 pickProxy 区别：会问 trySlotAcquire 看 slot 是否有容量；
-// 调用方拿到的 slot 必须配套调 slotRelease(proxy.ID)。
+// Difference from the old pickProxy: it asks trySlotAcquire whether the
+// slot has capacity; the caller must pair the acquired slot with
+// slotRelease(proxy.ID).
 func pickProxyWithCapacity() (Proxy, bool) { return pickProxyPreferring(0) }
 
-// pickProxyPreferring 优先挑 preferID 那个出口，它不可用或没容量时才轮询别的。
+// pickProxyPreferring prefers the preferID egress; only round-robins to
+// others when it is unusable or has no capacity.
 //
-// 为什么要粘住：cookie 池和代理池各自独立轮转的话，同一个 Google 账号会在几十个
-// 出口 IP 之间来回跳 —— 这在 Google 眼里正是账号共享的特征。粘不住时宁可换出口
-// 也不排队等，可用性优先。
+// Why stick: if the cookie pool and the proxy pool rotate independently, the
+// same Google account jumps back and forth across dozens of egress IPs —
+// exactly the signature of a shared account in Google's eyes. When sticking
+// isn't possible, switching egress is preferred over queueing: availability
+// first.
 func pickProxyPreferring(preferID int64) (Proxy, bool) {
 	proxyMu.RLock()
 	defer proxyMu.RUnlock()
@@ -268,11 +305,11 @@ func pickProxyPreferring(preferID int64) (Proxy, bool) {
 				if ok, _ := trySlotAcquire(p.ID); ok {
 					return p, true
 				}
-				break // 绑的那个满了，往下走正常轮询
+				break // the pinned one is saturated; fall through to normal round-robin
 			}
 		}
 	}
-	// 从轮询起点开始,找第一个 slot 没满的
+	// Starting from the round-robin start point, find the first slot with capacity
 	start := atomic.AddUint64(&proxyCursor, 1) - 1
 	for i := 0; i < len(pool); i++ {
 		p := pool[(int(start)+i)%len(pool)]
@@ -283,14 +320,20 @@ func pickProxyPreferring(preferID int64) (Proxy, bool) {
 	return Proxy{}, false
 }
 
-// recordProxyResult 回写一次请求的结果，并同步更新内存里那一条。
+// recordProxyResult writes back the result of one request and updates the
+// matching in-memory entry.
 //
-// 只改内存里的那一条，不整表重读：这个函数每个请求都会调，重读一次就是一次全表
-// SELECT，而它自己刚发起过 UPDATE —— 高并发下正是这对读写在 WAL 上撞出 SQLITE_BUSY，
-// 也就是代理池被读空、请求退回直连的触发条件。
+// Only the in-memory entry is changed, not the whole table re-read: this
+// function is called on every request, and a re-read is a full-table SELECT
+// right after it itself issued an UPDATE — under high concurrency it is
+// precisely this read/write pair colliding on WAL that produces
+// SQLITE_BUSY, i.e. the trigger condition for the proxy pool being read
+// empty and requests falling back to direct connection.
 //
-// 代价是内存里的 FailCount++ 和 DB 的 fail_count+1 各算各的，别的进程直接改库会
-// 让两边漂移。单进程持有这个库，重启也会从 DB 重新加载，可以接受。
+// The cost is that the in-memory FailCount++ and the DB's fail_count+1 are
+// counted separately; another process modifying the DB directly would let
+// the two drift. This process owns the DB, and a restart reloads from the
+// DB, so it's acceptable.
 func recordProxyResult(id int64, success bool, errStr string) {
 	if id == 0 {
 		return
@@ -341,12 +384,14 @@ func proxyCreate(name, url string, weight int) (int64, error) {
 	return id, nil
 }
 
-// validateProxyURL 校验代理 URL 协议。
-// 支持 http / https / socks5 / socks5h。
+// validateProxyURL validates the proxy URL scheme.
+// Supports http / https / socks5 / socks5h.
 //
-// scheme 按大小写不敏感比：URL 的 scheme 本来就不区分大小写，url.Parse 会统一转小写，
-// 所以 HTTP:// 在 4.0.0 那条不做校验的静态代理路径上是能正常工作的。校验若大小写
-// 敏感，升级时就会把这种值拦下来 —— 用户什么都没改，代理却不工作了。
+// The scheme is compared case-insensitively: URL schemes are case-
+// insensitive by definition and url.Parse lowercases them anyway, so
+// HTTP:// worked fine on the unvalidated static-proxy path in 4.0.0. A
+// case-sensitive check would reject such values on upgrade — the user
+// changed nothing, yet the proxy stops working.
 func validateProxyURL(s string) error {
 	low := strings.ToLower(s)
 	for _, p := range []string{"http://", "https://", "socks5://", "socks5h://"} {

@@ -156,15 +156,23 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
 - **Ursache:** Agenten-Frameworks wie opencode senden bei **jedem einzelnen Tool-Call in einer Kette die vollständige bisherige Konversationshistorie** erneut an das Modell.
 - **Thinking-Budget-Overhead:** `antigravity-proxy` erzwang bei `claude-opus-4-6-thinking` standardmäßig ein `thinkingBudget: 8192`. Dadurch fielen bei jedem Zwischenschritt bis zu 8k Output-Tokens an.
 
-### 3. Gegenmaßnahmen & Optimierungen für Antigravity-Proxy & Opencode
-1. **Opus-Kontext in Opencode deckeln (`limit.context`):**
-   In `.opencode/opencode.json` unter `provider.antigravity.models["claude-opus-4-6"].limit.context` von 250.000 auf **48.000 bis 64.000** reduzieren. Opencode compactet dann frühzeitig und verhindert, dass Tool-Loops mit 50k+ Historie explodieren. (Gemini behält 1.000.000 Tokens).
-2. **Thinking-Budget steuern:**
-   Google Antigravity unterstützt `claude-opus-4-6-thinking` auch mit `thinkingBudget: 0` (kein Thinking) oder `1024` (minimal/low). Ein Default auf `low` oder `none` reduziert die Output-Tokens um bis zu 87%.
-3. **Subagenten auf günstige Modelle pinnen:**
-   Dateisuchen (`@explore`) oder Zusammenfassungen dürfen nicht mit Opus laufen (ein Explore-Lauf verbrannte 524k Opus-Tokens), sondern auf `gemini-3.8-flash` oder `@glm2api` (Free).
-4. **Session-Hygiene:**
-   In langen Sessions (>30k Tokens) keine kurzen Nachfragen stellen, sondern `/new` oder `/compact` nutzen.
+### 3. Implementierte Gegenmaßnahmen für Claude/Opus
+1. **Opus- & Sonnet-Kontext in Opencode auf 75.000 Tokens gedeckelt (`limit.context`):**
+   In `.opencode/opencode.json` unter `provider.antigravity.models["claude-opus-4-6"]` und `["claude-sonnet-4-6"]`
+   wurde `limit.context` von 250.000 auf **75.000** und `output` auf **16.384** gesetzt.
+   `compaction.reserved` wurde von 83.400 auf **15.000** korrigiert. Opencode triggert
+   dadurch Auto-Compaction und Tool-Pruning bei 60.000 Tokens und verhindert Kontext-Multiplikationen.
+   Gemini behält seine vollen 1.000.000 Tokens.
+2. **Thinking-Budget neu kalibriert (Proxy-Ebene):**
+   In `llm-proxies/antigravity-proxy` wurde `ensureAntigravityThinkingDefaults` für Claude neu gestaffelt:
+   - `none` / `off`: `budget = 0` (Thinking komplett aus, `ThinkingConfig: nil`)
+   - `low` / `minimal`: `budget = 1024` Tokens
+   - `medium` (Default): `budget = 2048` Tokens (ausgewogener Sweet-Spot)
+   - `high`: `budget = 4096` Tokens (hartes Limit, der 8.192-Overkill ist deaktiviert)
+   In `.opencode/opencode.json` sind alle 4 Varianten (`none`, `low`, `medium`, `high`) wählbar,
+   Default steht auf `medium`.
+3. **Session-Hygiene:**
+   In langen Sessions (>40k Tokens) keine kurzen Nachfragen stellen, sondern `/new` oder `/compact` nutzen.
 
 ## Infrastruktur-Soll (Details Betrieb)
 
@@ -219,6 +227,16 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-11 (17): **Claude/Opus Quota-Schutz: 75k-Kontextdeckel & neu kalibriertes Thinking-Budget.**
+  Maßnahmen gegen den Token-Multiplikator bei Claude Opus:
+  1. `antigravity-proxy`: Claude Thinking-Budget neu kalibriert (`none`=0, `low`=1024,
+     `medium`=2048 Default, `high`=4096 Cap statt 8192 Overkill). 92/92 Tests bestanden,
+     Proxy neu gebaut und live verifiziert.
+  2. `.opencode/opencode.json`: `limit.context` für Opus & Sonnet auf 75.000 (Output 16.384),
+     Default auf `reasoningEffort: medium` mit Varianten `none`, `low`, `medium`, `high`.
+     `compaction.reserved` von 83.400 auf 15.000 korrigiert (Auto-Pruning greift bei 60k).
+  Gemini (1M) und GLM bleiben vollständig unberührt.
 
 - 2026-09-11 (16): **quota.sh: Live 5h-Sprint & Wochen-Limit via retrieveUserQuotaSummary.**
   Bisher nutzte `quota.sh` den flachen Endpunkt `fetchAvailableModels`, der nur

@@ -215,32 +215,34 @@
           "name": "Claude Opus 4.6",
           "reasoning": true,
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "medium"
           },
           "variants": {
+            "none": { "reasoningEffort": "none" },
             "low": { "reasoningEffort": "low" },
             "medium": { "reasoningEffort": "medium" },
             "high": { "reasoningEffort": "high" }
           },
           "limit": {
-            "context": 250000,
-            "output": 64000
+            "context": 75000,
+            "output": 16384
           }
         },
         "claude-sonnet-4-6": {
           "name": "Claude Sonnet 4.6",
           "reasoning": true,
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "medium"
           },
           "variants": {
+            "none": { "reasoningEffort": "none" },
             "low": { "reasoningEffort": "low" },
             "medium": { "reasoningEffort": "medium" },
             "high": { "reasoningEffort": "high" }
           },
           "limit": {
-            "context": 250000,
-            "output": 64000
+            "context": 75000,
+            "output": 16384
           }
         }
       }
@@ -366,7 +368,7 @@
   "compaction": {
     "auto": true,
     "prune": true,
-    "reserved": 83400
+    "reserved": 15000
   },
   "agent": {
     "build": {
