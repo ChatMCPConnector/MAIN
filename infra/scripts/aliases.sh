@@ -10,6 +10,42 @@ alias quota='bash /workspaces/MAIN/infra/scripts/quota.sh'
 alias st='git status -sb'
 alias ll='ls -lah'
 
+# Autosave-Daemon: status / start / stop / log
+autosave() {
+  local lock=/tmp/opencode/autosave-daemon.lock
+  case "${1:-status}" in
+    status)
+      if [ -f "$lock" ] && kill -0 "$(cat "$lock" 2>/dev/null)" 2>/dev/null; then
+        echo "autosave-daemon läuft (PID $(cat "$lock"))"
+      else
+        echo "autosave-daemon ist NICHT aktiv"
+      fi
+      ;;
+    start)
+      if [ -f "$lock" ] && kill -0 "$(cat "$lock" 2>/dev/null)" 2>/dev/null; then
+        echo "läuft bereits (PID $(cat "$lock"))"
+      else
+        setsid bash /workspaces/MAIN/.devcontainer/autosave-daemon.sh </dev/null >/dev/null 2>&1 &
+        sleep 0.3
+        echo "gestartet (PID $(cat "$lock" 2>/dev/null || echo '?'))"
+      fi
+      ;;
+    stop)
+      if [ -f "$lock" ] && kill -0 "$(cat "$lock" 2>/dev/null)" 2>/dev/null; then
+        kill "$(cat "$lock")" && echo "gestoppt" || echo "kill fehlgeschlagen"
+      else
+        echo "läuft nicht"
+      fi
+      ;;
+    log)
+      tail -30 /tmp/opencode/autosave.log 2>/dev/null || echo "kein Log"
+      ;;
+    *)
+      echo "Usage: autosave {status|start|stop|log}"
+      ;;
+  esac
+}
+
 # opencode Server-Client Wrapper: verbindet mehrere Terminal-Tabs mit dem
 # zentralen Server (Port 4096), damit sich parallele Sessions nie gegenseitig abbrechen.
 opencode() {

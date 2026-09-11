@@ -65,3 +65,9 @@ if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/
   setsid bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >/dev/null 2>&1 &
   echo "[boot] Proxy-Watchdog gestartet (30s-Intervall für alle Proxies + Server)."
 fi
+
+# 6. Autosave-Daemon: committet+pusht alle offenen Änderungen alle 30 Min.
+if ! { [ -f /tmp/opencode/autosave-daemon.lock ] && kill -0 "$(cat /tmp/opencode/autosave-daemon.lock 2>/dev/null)" 2>/dev/null; }; then
+  setsid bash "$REPO_ROOT/.devcontainer/autosave-daemon.sh" </dev/null >/dev/null 2>&1 &
+  echo "[boot] Autosave-Daemon gestartet (30-Min-Intervall)."
+fi
