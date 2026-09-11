@@ -489,8 +489,10 @@ func proxyNameByID(id int64) string {
 	return ""
 }
 
-// proxyUsableByID 这个出口现在还能不能用（存在 + enabled + 没熔断或已过冷却）。
-// 判断账号绑定的出口是不是还有效，无效才该重新绑。
+// proxyUsableByID reports whether this egress is still usable (exists +
+// enabled + not circuit-broken or past cooldown). Used to check whether an
+// account's bound egress is still valid; rebinding should happen only when
+// it isn't.
 func proxyUsableByID(id int64) bool {
 	if id <= 0 {
 		return false
@@ -507,7 +509,8 @@ func proxyUsableByID(id int64) bool {
 	return false
 }
 
-// proxyURLByID 按 id 取代理 URL，找不到返回空串（直连）。
+// proxyURLByID fetches the proxy URL by id; returns an empty string when
+// not found (direct connection).
 func proxyURLByID(id int64) string {
 	if id <= 0 {
 		return ""
