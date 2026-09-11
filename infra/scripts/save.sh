@@ -52,6 +52,9 @@ fi
 
 if push_cmd; then
   echo "Gepusht -> $slug/main"
+  # Google-Drive-Backup-Hook (2-Generationen-Rotation). Fehlt die rclone-Auth,
+  # überspringt sich das Skript selbst — Push-Erfolg wird nie gefährdet.
+  ./infra/scripts/gdrive-backup.sh backup || true
 else
   echo "PUSH FEHLGESCHLAGEN. Einmalig: ./infra/scripts/auth.sh setup (oder LANDSCAPE_PAT als Codespaces-Secret setzen)."
   exit 1

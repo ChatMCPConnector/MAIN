@@ -49,6 +49,7 @@ cmd_lock() {
   [ -f "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ] && { cp "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" "$stage/files/antigravity-oauth_creds.json"; found=1; }
   [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
   [ -f "$HOME/.local/share/opencode/auth.json" ] && { cp "$HOME/.local/share/opencode/auth.json" "$stage/files/opencode-auth.json"; found=1; }
+  [ -f "$HOME/.config/landscape/rclone.conf" ] && { cp "$HOME/.config/landscape/rclone.conf" "$stage/files/rclone.conf"; found=1; }
   [ -f ".env" ] && { cp ".env" "$stage/files/env"; found=1; }
   [ "$found" -eq 1 ] || { echo "Nichts zu sichern (kein PAT, kein opencode-Login, kein .env)."; exit 1; }
   get_passphrase
@@ -107,6 +108,10 @@ cmd_unlock() {
   if [ -f "$stage/files/antigravity-oauth_creds.json" ] && [ ! -f "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ]; then
     mkdir -p "$HOME/.config/antigravity-oauth-proxy" && cp "$stage/files/antigravity-oauth_creds.json" "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" && chmod 600 "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json"
     echo "    Antigravity-OAuth-Creds wiederhergestellt."
+  fi
+  if [ -f "$stage/files/rclone.conf" ] && [ ! -f "$HOME/.config/landscape/rclone.conf" ]; then
+    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/rclone.conf" "$HOME/.config/landscape/rclone.conf" && chmod 600 "$HOME/.config/landscape/rclone.conf"
+    echo "    rclone.conf (Google-Drive) wiederhergestellt."
   fi
   if [ -f "$stage/files/env" ] && [ ! -f ".env" ]; then
     cp "$stage/files/env" ".env" && chmod 600 ".env"

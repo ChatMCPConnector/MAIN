@@ -74,6 +74,13 @@ else
   echo "    kein Token gefunden. Einmalig: ./infra/scripts/auth.sh setup  (oder LANDSCAPE_PAT als Codespaces-Secret setzen)"
 fi
 
+echo "==> [landscape] rclone (Google-Drive-Backup) installieren..."
+# rclone für gdrive-backup.sh (Repo-Sicherung nach Drive, unabhängig von GitHub).
+# Auth (rclone.conf mit Refresh-Token) kommt aus dem Secrets-Bundle via secrets.sh unlock.
+bash "$REPO_ROOT/infra/scripts/rclone-install.sh" >/dev/null 2>&1 \
+  && echo "    rclone installiert ($(rclone version 2>/dev/null | head -1))." \
+  || echo "    WARN: rclone-Install fehlgeschlagen, manuell: ./infra/scripts/rclone-install.sh"
+
 echo "==> [landscape] Browser-Runtime (Firefox) prüfen..."
 # Firefox (Mozilla-Tarball, gepinnt) statt Chromium: Google-Cookies aus Firefox sind
 # nicht DBSC-gebunden -> gemini-web2api kann __Secure-1PSIDTS unbegrenzt erneuern.
