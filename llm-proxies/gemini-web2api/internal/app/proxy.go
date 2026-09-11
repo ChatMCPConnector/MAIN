@@ -473,7 +473,8 @@ func joinComma(parts []string) string {
 	return out
 }
 
-// proxyNameByID 按 id 找代理名，找不到返回空串（0 = 还没绑 / 直连）。
+// proxyNameByID finds the proxy name by id; returns an empty string when
+// not found (0 = not yet bound / direct connection).
 func proxyNameByID(id int64) string {
 	if id <= 0 {
 		return ""
