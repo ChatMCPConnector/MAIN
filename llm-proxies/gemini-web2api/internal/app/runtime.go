@@ -130,7 +130,7 @@ func initRuntimeConfig() {
 			if err := validateRuntimeConfig(saved); err == nil {
 				base = saved
 			} else {
-				logf("[config] 忽略 kv 里不合法的运行时配置: %v", err)
+				logf("[config] ignoring invalid runtime config in kv: %v", err)
 			}
 		}
 	}
@@ -171,17 +171,17 @@ func validateRuntimeConfig(c RuntimeConfig) error {
 		{"max_prompt_bytes", c.MaxPromptBytes, 0, 10000000},
 	} {
 		if r.v < r.min || r.v > r.max {
-			return fmt.Errorf("%s=%d 超出允许范围 [%d, %d]", r.name, r.v, r.min, r.max)
+			return fmt.Errorf("%s=%d out of the allowed range [%d, %d]", r.name, r.v, r.min, r.max)
 		}
 	}
 	if _, _, err := resolveModel(c.DefaultModel); err != nil {
-		return fmt.Errorf("default_model 不可用: %v", err)
+		return fmt.Errorf("default_model not available: %v", err)
 	}
 	if c.Impersonate == "" {
-		return fmt.Errorf("impersonate 不能为空")
+		return fmt.Errorf("impersonate must not be empty")
 	}
 	if c.GeminiBL == "" {
-		return fmt.Errorf("gemini_bl 不能为空")
+		return fmt.Errorf("gemini_bl must not be empty")
 	}
 	return nil
 }
@@ -202,6 +202,6 @@ func saveRuntimeConfig(next RuntimeConfig) error {
 	rtMu.Lock()
 	rtVal = next
 	rtMu.Unlock()
-	logf("[config] 运行时配置已更新")
+	logf("[config] runtime config updated")
 	return nil
 }

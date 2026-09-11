@@ -16,7 +16,7 @@ func feed(t *testing.T, chunks []string) string {
 		g.Push(c)
 	}
 	if got.String() != g.Sent() {
-		t.Fatalf("Sent() 和实际发出的对不上: %q vs %q", g.Sent(), got.String())
+		t.Fatalf("Sent() does not match what was actually emitted: %q vs %q", g.Sent(), got.String())
 	}
 	return got.String()
 }
@@ -64,17 +64,17 @@ func TestToolFenceGate(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			// all three chunkings must yield the same result
 			if got := feed(t, []string{c.full}); got != c.want {
-				t.Errorf("整段喂: 得到 %q，期望 %q", got, c.want)
+				t.Errorf("fed whole: got %q, want %q", got, c.want)
 			}
 			if got := feed(t, chars(c.full)); got != c.want {
-				t.Errorf("逐字符喂: 得到 %q，期望 %q", got, c.want)
+				t.Errorf("fed char by char: got %q, want %q", got, c.want)
 			}
 			mid := len(c.full) / 2
 			for mid < len(c.full) && !isRuneStart(c.full[mid]) {
 				mid++
 			}
 			if got := feed(t, []string{c.full[:mid], c.full[mid:]}); got != c.want {
-				t.Errorf("对半喂: 得到 %q，期望 %q", got, c.want)
+				t.Errorf("fed in halves: got %q, want %q", got, c.want)
 			}
 		})
 	}
@@ -91,11 +91,11 @@ func TestToolFenceGateMatchesParse(t *testing.T) {
 	final, calls := parseToolCalls(full)
 
 	if len(calls) != 1 || calls[0].Function.Name != "get_weather" {
-		t.Fatalf("工具调用没解析出来: %+v", calls)
+		t.Fatalf("tool call not parsed: %+v", calls)
 	}
 	// what streaming emits may carry extra leading/trailing whitespace (parseToolCalls TrimSpaces at the end).
 	if strings.TrimSpace(streamed) != final {
-		t.Errorf("流式发出 %q，最终文本 %q", strings.TrimSpace(streamed), final)
+		t.Errorf("streamed %q, final text %q", strings.TrimSpace(streamed), final)
 	}
 }
 
@@ -104,15 +104,15 @@ func TestToolFenceGateUnclosed(t *testing.T) {
 	full := "开始了。\n```tool_call\n{\"name\": \"f\""
 	streamed := feed(t, chars(full))
 	if streamed != "开始了。\n" {
-		t.Fatalf("扣住的部分不对: %q", streamed)
+		t.Fatalf("withheld part is wrong: %q", streamed)
 	}
 	// parseToolCalls leaves unclosed fences alone, keeping them verbatim in the text
 	final, calls := parseToolCalls(full)
 	if len(calls) != 0 {
-		t.Fatalf("未闭合围栏不该解析出工具调用: %+v", calls)
+		t.Fatalf("an unclosed fence must not parse into a tool call: %+v", calls)
 	}
 	if rest := remainingOf(final, streamed); rest == "" {
-		t.Error("收尾补发算出来是空的，扣住的内容会丢")
+		t.Error("the finish-time catch-up computed as empty; the withheld content would be lost")
 	}
 }
 
@@ -132,7 +132,7 @@ func TestPartialPrefixLen(t *testing.T) {
 		{"中文", 0},
 	} {
 		if got := partialPrefixLen(c.s, m); got != c.want {
-			t.Errorf("partialPrefixLen(%q) = %d，期望 %d", c.s, got, c.want)
+			t.Errorf("partialPrefixLen(%q) = %d, want %d", c.s, got, c.want)
 		}
 	}
 }

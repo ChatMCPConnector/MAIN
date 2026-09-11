@@ -148,11 +148,11 @@ func dispatchMCP(req *rpcRequest) *rpcResponse {
 		}
 		query := strings.TrimSpace(p.Arguments.Query)
 		if query == "" {
-			return ok(toolTextError("query 不能为空"))
+			return ok(toolTextError("query must not be empty"))
 		}
 		text, err := mcpWebSearch(query)
 		if err != nil {
-			return ok(toolTextError("搜索失败: " + err.Error()))
+			return ok(toolTextError("search failed: " + err.Error()))
 		}
 		return ok(map[string]interface{}{
 			"content": []interface{}{map[string]interface{}{"type": "text", "text": text}},
@@ -198,7 +198,7 @@ func mcpWebSearch(query string) (string, error) {
 	}
 	text := extractResponseText(res.Raw)
 	if text == "" {
-		return "", fmt.Errorf("上游没有返回内容")
+		return "", fmt.Errorf("upstream returned no content")
 	}
 	sources := extractGrounding(res.Raw)
 	var b strings.Builder

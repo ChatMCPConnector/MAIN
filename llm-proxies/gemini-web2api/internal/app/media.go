@@ -170,7 +170,7 @@ func fetchImageArtifacts(raw, cid, cookie, sapisid, xsrf, proxyURL, defaultMime 
 		}
 	}
 	if len(urls) == 0 {
-		return nil, fmt.Errorf("响应里没有图片 CDN 链接")
+		return nil, fmt.Errorf("no image CDN link in the response")
 	}
 	var arts []MediaArtifact
 	for _, u := range urls {
@@ -211,7 +211,7 @@ func imageFullResURL(u string) string {
 func fetchDownloadArtifacts(cid, cookie, sapisid, xsrf, proxyURL, defaultMime string,
 	maxPolls int, interval time.Duration) ([]MediaArtifact, error) {
 	if cid == "" {
-		return nil, fmt.Errorf("没拿到会话 id，无法定位产物")
+		return nil, fmt.Errorf("no conversation id, cannot locate the artifact")
 	}
 	var dlURLs []string
 	for i := 0; i < maxPolls; i++ {
@@ -222,13 +222,13 @@ func fetchDownloadArtifacts(cid, cookie, sapisid, xsrf, proxyURL, defaultMime st
 			}
 			// When a video is rejected by content policy, hNvQHb says "I can't generate that video" — don't wait out the timeout.
 			if strings.Contains(body, "can't generate that video") {
-				return nil, fmt.Errorf("视频被内容政策拒绝（换个 prompt 再试）")
+				return nil, fmt.Errorf("video rejected by content policy (try a different prompt)")
 			}
 		}
 		time.Sleep(interval)
 	}
 	if len(dlURLs) == 0 {
-		return nil, fmt.Errorf("hNvQHb 里没等到可下载的产物链接（response_data）")
+		return nil, fmt.Errorf("no downloadable artifact link (response_data) appeared in hNvQHb")
 	}
 	var arts []MediaArtifact
 	for _, u := range dlURLs {
@@ -299,14 +299,14 @@ func deleteConversation(cid, cookie, sapisid, xsrf, proxyURL string) {
 	delete(headers, "x-goog-ext-525001261-jspb")
 	status, _, body, err := uploadPost(endpoint, headers, []byte(form.Encode()), proxyURL)
 	if err != nil {
-		logf("[autodel] 删会话 %s 失败: %v", cid, err)
+		logf("[autodel] failed to delete conversation %s: %v", cid, err)
 		return
 	}
 	if status != 200 {
-		logf("[autodel] 删会话 %s 返回 HTTP %d: %s", cid, status, truncate(string(body), 120))
+		logf("[autodel] deleting conversation %s returned HTTP %d: %s", cid, status, truncate(string(body), 120))
 		return
 	}
-	logf("[autodel] 已删会话 %s", cid)
+	logf("[autodel] deleted conversation %s", cid)
 }
 
 // walkFramesForURLs recursively walks all strings in the batchexecute envelope and
@@ -427,7 +427,7 @@ func downloadBytes(rawURL, cookie, proxyURL, defaultMime string) (string, []byte
 		return "", nil, err
 	}
 	if status != 200 {
-		return "", nil, fmt.Errorf("下载产物 HTTP %d（%d 字节）", status, len(body))
+		return "", nil, fmt.Errorf("artifact download HTTP %d (%d bytes)", status, len(body))
 	}
 	mime := respHead["content-type"]
 	if i := strings.IndexByte(mime, ';'); i >= 0 {
@@ -465,7 +465,7 @@ func mediaGetFollow(rawURL string, headers map[string]string, proxyURL string) (
 		}
 		return status, respHead, body, nil
 	}
-	return 0, nil, nil, fmt.Errorf("下载重定向次数过多")
+	return 0, nil, nil, fmt.Errorf("too many download redirects")
 }
 
 // resolveRef resolves the Location against the current URL (mostly absolute, but relative works too).

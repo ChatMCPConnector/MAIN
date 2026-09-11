@@ -191,7 +191,7 @@ func Run() {
 		tokInfo = "tiktoken cl100k_base"
 	}
 	fmt.Printf("  Tokenizer:   %s\n", tokInfo)
-	fmt.Printf("  Per-IP 限流: 并发=%d / RPM=%d / RPH=%d\n",
+	fmt.Printf("  Per-IP rate limits: concurrency=%d / RPM=%d / RPH=%d\n",
 		rtCfg().PerIPConcurrent, rtCfg().PerIPRPM, rtCfg().PerIPRPH)
 	fmt.Printf("  Retry:       %dx / %ds\n", rtCfg().RetryAttempts, rtCfg().RetryDelaySec)
 	fmt.Println()
@@ -226,7 +226,7 @@ func warnEnvProxyIgnored() {
 	if len(set) == 0 || len(listProxies()) > 0 {
 		return
 	}
-	fmt.Printf("  ⚠ 检测到代理环境变量 %s，但本程序**不读**它们，当前走直连。\n"+
-		"    请在面板「代理池」添加，或用 --proxy 启动参数（它会在启动时导入代理池）。\n\n",
+	fmt.Printf("  ⚠ Proxy environment variable(s) %s detected, but this program does **not** read them; egress is currently direct.\n"+
+		"    Add them in the admin panel (\"Proxy pool\"), or use the --proxy startup flag (it imports into the proxy pool at startup).\n\n",
 		strings.Join(set, " / "))
 }

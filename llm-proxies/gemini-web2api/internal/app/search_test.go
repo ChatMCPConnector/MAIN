@@ -9,20 +9,20 @@ import (
 func TestExtractGrounding(t *testing.T) {
 	raw, err := os.ReadFile("testdata/search_raw.txt")
 	if err != nil {
-		t.Skipf("没有 testdata/search_raw.txt，跳过: %v", err)
+		t.Skipf("no testdata/search_raw.txt, skipping: %v", err)
 	}
 	sources := extractGrounding(string(raw))
 	if len(sources) == 0 {
-		t.Fatal("这份响应应该有联网搜索来源，却一个都没解析出来")
+		t.Fatal("this response should have web search sources, but none were parsed")
 	}
 	for i, s := range sources {
 		if s.URL == "" {
-			t.Errorf("来源 %d 的 URL 为空", i)
+			t.Errorf("source %d has an empty URL", i)
 		}
 		if idx := len(s.URL); idx > 0 && contains(s.URL, "#:~:text=") {
-			t.Errorf("来源 %d 的 URL 还带着 #:~:text= 片段: %s", i, s.URL)
+			t.Errorf("source %d's URL still carries the #:~:text= fragment: %s", i, s.URL)
 		}
-		t.Logf("来源 %d: %s | %s", i, s.Title, s.URL)
+		t.Logf("source %d: %s | %s", i, s.Title, s.URL)
 	}
 }
 

@@ -330,7 +330,7 @@ func getAnonSession(proxyURL string) (string, error) {
 		pairs = append(pairs, strings.TrimSpace(nv))
 	}
 	if len(pairs) == 0 {
-		return "", fmt.Errorf("匿名 /app 没返回 Set-Cookie")
+		return "", fmt.Errorf("anonymous /app returned no Set-Cookie")
 	}
 	return strings.Join(pairs, "; "), nil
 }
@@ -361,7 +361,7 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 		if conv.cookie == "" && !conv.isLogin {
 			c, err := getAnonSession(proxyURL)
 			if err != nil {
-				return &StreamResult{ProxyID: p.ID, ProxyName: p.Name}, fmt.Errorf("建匿名会话失败: %w", err)
+				return &StreamResult{ProxyID: p.ID, ProxyName: p.Name}, fmt.Errorf("failed to create an anonymous conversation: %w", err)
 			}
 			conv.cookie = c
 		}
@@ -374,7 +374,7 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 			xsrf = tok
 		} else {
 			return &StreamResult{ProxyID: p.ID, ProxyName: p.Name, AccountID: conv.accountID},
-				fmt.Errorf("取 XSRF 失败: %w", err)
+				fmt.Errorf("failed to get XSRF: %w", err)
 		}
 	}
 
@@ -471,7 +471,7 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 		}
 		if err != nil || statusCode != 200 || !hasContentFrame(string(raw)) {
 			if err == nil && statusCode == 200 {
-				lastErr = fmt.Errorf("续接无内容帧（会话可能已失效，raw %d 字节）", len(raw))
+				lastErr = fmt.Errorf("continuation produced no content frames (the conversation may have expired, raw %d bytes)", len(raw))
 			} else if err != nil {
 				lastErr = err
 			} else {
@@ -582,9 +582,9 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 		}
 	}
 	if fresh {
-		logf("[conv] 新会话，首轮发 %d 字节（tools=%d）", len(prompt), len(tools))
+		logf("[conv] new conversation, first turn sends %d bytes (tools=%d)", len(prompt), len(tools))
 	} else {
-		logf("[conv] 续接命中 turn=%d，只发 %d 字节（历史留服务端）", conv.turn, len(prompt))
+		logf("[conv] continuation hit turn=%d, sending only %d bytes (history stays server-side)", conv.turn, len(prompt))
 	}
 
 res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
@@ -596,7 +596,7 @@ res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
 		for _, k := range hitKeys {
 			convDelete(k)
 		}
-		logf("[conv] 续接失败（%v），本轮就地重锚为新会话", err)
+		logf("[conv] continuation failed (%v), re-anchoring in place as a new conversation this turn", err)
 		conv = &convState{}
 		if !anonFirstEligible(mc, false) {
 			if a, ok := pickCookieAccount(); ok {
@@ -608,7 +608,7 @@ res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
 			}
 		}
 		prompt, _ = messagesToPrompt(messages, tools, toolChoice)
-		logf("[conv] 重锚，首轮发 %d 字节（tools=%d）", len(prompt), len(tools))
+		logf("[conv] re-anchor, first turn sends %d bytes (tools=%d)", len(prompt), len(tools))
 		res, err = streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
 	}
 	if err != nil {

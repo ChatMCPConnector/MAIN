@@ -28,7 +28,7 @@ func withPoolCookie(t *testing.T) {
 	t.Helper()
 	id, err := accountAdd("test", "SAPISID=dummy; SID=x", "")
 	if err != nil {
-		t.Fatalf("插测试 cookie 失败: %v", err)
+		t.Fatalf("failed to insert test cookie: %v", err)
 	}
 	t.Cleanup(func() { _ = accountDelete(id) })
 }

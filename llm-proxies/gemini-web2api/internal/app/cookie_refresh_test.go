@@ -17,17 +17,17 @@ func TestMergeSetCookie(t *testing.T) {
 	})
 	for _, want := range []string{"SIDCC=new1", "__Secure-1PSIDCC=new2"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("没刷新 %q: %s", want, got)
+			t.Errorf("did not refresh %q: %s", want, got)
 		}
 	}
 	// items not re-issued must be preserved verbatim — dropping one shaves a piece off the login state
 	for _, want := range []string{"SID=a", "SAPISID=b", "__Secure-1PSID=c"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("丢了 %q: %s", want, got)
+			t.Errorf("lost %q: %s", want, got)
 		}
 	}
 	if strings.Contains(got, "old1") || strings.Contains(got, "old2") {
-		t.Errorf("旧值没被替换掉: %s", got)
+		t.Errorf("old value was not replaced: %s", got)
 	}
 }
 
@@ -35,7 +35,7 @@ func TestMergeSetCookie(t *testing.T) {
 func TestMergeSetCookieAddsNew(t *testing.T) {
 	got := mergeSetCookie("SID=a", []string{"__Secure-3PSIDCC=fresh; path=/"})
 	if !strings.Contains(got, "SID=a") || !strings.Contains(got, "__Secure-3PSIDCC=fresh") {
-		t.Errorf("新键没追加: %s", got)
+		t.Errorf("new key not appended: %s", got)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestMergeSetCookieIgnoresDeletion(t *testing.T) {
 	got := mergeSetCookie("SID=a; SIDCC=keepme",
 		[]string{"SIDCC=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/"})
 	if !strings.Contains(got, "SIDCC=keepme") {
-		t.Errorf("删除指令把值清掉了: %s", got)
+		t.Errorf("a delete directive cleared the value: %s", got)
 	}
 }
 
@@ -53,10 +53,10 @@ func TestMergeSetCookieIgnoresDeletion(t *testing.T) {
 func TestMergeSetCookieNoop(t *testing.T) {
 	base := "SID=a; SAPISID=b"
 	if got := mergeSetCookie(base, nil); got != base {
-		t.Errorf("空输入却改了串: %q", got)
+		t.Errorf("empty input changed the string: %q", got)
 	}
 	if got := mergeSetCookie(base, []string{"garbage-without-equals"}); got != base {
-		t.Errorf("无法解析的 Set-Cookie 却改了串: %q", got)
+		t.Errorf("an unparseable Set-Cookie changed the string: %q", got)
 	}
 }
 
@@ -64,6 +64,6 @@ func TestMergeSetCookieNoop(t *testing.T) {
 func TestMergeSetCookieKeepsEquals(t *testing.T) {
 	got := mergeSetCookie("SID=a", []string{"SIDCC=AB==; path=/"})
 	if !strings.Contains(got, "SIDCC=AB==") {
-		t.Errorf("值里的等号被切坏: %s", got)
+		t.Errorf("the equals sign in the value got cut: %s", got)
 	}
 }

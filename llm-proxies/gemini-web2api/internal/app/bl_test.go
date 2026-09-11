@@ -14,7 +14,7 @@ func TestBLValueShape(t *testing.T) {
 	}
 	for _, s := range good {
 		if !blValueRe.MatchString(s) {
-			t.Errorf("应通过却被拒: %q", s)
+			t.Errorf("should pass but was rejected: %q", s)
 		}
 	}
 
@@ -30,7 +30,7 @@ func TestBLValueShape(t *testing.T) {
 	}
 	for _, s := range bad {
 		if blValueRe.MatchString(s) {
-			t.Errorf("应被拒却通过: %q", s)
+			t.Errorf("should be rejected but passed: %q", s)
 		}
 	}
 }
@@ -40,9 +40,9 @@ func TestCfb2hExtract(t *testing.T) {
 	page := `...,"cfb2h":"boq_assistant-bard-web-server_20260805.16_p0","fJfDgd":"x",...`
 	m := cfb2hRe.FindStringSubmatch(page)
 	if m == nil {
-		t.Fatal("没匹配到 cfb2h")
+		t.Fatal("no cfb2h match")
 	}
 	if want := "boq_assistant-bard-web-server_20260805.16_p0"; m[1] != want {
-		t.Errorf("取到 %q，期望 %q", m[1], want)
+		t.Errorf("got %q, want %q", m[1], want)
 	}
 }

@@ -36,7 +36,7 @@ func TestModelHeader(t *testing.T) {
 	// @think=N is a legacy fake parameter: strip it and ignore, no error and no routing change
 	name, mc, err := resolveModel("gemini-3.6-flash@think=2")
 	if err != nil || name != "gemini-3.6-flash" || mc.HexID != hexFlash36 {
-		t.Errorf("@think 后缀应被忽略, got name=%s hex=%s err=%v", name, mc.HexID, err)
+		t.Errorf("@think suffix should be ignored, got name=%s hex=%s err=%v", name, mc.HexID, err)
 	}
 	// unknown models must still error, no silent fallback
 	if _, _, err := resolveModel("no-such-model"); err == nil {
@@ -46,7 +46,7 @@ func TestModelHeader(t *testing.T) {
 	for _, gone := range []string{"gemini-3.5-flash", "gemini-3.5-flash-thinking",
 		"gemini-3.5-flash-thinking-lite", "gemini-auto", "gemini-flash-lite"} {
 		if _, _, err := resolveModel(gone); err == nil {
-			t.Errorf("已移除的别名 %s 应该报错", gone)
+			t.Errorf("removed alias %s should error", gone)
 		}
 	}
 	// the invariant guarded here is "no fake models may appear": thinking versions reuse
@@ -56,7 +56,7 @@ func TestModelHeader(t *testing.T) {
 		hexes[m.HexID] = true
 	}
 	if len(hexes) != 4 {
-		t.Errorf("只应存在 4 个真模型 hex, got %d", len(hexes))
+		t.Errorf("only 4 real model hexes should exist, got %d", len(hexes))
 	}
 	// and conversely: every real hex should have a thinking version
 	for _, base := range []string{hexFlash36, hexFlashLite, hexPro31, hexFlash38} {
@@ -67,7 +67,7 @@ func TestModelHeader(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("hex %s 缺 thinking 版", base)
+			t.Errorf("hex %s lacks a thinking variant", base)
 		}
 	}
 }
@@ -88,10 +88,10 @@ const okRaw = ")]}'\n\n900\n" +
 
 func TestEmptyFrameDetection(t *testing.T) {
 	if got := extractResponseText(rejectedRaw); got != "" {
-		t.Errorf("被拒响应应解析出空文本, got %q", got)
+		t.Errorf("rejected response should parse to empty text, got %q", got)
 	}
 	if got := extractResponseText(okRaw); got != "banana" {
-		t.Errorf("正常响应应解析出 banana, got %q", got)
+		t.Errorf("normal response should parse to banana, got %q", got)
 	}
 }
 
@@ -103,26 +103,26 @@ func TestUsageUsesTokenizer(t *testing.T) {
 	text := "自注意力通过查询、键、值三组投影计算token之间的相关性权重。"
 
 	if tokenizerOK && countTokens(prompt) == len(prompt)/4 {
-		t.Skipf("样本无区分度（tiktoken 与 chars/4 同为 %d），换样本再测", countTokens(prompt))
+		t.Skipf("sample has no discriminative power (tiktoken and chars/4 both %d), pick another sample", countTokens(prompt))
 	}
 
 	u := buildUsage(prompt, text, false)
 	if u["prompt_tokens"] != countTokens(prompt) || u["completion_tokens"] != countTokens(text) {
-		t.Errorf("chat usage 没走 countTokens: %v", u)
+		t.Errorf("chat usage did not go through countTokens: %v", u)
 	}
 	if u["total_tokens"] != u["prompt_tokens"]+u["completion_tokens"] {
-		t.Errorf("total 不等于两者之和: %v", u)
+		t.Errorf("total is not the sum of both: %v", u)
 	}
 	if tokenizerOK && u["prompt_tokens"] == len(prompt)/4 {
-		t.Errorf("prompt_tokens 落在 chars/4 上，仍是旧实现: %v", u)
+		t.Errorf("prompt_tokens landed on chars/4, still the old implementation: %v", u)
 	}
 
 	r := buildUsage(prompt, text, true)
 	if r["input_tokens"] != countTokens(prompt) || r["output_tokens"] != countTokens(text) {
-		t.Errorf("responses usage 没走 countTokens: %v", r)
+		t.Errorf("responses usage did not go through countTokens: %v", r)
 	}
 	if _, ok := r["prompt_tokens"]; ok {
-		t.Error("responses API 不应出现 prompt_tokens 字段")
+		t.Error("responses API must not contain a prompt_tokens field")
 	}
 }
 
@@ -153,25 +153,25 @@ func TestToolChoice(t *testing.T) {
 
 	// none: tool definitions never enter the prompt at all
 	if p := mustPrompt(t, msgs, tools, "none"); strings.Contains(p, "get_weather") {
-		t.Errorf("tool_choice=none 不该注入工具定义: %s", p)
+		t.Errorf("tool_choice=none must not inject tool definitions: %s", p)
 	}
 	// required: the forcing wording must appear
 	p := mustPrompt(t, msgs, tools, "required")
 	if !strings.Contains(p, "MUST call one of the tools") {
-		t.Errorf("tool_choice=required 缺强制指令: %s", p)
+		t.Errorf("tool_choice=required is missing the forcing instruction: %s", p)
 	}
 	// named function: keep only that function and call it out by name
 	p = mustPrompt(t, msgs, tools, map[string]interface{}{"type": "function",
 		"function": map[string]interface{}{"name": "get_weather"}})
 	if !strings.Contains(p, `MUST call the tool "get_weather"`) {
-		t.Errorf("指定函数缺强制指令: %s", p)
+		t.Errorf("named function is missing the forcing instruction: %s", p)
 	}
 	if strings.Contains(p, "send_email") {
-		t.Errorf("指定函数时不该带上其它工具: %s", p)
+		t.Errorf("named function must not include other tools: %s", p)
 	}
 	// auto: keep the original permissive wording
 	if p := mustPrompt(t, msgs, tools, "auto"); !strings.Contains(p, "when needed") {
-		t.Errorf("auto 应保持宽松措辞: %s", p)
+		t.Errorf("auto should keep the permissive wording: %s", p)
 	}
 }
 
@@ -191,7 +191,7 @@ func TestDeltaTrackerAccumulates(t *testing.T) {
 	}
 	want := cleanGeminiText(frames[len(frames)-1])
 	if got != want {
-		t.Errorf("增量拼接=%q want %q", got, want)
+		t.Errorf("delta concatenation=%q want %q", got, want)
 	}
 	if d.emitted != want {
 		t.Errorf("emitted=%q want %q", d.emitted, want)
@@ -199,19 +199,19 @@ func TestDeltaTrackerAccumulates(t *testing.T) {
 
 		// a repeated frame must not be emitted again
 	if extra := d.Push(frames[len(frames)-1]); extra != "" {
-		t.Errorf("重复帧不该产生增量, got %q", extra)
+		t.Errorf("a repeated frame must not produce a delta, got %q", extra)
 	}
 		// a shorter frame (out-of-order arrival) isn't emitted either
 	if extra := d.Push("Transformer"); extra != "" {
-		t.Errorf("更短的帧不该产生增量, got %q", extra)
+		t.Errorf("a shorter frame must not produce a delta, got %q", extra)
 	}
 		// when the prefix doesn't match, skip; emitted stays unchanged
 	before := d.emitted
 	if extra := d.Push("完全不同的一段文本，比原来的还要长很多很多很多很多"); extra != "" {
-		t.Errorf("非前缀帧不该产生增量, got %q", extra)
+		t.Errorf("a non-prefix frame must not produce a delta, got %q", extra)
 	}
 	if d.emitted != before {
-		t.Errorf("非前缀帧不该改动 emitted")
+		t.Errorf("a non-prefix frame must not change emitted")
 	}
 
 	// remainingText fills in the tail the tracker skipped
@@ -221,11 +221,11 @@ func TestDeltaTrackerAccumulates(t *testing.T) {
 	}
 	// non-true-streaming (empty Emitted) should return the full text
 	if r := remainingText(full, &StreamResult{}); r != full {
-		t.Errorf("Emitted 为空时应返回全文")
+		t.Errorf("empty Emitted should return the full text")
 	}
 	// when the prefix doesn't match, don't re-send, to avoid duplication
 	if r := remainingText("另一段内容", &StreamResult{Emitted: d.emitted}); r != "" {
-		t.Errorf("前缀对不上时不该补发, got %q", r)
+		t.Errorf("prefix mismatch must not re-send, got %q", r)
 	}
 }
 
@@ -233,16 +233,16 @@ func TestDeltaTrackerAccumulates(t *testing.T) {
 // 3.5 Flash-Lite); that's undetectable from the request name alone, so the
 func TestExtractUpstreamModel(t *testing.T) {
 	if got := extractUpstreamModel(okRaw); got != "3.6 Flash" {
-		t.Errorf("正常响应应取到 '3.6 Flash', got %q", got)
+		t.Errorf("normal response should yield '3.6 Flash', got %q", got)
 	}
 	// model names with an "扩展" (extended) suffix must be extracted whole, not truncated at the space
 	downgraded := `[["wrb.fr",null,"[null,[\"c_x\",\"r_y\"],null,null,[[\"rc_z\",[\"hi\"]]],null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,\"fbb127bbb056c959\",null,null,\"3.6 Flash 扩展\",true]"]]`
 	if got := extractUpstreamModel(downgraded); got != "3.6 Flash 扩展" {
-		t.Errorf("应取到 '3.6 Flash 扩展', got %q", got)
+		t.Errorf("should yield '3.6 Flash 扩展', got %q", got)
 	}
 	// rejected responses carry no model name; no guessing allowed
 	if got := extractUpstreamModel(rejectedRaw); got != "" {
-		t.Errorf("被拒响应应返回空, got %q", got)
+		t.Errorf("rejected response should return empty, got %q", got)
 	}
 }
 
@@ -252,46 +252,46 @@ func TestExtractUpstreamModel(t *testing.T) {
 func TestProHiddenWithoutCookie(t *testing.T) {
 	// the cookie pool is empty at this point (TestMain provides a fresh temp DB)
 	if _, ok := availableModels()["gemini-3.1-pro"]; ok {
-		t.Error("无 cookie 时不该暴露 3.1 Pro")
+		t.Error("3.1 Pro must not be exposed without a cookie")
 	}
 	// inner[80] (extended thinking) only takes effect when logged in; sent
 	// anonymously the server silently ignores it, so thinking versions can't be
 	for name, m := range availableModels() {
 		if m.Thinking {
-			t.Errorf("无 cookie 时不该暴露 thinking 版: %s", name)
+			t.Errorf("thinking variants must not be exposed without a cookie: %s", name)
 		}
 	}
 	if len(availableModels()) != 2 {
-		t.Errorf("无 cookie 时应只剩 2 个模型, got %d", len(availableModels()))
+		t.Errorf("only 2 models should remain without a cookie, got %d", len(availableModels()))
 	}
 	_, _, err := resolveModel("gemini-3.1-pro")
 	if err == nil {
-		t.Fatal("无 cookie 时选 3.1 Pro 应该报错")
+		t.Fatal("selecting 3.1 Pro without a cookie should error")
 	}
 	// the error message must explain why and what to do, not just "unknown model"
 	if !strings.Contains(err.Error(), "cookie") ||
 		!strings.Contains(err.Error(), "downgraded") ||
 		!strings.Contains(err.Error(), "admin panel") {
-		t.Errorf("错误信息没解释原因和解法: %v", err)
+		t.Errorf("error message does not explain the cause and the fix: %v", err)
 	}
 
 	withPoolCookie(t)
 	if _, ok := availableModels()["gemini-3.1-pro"]; !ok {
-		t.Error("配了 cookie 时应暴露 3.1 Pro")
+		t.Error("3.1 Pro should be exposed with a cookie configured")
 	}
 	if _, _, err := resolveModel("gemini-3.1-pro"); err != nil {
-		t.Errorf("配了 cookie 时不该报错: %v", err)
+		t.Errorf("should not error with a cookie configured: %v", err)
 	}
 	for _, n := range []string{"gemini-3.6-flash-thinking", "gemini-3.5-flash-lite-thinking",
 		"gemini-3.1-pro-thinking"} {
 		if _, ok := availableModels()[n]; !ok {
-			t.Errorf("配了 cookie 时应暴露 %s", n)
+			t.Errorf("%s should be exposed with a cookie configured", n)
 		}
 	}
 	// a model that truly doesn't exist is still "unknown model"; the cookie hint must not mask it
 	if _, _, err := resolveModel("no-such-model"); err == nil ||
 		!strings.Contains(err.Error(), "unknown model") {
-		t.Errorf("未知模型应报 unknown model, got %v", err)
+		t.Errorf("unknown model should report unknown model, got %v", err)
 	}
 }
 
@@ -308,7 +308,7 @@ func TestModelNeedsLogin(t *testing.T) {
 	// must match availableModels' exclusion criteria: what's exposed without a cookie
 	for name := range availableModels() {
 		if modelNeedsLogin(Models[name]) {
-			t.Errorf("%s 被 availableModels 暴露却判为需登录，两处判据不一致", name)
+			t.Errorf("%s is exposed by availableModels but judged as needing login; the two criteria disagree", name)
 		}
 	}
 }
@@ -342,7 +342,7 @@ func TestPickCookieConcurrentDistinct(t *testing.T) {
 	for i := 0; i < n; i++ {
 		id, err := accountAdd("conc", fmt.Sprintf("SAPISID=d%d; SID=x", i), "")
 		if err != nil {
-			t.Fatalf("插号失败: %v", err)
+			t.Fatalf("failed to insert account: %v", err)
 		}
 		t.Cleanup(func() { _ = accountDelete(id) })
 	}
@@ -369,7 +369,7 @@ func TestPickCookieConcurrentDistinct(t *testing.T) {
 	}
 	for id, c := range seen {
 		if c > 1 {
-			t.Errorf("账号 #%d 被并发挑中 %d 次，挑号未串行化", id, c)
+			t.Errorf("account #%d was picked %d times concurrently; picking is not serialized", id, c)
 		}
 	}
 }
@@ -387,24 +387,24 @@ func TestAnonFirstEligible(t *testing.T) {
 
 	set(false)
 	if anonFirstEligible(plain, false) {
-		t.Error("开关关时应恒 false（池里有号就用号）")
+		t.Error("with the switch off it must always be false (use an account when the pool has one)")
 	}
 
 	set(true)
 	if !anonFirstEligible(plain, false) {
-		t.Error("开 + 纯文本无附件应走匿名")
+		t.Error("on + plain text without attachments should go anonymous")
 	}
 	if anonFirstEligible(plain, true) {
-		t.Error("带附件必须挑号（匿名引用被上游 1100 拒）")
+		t.Error("attachments must pick an account (anonymous references are rejected upstream with 1100)")
 	}
 	if anonFirstEligible(pro, false) {
-		t.Error("3.1 Pro 需登录，不能走匿名")
+		t.Error("3.1 Pro needs login, cannot go anonymous")
 	}
 	if anonFirstEligible(img, false) {
-		t.Error("生图需登录，不能走匿名")
+		t.Error("image generation needs login, cannot go anonymous")
 	}
 	if anonFirstEligible(think, false) {
-		t.Error("扩展思考需登录，不能走匿名")
+		t.Error("extended thinking needs login, cannot go anonymous")
 	}
 }
 

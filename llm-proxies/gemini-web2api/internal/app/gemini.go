@@ -184,7 +184,7 @@ func applyAlwaysThinking(modelName string, mc ModelConfig, hasLogin bool) ModelC
 	if hasLogin && !mc.Thinking && mc.Tool == 0 {
 		if think, exists := Models[modelName+"-thinking"]; exists &&
 			think.HexID == mc.HexID && think.Mode == mc.Mode && think.Thinking {
-			logf("[model] %s -> thinking 版（always-thinking 政策）", modelName)
+			logf("[model] %s -> thinking variant (always-thinking policy)", modelName)
 			return think
 		}
 	}
@@ -257,7 +257,7 @@ func acquireSlot(preferProxyID int64) (Proxy, bool, error) {
 			return Proxy{}, false, &RateLimitError{Reason: "rph", ProxyID: -1}
 		}
 		if ok, reason := trySlotAcquire(0); ok {
-			logf("[proxy] 代理池无可用出口，本次退回直连（fallback_direct 已开）")
+			logf("[proxy] no available egress in the proxy pool, falling back to direct for this request (fallback_direct enabled)")
 			return Proxy{}, true, nil
 		} else {
 			return Proxy{}, false, &RateLimitError{Reason: reason, ProxyID: 0}
@@ -417,7 +417,7 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 			if _, _, rerr := rotateAccount(*acct); rerr == nil {
 				if fresh := accountByID(acct.ID); fresh != nil {
 					if tok2, err2 := getXSRF(fresh.Cookie, proxyURL); err2 == nil {
-						logf("[cookie] 账号 #%d 轮转后恢复可用", acct.ID)
+						logf("[cookie] account #%d recovered after rotation", acct.ID)
 						acct = fresh
 						cookieStr, sapisid, xsrfToken = fresh.Cookie, extractSAPISID(fresh.Cookie), tok2
 						if fresh.ProxyID == 0 || !proxyUsableByID(fresh.ProxyID) {
@@ -431,7 +431,7 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		// Unrecoverable: record a failure so the panel shows which account should be replaced, then move to the next.
 		markCookieByStatus(acct.ID, 401, err.Error())
 		lastCookieErr = err
-		logf("[cookie] 账号 #%d 不可用，换下一个：%v", acct.ID, err)
+		logf("[cookie] account #%d unavailable, trying the next one: %v", acct.ID, err)
 		acct, _ = pickCookieAccountExcept(tried) // returns nil when none is left; the loop ends naturally
 	}
 	if lastCookieErr != nil && cookieStr == "" {
@@ -439,11 +439,11 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 			// Error out by default instead of downgrading: with a dead cookie the upstream doesn't reject, it
 			// just treats you as anonymous — plain-text requests still get 200, so 3.1 Pro is silently
 			// downgraded to 3.5 Flash-Lite, the reasoning chain vanishes, and the client can't tell. Prefer a clear failure over a fake success.
-			return attrib(fmt.Errorf("cookie 池里 %d 个账号都不可用（最后一个：%w）；"+
-				"到面板「Cookie 池」用「检测」按钮逐个排查，或打开 fallback_anon 降级匿名",
+			return attrib(fmt.Errorf("all %d accounts in the cookie pool are unavailable (last one: %w); "+
+				"use the \"Check\" button in the admin panel (Cookie pool) to inspect them one by one, or enable fallback_anon to downgrade to anonymous",
 				len(tried), lastCookieErr))
 		}
-		logf("[cookie] 试过的 %d 个账号都不可用，本次降级匿名（能力会退化到匿名档）", len(tried))
+		logf("[cookie] all %d tried accounts are unavailable, downgrading to anonymous for this request (capabilities drop to the anonymous tier)", len(tried))
 		cookieID, cookieLabel = 0, ""
 	}
 	// Anonymous request: grab a /app session cookie (NID/COMPASS etc.) **purely as a transport vehicle**.
@@ -474,7 +474,7 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		for _, u := range pending {
 			ref, uerr := uploadBytes(cookieStr, proxyURL, u.Data, u.Name)
 			if uerr != nil {
-				return attrib(fmt.Errorf("上传附件 %s 失败: %w", u.Name, uerr))
+				return attrib(fmt.Errorf("failed to upload attachment %s: %w", u.Name, uerr))
 			}
 			files = append(files, fileRef{Ref: ref, Name: u.Name, Kind: u.Kind, Mime: u.Mime})
 			if u.Kind == 2 {
@@ -483,7 +483,7 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 				nImg++
 			}
 		}
-		logf("[vision] 上传了 %d 张图 / %d 个视频", nImg, nVid)
+		logf("[vision] uploaded %d images / %d videos", nImg, nVid)
 	}
 
 	// An oversized prompt is turned into a text attachment. This must wait until account and egress are
@@ -705,7 +705,7 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 				break
 			}
 			if attempt < rtCfg().RetryAttempts-1 {
-				logf("retry %d/%d: 空响应（无内容帧，%d 字节）", attempt+1, rtCfg().RetryAttempts, len(raw))
+				logf("retry %d/%d: empty response (no content frames, %d bytes)", attempt+1, rtCfg().RetryAttempts, len(raw))
 				time.Sleep(time.Duration(rtCfg().RetryDelaySec) * time.Second)
 			}
 			continue
@@ -741,11 +741,11 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 				mc.Tool, string(raw), extractConversationID(string(raw)),
 				cookieStr, sapisid, xsrfToken, proxyURL, mime)
 			if aerr != nil {
-				logf("[media] 取回产物失败: %v", aerr)
-				result.MediaErr = aerr.Error()
-			} else {
-				result.Artifacts = arts
-				logf("[media] 取回 %d 份产物", len(arts))
+logf("[media] failed to retrieve artifacts: %v", aerr)
+			result.MediaErr = aerr.Error()
+		} else {
+			result.Artifacts = arts
+			logf("[media] retrieved %d artifacts", len(arts))
 			}
 		}
 		// #19 auto-delete conversation: after the result, delete the conversation left on
@@ -1228,7 +1228,7 @@ func probeGemini(prompt, proxyURL string) ProbeResult {
 		req, e := http.NewRequest("POST", endpoint, strings.NewReader(body))
 		if e != nil {
 			res.Status = "network_error"
-			res.Diagnostic = "构建请求失败: " + e.Error()
+			res.Diagnostic = "failed to build the request: " + e.Error()
 			return res
 		}
 		applyChromeHeaders(req)
@@ -1239,7 +1239,7 @@ func probeGemini(prompt, proxyURL string) ProbeResult {
 		resp, e := client.Do(req)
 		if e != nil {
 			res.Status = "network_error"
-			res.Diagnostic = "网络层错误（DNS/TCP/TLS 失败）: " + e.Error()
+			res.Diagnostic = "network-layer error (DNS/TCP/TLS failure): " + e.Error()
 			return res
 		}
 		defer resp.Body.Close()
@@ -1250,7 +1250,7 @@ func probeGemini(prompt, proxyURL string) ProbeResult {
 		req, e := fhttp.NewRequest("POST", endpoint, strings.NewReader(body))
 		if e != nil {
 			res.Status = "network_error"
-			res.Diagnostic = "构建请求失败: " + e.Error()
+			res.Diagnostic = "failed to build the request: " + e.Error()
 			return res
 		}
 		for k, v := range headers {
@@ -1260,7 +1260,7 @@ func probeGemini(prompt, proxyURL string) ProbeResult {
 		resp, e := client.Do(req)
 		if e != nil {
 			res.Status = "network_error"
-			res.Diagnostic = "网络层错误（DNS/TCP/TLS 失败）: " + e.Error()
+			res.Diagnostic = "network-layer error (DNS/TCP/TLS failure): " + e.Error()
 			return res
 		}
 		defer resp.Body.Close()
@@ -1275,30 +1275,30 @@ func probeGemini(prompt, proxyURL string) ProbeResult {
 	switch {
 	case statusCode == 302:
 		res.Status = "blocked_sorry"
-		res.Diagnostic = "IP 被 Google 风控（重定向到 sorry/index）。" +
-			"通常 6-24 小时解除，或换 VPN/代理 IP 立即恢复。Location: " + truncate(locHeader, 200)
+res.Diagnostic = "IP flagged by Google risk control (redirected to sorry/index). " +
+		"Usually clears in 6-24 hours, or switch VPN/proxy IP for immediate recovery. Location: " + truncate(locHeader, 200)
 		return res
 	case statusCode == 429:
 		res.Status = "rate_limited"
-		res.Diagnostic = "Google 直接返回 429 限流。同样是 IP 嫌疑，但风控分支不同（朴素 SDK 路径）。"
+		res.Diagnostic = "Google returned 429 rate limiting directly. Also an IP suspicion, but a different risk-control branch (plain SDK path)."
 		return res
 	case statusCode != 200:
 		res.Status = "upstream_error"
-		res.Diagnostic = fmt.Sprintf("上游返回非 200 (HTTP %d)，可能是协议变更或临时故障。", statusCode)
+		res.Diagnostic = fmt.Sprintf("upstream returned non-200 (HTTP %d), possibly a protocol change or transient failure.", statusCode)
 		return res
 	}
 
 	text := extractResponseText(string(raw))
 	if text == "" {
 		res.Status = "upstream_error"
-		res.Diagnostic = "上游 200 但只回了结束帧、没有内容帧，通常是请求被服务端拒绝" +
-			"（例如带了不被接受的会话 id 或工具开关），不是帧格式变更。"
+res.Diagnostic = "upstream returned 200 but only the end frame, no content frames; usually the request was rejected server-side " +
+		"(e.g. an unaccepted conversation id or tool flag), not a frame-format change."
 		return res
 	}
 
 	res.OK = true
 	res.Status = "success"
 	res.ResponseText = truncate(text, 200)
-	res.Diagnostic = "调用成功。延迟 / 内容见上面字段。"
+	res.Diagnostic = "call succeeded. Latency / content see fields above."
 	return res
 }

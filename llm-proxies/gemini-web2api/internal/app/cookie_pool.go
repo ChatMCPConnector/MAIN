@@ -94,12 +94,12 @@ func cookieNames(cookie string) []string {
 // latter would admit an unfilled per-field template (key names present, values all empty) into
 // the pool, stored as a whole JSON blob, doomed to fail every time its turn comes.
 func accountAdd(label, cookie, note string) (int64, error) {
-	c, ok := normalizeCookie(cookie, "手工添加的 cookie")
+	c, ok := normalizeCookie(cookie, "manually added cookie")
 	if !ok {
-		return 0, fmt.Errorf("cookie 解析失败：既不是 \"k=v; k=v\" 串，也不是可识别的 JSON")
+		return 0, fmt.Errorf("cookie parse failed: neither a \"k=v; k=v\" string nor recognizable JSON")
 	}
 	if extractSAPISID(c) == "" {
-		return 0, fmt.Errorf("cookie 里没有 SAPISID，多半没复制全（需要 gemini.google.com 下的完整 cookie，至少含 SID / HSID / SSID / APISID / SAPISID / __Secure-1PSID）")
+		return 0, fmt.Errorf("cookie has no SAPISID, probably not copied in full (needs the complete gemini.google.com cookie, containing at least SID / HSID / SSID / APISID / SAPISID / __Secure-1PSID)")
 	}
 	return accountInsert(label, c, note)
 }
@@ -113,11 +113,11 @@ func accountAdd(label, cookie, note string) (int64, error) {
 func accountAdopt(label, cookie, note string) (int64, error) {
 	cookie, ok := normalizeCookie(cookie, label)
 	if !ok {
-		return 0, fmt.Errorf("cookie 解析失败")
+		return 0, fmt.Errorf("cookie parse failed")
 	}
 	if extractSAPISID(cookie) == "" {
-		logf("[cookie] %s 里没有 SAPISID，算不出 SAPISIDHASH 授权头，可能只当匿名处理；"+
-			"先按原样导入，请到面板核对", label)
+		logf("[cookie] %s has no SAPISID; the SAPISIDHASH authorization header cannot be computed, requests may be treated as anonymous; "+
+			"importing as-is — please verify in the admin panel", label)
 	}
 	return accountInsert(label, cookie, note)
 }
@@ -125,7 +125,7 @@ func accountAdopt(label, cookie, note string) (int64, error) {
 func accountInsert(label, cookie, note string) (int64, error) {
 	cookie = strings.TrimSpace(cookie)
 	if cookie == "" {
-		return 0, fmt.Errorf("cookie 不能为空")
+		return 0, fmt.Errorf("cookie must not be empty")
 	}
 	return insertID(
 		`INSERT INTO accounts(label, cookie, status, note, created_at) VALUES (?,?,?,?,?)`,
@@ -179,7 +179,7 @@ func accountDelete(id int64) error {
 // accountSetStatus changes the status (enabled / disabled).
 func accountSetStatus(id int64, status string) error {
 	if status != "enabled" && status != "disabled" {
-		return fmt.Errorf("非法状态 %q", status)
+		return fmt.Errorf("invalid status %q", status)
 	}
 	_, err := getDB().Exec(`UPDATE accounts SET status=? WHERE id=?`, status, id)
 	return err
@@ -233,16 +233,16 @@ func migrateLegacyCookie() {
 		_ = kvSet(kvLegacyCookieDone, "1")
 		return
 	}
-	cookie, ok := normalizeCookie(raw, "「设置」页的单 cookie")
+	cookie, ok := normalizeCookie(raw, "single cookie from the settings page")
 	if !ok {
 		return
 	}
 	if !poolHasCookie(cookie) {
-		if _, err := accountAdopt("原单 cookie", cookie, "从「设置」页迁入"); err != nil {
-			logf("[cookie] 「设置」页的单 cookie 迁入池子失败，原值保留、下次启动重试: %v", err)
+		if _, err := accountAdopt("legacy single cookie", cookie, "migrated from the settings page"); err != nil {
+			logf("[cookie] failed to migrate the settings-page single cookie into the pool, original value kept, will retry next startup: %v", err)
 			return
 		}
-		logf("[cookie] 「设置」页的单 cookie 已迁入 cookie 池")
+		logf("[cookie] settings-page single cookie migrated into the cookie pool")
 	}
 	_ = kvSet(kvLegacyCookieDone, "1")
 }
@@ -260,7 +260,7 @@ func syncSeededCookieFile() {
 		if err != nil {
 			// If unreadable, treat it as never configured: better to keep the current state than to
 			// yank the cookie the user is using just because the container lost a volume.
-			logf("[cookie] 读不了 --cookie-file %s，池子保持不变: %v", cfg.CookieFile, err)
+			logf("[cookie] cannot read --cookie-file %s, pool left unchanged: %v", cfg.CookieFile, err)
 			return
 		}
 		cur = strings.TrimSpace(string(data))
@@ -281,7 +281,7 @@ func syncSeededCookieFile() {
 	if cur == "" {
 		_ = kvSet(kvSeededCookieVal, "")
 		_ = kvSet(kvSeededCookieID, "")
-		logf("[cookie] --cookie-file 已移除，对应的池子记录一并撤下")
+		logf("[cookie] --cookie-file removed, its pool record withdrawn along with it")
 		return
 	}
 	if poolHasCookie(cur) {
@@ -289,14 +289,14 @@ func syncSeededCookieFile() {
 		_ = kvSet(kvSeededCookieID, "")
 		return
 	}
-	id, err := accountAdopt("cookie-file", cur, "来自 --cookie-file")
+	id, err := accountAdopt("cookie-file", cur, "from --cookie-file")
 	if err != nil {
-		logf("[cookie] --cookie-file 入池失败: %v", err)
+		logf("[cookie] failed to add --cookie-file to the pool: %v", err)
 		return
 	}
 	_ = kvSet(kvSeededCookieVal, cur)
 	_ = kvSet(kvSeededCookieID, strconv.FormatInt(id, 10))
-	logf("[cookie] --cookie-file 的 cookie 已加入 cookie 池")
+	logf("[cookie] --cookie-file cookie added to the cookie pool")
 }
 
 // dropSeededCookie retires the record last created by --cookie-file.
@@ -314,7 +314,7 @@ func dropSeededCookie(prevCookie string) {
 		if a.ID == id {
 			if a.Cookie == prevCookie {
 				if err := accountDelete(id); err != nil {
-					logf("[cookie] 撤下旧的 --cookie-file 记录失败: %v", err)
+					logf("[cookie] failed to withdraw the old --cookie-file record: %v", err)
 				}
 			}
 			return
@@ -343,7 +343,7 @@ func normalizeCookie(raw, who string) (string, bool) {
 	}
 	var m map[string]interface{}
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		logf("[cookie] %s 是 JSON 但解析失败，跳过: %v", who, err)
+		logf("[cookie] %s is JSON but failed to parse, skipping: %v", who, err)
 		return "", false
 	}
 	if c, ok := m["cookie"].(string); ok && strings.TrimSpace(c) != "" {
@@ -374,7 +374,7 @@ func normalizeCookie(raw, who string) (string, bool) {
 		parts = append(parts, k+"="+str(k))
 	}
 	if len(parts) == 0 {
-		logf("[cookie] %s 是 JSON 但一项非空值都没有，跳过", who)
+		logf("[cookie] %s is JSON but has no non-empty values, skipping", who)
 		return "", false
 	}
 	return strings.Join(parts, "; "), true
@@ -505,7 +505,7 @@ func autoDisableIfDead(id int64) {
 	}
 	if _, err := getDB().Exec(
 		`UPDATE accounts SET status='disabled' WHERE id=? AND status='enabled'`, id); err == nil {
-		logf("[cookie] 账号 #%d 连续 %d 次鉴权失败，已自动停用", id, fails)
+		logf("[cookie] account #%d had %d consecutive auth failures, auto-disabled", id, fails)
 	}
 }
 
@@ -528,13 +528,13 @@ func checkAccountCookie(a CookieAccount) CookieCheck {
 	t0 := time.Now()
 	picked, ok, err := acquireSlot(a.ProxyID)
 	if !ok {
-		return CookieCheck{Detail: "拿不到出口：" + err.Error()}
+		return CookieCheck{Detail: "could not acquire an egress: " + err.Error()}
 	}
 	defer releaseSlot(picked.ID)
 	proxyURL := picked.URL
 	name := picked.Name
 	if name == "" {
-		name = "直连"
+		name = "direct"
 	}
 
 	// Invalidate the cache first — otherwise a stale conclusion from minutes ago makes the check pointless
@@ -546,9 +546,9 @@ func checkAccountCookie(a CookieAccount) CookieCheck {
 		return CookieCheck{Detail: explainCookieFailure(err), ProxyName: name, TookMs: took}
 	}
 	markAccountResult(a.ID, true, "")
-	detail := "登录态有效"
+	detail := "signed-in state valid"
 	if extractSAPISID(a.Cookie) == "" {
-		detail += "，但缺 SAPISID（算不出授权头，部分接口会被当匿名）"
+		detail += ", but missing SAPISID (authorization header not computable, some endpoints will be treated as anonymous)"
 	}
 	return CookieCheck{OK: true, Detail: detail, ProxyName: name, TookMs: took}
 }
@@ -558,13 +558,13 @@ func explainCookieFailure(err error) string {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "no SNlM0e"):
-		return "cookie 已失效：页面能打开但没有登录态，请求会被当匿名处理"
+		return "cookie expired: the page opens but has no signed-in state; requests will be treated as anonymous"
 	case strings.Contains(msg, "HTTP 302"):
-		return "cookie 无效：被重定向到登录页"
+		return "cookie invalid: redirected to the login page"
 	case strings.Contains(msg, "HTTP 429"), strings.Contains(msg, "sorry"):
-		return "出口被上游限流，换个代理再试（不是 cookie 的问题）"
+		return "egress rate-limited by the upstream; try a different proxy (not a cookie problem)"
 	default:
-		return "检测失败：" + msg
+		return "check failed: " + msg
 	}
 }
 
@@ -662,7 +662,7 @@ func updateAccountCookie(id int64, cookie string) {
 	var cur string
 	if err := getDB().QueryRow(`SELECT cookie FROM accounts WHERE id=?`, id).Scan(&cur); err == nil {
 		if got, want := cookieIdentity(cookie), cookieIdentity(cur); got != want {
-			logf("[cookie] 账号 #%d 的刷新结果身份对不上，已丢弃不写回", id)
+			logf("[cookie] account #%d's refresh result identity doesn't match, discarded without writing back", id)
 			return
 		}
 	}

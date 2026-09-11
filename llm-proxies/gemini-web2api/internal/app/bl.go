@@ -73,17 +73,17 @@ func refreshBL(proxyURL string) {
 
 	body, err := fetchAppPage("", proxyURL)
 	if err != nil {
-		logf("[bl] 抓 /app 失败，继续用当前值: %v", err)
+		logf("[bl] failed to fetch /app, keeping the current value: %v", err)
 		return
 	}
 	m := cfb2hRe.FindSubmatch(body)
 	if m == nil {
-		logf("[bl] 页面里没有 cfb2h，继续用当前值")
+		logf("[bl] no cfb2h in the page, keeping the current value")
 		return
 	}
 	got := string(m[1])
 	if !blValueRe.MatchString(got) {
-		logf("[bl] 抓到的值形状不对，忽略: %q", truncate(got, 60))
+		logf("[bl] fetched value has the wrong shape, ignoring: %q", truncate(got, 60))
 		return
 	}
 
@@ -92,6 +92,6 @@ func refreshBL(proxyURL string) {
 	blFetched = got
 	blMu.Unlock()
 	if changed {
-		logf("[bl] 更新为 %s（配置里钉的是 %s）", got, rtCfg().GeminiBL)
+		logf("[bl] updated to %s (config pins %s)", got, rtCfg().GeminiBL)
 	}
 }

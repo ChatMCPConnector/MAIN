@@ -44,18 +44,18 @@ func TestMigrateLegacyCookie(t *testing.T) {
 
 	list := accountList()
 	if len(list) != 1 || list[0].Cookie != raw {
-		t.Fatalf("没搬进池子: %+v", list)
+		t.Fatalf("not migrated into the pool: %+v", list)
 	}
 	// the original value is kept: rolling back to the old version leaves that single cookie still working, behavior unchanged
 	if kvGet("google_cookie") != raw {
-		t.Errorf("不该动 kv 里的原值")
+		t.Errorf("the original kv value must not be touched")
 	}
 
 	// after the user deletes it from the pool, a restart must not resurrect it
 	_ = accountDelete(list[0].ID)
 	seedCookiesFromConfig()
 	if n := len(accountList()); n != 0 {
-		t.Errorf("删掉后又被塞回来了，池子里还有 %d 条", n)
+		t.Errorf("resurrected after deletion; the pool still has %d entries", n)
 	}
 }
 
@@ -71,14 +71,14 @@ func TestMigrateLegacyCookieWithoutSAPISID(t *testing.T) {
 
 	list := accountList()
 	if len(list) != 1 || list[0].Cookie != raw {
-		t.Fatalf("缺 SAPISID 就被拦下了，用户升级后会变匿名: %+v", list)
+		t.Fatalf("blocked just for missing SAPISID; users would become anonymous after upgrading: %+v", list)
 	}
 	if !hasCookie() {
-		t.Error("池子里有账号，hasCookie 却是 false")
+		t.Error("the pool has accounts but hasCookie is false")
 	}
 	// but manually adding the same value via the panel must still be blocked — the user sees the error right there
 	if _, err := accountAdd("手工", raw, ""); err == nil {
-		t.Error("面板手工添加不该放过缺 SAPISID 的 cookie")
+		t.Error("manual panel adds must not accept a cookie lacking SAPISID")
 	}
 }
 
@@ -91,13 +91,13 @@ func TestMigrateLegacyCookieBadValueKeepsRetrying(t *testing.T) {
 	seedCookiesFromConfig()
 
 	if n := len(accountList()); n != 0 {
-		t.Fatalf("不该入池，实际 %d 条", n)
+		t.Fatalf("must not enter the pool, actually %d entries", n)
 	}
 	if kvGet(kvLegacyCookieDone) == "1" {
-		t.Error("入池失败却标记了迁移完成，用户的 cookie 从此再没机会进池子")
+		t.Error("migration marked done despite failing to enter the pool; the user's cookie never gets another chance")
 	}
 	if kvGet("google_cookie") == "" {
-		t.Error("入池失败还把原值清了，等于直接丢数据")
+		t.Error("original value cleared despite failing to enter the pool, i.e. outright data loss")
 	}
 }
 
@@ -111,7 +111,7 @@ func TestProxySchemeCaseInsensitive(t *testing.T) {
 
 	list := listProxies()
 	if len(list) != 1 || list[0].URL != "HTTP://1.2.3.4:8080" {
-		t.Fatalf("大写 scheme 被拦了，用户升级后代理不工作: %+v", list)
+		t.Fatalf("uppercase scheme blocked; the user's proxy stops working after upgrade: %+v", list)
 	}
 }
 
@@ -129,14 +129,14 @@ func TestMigrateLegacyProxyRejectedKeepsRetrying(t *testing.T) {
 	seedProxiesFromConfig()
 
 	if n := len(listProxies()); n != 0 {
-		t.Fatalf("缺 scheme 的值不该入池，实际 %d 条", n)
+		t.Fatalf("a value missing its scheme must not enter the pool, actually %d entries", n)
 	}
 	if kvGet(kvLegacyProxyDone) == "1" {
-		t.Error("入池失败却标记了迁移完成")
+		t.Error("migration marked done despite failing to enter the pool")
 	}
 	// the original runtime_config must not be touched at all: it holds other fields too
 	if got := kvGet(runtimeConfigKey); got != `{"proxy":"1.2.3.4:8080","per_ip_rph":80}` {
-		t.Errorf("runtime_config 被改写了: %s", got)
+		t.Errorf("runtime_config was rewritten: %s", got)
 	}
 }
 
@@ -148,16 +148,16 @@ func TestMigrateLegacyProxyOK(t *testing.T) {
 
 	list := listProxies()
 	if len(list) != 1 || list[0].URL != "http://u:p@1.2.3.4:8080" {
-		t.Fatalf("没搬进池子: %+v", list)
+		t.Fatalf("not migrated into the pool: %+v", list)
 	}
 	// migration doesn't rewrite runtime_config — one less write to existing data means one less risk of corrupting other fields
 	if got := kvGet(runtimeConfigKey); got != `{"proxy":"http://u:p@1.2.3.4:8080","per_ip_rph":80}` {
-		t.Errorf("runtime_config 被改写了: %s", got)
+		t.Errorf("runtime_config was rewritten: %s", got)
 	}
 	// idempotent: a second startup must not add another entry
 	seedProxiesFromConfig()
 	if n := len(listProxies()); n != 1 {
-		t.Errorf("第二次启动又加了一条，池子里 %d 条", n)
+		t.Errorf("a second startup added another entry; the pool has %d", n)
 	}
 }
 
@@ -170,7 +170,7 @@ func TestSeededProxyReplacedOnChange(t *testing.T) {
 	cfg.Proxy = "http://old:1080"
 	seedProxiesFromConfig()
 	if list := listProxies(); len(list) != 1 || list[0].URL != "http://old:1080" {
-		t.Fatalf("首次播种不对: %+v", list)
+		t.Fatalf("first seeding is wrong: %+v", list)
 	}
 
 	cfg.Proxy = "http://new:1080" // user changed compose and restarted
@@ -178,17 +178,17 @@ func TestSeededProxyReplacedOnChange(t *testing.T) {
 
 	list := listProxies()
 	if len(list) != 1 {
-		t.Fatalf("应替换成 1 条，实际 %d 条: %+v", len(list), list)
+		t.Fatalf("should be replaced with 1 entry, actually %d: %+v", len(list), list)
 	}
 	if list[0].URL != "http://new:1080" {
-		t.Errorf("换成了 %s，期望 http://new:1080", list[0].URL)
+		t.Errorf("changed to %s, want http://new:1080", list[0].URL)
 	}
 
 	// parameter removed entirely → the entry we created gets withdrawn too
 	cfg.Proxy = ""
 	seedProxiesFromConfig()
 	if n := len(listProxies()); n != 0 {
-		t.Errorf("去掉 --proxy 后应撤下，池子里还有 %d 条", n)
+		t.Errorf("should be withdrawn after removing --proxy; the pool still has %d entries", n)
 	}
 }
 
@@ -207,10 +207,10 @@ func TestSeededProxyRespectsPanelEdits(t *testing.T) {
 
 	list := listProxies()
 	if len(list) != 1 {
-		t.Fatalf("不该动池子，实际 %d 条", len(list))
+		t.Fatalf("the pool must not be touched, actually %d entries", len(list))
 	}
 	if list[0].Enabled {
-		t.Error("用户停用的记录被重新启用了")
+		t.Error("a record the user disabled was re-enabled")
 	}
 }
 
@@ -223,7 +223,7 @@ func TestSeededProxySkipsExistingURL(t *testing.T) {
 	cfg.Proxy = "http://same:1080"
 	seedProxiesFromConfig()
 	if n := len(listProxies()); n != 1 {
-		t.Errorf("同一个 URL 被建了 %d 条", n)
+		t.Errorf("the same URL created %d entries", n)
 	}
 }
 
@@ -244,20 +244,20 @@ func TestSeededCookieFileRotates(t *testing.T) {
 	seedCookiesFromConfig() // a second startup with unchanged content
 	list := accountList()
 	if len(list) != 1 {
-		t.Fatalf("内容没变不该重复插，实际 %d 条", len(list))
+		t.Fatalf("unchanged content must not be re-inserted, actually %d entries", len(list))
 	}
 	if list[0].Cookie != "SAPISID=first; SID=z" {
-		t.Errorf("首尾空白没去掉: %q", list[0].Cookie)
+		t.Errorf("leading/trailing whitespace not stripped: %q", list[0].Cookie)
 	}
 
 	write("SAPISID=rotated; SID=z")
 	seedCookiesFromConfig()
 	list = accountList()
 	if len(list) != 1 {
-		t.Fatalf("轮换后应仍是 1 条，实际 %d 条: %+v", len(list), list)
+		t.Fatalf("should still be 1 entry after rotation, actually %d: %+v", len(list), list)
 	}
 	if list[0].Cookie != "SAPISID=rotated; SID=z" {
-		t.Errorf("没换成新的: %q", list[0].Cookie)
+		t.Errorf("not switched to the new one: %q", list[0].Cookie)
 	}
 }
 
@@ -272,14 +272,14 @@ func TestSeededCookieFileMissingKeepsPool(t *testing.T) {
 	cfg.CookieFile = path
 	seedCookiesFromConfig()
 	if len(accountList()) != 1 {
-		t.Fatal("前置条件不成立")
+		t.Fatal("precondition not met")
 	}
 
 	_ = os.Remove(path) // volume not mounted
 	seedCookiesFromConfig()
 
 	if n := len(accountList()); n != 1 {
-		t.Errorf("文件读不到就把 cookie 撤了，池子里剩 %d 条", n)
+		t.Errorf("the cookie was withdrawn just because the file is unreadable; the pool has %d left", n)
 	}
 }
 
@@ -294,13 +294,13 @@ func TestMigrateLegacyCookieJSONForm(t *testing.T) {
 
 	list := accountList()
 	if len(list) != 1 {
-		t.Fatalf("应有 1 条，实际 %d 条", len(list))
+		t.Fatalf("should have 1 entry, actually %d", len(list))
 	}
 	if list[0].Cookie != "SAPISID=fromjson; SID=w" {
-		t.Errorf("JSON 没归一化: %q", list[0].Cookie)
+		t.Errorf("JSON was not normalized: %q", list[0].Cookie)
 	}
 	if got := extractSAPISID(list[0].Cookie); got != "fromjson" {
-		t.Errorf("入池后取不出 SAPISID: %q", got)
+		t.Errorf("SAPISID not extractable after entering the pool: %q", got)
 	}
 }
 
@@ -310,13 +310,13 @@ func TestSeedNoop(t *testing.T) {
 	seedCookiesFromConfig()
 	seedProxiesFromConfig()
 	if n := len(accountList()); n != 0 {
-		t.Errorf("不该新建账号，实际 %d 条", n)
+		t.Errorf("no new account should be created, actually %d entries", n)
 	}
 	if n := len(listProxies()); n != 0 {
-		t.Errorf("不该新建代理，实际 %d 条", n)
+		t.Errorf("no new proxy should be created, actually %d entries", n)
 	}
 	if hasCookie() {
-		t.Error("池子空时 hasCookie 应为 false")
+		t.Error("hasCookie should be false when the pool is empty")
 	}
 }
 

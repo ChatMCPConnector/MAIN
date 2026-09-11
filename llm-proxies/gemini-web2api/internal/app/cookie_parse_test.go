@@ -42,10 +42,10 @@ func TestNormalizeCookieForms(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			got, ok := normalizeCookie(c.in, "test")
 			if !ok {
-				t.Fatal("解析失败")
+				t.Fatal("parse failed")
 			}
 			if got != c.want {
-				t.Errorf("得到 %q\n期望 %q", got, c.want)
+				t.Errorf("got %q\nwant %q", got, c.want)
 			}
 		})
 	}
@@ -58,10 +58,10 @@ func TestAccountAddRejectsBlankTemplate(t *testing.T) {
 	resetSeedState(t)
 	blank := `{"SID":"","HSID":"","SSID":"","APISID":"","SAPISID":"","__Secure-1PSID":"","__Secure-1PSIDTS":""}`
 	if _, err := accountAdd("空模板", blank, ""); err == nil {
-		t.Fatal("空模板被放进池子了")
+		t.Fatal("an empty template was put into the pool")
 	}
 	if n := len(accountList()); n != 0 {
-		t.Errorf("池子里多了 %d 条", n)
+		t.Errorf("the pool gained %d extra entries", n)
 	}
 }
 
@@ -74,14 +74,14 @@ func TestAccountAddAcceptsTemplate(t *testing.T) {
 	}
 	list := accountList()
 	if len(list) != 1 {
-		t.Fatalf("应有 1 条，实际 %d", len(list))
+		t.Fatalf("should have 1 entry, actually %d", len(list))
 	}
 	want := "SID=a; HSID=b; SSID=c; APISID=d; SAPISID=e; __Secure-1PSID=f"
 	if list[0].Cookie != want {
-		t.Errorf("存进去的是 %q\n期望 %q", list[0].Cookie, want)
+		t.Errorf("stored %q\nwant %q", list[0].Cookie, want)
 	}
 	if extractSAPISID(list[0].Cookie) != "e" {
-		t.Error("入池后取不出 SAPISID")
+		t.Error("SAPISID not extractable after entering the pool")
 	}
 }
 
@@ -97,15 +97,15 @@ func TestCookiePairsWithoutSpaces(t *testing.T) {
 		"SID=a;\nSAPISID=b;\nHSID=c",
 	} {
 		if got := extractSAPISID(in); got != "b" {
-			t.Errorf("extractSAPISID(%q) = %q，期望 \"b\"", in, got)
+			t.Errorf("extractSAPISID(%q) = %q, want \"b\"", in, got)
 		}
 		if n := len(cookieNames(in)); n != 3 {
-			t.Errorf("cookieNames(%q) 数出 %d 项，期望 3", in, n)
+			t.Errorf("cookieNames(%q) counted %d items, want 3", in, n)
 		}
 	}
 	// a value containing '=' (base64 padding) must only be split at the first equals sign
 	if got := extractSAPISID("SAPISID=ab==; SID=x"); got != "ab==" {
-		t.Errorf("值里的等号被切坏了: %q", got)
+		t.Errorf("the equals sign in the value got cut: %q", got)
 	}
 }
 
@@ -113,9 +113,9 @@ func TestCookiePairsWithoutSpaces(t *testing.T) {
 func TestAccountAddAcceptsNoSpaceCookie(t *testing.T) {
 	resetSeedState(t)
 	if _, err := accountAdd("无空格", "SID=a;SAPISID=b;__Secure-1PSID=c", ""); err != nil {
-		t.Fatalf("没空格的串应该能入池: %v", err)
+		t.Fatalf("a string without spaces should be able to enter the pool: %v", err)
 	}
 	if extractSAPISID(accountList()[0].Cookie) != "b" {
-		t.Error("入池后取不出 SAPISID")
+		t.Error("SAPISID not extractable after entering the pool")
 	}
 }

@@ -155,7 +155,7 @@ func callGemini(prompt, latest string, mc ModelConfig, tools []map[string]interf
 		if len(res.Artifacts) == 0 {
 			msg := res.MediaErr
 			if msg == "" {
-				msg = "媒体产物取回失败"
+				msg = "media artifact retrieval failed"
 			}
 			return "", nil, res, fmt.Errorf("media generation succeeded but artifact retrieval failed: %s", msg)
 		}
@@ -317,7 +317,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	fbPrefix := ""
 	if rtCfg().QuotaFallback && quotaActive() && quotaModelAffected(modelCfg) {
 		if fbName, fbCfg, ok := quotaFallbackModel(modelCfg); ok {
-			logf("[quota] %s 额度受限，本请求降级 %s", modelName, fbName)
+			logf("[quota] %s quota-limited, downgrading this request to %s", modelName, fbName)
 			fbPrefix = quotaFallbackPrefix(modelName, fbName) + "\n\n"
 			modelName, modelCfg = fbName, fbCfg
 		}
@@ -394,7 +394,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 			retryOK := false
 			for i := 0; i < 3; i++ {
-				logf("[canned] %s 罐头错误（%q），单轮重发 %d/3", modelName, truncateStr(cre.Text, 60), i+1)
+				logf("[canned] %s canned error (%q), single-turn resend %d/3", modelName, truncateStr(cre.Text, 60), i+1)
 				text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, nil, nil)
 				if err != nil {
 					recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
@@ -415,7 +415,7 @@ if !isCannedErrorText(text) {
 				retryOK = true
 				break
 			}
-				logf("[canned] 重发 %d/3 仍是罐头：%q", i+1, truncateStr(text, 60))
+				logf("[canned] resend %d/3 is still canned: %q", i+1, truncateStr(text, 60))
 			}
 if !retryOK {
 			if tre, ok := err.(*ToolRefusalError); ok {
@@ -481,7 +481,7 @@ if !retryOK {
 				sse.Fail(qle) // stream already open, can only fail out
 				return
 			}
-			logf("[quota] 检出额度签名回复（%s），原模型重发一次确认", modelName)
+			logf("[quota] quota signature reply detected (%s), resending once with the original model to confirm", modelName)
 			text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, nil, nil)
 			confirmed := err == nil && isQuotaText(text)
 			if !confirmed && err == nil {
@@ -526,7 +526,7 @@ if !retryOK {
 			}
 			if fb, fbCfg, ok := quotaFallbackModel(modelCfg); rtCfg().QuotaFallback && ok {
 				// One downgrade retry (single-turn path: the conv state is invalidated, flash-lite is not quota-limited, so sending the full prompt is safest). Streaming callbacks nulled — the prefix note must come first.
-				logf("[quota] %s 额度耗尽（重发确认），降级 %s 重发", modelName, fb)
+				logf("[quota] %s quota exhausted (confirmed by resend), downgrading to %s and resending", modelName, fb)
 				fbPrefix = quotaFallbackPrefix(modelName, fb) + "\n\n"
 				text, toolCalls, res, err = callGemini(prompt, latest, fbCfg, tools, images, nil, nil)
 				if err == nil {

@@ -52,28 +52,28 @@ func TestPromptOverLimitErrors(t *testing.T) {
 
 	prompt, _ := messagesToPrompt(longConversation(200), nil, nil)
 	if len(prompt) <= 20000 {
-		t.Fatalf("测试用例本身没超预算（%d 字节）", len(prompt))
+		t.Fatalf("the test case itself is not over budget (%d bytes)", len(prompt))
 	}
 	// the error must explain why it was rejected, otherwise users just blame us
 	noCookie := error(&PromptTooLongError{Bytes: len(prompt), Budget: 20000})
 	for _, want := range []string{"truncates", "latest message", "not tokens"} {
 		if !strings.Contains(noCookie.Error(), want) {
-			t.Errorf("错误信息缺少 %q: %v", want, noCookie)
+			t.Errorf("error message is missing %q: %v", want, noCookie)
 		}
 	}
 	// without a cookie this isn't a dead end: tell the user importing one enables the attachment path
 	for _, want := range []string{"Cookie pool", "attachment"} {
 		if !strings.Contains(noCookie.Error(), want) {
-			t.Errorf("没 cookie 时该提示导入 cookie，缺 %q: %v", want, noCookie)
+			t.Errorf("without a cookie it should hint at importing one, missing %q: %v", want, noCookie)
 		}
 	}
 	// over limit despite a cookie = the attachment path couldn't rescue it either, so stop telling people to import a cookie
 	withCookie := error(&PromptTooLongError{Bytes: len(prompt), Budget: 20000, HasCookie: true})
 	if strings.Contains(withCookie.Error(), "Cookie pool") {
-		t.Error("已经有 cookie 了还提示去导 cookie")
+		t.Error("hints at importing a cookie even though one is already configured")
 	}
 	if !strings.Contains(withCookie.Error(), "Shorten") {
-		t.Error("有 cookie 时该提示压缩内容")
+		t.Error("with a cookie it should hint at shortening the content")
 	}
 }
 
@@ -84,10 +84,10 @@ func TestPromptUnderLimitUntouched(t *testing.T) {
 
 	got, _ := messagesToPrompt(msgs, nil, nil)
 	if want := buildPrompt(msgs, nil, nil); got != want {
-		t.Error("没超限却改动了 prompt")
+		t.Error("the prompt was changed despite being under the limit")
 	}
 	if !strings.Contains(got, "读取一下 task.md") {
-		t.Error("最新提问不在 prompt 里")
+		t.Error("the latest question is not in the prompt")
 	}
 }
 
@@ -98,7 +98,7 @@ func TestPromptLimitDisabled(t *testing.T) {
 
 	got, _ := messagesToPrompt(msgs, nil, nil)
 	if len(got) < 20000 {
-		t.Error("关掉检查后不该有任何裁剪")
+		t.Error("there must be no truncation once the check is disabled")
 	}
 }
 
@@ -113,6 +113,6 @@ func TestPromptLimitCountsToolDefs(t *testing.T) {
 	msgs := []map[string]interface{}{{"role": "user", "content": "你好"}}
 
 	if p, _ := messagesToPrompt(msgs, tools, nil); len(p) <= 5000 {
-		t.Errorf("工具定义应该把 prompt 撑到 5000 字节以上，实际 %d", len(p))
+		t.Errorf("tool definitions should push the prompt above 5000 bytes, actually %d", len(p))
 	}
 }

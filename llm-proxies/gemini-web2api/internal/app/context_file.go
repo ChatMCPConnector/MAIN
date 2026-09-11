@@ -112,9 +112,9 @@ func prepareContextFile(prompt, latest string, budget int, cookie, proxyURL stri
 	}
 	ref, err := uploadBytes(cookie, proxyURL, []byte(prompt), contextFileName)
 	if err != nil {
-		return prompt, nil, false, fmt.Errorf("超长对话转附件失败: %w", err)
+		return prompt, nil, false, fmt.Errorf("failed to convert the oversized conversation to an attachment: %w", err)
 	}
-	logf("[context] prompt %d 字节超过 %d，已转成附件 %s", len(prompt), budget, contextFileName)
+	logf("[context] prompt of %d bytes exceeds %d, converted to attachment %s", len(prompt), budget, contextFileName)
 	files := []fileRef{{Ref: ref, Name: contextFileName, Kind: 3, Mime: "text/plain"}}
 	return contextFilePrompt(latest, budget), files, true, nil
 }

@@ -22,7 +22,7 @@ func TestIsToolRefusalText(t *testing.T) {
 	}
 	for _, r := range refusals {
 		if !isToolRefusalText(r) {
-			t.Errorf("应识别为拒答: %q", truncateStr(r, 60))
+			t.Errorf("should be recognized as a refusal: %q", truncateStr(r, 60))
 		}
 	}
 
@@ -45,7 +45,7 @@ func TestIsToolRefusalText(t *testing.T) {
 	}
 	for _, n := range notRefusals {
 		if isToolRefusalText(n) {
-			t.Errorf("不应误判为拒答: %q", truncateStr(n, 60))
+			t.Errorf("should not be misjudged as a refusal: %q", truncateStr(n, 60))
 		}
 	}
 }

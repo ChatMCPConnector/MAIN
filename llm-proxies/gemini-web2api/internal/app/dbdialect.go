@@ -52,8 +52,8 @@ func detectDSN(dsn string) (dbDialect, string, string) {
 	case strings.Contains(dsn, "@tcp("):
 		return dialectMySQL, "mysql", ensureMySQLParams(dsn) // native go-sql-driver DSN
 	default:
-		fmt.Fprintf(os.Stderr, "[db] SQL_DSN 认不出方言（要 postgres:// 或 postgresql:// 或 mysql:// 开头，"+
-			"或 go-sql-driver 的 user:pass@tcp(host:port)/db 形式）: %s\n", dsn)
+		fmt.Fprintf(os.Stderr, "[db] cannot recognize the SQL_DSN dialect (must start with postgres:// or postgresql:// or mysql://,"+
+			"or be go-sql-driver's user:pass@tcp(host:port)/db form): %s\n", dsn)
 		os.Exit(1)
 		return dialectSQLite, "", ""
 	}
@@ -64,7 +64,7 @@ func detectDSN(dsn string) (dbDialect, string, string) {
 func mysqlURLToDSN(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[db] mysql DSN 解析失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[db] mysql DSN parse failed: %v\n", err)
 		os.Exit(1)
 	}
 	cred := ""

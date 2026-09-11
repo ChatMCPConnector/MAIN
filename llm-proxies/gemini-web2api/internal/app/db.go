@@ -132,7 +132,7 @@ func getDB() *dbx {
 			}
 			sqliteDir = filepath.Dir(path)
 			if err := os.MkdirAll(sqliteDir, 0o755); err != nil {
-				fmt.Fprintf(os.Stderr, "[db] 建目录 %s 失败: %v\n%s", sqliteDir, err, dbPermHint(sqliteDir))
+				fmt.Fprintf(os.Stderr, "[db] failed to create directory %s: %v\n%s", sqliteDir, err, dbPermHint(sqliteDir))
 				os.Exit(1)
 			}
 			connStr = fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
@@ -157,7 +157,7 @@ func getDB() *dbx {
 				if curDialect == dialectSQLite {
 					hint = dbPermHint(sqliteDir)
 				}
-				fmt.Fprintf(os.Stderr, "[db] 初始化失败: %v\n  语句: %s\n%s", err, stmt, hint)
+				fmt.Fprintf(os.Stderr, "[db] initialization failed: %v\n  statement: %s\n%s", err, stmt, hint)
 				os.Exit(1)
 			}
 		}
@@ -263,10 +263,10 @@ func kvSet(k, v string) error {
 func dbPermHint(dir string) string {
 	uid := os.Getuid() // returns -1 on Windows, which is not affected by this problem
 	return fmt.Sprintf(""+
-		"      当前进程 uid=%d，写不进目录 %s。\n"+
-		"      Docker 部署最常见的原因是 bind mount 的宿主目录属主是 root，\n"+
-		"      而镜像以 nonroot(65532) 运行。两种解法：\n"+
-		"        1) 改用具名卷（推荐）：volumes 写 gw2a-data:/data\n"+
-		"        2) 保留 bind mount 就把属主改过来：sudo chown -R 65532:65532 ./data\n",
+		"      Current process uid=%d, cannot write into directory %s.\n"+
+		"      The most common cause in Docker deployments is a bind mount whose host directory is owned by root,\n"+
+		"      while the image runs as nonroot(65532). Two fixes:\n"+
+		"        1) Use a named volume (recommended): volumes should say gw2a-data:/data\n"+
+		"        2) Keep the bind mount and fix the ownership: sudo chown -R 65532:65532 ./data\n",
 		uid, dir)
 }

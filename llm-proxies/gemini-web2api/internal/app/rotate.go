@@ -88,7 +88,7 @@ func rotateAccount(a CookieAccount) (time.Duration, []string, error) {
 	c2, n, err := tryRotate1PSIDTS(a.ID, cookie, proxyURL)
 	if err != nil {
 		psidtsErr = err
-		logf("[rotate] 账号 #%d 刷新 1PSIDTS 失败: %v", a.ID, err)
+		logf("[rotate] account #%d failed to refresh 1PSIDTS: %v", a.ID, err)
 	} else {
 		cookie = c2
 		names = append(names, n...)
@@ -97,7 +97,7 @@ func rotateAccount(a CookieAccount) (time.Duration, []string, error) {
 	c3, iv, n2, err := rotateSIDCC(cookie, proxyURL)
 	if err != nil {
 		sidccErr = err
-		logf("[rotate] 账号 #%d SIDCC 保活失败: %v", a.ID, err)
+		logf("[rotate] account #%d SIDCC keep-alive failed: %v", a.ID, err)
 	} else {
 		cookie = c3
 		names = append(names, n2...)
@@ -113,7 +113,7 @@ func rotateAccount(a CookieAccount) (time.Duration, []string, error) {
 		invalidateXSRF(old)
 	}
 	if len(names) > 0 {
-		logf("[rotate] 账号 #%d 刷新了 %s", a.ID, strings.Join(names, ", "))
+		logf("[rotate] account #%d refreshed %s", a.ID, strings.Join(names, ", "))
 	}
 	// Failure requires both routes to fail. If 1PSIDTS was refreshed but the
 	// iframe page had no init, keep-alive still succeeded.
@@ -136,7 +136,7 @@ func tryRotate1PSIDTS(id int64, cookie, proxyURL string) (string, []string, erro
 		return cookie, nil, nil
 	}
 	if ok, _ := allow1PSIDTSRotate(id); !ok {
-		logf("[rotate] 账号 #%d 跳过 1PSIDTS 刷新（距上次不足 %s，避免 429）", id, min1PSIDTSInterval)
+		logf("[rotate] account #%d skipping 1PSIDTS refresh (less than %s since the last one, avoiding 429)", id, min1PSIDTSInterval)
 		return cookie, nil, nil
 	}
 	c2, names, err := rotate1PSIDTS(cookie, proxyURL)
@@ -198,11 +198,11 @@ func rotate1PSIDTS(cookie, proxyURL string) (string, []string, error) {
 		return cookie, nil, err
 	}
 	if status == 401 || status == 403 {
-		return cookie, nil, fmt.Errorf("RotateCookies 1PSIDTS 返回 HTTP %d（Chrome 导出的 cookie 可能受设备绑定限制，建议用 Firefox 重新导出）: %s",
+		return cookie, nil, fmt.Errorf("RotateCookies 1PSIDTS returned HTTP %d (cookies exported from Chrome may be device-bound; re-export from Firefox): %s",
 			status, truncate(string(respBody), 120))
 	}
 	if status != 200 {
-		return cookie, nil, fmt.Errorf("RotateCookies 1PSIDTS 返回 HTTP %d: %s", status, truncate(string(respBody), 120))
+		return cookie, nil, fmt.Errorf("RotateCookies 1PSIDTS returned HTTP %d: %s", status, truncate(string(respBody), 120))
 	}
 	merged := mergeSetCookie(cookie, setCookie)
 	return merged, setCookieNames(setCookie), nil
@@ -225,7 +225,7 @@ func rotateSIDCC(cookie, proxyURL string) (string, time.Duration, []string, erro
 		return cookie, 0, nil, err
 	}
 	if status != 200 {
-		return cookie, 0, nil, fmt.Errorf("RotateCookies 返回 HTTP %d: %s", status, truncate(string(respBody), 120))
+		return cookie, 0, nil, fmt.Errorf("RotateCookies returned HTTP %d: %s", status, truncate(string(respBody), 120))
 	}
 	cookie = mergeSetCookie(cookie, setCookie)
 	names := setCookieNames(append(append([]string{}, pageSet...), setCookie...))
@@ -274,13 +274,13 @@ func fetchRotateParams(cookie, proxyURL string) (string, time.Duration, []string
 		return "", 0, nil, err
 	}
 	if status != 200 {
-		return "", 0, nil, fmt.Errorf("取轮转页返回 HTTP %d", status)
+		return "", 0, nil, fmt.Errorf("rotation page fetch returned HTTP %d", status)
 	}
 	m := rotateInitRe.FindSubmatch(body)
 	if m == nil {
 		// Page fetched but no init(...): most likely the cookie has expired and it
 		// bounced to the login page.
-		return "", 0, nil, fmt.Errorf("轮转页里没有 init(...)（cookie 可能已失效）")
+		return "", 0, nil, fmt.Errorf("rotation page has no init(...) (the cookie may have expired)")
 	}
 	id := string(m[1])
 	interval := defaultRotateInterval
@@ -408,7 +408,7 @@ func rotateAllAccounts() time.Duration {
 		}
 		iv, _, err := rotateAccount(a)
 		if err != nil {
-			logf("[rotate] 账号 #%d 保活失败: %v", a.ID, err)
+			logf("[rotate] account #%d keep-alive failed: %v", a.ID, err)
 			continue
 		}
 		if iv > 0 {

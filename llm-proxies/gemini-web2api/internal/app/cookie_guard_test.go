@@ -8,19 +8,19 @@ import "testing"
 func TestAutoDisableAfterAuthFailures(t *testing.T) {
 	id, err := accountAdd("dead", "SAPISID=aaa; __Secure-1PSID=bbb", "")
 	if err != nil {
-		t.Fatalf("插账号失败: %v", err)
+		t.Fatalf("failed to insert account: %v", err)
 	}
 	t.Cleanup(func() { _ = accountDelete(id) })
 
 	for i := 1; i < maxCookieAuthFailures; i++ {
 		markCookieByStatus(id, 401, "no SNlM0e")
 		if a := accountByID(id); a == nil || a.Status != "enabled" {
-			t.Fatalf("第 %d 次失败就被停用了，太早", i)
+			t.Fatalf("disabled after only %d failures, too early", i)
 		}
 	}
 	markCookieByStatus(id, 401, "no SNlM0e")
 	if a := accountByID(id); a == nil || a.Status != "disabled" {
-		t.Errorf("连续 %d 次鉴权失败后应自动停用, got %+v", maxCookieAuthFailures, a)
+		t.Errorf("should auto-disable after %d consecutive auth failures, got %+v", maxCookieAuthFailures, a)
 	}
 }
 
@@ -30,7 +30,7 @@ func TestAutoDisableAfterAuthFailures(t *testing.T) {
 func TestNonAuthFailureDoesNotDisable(t *testing.T) {
 	id, err := accountAdd("noisy", "SAPISID=ccc; __Secure-1PSID=ddd", "")
 	if err != nil {
-		t.Fatalf("插账号失败: %v", err)
+		t.Fatalf("failed to insert account: %v", err)
 	}
 	t.Cleanup(func() { _ = accountDelete(id) })
 
@@ -40,7 +40,7 @@ func TestNonAuthFailureDoesNotDisable(t *testing.T) {
 	}
 	a := accountByID(id)
 	if a == nil || a.Status != "enabled" || a.FailCount != 0 {
-		t.Errorf("非鉴权失败不该动健康度, got %+v", a)
+		t.Errorf("non-auth failures must not affect health, got %+v", a)
 	}
 }
 
@@ -49,7 +49,7 @@ func TestNonAuthFailureDoesNotDisable(t *testing.T) {
 func TestSuccessResetsFailCount(t *testing.T) {
 	id, err := accountAdd("flappy", "SAPISID=eee; __Secure-1PSID=fff", "")
 	if err != nil {
-		t.Fatalf("插账号失败: %v", err)
+		t.Fatalf("failed to insert account: %v", err)
 	}
 	t.Cleanup(func() { _ = accountDelete(id) })
 
@@ -58,7 +58,7 @@ func TestSuccessResetsFailCount(t *testing.T) {
 	markCookieByStatus(id, 401, "x")
 	markCookieByStatus(id, 401, "x")
 	if a := accountByID(id); a == nil || a.Status != "enabled" {
-		t.Errorf("中间成功过就该清零，不应停用, got %+v", a)
+		t.Errorf("an intermediate success should reset the count, not disable, got %+v", a)
 	}
 }
 
@@ -71,7 +71,7 @@ func TestUpdateAccountCookieIdentityGuard(t *testing.T) {
 	orig := "SAPISID=keep; __Secure-1PSID=same; SIDCC=old"
 	id, err := accountAdd("guarded", orig, "")
 	if err != nil {
-		t.Fatalf("插账号失败: %v", err)
+		t.Fatalf("failed to insert account: %v", err)
 	}
 	t.Cleanup(func() { _ = accountDelete(id) })
 
@@ -79,18 +79,18 @@ func TestUpdateAccountCookieIdentityGuard(t *testing.T) {
 	refreshed := "SAPISID=keep; __Secure-1PSID=same; SIDCC=new"
 	updateAccountCookie(id, refreshed)
 	if a := accountByID(id); a == nil || a.Cookie != refreshed {
-		t.Errorf("同身份的刷新应写回, got %+v", a)
+		t.Errorf("a refresh with the same identity should be written back, got %+v", a)
 	}
 
 	// SAPISID changed: not the same account anymore, must be discarded
 	updateAccountCookie(id, "SAPISID=other; __Secure-1PSID=same; SIDCC=x")
 	if a := accountByID(id); a == nil || a.Cookie != refreshed {
-		t.Errorf("换了 SAPISID 应丢弃不写, got cookie=%q", a.Cookie)
+		t.Errorf("a changed SAPISID should be discarded, got cookie=%q", a.Cookie)
 	}
 
 	// __Secure-1PSID changed: same deal
 	updateAccountCookie(id, "SAPISID=keep; __Secure-1PSID=other; SIDCC=x")
 	if a := accountByID(id); a == nil || a.Cookie != refreshed {
-		t.Errorf("换了 __Secure-1PSID 应丢弃不写, got cookie=%q", a.Cookie)
+		t.Errorf("a changed __Secure-1PSID should be discarded, got cookie=%q", a.Cookie)
 	}
 }
