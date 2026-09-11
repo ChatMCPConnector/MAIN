@@ -157,6 +157,5 @@ if os.path.exists(db_path):
     except Exception:
         pass
 
-print(f"{indent} 5h-Sprint federt Lastspitzen ab. Wochenlimit ist das fixe Kontingent.")
 print("\n" * 6, end="")
 ' <<< "$RESPONSE"
