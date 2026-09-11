@@ -8,6 +8,7 @@ class _RetryConfig:
     glm_stream_error_max_retries = 2
     glm_stream_error_retry_interval = 0.0
     glm_blocked_tool_follow_ups = 0
+    glm_empty_response_max_retries = 2
     glm_history_max_chars = 120000
     request_timeout = 5
     blocked_tool_names = []
@@ -324,3 +325,39 @@ def test_transient_flag_on_upstream_error():
     assert exc.transient is True
     exc2 = UpstreamAPIError(502, "boom")
     assert exc2.transient is False
+
+def test_empty_response_triggers_auto_retry_stream():
+    """Leer-Turn-Autonomie-Fix: komplett leere Upstream-Runde (text=0,
+    reasoning=0, keine calls) -> auto-retry mit frischer Conversation,
+    Agent steht nicht mehr still."""
+    empty_finish = {
+        "status": "finish",
+        "parts": [{"logic_id": "p1", "status": "finish", "content": []}],
+    }
+    good_finish = _finish_event("Ergebnis da")
+    client, calls = _make_client([[empty_finish], [good_finish]])
+
+    chunks = list(client.stream_chat_completion({"model": "glm-test", "messages": [{"role": "user", "content": "hi"}]}))
+    content = "".join(
+        json.loads(chunk.decode("utf-8").removeprefix("data: ").strip())["choices"][0]
+        .get("delta", {})
+        .get("content", "")
+        for chunk in chunks
+        if chunk.decode("utf-8").strip() != "data: [DONE]"
+    )
+    assert calls["count"] == 2  # erster versuch leer, retry erfolgreich
+    assert "Ergebnis da" in content
+
+
+def test_empty_response_gives_up_after_max_retries():
+    """Bleibt die Antwort nach allen Retries leer, wird sie final
+    durchgereicht (kein unendlicher Loop)."""
+    empty_finish = {
+        "status": "finish",
+        "parts": [{"logic_id": "p1", "status": "finish", "content": []}],
+    }
+    client, calls = _make_client([[empty_finish]])
+
+    chunks = list(client.stream_chat_completion({"model": "glm-test", "messages": [{"role": "user", "content": "hi"}]}))
+    assert calls["count"] == 1 + _RetryConfig.glm_empty_response_max_retries  # versuch + 2 retries
+    assert any(b"data: [DONE]" == c.strip() for c in chunks)

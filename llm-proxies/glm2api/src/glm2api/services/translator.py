@@ -665,6 +665,19 @@ class GLMEventAccumulator:
     def __post_init__(self) -> None:
         self.tool_parser.allowed_tool_names = self.allowed_tool_names
 
+    def is_empty_response(self) -> bool:
+        """True, wenn der Upstream eine KOMPLETT leere Runde lieferte: kein
+        Text, keine Reasoning, keine Tool-Calls (auch server-side nicht).
+        Beobachtet im Kontext-Stresstest als 'finalize status=stop text_len=0
+        reasoning_len=0 tool_calls=0' — der Agent blieb genau dort stehen.
+        Solche Runden sind transient (Guest-Token-Erschöpfung / Upstream-
+        Zufall) und werden in glm_client automatisch retried, BEVOR die
+        leere Antwort den Client erreicht."""
+        text, reasoning = self._render_full_output()
+        has_calls = bool(self._server_side_tool_calls or self.tool_parser.tool_calls)
+        has_blocked = bool(self.blocked_tool_attempt_names)
+        return not text.strip() and not reasoning.strip() and not has_calls and not has_blocked
+
     def consume_event(self, payload: dict[str, object]) -> tuple[list[str], str | None]:
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE parsed event", payload)
         if not self.conversation_id and payload.get("conversation_id"):

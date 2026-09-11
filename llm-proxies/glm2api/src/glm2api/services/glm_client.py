@@ -156,7 +156,12 @@ class GLMWebClient:
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
         max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
+        max_empty_response_retries = self.config.glm_empty_response_max_retries
+        empty_retries = 0
         history_budget = self.config.glm_history_max_chars
+        history_tool_call_signatures = extract_history_tool_call_signatures(
+            list(payload.get("messages", [])) # type: ignore[arg-type]
+        )
         history_tool_call_signatures = extract_history_tool_call_signatures(
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
@@ -230,6 +235,26 @@ class GLMWebClient:
                     # build_response() also populates blocked_tool_attempt_names
                     # (detect_tool_call_names side effect) — call before deciding.
                     result = accumulator.build_response()
+                    # Leer-Turn-Autonomie-Fix (THEMA 1, optimierung.md): der
+                    # Upstream liefert gelegentlich KOMPLETT leere runden
+                    # (text_len=0, keine calls) — bisher blieb der agent dort
+                    # einfach stehen. Solche runden sind transient: retry mit
+                    # frischer conversation, BEVOR die leere antwort rausgeht.
+                    if (
+                        accumulator.is_empty_response()
+                        and empty_retries < max_empty_response_retries
+                    ):
+                        empty_retries += 1
+                        response.close() # type: ignore
+                        self.logger.warning(
+                            "Empty GLM response (no text/reasoning/calls) — auto-retrying round %s/%s",
+                            empty_retries,
+                            max_empty_response_retries,
+                        )
+                        time.sleep(self.config.glm_stream_error_retry_interval)
+                        accumulator = new_accumulator()
+                        response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        continue
                     if (
                         accumulator.blocked_tool_attempt_names
                         and blocked_follow_ups < max_blocked_follow_ups
@@ -315,6 +340,8 @@ class GLMWebClient:
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
         max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
+        max_empty_response_retries = self.config.glm_empty_response_max_retries
+        empty_retries = 0
         history_tool_call_signatures = extract_history_tool_call_signatures(
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
@@ -371,7 +398,7 @@ class GLMWebClient:
             return follow_up
 
         def generate():
-            nonlocal response, assistant_id, accumulator
+            nonlocal response, assistant_id, accumulator, empty_retries
             attempt = 0
             blocked_follow_ups = 0
             while True:
@@ -442,6 +469,29 @@ class GLMWebClient:
                         response.close() # type: ignore
                         accumulator = new_accumulator()
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        continue
+                    # Leer-Turn-Autonomie-Fix (THEMA 1, optimierung.md): komplett
+                    # leere Upstream-runden (kein text, keine reasoning, keine
+                    # calls) liessen den agent bisher STEHEN (stresstest 10:21:
+                    # 'finalize status=stop text_len=0 reasoning_len=0'). Bei
+                    # leerer runde und noch nicht gestreamtem content ist ein
+                    # retry mit frischer conversation sauber moeglich — der
+                    # agent laeuft autonom weiter, ohne externen resume-schubser.
+                    if (
+                        not served_content
+                        and accumulator.is_empty_response()
+                        and empty_retries < max_empty_response_retries
+                    ):
+                        empty_retries += 1
+                        response.close() # type: ignore
+                        self.logger.warning(
+                            "Empty GLM response (no text/reasoning/calls) in stream — auto-retrying round %s/%s",
+                            empty_retries,
+                            max_empty_response_retries,
+                        )
+                        time.sleep(self.config.glm_stream_error_retry_interval)
+                        accumulator = new_accumulator()
+                        response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
                     for chunk in finalize_chunks:
                         yield chunk.encode("utf-8")
