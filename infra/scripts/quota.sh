@@ -52,11 +52,11 @@ def format_time(reset_str):
         hours = (sec % 86400) // 3600
         mins = (sec % 3600) // 60
         if days > 0:
-            return f"in {days}d {hours:02d}H"
+            return f"in {days}d {hours:02d}h"
         elif hours > 0:
-            return f"in {hours}:{mins:02d}H"
+            return f"in {hours}:{mins:02d}h"
         else:
-            return f"in 0:{mins:02d}H"
+            return f"in 0:{mins:02d}h"
     except Exception:
         return reset_str
 
