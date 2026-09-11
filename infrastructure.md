@@ -203,6 +203,46 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Rückweg: Commit revertieren — bzw. für Chromium-CDP: Playwright-Setup neu
   anlegen.
 
+## Google-Drive-Backup (Repo-Sicherung unabhängig von GitHub)
+
+Szenario: GitHub-Account wird gebannt / Repo geschlossen → komplettes Repo
+(inkl. History, aller Branches) liegt dann als git-bundle auf Google Drive
+(5 TB, Google AI Pro). **GitHub-Actions bewusst nicht genutzt** — läuft bei
+Bann nicht mehr, genau dann wird das Backup gebraucht.
+
+- **`infra/scripts/gdrive-backup.sh`** (`gdrive backup|status|restore [dir]`,
+  Alias `gdrive`): baut `git bundle --all` (~110 MB), Rotation nach
+  2-Generationen-Schema — (1) altes `MAIN.backup.bundle` löschen, (2)
+  `MAIN.bundle` → `MAIN.backup.bundle` umbenennen, (3) frisches Bundle
+  hochladen, (4) MD5-Verifikation remote vs. lokal. Bricht der Upload ab,
+  bleibt die Backup-Generation intakt → immer mindestens eine
+  funktionsfähige Kopie auf Drive. Restore: `gdrive restore` klont aus der
+  Backup-Generation (Fallback current). Skip wenn kein neuer Commit seit
+  letztem Backup (State-File `.runtime/gdrive-backup.last`).
+- **Trigger:** `save.sh` ruft nach jedem erfolgreichen Push den Backup-Hook
+  auf — damit sichert auch der Autosave-Daemon (alle 30 Min) automatisch nach
+  Drive. Fehlt die rclone-Auth, überspringt sich der Hook selbst (Push-Erfolg
+  wird nie gefährdet).
+- **rclone** v1.75.1 (gepinnt): `infra/scripts/rclone-install.sh`, automatisch
+  via `setup.sh` nach `/usr/local/bin` (ephemeral, wird je Codespace neu
+  installiert).
+- **Auth:** OAuth-Refresh-Token in `~/.config/rclone/rclone.conf`, im
+  Secrets-Bundle (`rclone.conf`) mitgeschleift. **Bewusst NICHT
+  `~/.config/landscape/`** — dort werden `refresh_token`s von einem
+  Sanitizer aus Dateien entfernt (2026-09-11 2x beobachtet: 333→212 Bytes
+  nach cp); `~/.config/rclone/` bleibt unangetastet. Gotcha bei der
+  Einrichtung: rclone verwirft den refresh_token beim Config-Save wenn
+  `access_token` leer ist — Token-Paste immer mit vollem access_token
+  (`rclone authorize "drive"` im noVNC-Firefox, siehe unten).
+- **Erst-Einrichtung (neu/erneuert):** `rclone authorize "drive"` im
+  Hintergrund starten (lauscht 127.0.0.1:53682), Firefox via
+  `browser-start.sh "<auth-url>"` auf die state-URL schicken, im noVNC
+  (Port 6082) Google-Login + Zugriff erlauben, dann das Token-JSON aus dem
+  Log als `token = {...}` in `~/.config/rclone/rclone.conf` (Remote `gdrive`,
+  type drive, scope drive) und `secrets.sh lock`.
+- Remote-Layout: `gdrive:MAIN-backup/` mit `MAIN.bundle` (aktuell) +
+  `MAIN.backup.bundle` (vorherige Generation).
+
 ## Account-Wechsel (60h-Limit)
 
 Ein Codespace gehört zu Account+Repo+Branch, nicht übertragbar. Mitkommt 1:1
@@ -228,6 +268,22 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-11 (18): **Google-Drive-Backup: 2-Generationen-Repo-Sicherung nach Drive.**
+  Szenario Account-Bann: komplettes Repo (History, alle Branches) liegt als
+  git-bundle auf Google Drive (5 TB, Google AI Pro). Neuer Worker
+  `infra/scripts/gdrive-backup.sh` (Alias `gdrive`): `git bundle --all` →
+  Rotation (altes backup löschen, current → backup, frisch hochladen, MD5-
+  Verifikation) → immer eine intakte Kopie auch bei abgebrochenem Upload.
+  Trigger: save.sh-Hook nach jedem Push (deckt auch Autosave-Daemon mit ab).
+  rclone v1.75.1 gepinnt (`rclone-install.sh`, via setup.sh). OAuth-Conf in
+  `~/.config/rclone/rclone.conf` + Secrets-Bundle; bewusst NICHT
+  `~/.config/landscape/` (Sanitizer stript dort refresh_tokens). Live
+  verifiziert: Upload + MD5-Check, Rotation (beide Generationen auf Drive),
+  Restore-Test (Clone aus Backup-Generation, Commit-Identität stimmt).
+  Nebenher gefixt: setup.sh installiert jetzt Firefox-GTK-Deps
+  (libgtk-3-0t64, libdbus-glib-1-2, libxt6t64, libasound2t64) — der
+  noVNC-Browser startete sonst nach frischem Codespace nicht (XPCOMGlueLoad
+  libgtk-3.so.0 fehlt). Rückweg: Commits revertieren.
 - 2026-09-11 (15): **glm2api: Kontext-Management für Lang-Agent-Sessions (THEMA 1, optimierung.md).**
   Symptom: Ab ~150k Kontext driftete das Modell (Loops, Missdeutungen), Leer-
   Turns ließen Agents komplett stehen — alle Langläufe brauchten 4-6 externe

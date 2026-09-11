@@ -14,7 +14,9 @@
 #   -> klont aus MAIN.backup.bundle (Fallback MAIN.bundle) nach /tmp/opencode/restored
 #
 # Auth: rclone-Remote "gdrive" (Google Drive OAuth, Refresh-Token).
-# Config liegt unter ~/.config/landscape/rclone.conf (aus Secrets-Bundle via secrets.sh).
+# Config liegt unter ~/.config/rclone/rclone.conf (rclone-Standardpfad; aus
+# Secrets-Bundle via secrets.sh). BEWUSST NICHT ~/.config/landscape/ — dort
+# werden refresh_tokens von einem Sanitizer aus Dateien entfernt.
 #
 #   ./infra/scripts/gdrive-backup.sh backup    # Default: sichern
 #   ./infra/scripts/gdrive-backup.sh status    # Remote-Stand zeigen
@@ -22,7 +24,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
-readonly RCLONE_CONF="$HOME/.config/landscape/rclone.conf"
+readonly RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
 readonly REMOTE="gdrive"
 readonly REMOTE_DIR="${REMOTE}:MAIN-backup"
 readonly CURRENT="${REMOTE_DIR}/MAIN.bundle"     # neueste Sicherung
@@ -100,8 +102,8 @@ cmd_restore() {
   local dl="/tmp/opencode/MAIN.restore.bundle"
   mkdir -p "$(dirname "$dl")"
   echo "[gdrive] Lade Backup-Generation..."
-  runc copy "$BACKUP" "$(dirname "$dl")" --drive-chunk-size 32M 2>/dev/null \
-    || runc copy "$CURRENT" "$(dirname "$dl")" 2>/dev/null \
+  runc copyto "$BACKUP" "$dl" 2>/dev/null \
+    || runc copyto "$CURRENT" "$dl" 2>/dev/null \
     || { echo "[gdrive] FEHLER: Download."; exit 1; }
   git clone "$dl" "$target" || exit 1
   echo "[gdrive] OK: Repo wiederhergestellt -> $target"
