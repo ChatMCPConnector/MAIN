@@ -190,7 +190,8 @@ fi
 
 echo "==> [landscape] Autosave-Daemon starten (committet+pusht alle 30 Min)..."
 if ! { [ -f /tmp/opencode/autosave-daemon.lock ] && kill -0 "$(cat /tmp/opencode/autosave-daemon.lock 2>/dev/null)" 2>/dev/null; }; then
-  setsid bash "$REPO_ROOT/.devcontainer/autosave-daemon.sh" </dev/null >/dev/null 2>&1 &
+  setsid nohup bash "$REPO_ROOT/.devcontainer/autosave-daemon.sh" </dev/null >> /tmp/opencode/autosave.log 2>&1 &
+  disown $! 2>/dev/null || true
   echo "    Autosave-Daemon gestartet (30-Min-Intervall)."
 else
   echo "    Autosave-Daemon läuft bereits."

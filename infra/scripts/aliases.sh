@@ -25,7 +25,8 @@ autosave() {
       if [ -f "$lock" ] && kill -0 "$(cat "$lock" 2>/dev/null)" 2>/dev/null; then
         echo "läuft bereits (PID $(cat "$lock"))"
       else
-        setsid bash /workspaces/MAIN/.devcontainer/autosave-daemon.sh </dev/null >/dev/null 2>&1 &
+        setsid nohup bash /workspaces/MAIN/.devcontainer/autosave-daemon.sh </dev/null >> /tmp/opencode/autosave.log 2>&1 &
+        disown $! 2>/dev/null || true
         sleep 0.3
         echo "gestartet (PID $(cat "$lock" 2>/dev/null || echo '?'))"
       fi

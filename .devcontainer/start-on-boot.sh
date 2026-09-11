@@ -62,12 +62,14 @@ fi
 # 5. Proxy-Watchdog immer (re-)starten: hält alle Proxies und opencode-server am Leben
 mkdir -p /tmp/opencode
 if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/proxy-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
-  setsid bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >/dev/null 2>&1 &
+  setsid nohup bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >> /tmp/opencode/watchdog.log 2>&1 &
+  disown $! 2>/dev/null || true
   echo "[boot] Proxy-Watchdog gestartet (30s-Intervall für alle Proxies + Server)."
 fi
 
 # 6. Autosave-Daemon: committet+pusht alle offenen Änderungen alle 30 Min.
 if ! { [ -f /tmp/opencode/autosave-daemon.lock ] && kill -0 "$(cat /tmp/opencode/autosave-daemon.lock 2>/dev/null)" 2>/dev/null; }; then
-  setsid bash "$REPO_ROOT/.devcontainer/autosave-daemon.sh" </dev/null >/dev/null 2>&1 &
+  setsid nohup bash "$REPO_ROOT/.devcontainer/autosave-daemon.sh" </dev/null >> /tmp/opencode/autosave.log 2>&1 &
+  disown $! 2>/dev/null || true
   echo "[boot] Autosave-Daemon gestartet (30-Min-Intervall)."
 fi

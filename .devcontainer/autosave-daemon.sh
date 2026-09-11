@@ -22,6 +22,7 @@ if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
 fi
 echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
+trap '' HUP  # SIGHUP ignorieren, damit Terminal-Disconnect/Boot-Exit den Daemon nicht beendet
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') [autosave] Daemon gestartet (PID $$, Intervall ${INTERVAL}s)" >> "$LOG"
 
