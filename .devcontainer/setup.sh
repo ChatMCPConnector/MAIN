@@ -50,6 +50,8 @@ for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     echo "    verlinkt in $rc"
   fi
 done
+mkdir -p "$HOME/.local/bin"
+ln -sf "$REPO_ROOT/infra/scripts/quota.sh" "$HOME/.local/bin/quota"
 
 echo "==> [landscape] Secrets entsperren (falls Bundle + Passphrase da)..."
 if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
