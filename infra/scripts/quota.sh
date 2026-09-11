@@ -64,18 +64,9 @@ def make_bar(pct):
     bar_len = min(10, max(0, int(round(pct / 10))))
     return "█" * bar_len + "░" * (10 - bar_len)
 
-def get_status(pct_sprint, pct_week):
-    lowest = min(pct_sprint, pct_week)
-    if lowest <= 0.01:
-        return "Gesperrt"
-    elif lowest < 25.0:
-        return "Knapp"
-    else:
-        return "Aktiv"
-
 indent = "  "
-line_w = 76
-title = "ANTIGRAVITY QUOTA & STATUS"
+line_w = 74
+title = "ANTIGRAVITY QUOTA"
 
 print()
 print(indent + "=" * line_w)
@@ -84,8 +75,7 @@ print(indent + "=" * line_w)
 hdr_model = "Modell"
 hdr_sprint = "5h-Sprint"
 hdr_week = "Wochen-Limit"
-hdr_status = "Status"
-print(f"{indent} {hdr_model:<8} | {hdr_sprint:<27} | {hdr_week:<27} | {hdr_status}")
+print(f"{indent} {hdr_model:<8} | {hdr_sprint:<29} | {hdr_week:<29}")
 print(indent + "-" * line_w)
 
 if "groups" in data:
@@ -104,17 +94,16 @@ if "groups" in data:
 
         def parse_bucket(b):
             if not b:
-                return 100.0, "—"
+                return "—"
             frac = b.get("remainingFraction", 1.0)
             pct = round(frac * 100, 1)
             t = format_time(b.get("resetTime"))
             bar = make_bar(pct)
-            return pct, f"{pct:>5.1f}% [{bar}] {t:<10}"
+            return f"{pct:>5.1f}% [{bar}] {t:<10}"
 
-        s_pct, s_disp = parse_bucket(sprint_b)
-        w_pct, w_disp = parse_bucket(weekly_b)
-        status = get_status(s_pct, w_pct)
-        print(f"{indent} {name:<8} | {s_disp} | {w_disp} | {status}")
+        s_disp = parse_bucket(sprint_b)
+        w_disp = parse_bucket(weekly_b)
+        print(f"{indent} {name:<8} | {s_disp:<29} | {w_disp:<29}")
 else:
     # Fallback für flaches fetchAvailableModels
     models = data.get("models", {})
@@ -136,9 +125,9 @@ else:
             disp = f"{pct:>5.1f}% [{bar}] {t:<10}"
             bg_msg = "    - [----------] aktiv     "
             if "d " in t:
-                print(f"{indent} {name:<8} | {bg_msg} | {disp} | {get_status(100, pct)}")
+                print(f"{indent} {name:<8} | {bg_msg:<29} | {disp:<29}")
             else:
-                print(f"{indent} {name:<8} | {disp} | {bg_msg} | {get_status(pct, 100)}")
+                print(f"{indent} {name:<8} | {disp:<29} | {bg_msg:<29}")
 
 print(indent + "=" * line_w)
 
