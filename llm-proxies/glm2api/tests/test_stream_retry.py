@@ -8,6 +8,7 @@ class _RetryConfig:
     glm_stream_error_max_retries = 2
     glm_stream_error_retry_interval = 0.0
     glm_blocked_tool_follow_ups = 0
+    glm_history_max_chars = 120000
     request_timeout = 5
     blocked_tool_names = []
     debug_dump_all = False

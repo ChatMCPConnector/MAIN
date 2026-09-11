@@ -152,9 +152,11 @@ class GLMWebClient:
         return filtered_tools, {tool["function"]["name"] for tool in filtered_tools} if filtered_tools else None # type: ignore[index]
 
     def chat_completion(self, payload: dict[str, object]) -> tuple[dict[str, object], str | None]:
+        payload = dict(payload)  # lokal kopierbar fuer retry-mutationen (10040-budget)
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
         max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
+        history_budget = self.config.glm_history_max_chars
         history_tool_call_signatures = extract_history_tool_call_signatures(
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
@@ -252,7 +254,8 @@ class GLMWebClient:
                 if retry_exc is None:
                     break
                 # Transient upstream error: retry the stream with a fresh
-                # conversation before giving up.
+                # conversation before giving up. Bei 10040 ("context exceeded")
+                # das kompressions-budget halbieren (siehe stream-pfad).
                 attempt += 1
                 response.close() # type: ignore
                 self.logger.warning(
@@ -261,6 +264,15 @@ class GLMWebClient:
                     max_stream_retries,
                     retry_exc,
                 )
+                if retry_exc is not None and "code=10040" in str(retry_exc):
+                    halved = max(20000, history_budget // 2)
+                    if halved < history_budget:
+                        history_budget = halved
+                        payload["_glm_history_budget"] = halved
+                        self.logger.info(
+                            "Upstream 10040 (context exceeded) — halved history budget to %s chars",
+                            halved,
+                        )
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 accumulator = new_accumulator()
                 response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
@@ -299,12 +311,14 @@ class GLMWebClient:
             lease.release()
 
     def stream_chat_completion(self, payload: dict[str, object]):
+        payload = dict(payload)  # lokal kopierbar fuer retry-mutationen (10040-budget)
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
         max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
         history_tool_call_signatures = extract_history_tool_call_signatures(
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
+        history_budget = self.config.glm_history_max_chars
 
         def new_accumulator() -> GLMEventAccumulator:
             return GLMEventAccumulator(
@@ -439,6 +453,9 @@ class GLMWebClient:
                 # Transient upstream error before any visible content: retry
                 # the stream with a fresh conversation (guest tokens and
                 # fresh sessions die quickly; reasoning replay is harmless).
+                # Bei 10040 ("context exceeded"): kompressions-budget halbieren
+                # und im payload weiterreichen — der retry schrumpft die
+                # historie so lange, bis der upstream mitmacht.
                 attempt += 1
                 response.close() # type: ignore
                 self.logger.warning(
@@ -447,6 +464,15 @@ class GLMWebClient:
                     max_stream_retries,
                     retry_exc,
                 )
+                if retry_exc is not None and "code=10040" in str(retry_exc):
+                    halved = max(20000, history_budget // 2)
+                    if halved < history_budget:
+                        history_budget = halved
+                        payload["_glm_history_budget"] = halved
+                        self.logger.info(
+                            "Upstream 10040 (context exceeded) — halved history budget to %s chars",
+                            halved,
+                        )
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 accumulator = new_accumulator()
                 response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
@@ -466,7 +492,10 @@ class GLMWebClient:
 
     # Error codes the upstream may emit mid-stream that are worth a retry
     # with the same or a rotated account instead of failing the whole request.
-    TRANSIENT_UPSTREAM_ERROR_CODES = {10025, 10061, 10062}
+    # 10040 = "model response context exceeded": input-historie zu gross —
+    # retry koppelt an halbierung des kompressions-budgets (siehe
+    # _open_chat_stream), deshalb transient.
+    TRANSIENT_UPSTREAM_ERROR_CODES = {10025, 10040, 10061, 10062}
 
     def _raise_for_event_error(self, event: dict[str, object], stream: bool) -> None:
         status = str(event.get("status", "")).strip().lower()
@@ -597,16 +626,24 @@ class GLMWebClient:
         # request-historie. Historie VOR der Konvertierung komprimieren, damit
         # budget-grenze auf den rohen messages liegt (nicht auf dem
         # flachen prompt — tools-instructions brauchen ihr eigenes budget).
+        # Retry-Kopplung bei upstream 10040 ("context exceeded"): der
+        # retry-pfad (TRANSIENT_UPSTREAM_ERROR_CODES) halbiert dieses budget
+        # ueber das payload-feld _glm_history_budget, bis der upstream
+        # mitmacht — kein harter fail mehr auf langen sessions.
+        history_budget = self.config.glm_history_max_chars
+        raw_budget = openai_payload.get("_glm_history_budget")
+        if isinstance(raw_budget, int) and raw_budget > 0:
+            history_budget = raw_budget
         compressed_messages = compress_history_messages(
             list(openai_payload.get("messages", [])), # type: ignore[arg-type]
-            self.config.glm_history_max_chars,
+            history_budget,
         )
         if len(compressed_messages) != len(list(openai_payload.get("messages", []))): # type: ignore[arg-type]
             self.logger.info(
                 "Compressed request history messages=%s -> %s (budget=%s chars)",
                 len(list(openai_payload.get("messages", []))), # type: ignore[arg-type]
                 len(compressed_messages),
-                self.config.glm_history_max_chars,
+                history_budget,
             )
         converted_messages = convert_messages(
             messages=compressed_messages, # type: ignore

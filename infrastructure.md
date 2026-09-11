@@ -18,7 +18,7 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 
 | Pfad | Zweck |
 |---|---|
-| `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau) |
+| `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau), autosave-daemon.sh (30-Min-Auto-Commit+Push), proxy-watchdog.sh |
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
@@ -38,7 +38,7 @@ Start** — der Code liegt komplett im Repo, es gibt nichts mehr zu klonen; nur
 ```
 
 Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
-`secrets`, `ports`, `st`, `ll`, `landscape-diff`.
+`secrets`, `ports`, `quota`, `st`, `ll`, `autosave` (status/start/stop/log), `landscape-diff`.
 
 ## Enthalten
 
@@ -179,12 +179,33 @@ glm2api selbst kommt komplett mit (Code im Repo).
 | Codespace-**Resume** (Stopp→Start, Idle/Über Nacht) | `postStartCommand` → `start-on-boot.sh` | Proxy-Health-Check; läuft er nicht → Start (Code/venv/.env überleben in MAIN). Bei Unvollständigkeit: Hintergrund-Rebuild (Log `/tmp/opencode/boot-rebuild.log`) |
 | **Client-Reconnect** (Browser-Reconnect ohne Container-Restart) | **`proxy-watchdog.sh`** (Daemon, 30s-Intervall) | postStartCommand läuft NICHT bei Reconnect — der Watchdog hält den Proxy trotzdem am Leben (auch nach OOM-Kill). Start via start-on-boot.sh, Lockfile `/tmp/opencode/proxy-watchdog.lock`, Log `/tmp/opencode/watchdog.log` |
 | Laufzeit | `start-glm2api.sh` idempotent | Doppelstart-sicher, Port-Check |
+| **Idle-Schutz** (offene Commits vor Shutdown sichern) | **`autosave-daemon.sh`** (Daemon, 30-Min-Intervall) | Alle 30 Min: prüft auf uncommittete Änderungen oder ungepushte Commits → `save.sh` (add -A, commit, pull --rebase, push). Kein leerer Commit-Spam. Start via start-on-boot.sh + setup.sh, Lockfile `/tmp/opencode/autosave-daemon.lock`, Log `/tmp/opencode/autosave.log`. Shell: `autosave {status|start|stop|log}` |
 
 **Proxy-Verhalten nach Stopp:** Prozesse sterben, `/tmp` (Logs) wird geleert —
 Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-11 (16): **quota.sh: Live 5h-Sprint & Wochen-Limit via retrieveUserQuotaSummary.**
+  Bisher nutzte `quota.sh` den flachen Endpunkt `fetchAvailableModels`, der nur
+  einen einzigen Quota-Wert lieferte (bei Claude starr das 7-Tage-Wochenlimit,
+  welches fälschlicherweise in die Spalte „5h-Sprint“ gedruckt wurde).
+  Umgestellt auf `v1internal:retrieveUserQuotaSummary` (exakt wie in der Antigravity
+  Desktop-App): zeigt nun die vollständige 2×2-Matrix (Gemini Models & Claude/GPT
+  jeweils mit 5-Stunden-Sprint und Wochen-Limit getrennt inkl. Restzeiten, Balken
+  und lokalem Opencode-Tokenverbrauch). Fallback auf `fetchAvailableModels` gesichert.
+
+- 2026-09-11 (15): **Autosave-Daemon: automatischer Commit+Push alle 30 Minuten.**
+  Neuer Hintergrund-Daemon (`.devcontainer/autosave-daemon.sh`) sichert den
+  Arbeitsstand automatisch, damit bei Codespace-Idle-Shutdown nichts verloren
+  geht — egal welcher Agent oder User gerade parallel arbeitet. Prüft erst ob
+  es tatsächlich uncommittete Änderungen oder ungepushte Commits gibt (kein
+  leerer Commit-Spam), nutzt `save.sh` intern (add -A, commit `autosave
+  <timestamp>`, pull --rebase --autostash, push). Lockfile-gesichert
+  (`/tmp/opencode/autosave-daemon.lock`), Log `/tmp/opencode/autosave.log`.
+  Autostart via `start-on-boot.sh` (Block 6) und `setup.sh` (letzter Block).
+  Shell-Funktion `autosave` in `aliases.sh` für Status/Start/Stop/Log-Zugriff.
 
 - 2026-09-11 (14): **glm2api: Leak-Variante D gefixt — nacktes JSON-Array als Tool-Protokoll.**
   Auslöser: Final-Run des HARD-Benchmarks — das Modell emittierte Tool-Calls als
