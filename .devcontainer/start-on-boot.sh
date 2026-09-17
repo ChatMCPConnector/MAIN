@@ -67,7 +67,14 @@ if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/
   echo "[boot] Proxy-Watchdog gestartet (30s-Intervall für alle Proxies + Server)."
 fi
 
-# 6. Autosave-Daemon: committet+pusht alle offenen Änderungen alle 30 Min.
+# 6. Config-Watchdog: restartet opencode-server automatisch bei opencode.json-Änderung
+if ! { [ -f /tmp/opencode/config-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/config-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
+  setsid nohup bash "$REPO_ROOT/.devcontainer/config-watchdog.sh" </dev/null >>/tmp/opencode/config-watchdog.log 2>&1 &
+  disown $! 2>/dev/null || true
+  echo "[boot] Config-Watchdog gestartet (inotify auf opencode.json)."
+fi
+
+# 7. Autosave-Daemon: committet+pusht alle offenen Änderungen alle 30 Min.
 if ! { [ -f /tmp/opencode/autosave-daemon.lock ] && kill -0 "$(cat /tmp/opencode/autosave-daemon.lock 2>/dev/null)" 2>/dev/null; }; then
   setsid nohup bash "$REPO_ROOT/.devcontainer/autosave-daemon.sh" </dev/null >> /tmp/opencode/autosave.log 2>&1 &
   disown $! 2>/dev/null || true

@@ -104,6 +104,22 @@
                   "reasoningEffort": "xhigh"
                 }
               }
+            },
+            "z-ai/glm-5.3": {
+              "name": "GLM 5.3",
+              "cost": {
+                "input": 20,
+                "output": 20,
+                "cache_read": 20
+              }
+            },
+            "moonshotai/kimi-k3": {
+              "name": "Kimi K3",
+              "cost": {
+                "input": 20,
+                "output": 20,
+                "cache_read": 20
+              }
             }
           }
         },

@@ -70,6 +70,43 @@ opencode-server() {
   /workspaces/MAIN/infra/scripts/opencode-server.sh "$@"
 }
 
+# Config-Watchdog: status / start / stop / log
+config-watchdog() {
+  local lock=/tmp/opencode/config-watchdog.lock
+  case "${1:-status}" in
+    status)
+      if [ -f "$lock" ] && kill -0 "$(cat "$lock" 2>/dev/null)" 2>/dev/null; then
+        echo "config-watchdog läuft (PID $(cat "$lock"))"
+      else
+        echo "config-watchdog ist NICHT aktiv"
+      fi
+      ;;
+    start)
+      if [ -f "$lock" ] && kill -0 "$(cat "$lock" 2>/dev/null)" 2>/dev/null; then
+        echo "läuft bereits (PID $(cat "$lock"))"
+      else
+        setsid nohup bash /workspaces/MAIN/.devcontainer/config-watchdog.sh </dev/null >>/tmp/opencode/config-watchdog.log 2>&1 &
+        disown $! 2>/dev/null || true
+        sleep 0.3
+        echo "gestartet (PID $(cat "$lock" 2>/dev/null || echo '?'))"
+      fi
+      ;;
+    stop)
+      if [ -f "$lock" ] && kill -0 "$(cat "$lock" 2>/dev/null)" 2>/dev/null; then
+        kill "$(cat "$lock")" && echo "gestoppt" || echo "kill fehlgeschlagen"
+      else
+        echo "läuft nicht"
+      fi
+      ;;
+    log)
+      tail -30 /tmp/opencode/config-watchdog.log 2>/dev/null || echo "kein Log"
+      ;;
+    *)
+      echo "Usage: config-watchdog {status|start|stop|log}"
+      ;;
+  esac
+}
+
 # Praktisch beim Umzug: zeigt was NICHT im Git ist und damit verloren ginge
 landscape-diff() {
   echo "== Nur noch im Secrets-Bundle (config/secrets.enc), nicht im Git: =="

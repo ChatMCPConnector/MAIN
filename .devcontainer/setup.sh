@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "==> [landscape] Systempakete..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential python3 python3-pip python3-venv ca-certificates gnupg nodejs npm xvfb x11vnc novnc websockify libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 > /dev/null
+sudo apt-get install -y -qq curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential python3 python3-pip python3-venv ca-certificates gnupg nodejs npm xvfb x11vnc novnc websockify libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 inotify-tools > /dev/null
 sudo rm -rf /var/lib/apt/lists/*
 
 echo "==> [landscape] opencode installieren (falls fehlt)..."
@@ -193,6 +193,15 @@ if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/
   echo "    Proxy-Watchdog gestartet (30s-Intervall)."
 else
   echo "    Watchdog läuft bereits."
+fi
+
+echo "==> [landscape] Config-Watchdog starten (restartet opencode-server bei Config-Änderung)..."
+if ! { [ -f /tmp/opencode/config-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/config-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
+  setsid nohup bash "$REPO_ROOT/.devcontainer/config-watchdog.sh" </dev/null >>/tmp/opencode/config-watchdog.log 2>&1 &
+  disown $! 2>/dev/null || true
+  echo "    Config-Watchdog gestartet (inotify auf opencode.json)."
+else
+  echo "    Config-Watchdog läuft bereits."
 fi
 
 echo "==> [landscape] Autosave-Daemon starten (committet+pusht alle 30 Min)..."
