@@ -18,7 +18,7 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 
 | Pfad | Zweck |
 |---|---|
-| `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau), autosave-daemon.sh (30-Min-Auto-Commit+Push), proxy-watchdog.sh |
+| `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau), autosave-daemon.sh (30-Min-Auto-Commit+Push), proxy-watchdog.sh, config-watchdog.sh (inotify auf opencode.json → Server-Auto-Restart) |
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
@@ -38,7 +38,8 @@ Start** — der Code liegt komplett im Repo, es gibt nichts mehr zu klonen; nur
 ```
 
 Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
-`secrets`, `ports`, `quota`, `st`, `ll`, `autosave` (status/start/stop/log), `landscape-diff`.
+`secrets`, `ports`, `quota`, `st`, `ll`, `autosave` (status/start/stop/log),
+`config-watchdog` (status/start/stop/log), `landscape-diff`.
 
 ## Enthalten
 
@@ -73,7 +74,7 @@ Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
 |---|---|---|
 | tokenrouter | z-ai/glm-5.3-free (1M) | tokenrouter.key |
 | nvidia | nemotron-3-ultra, deepseek-v4-flash/pro | nvidia-nim.key |
-| xinjianya | gpt-5.6-sol, kimi-k3, deepseek-v4-pro | xinjianya.key |
+| xinjianya | gpt-5.6-sol, kimi-k3, deepseek-v4-pro, glm-5.3, moonshotai/kimi-k3 | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
 | **gemini-web** | gemini-3.1-pro-thinking, gemini-3.8-flash-thinking, gemini-3.5-flash-lite-thinking | lokal, Port 8083, Google AI Pro (Cookie-Pool) |
 | **antigravity** | claude-opus-4-6 (250k, Thinking 1k/4k/8k), claude-sonnet-4-6 (250k, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output), gemini-3.1-pro (1M, 64k Output), gemini-3.5-flash-light (1M, 32k Output) | lokal, Port 9878, Google Cloud Code OAuth |
@@ -261,6 +262,7 @@ glm2api selbst kommt komplett mit (Code im Repo).
 | **Client-Reconnect** (Browser-Reconnect ohne Container-Restart) | **`proxy-watchdog.sh`** (Daemon, 30s-Intervall) | postStartCommand läuft NICHT bei Reconnect — der Watchdog hält den Proxy trotzdem am Leben (auch nach OOM-Kill). Start via start-on-boot.sh, Lockfile `/tmp/opencode/proxy-watchdog.lock`, Log `/tmp/opencode/watchdog.log` |
 | Laufzeit | `start-glm2api.sh` idempotent | Doppelstart-sicher, Port-Check |
 | **Idle-Schutz** (offene Commits vor Shutdown sichern) | **`autosave-daemon.sh`** (Daemon, 30-Min-Intervall) | Alle 30 Min: prüft auf uncommittete Änderungen oder ungepushte Commits → `save.sh` (add -A, commit, pull --rebase, push). Kein leerer Commit-Spam. Start via start-on-boot.sh + setup.sh, Lockfile `/tmp/opencode/autosave-daemon.lock`, Log `/tmp/opencode/autosave.log`. Shell: `autosave {status|start|stop|log}` |
+| **Config-Auto-Restart** (neue Modelle sofort verfügbar) | **`config-watchdog.sh`** (Daemon, inotify-Event-basiert) | Überwacht `.opencode/opencode.json` per `inotifywait` (close_write/moved_to); bei Änderung 3s Debounce, dann `opencode-server.sh restart`. Fallback auf Polling (10s md5sum) falls inotify-tools fehlt. Start via start-on-boot.sh + setup.sh, Lockfile `/tmp/opencode/config-watchdog.lock`, Log `/tmp/opencode/config-watchdog.log`. Shell: `config-watchdog {status|start|stop|log}` |
 
 **Proxy-Verhalten nach Stopp:** Prozesse sterben, `/tmp` (Logs) wird geleert —
 Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
@@ -268,6 +270,16 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-17: **Config-Watchdog + neue Modelle.**
+  Neuer Daemon `.devcontainer/config-watchdog.sh`: überwacht `opencode.json`
+  per inotifywait (close_write/moved_to), 3s Debounce, dann automatischer
+  `opencode-server.sh restart`. Fallback auf 10s-md5sum-Polling falls
+  inotify-tools fehlt. Lockfile `/tmp/opencode/config-watchdog.lock`, Log
+  `/tmp/opencode/config-watchdog.log`. Start via setup.sh + start-on-boot.sh,
+  Resurrection via proxy-watchdog.sh. Shell-Alias: `config-watchdog
+  {status|start|stop|log}`. inotify-tools zu setup.sh-Paketliste hinzugefügt.
+  Neue Modelle in xinjianya-Provider: `z-ai/glm-5.3`, `moonshotai/kimi-k3`.
+  Live verifiziert: touch opencode.json → Debounce → Restart → Health-Check OK.
 - 2026-09-11 (18): **Google-Drive-Backup: 2-Generationen-Repo-Sicherung nach Drive.**
   Szenario Account-Bann: komplettes Repo (History, alle Branches) liegt als
   git-bundle auf Google Drive (5 TB, Google AI Pro). Neuer Worker
