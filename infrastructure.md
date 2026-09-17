@@ -18,10 +18,10 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 
 | Pfad | Zweck |
 |---|---|
-| `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau), autosave-daemon.sh (30-Min-Auto-Commit+Push), proxy-watchdog.sh, config-watchdog.sh (inotify auf opencode.json → Server-Auto-Restart) |
+| `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau), autosave-daemon.sh (30-Min-Auto-Commit+Push), proxy-watchdog.sh |
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
-| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
+| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **gemini-web2api** (Port 8083, Gemini Web Pro) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
 
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
@@ -271,7 +271,7 @@ Proxy bei jedem Start automatisch hoch.
 ## Changelog
 
 - 2026-09-17: **Config-Watchdog + neue Modelle.**
-  Neuer Daemon `.devcontainer/config-watchdog.sh`: überwacht `opencode.json`
+  Neuer Daemon `infra/scripts/config-watchdog.sh`: überwacht `opencode.json`
   per inotifywait (close_write/moved_to), 3s Debounce, dann automatischer
   `opencode-server.sh restart`. Fallback auf 10s-md5sum-Polling falls
   inotify-tools fehlt. Lockfile `/tmp/opencode/config-watchdog.lock`, Log
