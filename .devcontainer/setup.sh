@@ -197,7 +197,7 @@ fi
 
 echo "==> [landscape] Config-Watchdog starten (restartet opencode-server bei Config-Änderung)..."
 if ! { [ -f /tmp/opencode/config-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/config-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
-  setsid nohup bash "$REPO_ROOT/.devcontainer/config-watchdog.sh" </dev/null >>/tmp/opencode/config-watchdog.log 2>&1 &
+  setsid nohup bash "$REPO_ROOT/infra/scripts/config-watchdog.sh" </dev/null >>/tmp/opencode/config-watchdog.log 2>&1 &
   disown $! 2>/dev/null || true
   echo "    Config-Watchdog gestartet (inotify auf opencode.json)."
 else

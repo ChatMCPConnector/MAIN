@@ -5,7 +5,7 @@
 # Wird von start-on-boot.sh und setup.sh als Hintergrund-Daemon gestartet.
 # Lockfile-gesichert, Log unter /tmp/opencode/config-watchdog.log.
 set -u
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOCK=/tmp/opencode/config-watchdog.lock
 LOG=/tmp/opencode/config-watchdog.log
 CONFIG="$REPO_ROOT/.opencode/opencode.json"

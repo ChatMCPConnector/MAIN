@@ -50,7 +50,7 @@ while true; do
   # 6. config-watchdog (inotify auf opencode.json → opencode-server restart)
   if ! { [ -f /tmp/opencode/config-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/config-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
     echo "$(date '+%H:%M:%S') [watchdog] config-watchdog weg — starte neu..." >> /tmp/opencode/watchdog.log
-    setsid nohup bash "$REPO_ROOT/.devcontainer/config-watchdog.sh" </dev/null >> /tmp/opencode/config-watchdog.log 2>&1 &
+    setsid nohup bash "$REPO_ROOT/infra/scripts/config-watchdog.sh" </dev/null >> /tmp/opencode/config-watchdog.log 2>&1 &
     disown $! 2>/dev/null || true
   fi
 

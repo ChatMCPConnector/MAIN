@@ -85,7 +85,7 @@ config-watchdog() {
       if [ -f "$lock" ] && kill -0 "$(cat "$lock" 2>/dev/null)" 2>/dev/null; then
         echo "läuft bereits (PID $(cat "$lock"))"
       else
-        setsid nohup bash /workspaces/MAIN/.devcontainer/config-watchdog.sh </dev/null >>/tmp/opencode/config-watchdog.log 2>&1 &
+        setsid nohup bash /workspaces/MAIN/infra/scripts/config-watchdog.sh </dev/null >>/tmp/opencode/config-watchdog.log 2>&1 &
         disown $! 2>/dev/null || true
         sleep 0.3
         echo "gestartet (PID $(cat "$lock" 2>/dev/null || echo '?'))"
