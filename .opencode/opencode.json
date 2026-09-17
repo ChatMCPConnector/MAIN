@@ -136,38 +136,6 @@
                   "reasoningEffort": "max"
                 }
               }
-            },
-            "moonshotai/kimi-k3": {
-              "name": "Kimi K3",
-              "reasoning": true,
-              "cost": {
-                "input": 20,
-                "output": 20,
-                "cache_read": 20
-              },
-              "options": {
-                "reasoningEffort": "medium"
-              },
-              "variants": {
-                "none": {
-                  "reasoningEffort": "none"
-                },
-                "low": {
-                  "reasoningEffort": "low"
-                },
-                "medium": {
-                  "reasoningEffort": "medium"
-                },
-                "high": {
-                  "reasoningEffort": "high"
-                },
-                "xhigh": {
-                  "reasoningEffort": "xhigh"
-                },
-                "max": {
-                  "reasoningEffort": "max"
-                }
-              }
             }
           }
         },
