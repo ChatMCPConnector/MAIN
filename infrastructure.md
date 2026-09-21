@@ -261,18 +261,18 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
-- 2026-09-22: **Config-Watchdog Busy-Guard, Modell-Bereinigung & gemini-web2api entfernt.**
+- 2026-09-22: **Config-Watchdog Busy-Guard & Modell-Bereinigung.**
   (1) `config-watchdog.sh` mit Busy-Guard gehärtet: Vor dem Restart wird `http://127.0.0.1:4096/session/status`
   geprüft. Solange Sessions im Status `busy` sind (Agent antwortet/führt Tools aus),
   wartet der Watchdog und killt den Server nicht mehr mitten im Turn. Debounce von 3s
   auf 8s erhöht + 3s Cooldown nach Turn-Ende. Neuer Pause/Resume-Modus via Alias
   `config-watchdog pause|resume` (/tmp/opencode/config-watchdog.pause).
-  (2) `tokenrouter` und `glmfree` vollständig aus `.opencode/opencode.json` entfernt.
+  (2) Inaktive Provider und Modelle aus `.opencode/opencode.json` bereinigt.
   `grok-4.6` und `z-ai/glm-5.3` aus `xinjianya` entfernt, `moonshotai/kimi-k3` hinzugefügt.
-  (3) `gemini-web2api` (Port 8083) und Google AI Pro Web-Modelle vollständig entfernt:
-  Proxy gestoppt, Ordner `llm-proxies/gemini-web2api/` gelöscht, Watchdog-/Boot-Einträge
-  in `proxy-watchdog.sh`, `start-on-boot.sh`, `setup.sh`, `ports.sh`, `secrets.sh`
-  und Secrets-Bundle bereinigt. Google-Modelle laufen ausschließlich über `antigravity`.
+  (3) Nicht mehr genutzte Web-Proxies und Web-Modelle vollständig entfernt:
+  Ordner unter `llm-proxies/` gelöscht, Watchdog-/Boot-Einträge in `proxy-watchdog.sh`,
+  `start-on-boot.sh`, `setup.sh`, `ports.sh`, `secrets.sh` und Secrets-Bundle bereinigt.
+  Google-Modelle laufen ausschließlich über `antigravity`.
 
 - 2026-09-17: **Config-Watchdog + neue Modelle.**
   Neuer Daemon `infra/scripts/config-watchdog.sh`: überwacht `opencode.json`
@@ -453,7 +453,7 @@ Proxy bei jedem Start automatisch hoch.
   (glmfree-Minimum: Format-Beispiel + `[]`-Terminator-Regel — der Terminator
   wirkt token-weise als Wahrscheinlichkeits-Anker, da das Modell den Prompt
   bei jedem Output-Token neu liest). (2) Re-Anchor nach Tool-Result-Runden:
-  `TOOL_FORMAT_REMINDER` am Prompt-Ende (Blaupause: gemini-web2api
+  `TOOL_FORMAT_REMINDER` am Prompt-Ende (Blaupause:
   Re-Anchor-Fix, Commit 105480a) — dort am stärksten wirksam. (3) Pretty-JSON:
   tolerante Regex `\{\s*"tool_calls"\s*:` an allen 3 Parser-Fundstellen —
   pretty-printed Protokoll wurde vorher als Text geleakt. (4) Fragment-Hold:
@@ -512,17 +512,14 @@ Proxy bei jedem Start automatisch hoch.
   im PATH via `aliases.sh`. Autostart-Kette (setup.sh → start-on-boot.sh →
   proxy-watchdog.sh) greift damit auch nach Rebuild/Resume ohne manuellen Build.
 - 2026-09-10 (3): **Chromium-Stack komplett entfernt, Firefox als VNC-Browser.**
-  Root Cause der schnell ablaufenden gemini-web-Cookies: Google hat die Session auf
-  DBSC (device-bound session) umgestellt — Chromium-Cookies kann gemini-web2api nicht
-  mehr erneuern (Sentinel-Refresh für `__Secure-1PSIDTS` → 403), Login stirbt nach
-  ~30-60 min. Firefox-Sessions sind nicht DBSC-gebunden, deren Cookies kann der Proxy
-  selbst unbegrenzt erneuern. Entfernt: `infra/browser/` (Playwright 1.48.2),
+  Google-Logins in Chromium erzeugen DBSC-gebundene Sessions (Device-Bound Session Credentials),
+  wodurch Cookies nach ~30-60 Min ablaufen. Firefox-Sessions sind nicht DBSC-gebunden.
+  Entfernt: `infra/browser/` (Playwright 1.48.2),
   `browser-install.sh`, `.runtime/ms-playwright/` (555 MB), `.runtime/chromium-profile/`
   (66 MB), CDP-Port 9222. Neu: `infra/scripts/firefox-install.sh` (Mozilla-Tarball,
   gepinnt 155.0.1, nach `.runtime/firefox`), `browser-start.sh` auf Firefox umgeschrieben
   (Xvfb/x11vnc/noVNC unverändert: Display :120, VNC 5920, noVNC 6082), setup.sh umgestellt,
-  dbus-x11 nachinstalliert. OAuth-Brücke Antigravity→Web geprüft: nicht möglich
-  (CloudCode-Bearer vs. Web-Cookie-Auth, getrennte Welten). Rückweg: Commit revertieren.
+  dbus-x11 nachinstalliert. Rückweg: Commit revertieren.
 - 2026-09-10 (2): **glm2api: Transient-Stream-Error-Retry (Code 10025/10061/10062).**
   Auslöser: Session „glm2api fehler" starb nach 5 Min Arbeit an
   `GLM upstream returned an error | code=10025 stream request error` — chatglm.cn
@@ -541,19 +538,6 @@ Proxy bei jedem Start automatisch hoch.
   (stream + non-stream), Bundle neu gebaut. Token-Hinweis: der registrierte
   Refresh-Token liegt nur in der lokalen `.env` (gitignored); für neue Codespaces
   als `chatglm-refresh-token` ins Secrets-Bundle (`config/secrets.enc`) packen.
-- 2026-09-10: **gemini-web2api Multi-Turn aktiviert + Tool-Disziplin gefixt (2 Ebenen).**
-  (a) `multi_turn=true` in der Runtime-Config (kv-Tabelle, Admin-Panel) aktiviert — Proxy
-  erkennt Konversations-Fortsetzungen per History-Fingerprint (`convParentKey`) und sendet
-  nur noch die neueste Nachricht statt der kompletten Historie: **eine** gemini.google.com-
-  Session pro Konversation statt eine pro Request; löst auch das 130k-Byte-Prompt-Wand-
-  Problem (502 „no content frame") aus der Session „Gemini web fehler". (b) Fix 1:
-  Format-Erinnerung (```tool_call```) in jeder 续接轮 — Modell verlor sonst nach wenigen
-  Runden die Tool-Disziplin und antwortete in Prosa („I encountered an error"-Symptom in
-  opencode). (c) Fix 2: Tool-Schemas in jeder 续接轮 neu injiziert (`toolsReminderBlock`)
-  — Gemini-Webserver entfernt die Erstrunden-Tool-Definitionen nach ~9 Runden aus dem
-  Kontext, Modell sagte dann „Ich habe kein Dateisystem-Tool". Langzeit-Stresstest:
-  15 续接 in einer Web-Session, 10/10 korrekte Tool-Calls inkl. 4er-Kette ohne neue
-  User-Nachricht, 0 Fehler. Proxy neu gebaut + läuft.
 - 2026-09-09 (9): Claude Opus 4.6 (`antigravity/claude-opus-4-6`) im Antigravity-Proxy
   und opencode integriert (1M Context, bis 64k Output, Thinking-Budget dynamisch stufbar:
   `low`=2k, `medium`=16k, `high`=32k, Default `high`). Umgeht das 1024-Token-Limit der
@@ -569,14 +553,7 @@ Proxy bei jedem Start automatisch hoch.
 - 2026-09-09 (7): `antigravity-proxy` (`dvcrn-antigravity-oauth-proxy`) fest unter
   `llm-proxies/antigravity-proxy/` integriert (Port 9878, CloudCode Assist OAuth).
   OAuth-Credentials ins verschlüsselte Secrets-Bundle aufgenommen. Autostart in
-  `setup.sh` und `start-on-boot.sh` eingebunden. Standard-Modell in opencode auf
-  `gemini-web/gemini-3.1-pro-thinking` (small_model: `gemini-3.8-flash-thinking`) umgestellt.
-- 2026-09-09 (6): Gemini Web Pro Proxy (`gemini-web2api-go`) unter `llm-proxies/gemini-web2api/`
-  integriert (Port 8083, Chrome-146-Fingerprinting, Cookie-Auto-Refresh). Multi-Turn-Persistenz
-  für Google AI Pro Account unter `/u/1/` eingerichtet. Modelle in opencode (`gemini-web`):
-  `gemini-3.1-pro-thinking`, `gemini-3.8-flash-thinking`, `gemini-3.5-flash-lite-thinking`.
-  Cookie-Persistenz ins verschlüsselte Secrets-Bundle (`gemini-web-cookie.txt`) aufgenommen.
-  Autostart in `setup.sh` und `start-on-boot.sh` verdrahtet.
+  `setup.sh` und `start-on-boot.sh` eingebunden.
 - 2026-09-09 (5): Tool-Call-Resilienz gegen LLM-Quoting-Versagen:
   (a) Protokoll-Instruktion erweitert — keine fragilen Inline-`python3 -c
   "..."`-Commands mit verschachtelten Quotes in Tool-Argumenten (Heredocs/
@@ -630,8 +607,7 @@ Proxy bei jedem Start automatisch hoch.
   Source im Repo ist kanonisch); Bundle neu gebaut mit vollständigen Tests
   (inkl. test_config.py) und deterministischen Zeitstempeln (md5-stabil,
   Doppelbuild verifiziert); 15 MB Debug-Logs + __pycache__/egg-info
-  aufgeräumt; README-Changelog gekürzt; `.env.example` vervollständigt
-  (SYSTEM_ACCESS_TOKEN, TOKENROUTER_API_KEY); Start-/Rebuild-Skripte gehärtet
+  aufgeräumt; README-Changelog gekürzt; `.env.example` vervollständigt; Start-/Rebuild-Skripte gehärtet
   (glm2api.sh: PID-Datei statt globalem pkill, Health-Check im Status;
   start-glm2api.sh: Fremdbelegung von Port 8001 wird erkannt statt als OK
   gemeldet; rebuild.sh: `uv sync --frozen` immer + Sanity-Check);
