@@ -58,7 +58,7 @@ Secret-Schutz-Purismus:
   Entschlüsselungswort — nie ein Secret/PAT als Passphrase zweckentfremden
   (der alte PAT wurde dadurch geleakt und von GitHub revoked).
 - `config/secrets.enc` (+ Manifest): verschlüsseltes Bundle mit
-  `pat`, `tokenrouter.key`, `nvidia-nim.key`, `xinjianya.key`, `gemini-web-cookie.txt`, `antigravity-oauth_creds.json`, `chatglm-refresh-token`,
+  `pat`, `nvidia-nim.key`, `xinjianya.key`, `antigravity-oauth_creds.json`, `chatglm-refresh-token`,
   `env`, `opencode-auth.json` → landen beim Unlock unter `~/.config/landscape/`,
   `~/.local/share/opencode/auth.json` bzw. `.env`/`.secrets/`.
 - `./infra/scripts/secrets.sh lock|unlock|status` verwaltet das Bundle.
@@ -182,13 +182,6 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   `infra/scripts/firefox-install.sh`, Install nach `.runtime/firefox`, gitignored)
   → `./infra/scripts/browser-start.sh [URL]` (Xvfb, x11vnc, noVNC; idempotent).
   Dienste: Display `:120`, VNC `localhost:5920`, noVNC Port `6082`.
-  **War Firefox statt Chromium/Playwright:** Google-Logins in Chromium erzeugen
-  DBSC-gebundene Sessions — deren Cookies kann gemini-web2api nicht erneuern,
-  sie sterben nach ~30-60 min (Root Cause der „Proxy läuft viel zu schnell ab"-
-  Phase). Firefox-Sessions sind nicht DBSC-gebunden, der Proxy erneuert
-  `__Secure-1PSIDTS` per Sentinel selbst (siehe gemini-web2api/CHANGELOG #6).
-  Cookie-Bezug für den Proxy-Pool: Login im noVNC-Firefox → DevTools (F12) →
-  Storage → Cookies → nach `.secrets/gemini-web-cookie.txt` / Admin-Panel.
   Profil `.runtime/firefox-profile/` enthält evtl. Logins — nie committen.
 - **Systempakete** via setup.sh (idempotent): nodejs, npm, xvfb, x11vnc, novnc,
   websockify, sqlite3, dbus-x11, build-essential, python3-* etc.

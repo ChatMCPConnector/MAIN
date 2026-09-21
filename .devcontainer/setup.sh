@@ -82,8 +82,7 @@ bash "$REPO_ROOT/infra/scripts/rclone-install.sh" >/dev/null 2>&1 \
   || echo "    WARN: rclone-Install fehlgeschlagen, manuell: ./infra/scripts/rclone-install.sh"
 
 echo "==> [landscape] Browser-Runtime (Firefox) prüfen..."
-# Firefox (Mozilla-Tarball, gepinnt) statt Chromium: Google-Cookies aus Firefox sind
-# nicht DBSC-gebunden -> gemini-web2api kann __Secure-1PSIDTS unbegrenzt erneuern.
+# Firefox (Mozilla-Tarball, gepinnt) als leichtgewichtige Desktop-Browser-Runtime
 if [ ! -x "$REPO_ROOT/.runtime/firefox/firefox" ]; then
   bash "$REPO_ROOT/infra/scripts/firefox-install.sh" >/dev/null 2>&1 \
     && echo "    Firefox-Runtime installiert." \

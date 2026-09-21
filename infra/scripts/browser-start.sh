@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# browser-start.sh: Startet den VNC-Browser-Stack (Firefox statt Chromium).
-# Xvfb + x11vnc + noVNC bleiben identisch; Firefox ersetzt Chromium.
-# Zweck des Wechsels: Google-Logins in Firefox erzeugen KEINE DBSC-gebundenen
-# Sessions — deren Cookies kann gemini-web2api per Sentinel-Refresh unbegrenzt
-# selbst erneuern (Chrome/Chromium-Cookies sterben nach ~30-60 min, s. CHANGELOG).
-# Remote-Debugging: Firefox --start-debugger-server (Marionette/DevTools) ist für
-# Cookie-Exports nicht nötig — Cookies liegen in .runtime/firefox-profile
-# (cookies.sqlite), Export via DevTools im noVNC-Browser.
+# browser-start.sh: Startet den VNC-Browser-Stack (Firefox).
+# Xvfb + x11vnc + noVNC; Anzeige im Web-Browser via Port 6082.
 set -euo pipefail
 
 readonly root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

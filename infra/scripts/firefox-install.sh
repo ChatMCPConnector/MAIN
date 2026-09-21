@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # firefox-install.sh: Installiert Firefox (Mozilla-Tarball, gepinnte Version) nach .runtime/firefox.
 # Snap/apt-Firefox ist im Codespace unbrauchbar (apt-Paket ist nur ein Snap-Wrapper).
-# Firefox statt Chromium: Google-Cookies aus Firefox sind NICHT DBSC-gebunden,
-# gemini-web2api kann __Secure-1PSIDTS damit unbegrenzt selbst erneuern.
 # Kanonisch: FIREFOX_VERSION unten pinnen + dieses Skript ist der einzige Weg.
 set -euo pipefail
 
