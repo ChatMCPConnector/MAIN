@@ -9,7 +9,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOCK=/tmp/opencode/config-watchdog.lock
 LOG=/tmp/opencode/config-watchdog.log
 CONFIG="$REPO_ROOT/.opencode/opencode.json"
-DEBOUNCE_SECONDS=3
+DEBOUNCE_SECONDS=8
+PAUSE_FILE=/tmp/opencode/config-watchdog.pause
 
 mkdir -p /tmp/opencode
 
@@ -21,7 +22,50 @@ echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
 trap '' HUP  # SIGHUP ignorieren
 
-echo "$(date '+%H:%M:%S') [config-watchdog] Gestartet (PID $$), überwache $CONFIG" >> "$LOG"
+echo "$(date '+%H:%M:%S') [config-watchdog] Gestartet (PID $$), überwache $CONFIG (Debounce: ${DEBOUNCE_SECONDS}s, Busy-Guard aktiv)" >> "$LOG"
+
+safe_restart() {
+  # 1. Debounce: kurz warten, falls mehrere Writes kommen (Editor save etc.)
+  sleep "$DEBOUNCE_SECONDS"
+
+  # 2. Pause-Lockfile prüfen (Agent oder Nutzer hat Watchdog pausiert)
+  while [ -f "$PAUSE_FILE" ]; do
+    echo "$(date '+%H:%M:%S') [config-watchdog] Pausiert durch $PAUSE_FILE — warte..." >> "$LOG"
+    sleep 3
+  done
+
+  # 3. Prüfen ob der Server überhaupt läuft — wenn nicht, Restart unnötig
+  if ! curl -sf -m 2 http://127.0.0.1:4096/ >/dev/null 2>&1; then
+    echo "$(date '+%H:%M:%S') [config-watchdog] Config geändert, aber Server nicht aktiv — skip." >> "$LOG"
+    return 0
+  fi
+
+  # 4. Busy-Guard: Niemals restarten solange eine Session aktiv arbeitet
+  local max_wait=300
+  local waited=0
+  local check_url="http://127.0.0.1:4096/session/status"
+
+  while [ $waited -lt $max_wait ]; do
+    local status
+    status="$(curl -sf -m 2 "$check_url" 2>/dev/null || echo "{}")"
+    if echo "$status" | grep -q '"busy"'; then
+      echo "$(date '+%H:%M:%S') [config-watchdog] Session aktiv ('busy') — warte vor Restart (${waited}s)..." >> "$LOG"
+      sleep 3
+      waited=$((waited + 3))
+    else
+      # Session ist idle — 3s Puffer damit Response-Stream sicher beendet ist
+      sleep 3
+      status="$(curl -sf -m 2 "$check_url" 2>/dev/null || echo "{}")"
+      if ! echo "$status" | grep -q '"busy"'; then
+        break
+      fi
+    fi
+  done
+
+  echo "$(date '+%H:%M:%S') [config-watchdog] opencode.json geändert & Server idle — restarte opencode-server..." >> "$LOG"
+  bash "$REPO_ROOT/infra/scripts/opencode-server.sh" restart >> "$LOG" 2>&1 || true
+  echo "$(date '+%H:%M:%S') [config-watchdog] Restart abgeschlossen." >> "$LOG"
+}
 
 # Fallback: Falls inotifywait nicht installiert ist, Polling (alle 10s md5sum)
 if ! command -v inotifywait >/dev/null 2>&1; then
@@ -31,11 +75,9 @@ if ! command -v inotifywait >/dev/null 2>&1; then
     sleep 10
     CURRENT_HASH="$(md5sum "$CONFIG" 2>/dev/null | cut -d' ' -f1)"
     if [ "$CURRENT_HASH" != "$LAST_HASH" ]; then
-      echo "$(date '+%H:%M:%S') [config-watchdog] Config geändert (Polling), restarte opencode-server..." >> "$LOG"
-      sleep "$DEBOUNCE_SECONDS"
-      # Nochmal lesen (Debounce: falls mehrere Writes hintereinander)
+      echo "$(date '+%H:%M:%S') [config-watchdog] Config geändert (Polling)..." >> "$LOG"
+      safe_restart
       CURRENT_HASH="$(md5sum "$CONFIG" 2>/dev/null | cut -d' ' -f1)"
-      bash "$REPO_ROOT/infra/scripts/opencode-server.sh" restart >> "$LOG" 2>&1 || true
       LAST_HASH="$CURRENT_HASH"
     fi
   done
@@ -53,22 +95,9 @@ while true; do
   }
 
   # Nur reagieren wenn sich tatsächlich opencode.json geändert hat
-  # (inotifywait auf das Verzeichnis feuert auch bei anderen Dateien)
   if [ ! -f "$CONFIG" ]; then
     continue
   fi
 
-  # Debounce: kurz warten, falls mehrere Writes kommen (Editor save etc.)
-  sleep "$DEBOUNCE_SECONDS"
-
-  # Prüfen ob der Server überhaupt läuft — wenn nicht, Restart unnötig
-  # (der normale Watchdog kümmert sich ums Hochfahren)
-  if ! curl -sf -m 2 http://127.0.0.1:4096/ >/dev/null 2>&1; then
-    echo "$(date '+%H:%M:%S') [config-watchdog] Config geändert, aber Server nicht aktiv — skip (proxy-watchdog startet ihn)." >> "$LOG"
-    continue
-  fi
-
-  echo "$(date '+%H:%M:%S') [config-watchdog] opencode.json geändert — restarte opencode-server..." >> "$LOG"
-  bash "$REPO_ROOT/infra/scripts/opencode-server.sh" restart >> "$LOG" 2>&1 || true
-  echo "$(date '+%H:%M:%S') [config-watchdog] Restart abgeschlossen." >> "$LOG"
+  safe_restart
 done

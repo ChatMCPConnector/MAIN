@@ -68,11 +68,10 @@ Secret-Schutz-Purismus:
 
 ## opencode-Konfiguration (`.opencode/`)
 
-Provider (`opencode.json`, Default `tokenrouter/z-ai/glm-5.3-free`):
+Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 
 | Provider | Modelle | Auth |
 |---|---|---|
-| tokenrouter | z-ai/glm-5.3-free (1M) | tokenrouter.key |
 | nvidia | nemotron-3-ultra, deepseek-v4-flash/pro | nvidia-nim.key |
 | xinjianya | gpt-5.6-sol, kimi-k3, deepseek-v4-pro, glm-5.3 | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
@@ -262,13 +261,22 @@ glm2api selbst kommt komplett mit (Code im Repo).
 | **Client-Reconnect** (Browser-Reconnect ohne Container-Restart) | **`proxy-watchdog.sh`** (Daemon, 30s-Intervall) | postStartCommand läuft NICHT bei Reconnect — der Watchdog hält den Proxy trotzdem am Leben (auch nach OOM-Kill). Start via start-on-boot.sh, Lockfile `/tmp/opencode/proxy-watchdog.lock`, Log `/tmp/opencode/watchdog.log` |
 | Laufzeit | `start-glm2api.sh` idempotent | Doppelstart-sicher, Port-Check |
 | **Idle-Schutz** (offene Commits vor Shutdown sichern) | **`autosave-daemon.sh`** (Daemon, 30-Min-Intervall) | Alle 30 Min: prüft auf uncommittete Änderungen oder ungepushte Commits → `save.sh` (add -A, commit, pull --rebase, push). Kein leerer Commit-Spam. Start via start-on-boot.sh + setup.sh, Lockfile `/tmp/opencode/autosave-daemon.lock`, Log `/tmp/opencode/autosave.log`. Shell: `autosave {status|start|stop|log}` |
-| **Config-Auto-Restart** (neue Modelle sofort verfügbar) | **`config-watchdog.sh`** (Daemon, inotify-Event-basiert) | Überwacht `.opencode/opencode.json` per `inotifywait` (close_write/moved_to); bei Änderung 3s Debounce, dann `opencode-server.sh restart`. Fallback auf Polling (10s md5sum) falls inotify-tools fehlt. Start via start-on-boot.sh + setup.sh, Lockfile `/tmp/opencode/config-watchdog.lock`, Log `/tmp/opencode/config-watchdog.log`. Shell: `config-watchdog {status|start|stop|log}` |
+| **Config-Auto-Restart** (neue Modelle sofort verfügbar) | **`config-watchdog.sh`** (Daemon, inotify-Event-basiert) | Überwacht `.opencode/opencode.json` per `inotifywait` (close_write/moved_to); Debounce 8s + **Busy-Guard** (prüft `/session/status`, wartet bis alle Sessions idle sind vor Restart, kein Abbruch laufender Turns) + Pause-Mechanismus (`config-watchdog.pause`). Fallback auf Polling (10s md5sum) falls inotify-tools fehlt. Start via start-on-boot.sh + setup.sh, Lockfile `/tmp/opencode/config-watchdog.lock`, Log `/tmp/opencode/config-watchdog.log`. Shell: `config-watchdog {status|start|stop|pause|resume|log}` |
 
 **Proxy-Verhalten nach Stopp:** Prozesse sterben, `/tmp` (Logs) wird geleert —
 Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-22: **Config-Watchdog Busy-Guard + TokenRouter & glmfree Bereinigung.**
+  (1) `config-watchdog.sh` mit Busy-Guard gehärtet: Vor dem Restart wird `http://127.0.0.1:4096/session/status`
+  geprüft. Solange Sessions im Status `busy` sind (Agent antwortet/führt Tools aus),
+  wartet der Watchdog und killt den Server nicht mehr mitten im Turn. Debounce von 3s
+  auf 8s erhöht + 3s Cooldown nach Turn-Ende. Neuer Pause/Resume-Modus via Alias
+  `config-watchdog pause|resume` (/tmp/opencode/config-watchdog.pause).
+  (2) `tokenrouter` (keine Free-Modelle mehr) und `glmfree` (nicht mehr erreichbar)
+  vollständig aus `.opencode/opencode.json` entfernt.
 
 - 2026-09-17: **Config-Watchdog + neue Modelle.**
   Neuer Daemon `infra/scripts/config-watchdog.sh`: überwacht `opencode.json`

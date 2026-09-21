@@ -101,8 +101,16 @@ config-watchdog() {
     log)
       tail -30 /tmp/opencode/config-watchdog.log 2>/dev/null || echo "kein Log"
       ;;
+    pause)
+      touch /tmp/opencode/config-watchdog.pause
+      echo "config-watchdog pausiert (/tmp/opencode/config-watchdog.pause gesetzt)"
+      ;;
+    resume)
+      rm -f /tmp/opencode/config-watchdog.pause
+      echo "config-watchdog fortgesetzt (/tmp/opencode/config-watchdog.pause entfernt)"
+      ;;
     *)
-      echo "Usage: config-watchdog {status|start|stop|log}"
+      echo "Usage: config-watchdog {status|start|stop|pause|resume|log}"
       ;;
   esac
 }
