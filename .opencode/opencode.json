@@ -61,41 +61,9 @@
               "reasoningEffort": "max"
             }
           }
-        },
-        "z-ai/glm-5.3": {
-              "name": "GLM 5.3",
-              "reasoning": true,
-              "cost": {
-                "input": 20,
-                "output": 20,
-                "cache_read": 20
-              },
-              "options": {
-                "reasoningEffort": "medium"
-              },
-              "variants": {
-                "none": {
-                  "reasoningEffort": "none"
-                },
-                "low": {
-                  "reasoningEffort": "low"
-                },
-                "medium": {
-                  "reasoningEffort": "medium"
-                },
-                "high": {
-                  "reasoningEffort": "high"
-                },
-                "xhigh": {
-                  "reasoningEffort": "xhigh"
-                },
-                "max": {
-                  "reasoningEffort": "max"
-                }
-              }
-            }
-          }
-        },
+        }
+      }
+    },
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "glm2api",
