@@ -205,32 +205,6 @@
         }
       }
     },
-    "gemini-web": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Google AI Pro",
-      "options": {
-        "baseURL": "http://127.0.0.1:8083/v1",
-        "apiKey": "sk-gemini-pro-local-2026"
-      },
-      "models": {
-        "gemini-3.8-flash-thinking": {
-          "name": "Gemini 3.8 Flash (Web)",
-          "reasoning": true,
-          "limit": {
-            "context": 128000,
-            "output": 16384
-          }
-        },
-        "gemini-3.5-flash-lite-thinking": {
-          "name": "Gemini 3.5 Flash-Lite (Web)",
-          "reasoning": true,
-          "limit": {
-            "context": 128000,
-            "output": 16384
-          }
-        }
-      }
-    },
     "opencode": {
       "blacklist": [
         "claude-fable-5",
