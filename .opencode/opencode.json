@@ -62,33 +62,7 @@
             }
           }
         },
-            "grok-4.6": {
-              "name": "Grok 4.6",
-              "reasoning": true,
-              "cost": {
-                "input": 20,
-                "output": 20,
-                "cache_read": 20
-              },
-              "options": {
-                "reasoningEffort": "xhigh"
-              },
-              "variants": {
-                "low": {
-                  "reasoningEffort": "low"
-                },
-                "medium": {
-                  "reasoningEffort": "medium"
-                },
-                "high": {
-                  "reasoningEffort": "high"
-                },
-                "xhigh": {
-                  "reasoningEffort": "xhigh"
-                }
-              }
-            },
-            "z-ai/glm-5.3": {
+        "z-ai/glm-5.3": {
               "name": "GLM 5.3",
               "reasoning": true,
               "cost": {
