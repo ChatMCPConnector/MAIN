@@ -73,7 +73,7 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 | Provider | Modelle | Auth |
 |---|---|---|
 | nvidia | nemotron-3-ultra | nvidia-nim.key |
-| xinjianya | gpt-5.6-sol | xinjianya.key |
+| xinjianya | gpt-5.6-sol, moonshotai/kimi-k3 | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
 | **gemini-web** | gemini-3.1-pro-thinking, gemini-3.8-flash-thinking, gemini-3.5-flash-lite-thinking | lokal, Port 8083, Google AI Pro (Cookie-Pool) |
 | **antigravity** | claude-opus-4-6 (250k, Thinking 1k/4k/8k), claude-sonnet-4-6 (250k, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output), gemini-3.1-pro (1M, 64k Output), gemini-3.5-flash-light (1M, 32k Output) | lokal, Port 9878, Google Cloud Code OAuth |
