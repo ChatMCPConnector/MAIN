@@ -134,17 +134,6 @@ else
     || echo "    WARN: Autostart fehlgeschlagen — manuell: ./llm-proxies/rebuild.sh --start"
 fi
 
-echo "==> [landscape] LLM-Proxy gemini-web2api wiederherstellen & starten..."
-if ss -tln | grep -q ":8083 "; then
-  echo "    Port 8083 belegt — gemini-web2api läuft bereits."
-else
-  if [ -x "$REPO_ROOT/llm-proxies/gemini-web2api/scripts/start.sh" ]; then
-    bash "$REPO_ROOT/llm-proxies/gemini-web2api/scripts/start.sh" \
-      && echo "    gemini-web2api läuft." \
-      || echo "    WARN: gemini-web2api Start fehlgeschlagen."
-  fi
-fi
-
 echo "==> [landscape] Go-Toolchain installieren (antigravity-proxy-Build)..."
 # antigravity-proxy ist Go und braucht das Binary vor Ort (liegt nicht im Git).
 # start.sh erwartet go unter /usr/local/go/bin/go (Fallback-Pfad dort).

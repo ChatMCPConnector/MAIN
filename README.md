@@ -12,7 +12,7 @@ im Repo.
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | verschlüsseltes Secrets-Bundle + Manifest |
 | `infra/` | Werkzeugkasten: `scripts/`, `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
-| `llm-proxies/` | LLM-Proxies: **glm2api** (GLM-Haupt-Proxy), **gemini-web2api** (Gemini Web Pro), **antigravity-proxy** (CloudCode OAuth) |
+| `llm-proxies/` | LLM-Proxies: **glm2api** (GLM-Haupt-Proxy), **antigravity-proxy** (CloudCode OAuth) |
 
 ## Dokumentation
 

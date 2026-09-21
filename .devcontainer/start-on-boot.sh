@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # start-on-boot.sh: läuft bei JEDEM Codespace-Start (postStartCommand, auch Resume).
-# Leichtgewichtig: stellt sicher, dass alle lokalen LLM-Proxies (glm2api, gemini-web2api,
+# Leichtgewichtig: stellt sicher, dass alle lokalen LLM-Proxies (glm2api,
 # antigravity-proxy) laufen und der Watchdog aktiv ist.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # 0. Secrets entsperren, falls nötig (z.B. nach Container-Neustart)
 if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
-  if [ ! -f "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ] || [ ! -f "$REPO_ROOT/.secrets/gemini-web-cookie.txt" ]; then
+  if [ ! -f "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ]; then
     bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock >/dev/null 2>&1 || true
   fi
 fi
@@ -26,18 +26,7 @@ else
   fi
 fi
 
-# 2. gemini-web2api (Port 8083)
-if curl -sf -m 2 http://127.0.0.1:8083/ >/dev/null 2>&1; then
-  echo "[boot] gemini-web2api läuft bereits."
-else
-  if [ -x "$REPO_ROOT/llm-proxies/gemini-web2api/scripts/start.sh" ]; then
-    bash "$REPO_ROOT/llm-proxies/gemini-web2api/scripts/start.sh" >/dev/null 2>&1 \
-      && echo "[boot] gemini-web2api gestartet." \
-      || echo "[boot] WARN: gemini-web2api Start fehlgeschlagen."
-  fi
-fi
-
-# 3. antigravity-proxy (Port 9878)
+# 2. antigravity-proxy (Port 9878)
 if curl -sf -m 2 http://127.0.0.1:9878/v1/models >/dev/null 2>&1; then
   echo "[boot] antigravity-proxy läuft bereits."
 else

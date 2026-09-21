@@ -22,7 +22,7 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
-| `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **gemini-web2api** (Port 8083, Gemini Web Pro) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
+| `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
 
 | `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
 
@@ -43,7 +43,7 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 
 ## Enthalten
 
-- Ports 3000/8000 (Apps), 4096 (opencode-Server für Multi-Client), 8001 (glm2api LLM-Proxy), 8083 (gemini-web2api Proxy), 9878 (antigravity-proxy), 6082/5920 (Browser-VNC, nur lokal)
+- Ports 3000/8000 (Apps), 4096 (opencode-Server für Multi-Client), 8001 (glm2api LLM-Proxy), 9878 (antigravity-proxy), 6082/5920 (Browser-VNC, nur lokal)
 - opencode, Default-Modell `antigravity/gemini-3.8-flash` (Thinking immer aktiv auf high)
 - `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
   (kostenlos, NIM-Keys), für Modell-Discovery
@@ -268,14 +268,18 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
-- 2026-09-22: **Config-Watchdog Busy-Guard + TokenRouter & glmfree Bereinigung.**
+- 2026-09-22: **Config-Watchdog Busy-Guard, Modell-Bereinigung & gemini-web2api entfernt.**
   (1) `config-watchdog.sh` mit Busy-Guard gehärtet: Vor dem Restart wird `http://127.0.0.1:4096/session/status`
   geprüft. Solange Sessions im Status `busy` sind (Agent antwortet/führt Tools aus),
   wartet der Watchdog und killt den Server nicht mehr mitten im Turn. Debounce von 3s
   auf 8s erhöht + 3s Cooldown nach Turn-Ende. Neuer Pause/Resume-Modus via Alias
   `config-watchdog pause|resume` (/tmp/opencode/config-watchdog.pause).
-  (2) `tokenrouter` (keine Free-Modelle mehr) und `glmfree` (nicht mehr erreichbar)
-  vollständig aus `.opencode/opencode.json` entfernt.
+  (2) `tokenrouter` und `glmfree` vollständig aus `.opencode/opencode.json` entfernt.
+  `grok-4.6` und `z-ai/glm-5.3` aus `xinjianya` entfernt, `moonshotai/kimi-k3` hinzugefügt.
+  (3) `gemini-web2api` (Port 8083) und Google AI Pro Web-Modelle vollständig entfernt:
+  Proxy gestoppt, Ordner `llm-proxies/gemini-web2api/` gelöscht, Watchdog-/Boot-Einträge
+  in `proxy-watchdog.sh`, `start-on-boot.sh`, `setup.sh`, `ports.sh`, `secrets.sh`
+  und Secrets-Bundle bereinigt. Google-Modelle laufen ausschließlich über `antigravity`.
 
 - 2026-09-17: **Config-Watchdog + neue Modelle.**
   Neuer Daemon `infra/scripts/config-watchdog.sh`: überwacht `opencode.json`
