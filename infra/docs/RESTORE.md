@@ -72,7 +72,7 @@ bash .devcontainer/setup.sh
 ```
 
 Das stellt automatisch her: Systempakete, opencode, uv, Firefox-Browser-Runtime,
-rclone, **Secrets-Unlock** (alle API-Keys, LLM-Proxy-Credentials, gemini-web-Cookie,
+rclone, **Secrets-Unlock** (alle API-Keys, LLM-Proxy-Credentials,
 rclone-Conf — Passphrase liegt als `config/passphrase` im Bundle), Git-Auth,
 MCP-Registrierung, glm2api-Proxy inkl. Start, Autosave- + Watchdog-Daemons.
 

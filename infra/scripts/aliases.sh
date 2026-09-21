@@ -118,7 +118,7 @@ config-watchdog() {
 # Praktisch beim Umzug: zeigt was NICHT im Git ist und damit verloren ginge
 landscape-diff() {
   echo "== Nur noch im Secrets-Bundle (config/secrets.enc), nicht im Git: =="
-  echo "   ~/.config/landscape/pat, tokenrouter.key, nvidia-nim.key, xinjianya.key"
+  echo "   ~/.config/landscape/pat, nvidia-nim.key, xinjianya.key"
   echo "   ~/.local/share/opencode/auth.json"
   echo "   .env + .secrets/chatglm-refresh-token"
   echo ""

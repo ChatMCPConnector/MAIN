@@ -328,8 +328,8 @@ def compress_history_messages(
 ) -> list[dict[str, object]]:
     """H1/THEMA 1 aus optimierung.md: chatglm.cn driftet bei aufgeblähter
     request-historie (loops, missdeutungen ab ~150k token) — auch wenn das
-    modell nominell mehr kann. glm-free-api (gleicher upstream) komprimiert
-    serverseitig und bleibt stundenlang stabil.
+    modell nominell mehr kann. Die serverseitige Komprimierung hält den Kontext
+    stundenlang stabil.
 
     Strategie hier (konfigurierbar via GLM_HISTORY_MAX_CHARS, default 120k
     chars, 0 = aus): die messages-liste wird von NEU nach ALT gesammelt bis
@@ -524,10 +524,9 @@ def convert_messages(
 
     prompt = "\n\n".join(part for part in transcript_parts if part).strip()
     # Re-Anchor: nach Tool-Result-Runden verliert das Modell die Format-
-    # Disziplin (prose statt JSON, halluzinierte Limits — Blaupause
-    # gemini-web2api Re-Anchor-Fix). Der Reminder steht damit DIREKT am
-    # Prompt-Ende, wo die []-Terminator-Wahrscheinlichkeit pro generiertem
-    # Token am staerksten wirkt.
+    # Disziplin (prose statt JSON, halluzinierte Limits).
+    # Der Reminder steht damit DIREKT am Prompt-Ende, wo die
+    # []-Terminator-Wahrscheinlichkeit pro generiertem Token am staerksten wirkt.
     if tools and tool_choice_policy.get("mode") != "none" and _conversation_has_tool_round(processed):
         prompt = prompt + "\n\n" + TOOL_FORMAT_REMINDER
     return [{"role": "user", "content": [{"type": "text", "text": prompt + "\n\nAssistant: "}]}]

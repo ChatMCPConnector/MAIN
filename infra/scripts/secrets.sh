@@ -42,7 +42,6 @@ cmd_lock() {
   local found=0
   mkdir -p "$stage/files"
   [ -f "$HOME/.config/landscape/pat" ] && { cp "$HOME/.config/landscape/pat" "$stage/files/pat"; found=1; }
-  [ -f "$HOME/.config/landscape/tokenrouter.key" ] && { cp "$HOME/.config/landscape/tokenrouter.key" "$stage/files/tokenrouter-key"; found=1; }
   [ -f "$HOME/.config/landscape/nvidia-nim.key" ] && { cp "$HOME/.config/landscape/nvidia-nim.key" "$stage/files/nvidia-nim-key"; found=1; }
   [ -f "$HOME/.config/landscape/xinjianya.key" ] && { cp "$HOME/.config/landscape/xinjianya.key" "$stage/files/xinjianya-key"; found=1; }
   [ -f "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ] && { cp "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" "$stage/files/antigravity-oauth_creds.json"; found=1; }
@@ -83,10 +82,6 @@ cmd_unlock() {
   if [ -f "$stage/files/opencode-auth.json" ] && [ ! -f "$HOME/.local/share/opencode/auth.json" ]; then
     mkdir -p "$HOME/.local/share/opencode" && cp "$stage/files/opencode-auth.json" "$HOME/.local/share/opencode/auth.json" && chmod 600 "$HOME/.local/share/opencode/auth.json"
     echo "    opencode-Login wiederhergestellt."
-  fi
-  if [ -f "$stage/files/tokenrouter-key" ] && [ ! -f "$HOME/.config/landscape/tokenrouter.key" ]; then
-    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/tokenrouter-key" "$HOME/.config/landscape/tokenrouter.key" && chmod 600 "$HOME/.config/landscape/tokenrouter.key"
-    echo "    TokenRouter-Key wiederhergestellt."
   fi
   if [ -f "$stage/files/nvidia-nim-key" ] && [ ! -f "$HOME/.config/landscape/nvidia-nim.key" ]; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/nvidia-nim-key" "$HOME/.config/landscape/nvidia-nim.key" && chmod 600 "$HOME/.config/landscape/nvidia-nim.key"

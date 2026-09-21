@@ -20,4 +20,3 @@ llm-proxies/glm2api/.env
 llm-proxies/glm2api/log/
 llm-proxies/glm2api/token.txt
 llm-proxies/dist/glm2api-bundle/
-llm-proxies/gemini-web2api/port
