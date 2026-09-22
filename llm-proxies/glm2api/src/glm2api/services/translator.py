@@ -694,6 +694,22 @@ class GLMEventAccumulator:
                     merged = _merge_part_texts(existing, part, event_status=str(payload.get("status", "")))
                     self.parts_by_logic_id[logic_id] = merged
                 self._render_cache_dirty = True
+            # Intercept server-side tool calls from meta_data or content items
+            meta = part.get("meta_data") if isinstance(part, dict) else None
+            if isinstance(meta, dict):
+                extra = meta.get("tool_result_extra")
+                if isinstance(extra, dict):
+                    tool_call_name = str(extra.get("tool_call_name", "")).strip()
+                    if tool_call_name in BLOCKED_NATIVE_TOOL_NAMES:
+                        if tool_call_name not in self.blocked_tool_attempt_names:
+                            self.blocked_tool_attempt_names.append(tool_call_name)
+                        if self.logger:
+                            self.logger.warning(
+                                "Intercepted blocked native tool call in meta_data tool=%s, triggering immediate intervene",
+                                tool_call_name,
+                            )
+                        return [], "intervene"
+
             # Extract server-side native tool_calls from content items
             if isinstance(part, dict) and isinstance(part.get("content"), list):
                 for content in part["content"]:
@@ -704,6 +720,15 @@ class GLMEventAccumulator:
                             tool_id = str(tool_calls_data.get("id", "")).strip()
                             arguments = tool_calls_data.get("arguments", "{}")
                             if self.allowed_tool_names is not None and tool_name not in self.allowed_tool_names:
+                                if tool_name not in self.blocked_tool_attempt_names:
+                                    self.blocked_tool_attempt_names.append(tool_name)
+                                if tool_name in BLOCKED_NATIVE_TOOL_NAMES:
+                                    if self.logger:
+                                        self.logger.warning(
+                                            "Intercepted blocked native tool call tool=%s, triggering immediate intervene",
+                                            tool_name,
+                                        )
+                                    return [], "intervene"
                                 continue
                             if tool_name and tool_id and tool_id not in self._server_side_tool_call_ids:
                                 # Echo-Filter: der Upstream spiegelt bereits

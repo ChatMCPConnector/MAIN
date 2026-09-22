@@ -227,6 +227,7 @@ class GLMWebClient:
                         + ", ".join(f"`{name}`" for name in blocked)
                         + " do NOT exist in this environment and were NOT executed. Do not call them again."
                         + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
+                        + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
                         + " Continue the task now with the available tools."
                     ),
                 },
@@ -416,6 +417,7 @@ class GLMWebClient:
                         + ", ".join(f"`{name}`" for name in blocked)
                         + " do NOT exist in this environment and were NOT executed. Do not call them again."
                         + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
+                        + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
                         + " Continue the task now with the available tools."
                     ),
                 },

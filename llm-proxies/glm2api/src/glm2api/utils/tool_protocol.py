@@ -90,6 +90,10 @@ def build_tool_call_instructions(
         "Only the tools listed above exist in this environment. Do not attempt to call any other tools.",
         "Before emitting any tool call, verify the tool name appears in the allowed list above. When a task requires tools (e.g. inspecting directories, creating files, running commands), you MUST call the appropriate allowed tool (e.g. bash, write). Never describe actions in prose instead of calling the tool.",
         "",
+        "## Filesystem vs. Web Rules",
+        "- For filesystem operations (inspecting, listing, or creating directories like `/workspaces`, reading/writing files), you MUST use `bash` (e.g. `ls`, `mkdir`) or `read`/`write`. NEVER attempt to call `open` on directory paths or files — `open` is NOT a filesystem tool and will fail.",
+        "- For web requests, use `webfetch`. Never call `open`, `open_url`, or `browser`.",
+        "",
         "## Call format",
         "To call a tool, output this JSON format (and nothing else in the answer):",
         CANONICAL_TOOL_CALL_EXAMPLE,
@@ -131,9 +135,10 @@ TOOL_FORMAT_REMINDER = (
     "[System instruction — highest priority]: When the user task requires inspecting, creating, "
     "or editing files, running commands, or calling any tool, you MUST IMMEDIATELY output the JSON "
     "format from the TOOL USE PROTOCOL with the trailing [] — this is the ONLY way tools get executed. "
+    "For filesystem operations (like inspecting/creating /workspaces), use `bash` or `read`/`write` — NEVER call `open`. "
     "Do NOT output plans, summaries, or descriptions in prose instead of calling the tool. "
     "Prose, XML, or fenced blocks will NOT be executed. "
-    "NEVER call tools that are not in the allowed list. "
+    "NEVER call tools that are not in the allowed list (such as open, open_url, web_search). "
     "If you need information from a URL, use an allowed tool or tell the user — do NOT invent a tool. "
     "Do not output any preamble, commentary, or thoughts in Chinese or any other language before the tool call. "
     "If answering the user directly (only when no tools are needed), provide the answer in the conversation language (e.g. German)."
