@@ -61,39 +61,6 @@
               "reasoningEffort": "max"
             }
           }
-        },
-        "moonshotai/kimi-k3": {
-          "name": "Kimi K3",
-          "reasoning": true,
-          "cost": {
-            "input": 2,
-            "output": 16,
-            "cache_read": 2
-          },
-          "options": {
-            "reasoningEffort": "max",
-            "textVerbosity": "high"
-          },
-          "variants": {
-            "none": {
-              "reasoningEffort": "none"
-            },
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "xhigh": {
-              "reasoningEffort": "xhigh"
-            },
-            "max": {
-              "reasoningEffort": "max"
-            }
-          }
         }
       }
     },
@@ -137,22 +104,6 @@
         "apiKey": "antigravity-secret-6fe2eaa404e1c91bfa0fec01e74ddcc1"
       },
       "models": {
-        "gemini-3.5-flash-light": {
-          "name": "Gemini 3.5 Flash-Lite",
-          "reasoning": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": { "reasoningEffort": "low" },
-            "medium": { "reasoningEffort": "medium" },
-            "high": { "reasoningEffort": "high" }
-          },
-          "limit": {
-            "context": 1000000,
-            "output": 32768
-          }
-        },
         "gemini-3.8-flash": {
           "name": "Gemini 3.8 Flash",
           "reasoning": true,
