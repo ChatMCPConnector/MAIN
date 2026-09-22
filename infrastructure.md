@@ -297,7 +297,14 @@ Proxy bei jedem Start automatisch hoch.
   Server-Tool Interception (`open`/`web_search`):** Wenn ChatGLMs Server native Web-Tools wie `open`
   (z. B. fälschlich für `/workspaces`) triggert, fängt `consume_event` dies sofort ab und bricht
   den Stream mit `status="intervene"` ab, statt 70 Sekunden auf 8 Upstream-Fehlversuche zu warten.
-  Der bounded Follow-up-Mechanismus leitet das Modell direkt mit `bash` weiter. Bundle aktualisiert.
+  Der bounded Follow-up-Mechanismus leitet das Modell direkt mit `bash` weiter. (f) **Mehrfach-Tool-Calls
+  (Komma-separiert):** `_find_json_tool_call` extrahiert nun auch aufeinanderfolgende Sibling-Tool-Calls,
+  falls das Modell das `tool_calls`-Array vorzeitig schließt und Folgetools mit Komma abtrennt
+  (`{"tool_calls":[...]},{"name":"write"...}`). Leakt nicht mehr als sichtbarer Text. (g) **Schema-Schutz
+  für `write`/`edit` & `file://`-Stripping:** Verhindert, dass JSON-Inhalte von `write` fälschlicherweise
+  in Dicts geparst werden (SchemaError in OpenCode). Übergibt das Modell dennoch ein Dict/Array als Dateiinhalt,
+  wird es automatisch in formatierten JSON-Text serialisiert. `file:///`-Präfixe in `filePath` werden
+  automatisch zu echten absoluten Pfaden normalisiert. Standalone-Bundle `dist/glm2api-bundle.zip` aktualisiert.
 
 - 2026-09-17: **Config-Watchdog + neue Modelle.**
   Neuer Daemon `infra/scripts/config-watchdog.sh`: überwacht `opencode.json`
