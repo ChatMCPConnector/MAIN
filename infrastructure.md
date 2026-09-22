@@ -278,6 +278,14 @@ Proxy bei jedem Start automatisch hoch.
   alle unter einer einzigen persistenten Web-Session (gespeichert in `conversation.txt`).
   Verhindert das Fluten des ChatGLM-Accounts mit Einzelsitzungen. Fehlerhafte Sessions
   werden bei Upstream-Fehlern automatisch zurückgesetzt.
+  (5) **Modell-Feinschliff Antigravity:** `Gemini 3.8 Flash` fest als Standardmodell
+  mit erzwungenem High-Thinking hinterlegt (`gemini-3.8-flash-high`, 1M Context, 64k Output).
+  `Claude Opus 4.6` auf 100k Context-Limit angehoben. Unbenutzte Modelle (`gemini-3.5-flash-light`,
+  `claude-sonnet-4-6`, `moonshotai/kimi-k3`) vollständig aus der Config bereinigt.
+  (6) **glm2api Mega-Reasoning Format-Fix:** Re-Anchor (`TOOL_FORMAT_REMINDER`) an das
+  Ende jedes Prompts verlegt (auch Turn 1), damit GLM-5.3 nach 60k+ Tokens Denkarbeit im
+  `max`-Modus (`deep_thinking`) nicht mehr in Fließtext-Pläne abdriftet, sondern sofort
+  den JSON-Tool-Call emittiert. Standalone-Bundle `dist/glm2api-bundle.zip` aktualisiert.
 
 - 2026-09-17: **Config-Watchdog + neue Modelle.**
   Neuer Daemon `infra/scripts/config-watchdog.sh`: überwacht `opencode.json`
