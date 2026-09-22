@@ -557,7 +557,21 @@ def _looks_like_tool_markup_fragment(text: str) -> bool:
     return False
 
 
-def _recover_call_elements(candidate: str) -> dict[str, object] | None:
+def _extract_call_arguments(call: dict[str, object]) -> str:
+    args = call.get("arguments")
+    if args is not None and (isinstance(args, str) or (isinstance(args, dict) and args)):
+        return args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+    # Fallback: model emitted parameters directly as sibling keys of "name"
+    siblings = {k: v for k, v in call.items() if k not in ("name", "id", "type", "arguments", "index", "_repaired")}
+    if siblings:
+        return json.dumps(siblings, ensure_ascii=False)
+    if isinstance(args, dict):
+        return json.dumps(args, ensure_ascii=False)
+    return "{}"
+
+
+def _recover_call_elements(
+candidate: str) -> dict[str, object] | None:
     """Recovery-Stufe 3: Das Modell liefert gelegentlich invalides JSON
     mit unbalancierten klammern (haeufig fehlt das '}' zwischen zwei
     call-objekten, z.B. '..."arguments":{...}]},{\"name\":...'). Der
@@ -802,15 +816,14 @@ def _find_bare_tool_call_array(
         if not isinstance(item, dict):
             return None
         keys = set(item.keys())
-        if not keys <= {"name", "arguments"} or "name" not in keys:
+        if "name" not in keys:
             return None
         name = str(item.get("name", "")).strip()
         if not name:
             return None
         names.append(name)
         if _is_allowed_tool_name(name, allowed_tool_names) or allowed_tool_names is None:
-            args = item.get("arguments", {})
-            args_str = args if isinstance(args, str) else json.dumps(args or {}, ensure_ascii=False)
+            args_str = _extract_call_arguments(item)
             tool_calls.append({
                 "index": len(tool_calls),
                 "id": f"call_{uuid.uuid4().hex[:24]}",
@@ -937,11 +950,7 @@ def _find_json_tool_call(
         if not isinstance(call, dict):
             continue
         name = str(call.get("name", "")).strip()
-        args = call.get("arguments", {})
-        if isinstance(args, str):
-            args_str = args
-        else:
-            args_str = json.dumps(args or {}, ensure_ascii=False)
+        args_str = _extract_call_arguments(call)
         if name and _is_allowed_tool_name(name, allowed_tool_names):
             tool_calls.append({
                 "index": len(tool_calls),
@@ -1024,11 +1033,7 @@ def _split_stream_text(
                     if not isinstance(call, dict):
                         continue
                     name = str(call.get("name", "")).strip()
-                    args = call.get("arguments", {})
-                    if isinstance(args, str):
-                        args_str = args
-                    else:
-                        args_str = json.dumps(args or {}, ensure_ascii=False)
+                    args_str = _extract_call_arguments(call)
                     if name and _is_allowed_tool_name(name, allowed_tool_names):
                         tool_calls.append({
                             "index": len(tool_calls),

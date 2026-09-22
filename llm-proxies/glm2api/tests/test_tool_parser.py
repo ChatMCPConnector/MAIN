@@ -31,6 +31,21 @@ def test_streaming_json_tool_call_accepts_single_object():
     assert tool_calls[0]["function"]["arguments"] == '{"command": "pwd"}'
 
 
+def test_streaming_json_tool_call_supports_flattened_sibling_parameters():
+    parser = StreamingToolParser(allowed_tool_names={"todowrite"})
+    text = '{"tool_calls":[{"name":"todowrite","todos":[{"content":"task1","status":"pending"}]}]}[]'
+
+    clean = parser.consume(text)
+    tail, tool_calls = parser.flush()
+
+    assert clean == ""
+    assert tail == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "todowrite"
+    args = json.loads(tool_calls[0]["function"]["arguments"])
+    assert args == {"todos": [{"content": "task1", "status": "pending"}]}
+
+
 def test_parse_repairs_missing_tool_calls_array_close_and_preserves_model_text():
     text = (
         'Vorher {"tool_calls":[{"name":"bash","arguments":{"command":"pwd"}}}'

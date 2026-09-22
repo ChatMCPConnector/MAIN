@@ -424,7 +424,7 @@ class GLMWebClient:
             return follow_up
 
         def generate():
-            nonlocal response, assistant_id, accumulator, empty_retries
+            nonlocal response, assistant_id, accumulator, empty_retries, history_budget
             attempt = 0
             blocked_follow_ups = 0
             while True:
@@ -743,6 +743,7 @@ class GLMWebClient:
             model=requested_model,
             reasoning_effort=openai_payload.get("reasoning_effort"),
             deep_research=openai_payload.get("deep_research"),
+            has_tools=bool(filtered_tools),
         )
         is_networking = resolve_networking(
             model=requested_model,

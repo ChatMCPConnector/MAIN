@@ -178,6 +178,7 @@ def setup_logging(level: str) -> None:
     root.handlers.clear()
     resolved_level = getattr(logging, str(level).upper(), logging.INFO)
     root.setLevel(resolved_level)
+    logging.getLogger("glm2api").setLevel(resolved_level)
 
     # ── Console handler (TUI style) ──────────────────────────────────────────
     console = logging.StreamHandler(sys.stdout)

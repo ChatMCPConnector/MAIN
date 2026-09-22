@@ -571,23 +571,28 @@ _EFFORT_TO_CHAT_MODE = {
 }
 
 
-def resolve_chat_mode(model: str, reasoning_effort: object, deep_research: object) -> str:
+def resolve_chat_mode(model: str, reasoning_effort: object, deep_research: object, has_tools: bool = False) -> str:
     lower_model = (model or "").lower()
     if deep_research or "deepresearch" in lower_model or "deep-research" in lower_model:
         return "deep_research"
+    mode = ""
     # Explizite Stufe (reasoning_effort) übersetzt 1:1 in den echten UI-Wert.
     if isinstance(reasoning_effort, str) and reasoning_effort.lower() in _EFFORT_TO_CHAT_MODE:
-        return _EFFORT_TO_CHAT_MODE[reasoning_effort.lower()]
-    # truthy-aber-unbekannt (z.B. Zahlen, "xhigh") → volles Denken als Default.
-    if reasoning_effort:
-        return CHAT_MODE_DEEP_THINKING
-    if model_requests_thinking(model) or "think" in lower_model:
-        # -think-Modell ohne Stufe: volles Denken (früheres "zero" war ein
-        # von der UI nie gesendeter Wert).
-        return CHAT_MODE_DEEP_THINKING
-    if "zero" in lower_model:
+        mode = _EFFORT_TO_CHAT_MODE[reasoning_effort.lower()]
+    elif reasoning_effort:
+        mode = CHAT_MODE_DEEP_THINKING
+    elif model_requests_thinking(model) or "think" in lower_model:
+        mode = CHAT_MODE_DEEP_THINKING
+    elif "zero" in lower_model:
+        mode = CHAT_MODE_THINKING
+
+    # In Tool-Calling-Runden führt deep_thinking auf chatglm.cn zu 2-3 Minuten
+    # Latenz, Überdenk-Schleifen und RLHF-Sicherheitsabbrüchen ("根据要求，停止工具调用").
+    # Standard "thinking" erhält volle Denkfähigkeit, antwortet in wenigen Sekunden
+    # und führt Tool-Calls deterministisch aus.
+    if has_tools and mode == CHAT_MODE_DEEP_THINKING:
         return CHAT_MODE_THINKING
-    return ""
+    return mode
 
 
 def resolve_networking(model: str, web_search: object) -> bool:
