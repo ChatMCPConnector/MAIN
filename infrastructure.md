@@ -75,7 +75,7 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 | nvidia | nemotron-3-ultra | nvidia-nim.key |
 | xinjianya | gpt-5.6-sol | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
-| **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), claude-sonnet-4-6 (250k, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
+| **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,

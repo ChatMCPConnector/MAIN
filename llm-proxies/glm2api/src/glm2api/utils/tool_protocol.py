@@ -88,7 +88,7 @@ def build_tool_call_instructions(
         "# TOOL USE PROTOCOL",
         "",
         "## Allowed tools (EXHAUSTIVE list — no others exist)",
-        f"{available_xml_names}",
+        f"Available tools: {available_xml_names}. No other tools exist — no browser, no open_url, no web.search.",
         "",
         "## CRITICAL: Tool-call hallucination prevention",
         f"The following tools DO NOT EXIST in this environment and MUST NEVER be called: {blocked_examples}.",
