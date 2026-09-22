@@ -565,3 +565,24 @@ def test_parse_recovers_bare_array_with_broken_fence_and_duplicate():
     assert len(tool_calls) >= 1
     assert all(tc["function"]["name"] == "bash" for tc in tool_calls)
     assert json.loads(tool_calls[0]["function"]["arguments"])["workdir"] == "/tmp"
+
+
+def test_parse_recovers_comma_separated_sibling_tool_calls():
+    """Modell schliesst das tool_calls-Array nach dem 1. Call und haengt
+    weitere Calls mit Komma getrennt an: {"tool_calls":[...]},{"name":"write"...}[]"""
+    text = (
+        '{"tool_calls":[{"name":"bash","arguments":{"command":"mkdir -p /tmp/test"}}]},'
+        '{"name":"write","arguments":{"filePath":"/tmp/test/models.py","content":"code"}}[]'
+    )
+    parser = StreamingToolParser(allowed_tool_names={"bash", "write"})
+    vis = parser.consume(text)
+    tail, tool_calls = parser.flush()
+
+    assert vis == ""
+    assert tail == ""
+    assert len(tool_calls) == 2
+    assert tool_calls[0]["function"]["name"] == "bash"
+    assert json.loads(tool_calls[0]["function"]["arguments"])["command"] == "mkdir -p /tmp/test"
+    assert tool_calls[1]["function"]["name"] == "write"
+    assert json.loads(tool_calls[1]["function"]["arguments"])["filePath"] == "/tmp/test/models.py"
+

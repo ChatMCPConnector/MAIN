@@ -31,7 +31,7 @@ curl -sf -m 90 -N "$BASE/v1/chat/completions" -H "Content-Type: application/json
 # 4) Anthropic
 curl -sf -m 90 "$BASE/v1/messages" -H "Content-Type: application/json" -H "anthropic-version: 2023-06-01" \
   -d "{\"model\":\"$MODEL\",\"max_tokens\":30,\"messages\":[{\"role\":\"user\",\"content\":\"Antworte nur mit: ok\"}]}" \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'ok' in d['content'][0]['text'].lower() else 1)"; check "anthropic messages" $?
+  | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if any('ok' in c.get('text', '').lower() for c in d.get('content', [])) else 1)"; check "anthropic messages" $?
 
 # 5) Responses
 curl -sf -m 90 "$BASE/v1/responses" -H "Content-Type: application/json" \

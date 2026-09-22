@@ -945,6 +945,73 @@ def _find_json_tool_call(
         calls_raw = [calls_raw]
     if not isinstance(calls_raw, list):
         return text, "", []
+
+    # Recovery 3: Consecutive sibling tool calls (z.B. {"tool_calls":[...]}, {"name": "write", ...})
+    # Falls das Modell das Array vorzeitig geschlossen und Folgetools mit Komma abgetrennt hat:
+    while True:
+        r_strip = rest.lstrip()
+        for t in terminators:
+            if r_strip.startswith(t):
+                rest = r_strip[len(t):]
+                r_strip = rest.lstrip()
+                break
+        if r_strip.startswith(","):
+            after = r_strip[1:].lstrip()
+        elif r_strip.startswith(('{"name"', '{"tool_calls"')):
+            after = r_strip
+        else:
+            break
+        if not after.startswith("{"):
+            break
+        end2 = -1
+        depth2 = 0
+        in_str2 = False
+        esc2 = False
+        for i2 in range(len(after)):
+            ch2 = after[i2]
+            if in_str2:
+                if esc2:
+                    esc2 = False
+                elif ch2 == "\\":
+                    esc2 = True
+                elif ch2 == '"':
+                    in_str2 = False
+                continue
+            if ch2 == '"':
+                in_str2 = True
+            elif ch2 == "{":
+                depth2 += 1
+            elif ch2 == "}":
+                depth2 -= 1
+                if depth2 == 0:
+                    end2 = i2 + 1
+                    break
+        if end2 == -1:
+            break
+        try:
+            cand2 = json.loads(after[:end2])
+            if isinstance(cand2, dict):
+                if "tool_calls" in cand2:
+                    c2 = cand2["tool_calls"]
+                    calls_raw.extend(c2 if isinstance(c2, list) else [c2])
+                    rest = after[end2:]
+                elif "name" in cand2:
+                    calls_raw.append(cand2)
+                    rest = after[end2:]
+                else:
+                    break
+            else:
+                break
+        except Exception:
+            break
+
+    # Finaler Terminator-Check
+    r_strip = rest.lstrip()
+    for t in terminators:
+        if r_strip.startswith(t):
+            rest = r_strip[len(t):]
+            break
+
     tool_calls = []
     for idx, call in enumerate(calls_raw):
         if not isinstance(call, dict):
