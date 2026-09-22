@@ -1035,6 +1035,31 @@ class GLMEventAccumulator:
                     )
                 )
 
+        if not all_tool_calls and not final_text.strip() and self.blocked_tool_attempt_names:
+            blocked_names = ", ".join(sorted(set(self.blocked_tool_attempt_names)))
+            fallback_content = (
+                "The model attempted to call an unavailable tool "
+                f"({blocked_names}) and returned no final response."
+            )
+            if self.logger:
+                self.logger.warning(
+                    "Replacing empty streaming response after blocked tool attempts: %s",
+                    blocked_names,
+                )
+            chunks.append(
+                self._chunk_json(
+                    {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": fallback_content},
+                                "finish_reason": None,
+                            }
+                        ]
+                    }
+                )
+            )
+
         finish_reason = "tool_calls" if all_tool_calls else "stop"
         chunks.append(
             self._chunk_json(
@@ -1088,6 +1113,17 @@ class GLMEventAccumulator:
             all_tool_calls.append(tc_copy)
 
         final_content = clean_content.strip()
+        if not all_tool_calls and not final_content and self.blocked_tool_attempt_names:
+            blocked_names = ", ".join(sorted(set(self.blocked_tool_attempt_names)))
+            final_content = (
+                "The model attempted to call an unavailable tool "
+                f"({blocked_names}) and returned no final response."
+            )
+            if self.logger:
+                self.logger.warning(
+                    "Replacing empty non-streaming response after blocked tool attempts: %s",
+                    blocked_names,
+                )
         message: dict[str, object] = {
             "role": "assistant",
             "content": None if all_tool_calls or not final_content else final_content,

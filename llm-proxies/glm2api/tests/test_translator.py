@@ -91,6 +91,54 @@ def test_accumulator_build_response_maps_xml_to_openai_tool_calls():
     assert message["tool_calls"][0]["function"]["arguments"] == '{"city":"上海"}'
 
 
+def test_streaming_empty_response_after_blocked_tool_has_visible_fallback():
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"bash"})
+    accumulator.blocked_tool_attempt_names.append("open_url")
+    accumulator.consume_event(
+        {
+            "conversation_id": "conv_1",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "1",
+                    "content": [],
+                }
+            ],
+        }
+    )
+
+    chunks = accumulator.finalize("finish")
+    output = "".join(chunks)
+
+    assert "unavailable tool" in output
+    assert "open_url" in output
+    assert '"finish_reason":"stop"' in output
+
+
+def test_non_streaming_empty_response_after_blocked_tool_has_visible_fallback():
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"bash"})
+    accumulator.blocked_tool_attempt_names.append("open_url")
+    accumulator.consume_event(
+        {
+            "conversation_id": "conv_1",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "1",
+                    "content": [],
+                }
+            ],
+        }
+    )
+
+    response = accumulator.build_response()
+    message = response["choices"][0]["message"]
+
+    assert "unavailable tool" in message["content"]
+    assert "open_url" in message["content"]
+    assert response["choices"][0]["finish_reason"] == "stop"
+
+
 def test_accumulator_streaming_tool_call_emits_assistant_role_before_tool_delta():
     accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"write"})
     chunks, status = accumulator.consume_event(
@@ -950,4 +998,3 @@ def test_build_tool_call_instructions_includes_language_lock_and_no_preamble():
     assert "NEVER output internal monologue, reasoning, or responses in Chinese" in instructions
 
     assert "Do not output any preamble, commentary, or thoughts in Chinese" in TOOL_FORMAT_REMINDER
-
