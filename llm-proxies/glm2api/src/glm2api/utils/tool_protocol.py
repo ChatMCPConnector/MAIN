@@ -13,6 +13,8 @@ BLOCKED_NATIVE_TOOL_NAMES = {
     "web.open",
     "browse",
     "open_link",
+    "finish",
+    "web_search",
 }
 SERVER_SIDE_TOOL_NAMES: set[str] = set()
 

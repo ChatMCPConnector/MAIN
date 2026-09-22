@@ -215,10 +215,16 @@ class GLMWebClient:
             allowed = sorted(allowed_tool_names or [])
             follow_up = dict(payload)
             messages = list(payload.get("messages", [])) # type: ignore[arg-type]
+            rendered_text, _ = accumulator._render_full_output()
+            assistant_content = rendered_text.strip()
+            if assistant_content:
+                assistant_text = assistant_content + "\n\nTool call attempt: " + ", ".join(blocked)
+            else:
+                assistant_text = "Tool call attempt: " + ", ".join(blocked)
             messages = messages + [
                 {
                     "role": "assistant",
-                    "content": "Tool call attempt: " + ", ".join(blocked),
+                    "content": assistant_text,
                 },
                 {
                     "role": "user",
@@ -405,10 +411,16 @@ class GLMWebClient:
             allowed = sorted(allowed_tool_names or [])
             follow_up = dict(payload)
             messages = list(payload.get("messages", [])) # type: ignore[arg-type]
+            rendered_text, _ = accumulator._render_full_output()
+            assistant_content = rendered_text.strip()
+            if assistant_content:
+                assistant_text = assistant_content + "\n\nTool call attempt: " + ", ".join(blocked)
+            else:
+                assistant_text = "Tool call attempt: " + ", ".join(blocked)
             messages = messages + [
                 {
                     "role": "assistant",
-                    "content": "Tool call attempt: " + ", ".join(blocked),
+                    "content": assistant_text,
                 },
                 {
                     "role": "user",
@@ -473,11 +485,14 @@ class GLMWebClient:
                         )
                         blocked = list(accumulator.blocked_tool_attempt_names)
                         break
+                if finalize_chunks is None and retry_exc is None:
+                    finalize_chunks = accumulator.finalize(status="stop")
+                    blocked = list(accumulator.blocked_tool_attempt_names)
+
                 if finalize_chunks is not None:
                     if (
                         blocked
                         and blocked_follow_ups < max_blocked_follow_ups
-                        and not served_content
                     ):
                         # Follow-up round with a negative tool result
                         # instead of forwarding the blocked-call notice
@@ -489,13 +504,16 @@ class GLMWebClient:
                                 yield chunk.encode("utf-8")
                             return
                         self.logger.warning(
-                            "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s",
+                            "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s (served_content=%s)",
                             ", ".join(sorted(set(blocked))),
                             blocked_follow_ups,
                             max_blocked_follow_ups,
+                            served_content,
                         )
                         response.close() # type: ignore
                         accumulator = new_accumulator()
+                        if served_content:
+                            accumulator.emitted_role = True
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
                     # Leer-Turn-Autonomie-Fix (THEMA 1, optimierung.md): komplett
@@ -522,10 +540,6 @@ class GLMWebClient:
                         response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
                     for chunk in finalize_chunks:
-                        yield chunk.encode("utf-8")
-                    return
-                if retry_exc is None:
-                    for chunk in accumulator.finalize(status="stop"):
                         yield chunk.encode("utf-8")
                     return
                 # Transient upstream error before any visible content: retry

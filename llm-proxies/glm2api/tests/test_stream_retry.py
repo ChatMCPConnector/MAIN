@@ -291,6 +291,60 @@ def test_blocked_tool_triggers_follow_up_round_stream():
     assert "open_url" not in text
 
 
+def test_blocked_tool_triggers_follow_up_round_stream_with_served_content():
+    # Model emits visible text BEFORE attempting the blocked tool call
+    client, calls = _make_follow_up_client(_FollowUpConfig())
+    round1_events = [
+        {
+            "status": "init",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "init",
+                    "content": [{"type": "text", "text": "Ich fange an: "}],
+                },
+                {
+                    "logic_id": "p2",
+                    "status": "finish",
+                    "content": [
+                        {"type": "text", "text": '{"tool_calls":[{"name":"open_url","arguments":{"param_name":"url","param_value":"/x"}}]}[]'}
+                    ],
+                },
+            ],
+        }
+    ]
+    def fake_open(payload, preferred_account_index=None, filtered_tools=None):
+        calls["count"] += 1
+        calls["payloads"].append(payload)
+        if calls["count"] == 1:
+            return _FakeResponse(round1_events), "assistant-1"
+        return _FakeResponse(_normal_answer_events()), "assistant-1"
+
+    client._open_chat_stream = fake_open
+
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "mach was"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "bash", "parameters": {"type": "object"}},
+            }
+        ],
+    }
+
+    stream = client.stream_chat_completion(dict(payload))
+    chunks = [chunk.decode("utf-8") for chunk in stream]
+
+    assert calls["count"] == 2
+    text = "".join(chunks)
+    assert "Ich fange an:" in text
+    assert "Alles erledigt." in text
+    assert "open_url" not in text
+    follow_up_assistant = calls["payloads"][1]["messages"][-2]
+    assert "Ich fange an:" in str(follow_up_assistant.get("content", ""))
+
+
 def test_blocked_tool_follow_up_respects_budget():
     # follow-ups disabled -> single round, blocked notice forwarded as text
     client, calls = _make_follow_up_client(_RetryConfig())
