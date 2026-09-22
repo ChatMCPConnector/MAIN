@@ -552,22 +552,25 @@ def resolve_upstream_model(requested_model: str, config: AppConfig) -> tuple[str
 # Reasoning levels: real chat_mode values of the chatglm.cn web UI (verified
 # via CDP reverse engineering 2026-09-07):
 #   ""             = quick (no thinking)
-#   "thinking"     = deep (standard thinking)
-#   "deep_thinking" = ultra (full thinking, takes longer)
-# Note: The old value "zero" was never sent by the real UI.
+# chat_mode values for GLM upstream API:
+#   ""              = quick (no thinking)
+#   "thinking"      = standard thinking (fast CoT, ~7s)
+#   "deep_research" = autonomous multi-turn web research
+# Hinweis: "deep_thinking" ist der ChatGLM-Web-Research-Modus (verursacht Latenzen
+# und Fails durch interne Web-Scraper-Schleifen). Daher mappt "max" direkt auf "thinking".
 CHAT_MODE_THINKING = "thinking"
-CHAT_MODE_DEEP_THINKING = "deep_thinking"
+CHAT_MODE_DEEP_THINKING = "thinking"
 
 _EFFORT_TO_CHAT_MODE = {
     # low    = quick (no thinking)
-    # medium = deep (standard thinking)  — intermediate level
-    # high   = thinking (full thinking via UI mode deep+)
-    # max    = ultra (deep_thinking, full-power reasoning)
+    # medium = thinking (standard thinking)
+    # high   = thinking (standard thinking)
+    # max    = thinking (standard thinking)
     "low": "",
     "minimal": "",
     "medium": CHAT_MODE_THINKING,
     "high": CHAT_MODE_THINKING,
-    "max": CHAT_MODE_DEEP_THINKING,
+    "max": CHAT_MODE_THINKING,
 }
 
 
@@ -575,24 +578,14 @@ def resolve_chat_mode(model: str, reasoning_effort: object, deep_research: objec
     lower_model = (model or "").lower()
     if deep_research or "deepresearch" in lower_model or "deep-research" in lower_model:
         return "deep_research"
-    mode = ""
-    # Explizite Stufe (reasoning_effort) übersetzt 1:1 in den echten UI-Wert.
+    # Explizite Stufe (reasoning_effort) übersetzt in den UI-Wert.
     if isinstance(reasoning_effort, str) and reasoning_effort.lower() in _EFFORT_TO_CHAT_MODE:
-        mode = _EFFORT_TO_CHAT_MODE[reasoning_effort.lower()]
-    elif reasoning_effort:
-        mode = CHAT_MODE_DEEP_THINKING
-    elif model_requests_thinking(model) or "think" in lower_model:
-        mode = CHAT_MODE_DEEP_THINKING
-    elif "zero" in lower_model:
-        mode = CHAT_MODE_THINKING
-
-    # In Tool-Calling-Runden führt deep_thinking auf chatglm.cn zu 2-3 Minuten
-    # Latenz, Überdenk-Schleifen und RLHF-Sicherheitsabbrüchen ("根据要求，停止工具调用").
-    # Standard "thinking" erhält volle Denkfähigkeit, antwortet in wenigen Sekunden
-    # und führt Tool-Calls deterministisch aus.
-    if has_tools and mode == CHAT_MODE_DEEP_THINKING:
+        return _EFFORT_TO_CHAT_MODE[reasoning_effort.lower()]
+    if reasoning_effort:
         return CHAT_MODE_THINKING
-    return mode
+    if model_requests_thinking(model) or "think" in lower_model or "zero" in lower_model:
+        return CHAT_MODE_THINKING
+    return ""
 
 
 def resolve_networking(model: str, web_search: object) -> bool:

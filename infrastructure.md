@@ -287,12 +287,13 @@ Proxy bei jedem Start automatisch hoch.
   Ende jedes Prompts verlegt (auch Turn 1), damit GLM-5.3 nach 60k+ Tokens Denkarbeit im
   `max`-Modus (`deep_thinking`) nicht mehr in Fließtext-Pläne abdriftet, sondern sofort
   den JSON-Tool-Call emittiert. Standalone-Bundle `dist/glm2api-bundle.zip` aktualisiert.
-  (7) **glm2api Tool-Calling-Stabilisierung & Flat-Parameter:** (a) `resolve_chat_mode`
-  schützt Tool-Runden vor dem Web-Modus `deep_thinking` (welcher für Text-Essays gedacht ist
-  und bei Tool-Prompts zu RLHF-Sicherheitsabbrüchen „根据要求，停止工具调用" und Minuten-Latenzen
-  führte) und setzt deterministisches `thinking` ein. (b) `_extract_call_arguments` fängt flach
+  (7) **glm2api Tool-Calling-Stabilisierung & Vereinheitlichung auf `thinking`:** (a) `deep_thinking`
+  vollständig entfernt und `max` fest auf `thinking` (ca. 7s CoT) gemappt. ChatGLMs serverseitiger
+  Web-Research-Modus (`deep_thinking`) ist damit dauerhaft deaktiviert (verhinderte Tool-Ausführung
+  durch interne Web-Scraper-Schleifen). (b) In `.opencode/opencode.json` Varianten für `glm-5.3` auf
+  ausschließlich `max` reduziert (`low` und `high` entfernt). (c) `_extract_call_arguments` fängt flach
   emittierte Tool-Parameter ab (`{"name":"todowrite","todos":[...]}`), statt sie auf `{}` zu
-  leeren. (c) Alarmistische System-Prompts („waste an entire round") entschärft. Bundle aktualisiert.
+  leeren. (d) Alarmistische System-Prompts („waste an entire round") entschärft. Bundle aktualisiert.
 
 - 2026-09-17: **Config-Watchdog + neue Modelle.**
   Neuer Daemon `infra/scripts/config-watchdog.sh`: überwacht `opencode.json`

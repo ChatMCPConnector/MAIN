@@ -132,8 +132,9 @@ OpenAI SSE (Client)
 | `reasoning_effort` | GLM `chat_mode` |
 |-------------------|-----------------|
 | `low` / `minimal` | `""` (schnell, kein Denken) |
-| `medium` / `high` | `"thinking"` (Standard-Denken) |
-| `max` | `"deep_thinking"` (volles Reasoning) |
+| `medium` / `high` / `max` | `"thinking"` (Standard-Denken, ca. 7s CoT) |
+
+*Hinweis:* `"deep_thinking"` (ChatGLM-Web-Research-Modus mit internem Web-Scraper) ist deaktiviert, da er bei Coding- und Agenten-Tasks zu minutenlangen Hängern und Tool-Abbrüchen führt. `max` mappt direkt auf `thinking`.
 
 ---
 

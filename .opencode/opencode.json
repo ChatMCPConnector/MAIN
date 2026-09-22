@@ -83,12 +83,6 @@
             "reasoningEffort": "max"
           },
           "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            },
             "max": {
               "reasoningEffort": "max"
             }
