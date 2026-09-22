@@ -121,23 +121,6 @@
             "output": 65536
           }
         },
-        "gemini-3.8-flash": {
-          "name": "Gemini 3.8 Flash",
-          "reasoning": true,
-          "options": {
-            "model": "gemini-3.8-flash-high",
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "high": { "model": "gemini-3.8-flash-high", "reasoningEffort": "high" },
-            "medium": { "model": "gemini-3.8-flash-medium", "reasoningEffort": "medium" },
-            "low": { "model": "gemini-3.8-flash-low", "reasoningEffort": "low" }
-          },
-          "limit": {
-            "context": 1000000,
-            "output": 65536
-          }
-        },
         "claude-opus-4-6": {
           "name": "Claude Opus 4.6",
           "reasoning": true,
