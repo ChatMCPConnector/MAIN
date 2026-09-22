@@ -82,12 +82,24 @@ def build_tool_call_instructions(
     mode = str(policy.get("mode", "auto"))
     specific_name = str(policy.get("tool_name", "") or "")
 
+    blocked_examples = ", ".join(f"`{n}`" for n in sorted(BLOCKED_NATIVE_TOOL_NAMES))
+
     lines = [
         "# TOOL USE PROTOCOL",
-        f"Available tools: {available_xml_names}. No other tools exist — no browser, no open_url, no web.search.",
+        "",
+        "## Allowed tools (EXHAUSTIVE list — no others exist)",
+        f"{available_xml_names}",
+        "",
+        "## CRITICAL: Tool-call hallucination prevention",
+        f"The following tools DO NOT EXIST in this environment and MUST NEVER be called: {blocked_examples}.",
+        "If you call any tool not listed above, the call WILL BE REJECTED, nothing will execute, and you will waste an entire round.",
+        "Before emitting any tool call, verify the tool name appears in the allowed list above. If it does not, DO NOT call it — answer the user directly instead.",
+        "",
+        "## Call format",
         "To call a tool, output this JSON format (and nothing else in the answer):",
         CANONICAL_TOOL_CALL_EXAMPLE,
-        "Rules:",
+        "",
+        "## Rules",
         "- The trailing [] after the JSON object is MANDATORY: write the JSON, then immediately [].",
         "- Parameter names must exactly match the schema.",
         "- Multiple calls go in one \"tool_calls\" array.",
@@ -124,6 +136,8 @@ TOOL_FORMAT_REMINDER = (
     "[System instruction — highest priority]: If calling a tool, output the JSON "
     "format from the TOOL USE PROTOCOL with the trailing [] — this is the ONLY "
     "way tools get executed. Prose, XML, or fenced blocks will NOT be executed. "
+    "NEVER call tools that are not in the allowed list (especially not open_url, browse, web.search, or any browser tool). "
+    "If you need information from a URL, use an allowed tool or tell the user — do NOT invent a tool. "
     "Do not output any preamble, commentary, or thoughts in Chinese or any other language before the tool call. "
     "If answering the user directly, provide the answer in the conversation language (e.g. German)."
 )
@@ -157,7 +171,8 @@ def tools_to_prompt(
 
     parts = [
         "# TOOL SCHEMAS",
-        "Treat the following schema list as the authoritative tool contract for this request.",
+        "Treat the following schema list as the COMPLETE and EXHAUSTIVE tool contract for this request.",
+        "No tools exist beyond what is listed here. Do not guess, infer, or invent any tool names.",
         "",
         "\n\n".join(tool_schemas),
         "",

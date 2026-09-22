@@ -52,7 +52,40 @@ Status: **ERLEDIGT — BEACHTEN** (in künftigen Langläufen auf
 "Empty GLM response — auto-retrying"-Logzeilen und 10040-Halbierungen
 achten; Budget ggf. tunen).
 
-## THEMA 2 — Encoding-Verderb: Umlaute → Steuerzeichen (OFFEN)
+## THEMA 2 — Tool-Halluzination: GLM ruft nicht-existente Tools auf (DONE 2026-09-22)
+
+### Symptom
+
+GLM-5.3 halluziniert Tool-Calls (`open_url`, `browse`, `web.search` etc.),
+obwohl diese nicht in der Tool-Liste stehen. Der Proxy blockiert sie korrekt
+(bounded Follow-up, max 2 Runden), aber das Modell ignorierte die alte
+System-Instruktion ("no open_url") und halluzinierte persistent weiter.
+Ergebnis: alle Follow-up-Runden verbraucht, Fehlermeldung an Client.
+
+### Root Cause
+
+Der alte System-Prompt in `build_tool_call_instructions()` erwähnte das
+Verbot nur beiläufig in einer Zeile ("No other tools exist — no browser,
+no open_url, no web.search"). Zu schwach für GLM-5.3, das nach Tool-Result-
+Runden die Format-Disziplin verliert.
+
+### Fix (tool_protocol.py)
+
+1. **`build_tool_call_instructions()`**: Restrukturiert mit eigener Sektion
+   `## CRITICAL: Tool-call hallucination prevention` — listet alle
+   `BLOCKED_NATIVE_TOOL_NAMES` explizit auf, warnt vor Rejection + Runden-
+   Verlust, fordert Verifikation vor dem Emit.
+2. **`TOOL_FORMAT_REMINDER`** (Re-Anchor nach Tool-Result-Runden): Explizites
+   Verbot von `open_url`, `browse`, `web.search`; Instruktion, bei URL-Bedarf
+   ein erlaubtes Tool zu nutzen statt eines zu erfinden.
+3. **`tools_to_prompt()`** Schema-Header: "authoritative" → "COMPLETE and
+   EXHAUSTIVE", plus "Do not guess, infer, or invent any tool names."
+
+Status: **DONE** — Wirksamkeit in künftigen Benchmark-Läufen beobachten.
+
+---
+
+## THEMA 3 — Encoding-Verderb: Umlaute → Steuerzeichen (OFFEN)
 
 ### Symptom
 
