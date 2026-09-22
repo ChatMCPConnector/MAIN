@@ -293,7 +293,11 @@ Proxy bei jedem Start automatisch hoch.
   durch interne Web-Scraper-Schleifen). (b) In `.opencode/opencode.json` Varianten für `glm-5.3` auf
   ausschließlich `max` reduziert (`low` und `high` entfernt). (c) `_extract_call_arguments` fängt flach
   emittierte Tool-Parameter ab (`{"name":"todowrite","todos":[...]}`), statt sie auf `{}` zu
-  leeren. (d) Alarmistische System-Prompts („waste an entire round") entschärft. Bundle aktualisiert.
+  leeren. (d) Alarmistische System-Prompts („waste an entire round") entschärft. (e) **Native
+  Server-Tool Interception (`open`/`web_search`):** Wenn ChatGLMs Server native Web-Tools wie `open`
+  (z. B. fälschlich für `/workspaces`) triggert, fängt `consume_event` dies sofort ab und bricht
+  den Stream mit `status="intervene"` ab, statt 70 Sekunden auf 8 Upstream-Fehlversuche zu warten.
+  Der bounded Follow-up-Mechanismus leitet das Modell direkt mit `bash` weiter. Bundle aktualisiert.
 
 - 2026-09-17: **Config-Watchdog + neue Modelle.**
   Neuer Daemon `infra/scripts/config-watchdog.sh`: überwacht `opencode.json`
