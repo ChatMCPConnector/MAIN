@@ -250,6 +250,45 @@ def sanitize_tool_call_payload(
     return cleaned
 
 
+def map_native_open_tool_call(
+    arguments: object,
+    allowed_tool_names: set[str] | None = None,
+) -> tuple[str, dict[str, object]] | None:
+    """Maps ChatGLM's native open(ref_id=...) call to an allowed OpenCode tool
+    (read or webfetch) if the target is a valid path or URL.
+    Returns (mapped_tool_name, mapped_arguments) or None if unmappable."""
+    parsed = arguments
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(parsed, dict):
+        return None
+
+    target = ""
+    open_list = parsed.get("open")
+    if isinstance(open_list, list) and open_list:
+        first = open_list[0]
+        if isinstance(first, dict):
+            target = str(first.get("ref_id", "") or first.get("url", "") or first.get("path", "")).strip()
+    if not target:
+        target = str(parsed.get("ref_id", "") or parsed.get("url", "") or parsed.get("path", "") or parsed.get("file", "")).strip()
+
+    if not target:
+        return None
+
+    if target.startswith("http://") or target.startswith("https://"):
+        if allowed_tool_names is None or "webfetch" in allowed_tool_names:
+            return "webfetch", {"url": target}
+
+    if not target.startswith("turn") and ("/" in target or target.startswith(".")):
+        if allowed_tool_names is None or "read" in allowed_tool_names:
+            return "read", {"filePath": target}
+
+    return None
+
+
 def sanitize_tool_calls(
     tool_calls: list[dict[str, object]],
     fallback_url: str | None = None,
@@ -264,6 +303,12 @@ def sanitize_tool_calls(
             continue
         original_arguments = function.get("arguments", "{}")
         original_value: object = original_arguments
+        if tool_name == "open":
+            mapped = map_native_open_tool_call(original_arguments)
+            if mapped is not None:
+                tool_name, mapped_args = mapped
+                original_arguments = mapped_args
+                original_value = mapped_args
         if isinstance(original_arguments, str):
             try:
                 original_value = json.loads(original_arguments)
@@ -699,7 +744,7 @@ class GLMEventAccumulator:
                 extra = meta.get("tool_result_extra")
                 if isinstance(extra, dict):
                     tool_call_name = str(extra.get("tool_call_name", "")).strip()
-                    if tool_call_name.lower() in {"finish", "intervene", "cancel", "none"}:
+                    if tool_call_name.lower() in {"finish", "intervene", "cancel", "none", "open"}:
                         pass
                     elif tool_call_name in BLOCKED_NATIVE_TOOL_NAMES:
                         if tool_call_name not in self.blocked_tool_attempt_names:
@@ -722,6 +767,18 @@ class GLMEventAccumulator:
                             arguments = tool_calls_data.get("arguments", "{}")
                             if tool_name.lower() in {"finish", "intervene", "cancel", "none"}:
                                 continue
+                            if tool_name == "open":
+                                mapped = map_native_open_tool_call(arguments, self.allowed_tool_names)
+                                if mapped is not None:
+                                    mapped_name, mapped_args = mapped
+                                    tool_name = mapped_name
+                                    arguments = mapped_args
+                                    if self.logger:
+                                        self.logger.info(
+                                            "Mapped native open tool call to %s args=%s",
+                                            tool_name,
+                                            mapped_args,
+                                        )
                             if self.allowed_tool_names is not None and tool_name not in self.allowed_tool_names:
                                 if tool_name not in self.blocked_tool_attempt_names:
                                     self.blocked_tool_attempt_names.append(tool_name)

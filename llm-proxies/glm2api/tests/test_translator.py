@@ -998,3 +998,42 @@ def test_build_tool_call_instructions_includes_language_lock_and_no_preamble():
     assert "NEVER output internal monologue, reasoning, or responses in Chinese" in instructions
 
     assert "Do not output any preamble, commentary, or thoughts in Chinese" in TOOL_FORMAT_REMINDER
+
+
+def test_native_open_maps_to_read_when_target_is_path():
+    from glm2api.services.translator import map_native_open_tool_call, GLMEventAccumulator
+
+    mapped = map_native_open_tool_call(
+        '{"open":[{"ref_id": "/workspaces/benchmark", "lineno": 1}]}',
+        allowed_tool_names={"bash", "read"},
+    )
+    assert mapped == ("read", {"filePath": "/workspaces/benchmark"})
+
+    acc = GLMEventAccumulator(model="glm-5.3", allowed_tool_names={"bash", "read"})
+    event = {
+        "status": "init",
+        "parts": [
+            {
+                "id": "p1",
+                "logic_id": "l1",
+                "role": "assistant",
+                "status": "finish",
+                "content": [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": {
+                            "id": "call_123",
+                            "name": "open",
+                            "arguments": '{"open":[{"ref_id": "/workspaces/benchmark", "lineno": 1}]}',
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    chunks, status = acc.consume_event(event)
+    assert status != "intervene"
+    assert acc.blocked_tool_attempt_names == []
+    assert len(acc._server_side_tool_calls) == 1
+    assert acc._server_side_tool_calls[0]["function"]["name"] == "read"
+    assert "/workspaces/benchmark" in str(acc._server_side_tool_calls[0]["function"]["arguments"])
