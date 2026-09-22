@@ -446,6 +446,7 @@ class GLMWebClient:
                 retry_exc: UpstreamAPIError | None = None
                 finalize_chunks: list[str] | None = None
                 blocked: list[str] = []
+                status: str | None = None
                 for event in self._iter_sse_events(response):
                     if not event:
                         continue
@@ -489,6 +490,14 @@ class GLMWebClient:
                     finalize_chunks = accumulator.finalize(status="stop")
                     blocked = list(accumulator.blocked_tool_attempt_names)
 
+                self.logger.warning(
+                    "Stream turn ended status=%s blocked=%s blocked_follow_ups=%s max_blocked=%s",
+                    status,
+                    blocked,
+                    blocked_follow_ups,
+                    max_blocked_follow_ups,
+                )
+
                 if finalize_chunks is not None:
                     if (
                         blocked
@@ -500,6 +509,7 @@ class GLMWebClient:
                         blocked_follow_ups += 1
                         follow_up = blocked_tool_follow_up_payload()
                         if follow_up is None:
+                            self.logger.warning("blocked_tool_follow_up_payload returned None; blocked=%s", blocked)
                             for chunk in finalize_chunks:
                                 yield chunk.encode("utf-8")
                             return

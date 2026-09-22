@@ -699,7 +699,9 @@ class GLMEventAccumulator:
                 extra = meta.get("tool_result_extra")
                 if isinstance(extra, dict):
                     tool_call_name = str(extra.get("tool_call_name", "")).strip()
-                    if tool_call_name in BLOCKED_NATIVE_TOOL_NAMES:
+                    if tool_call_name.lower() in {"finish", "intervene", "cancel", "none"}:
+                        pass
+                    elif tool_call_name in BLOCKED_NATIVE_TOOL_NAMES:
                         if tool_call_name not in self.blocked_tool_attempt_names:
                             self.blocked_tool_attempt_names.append(tool_call_name)
                         if self.logger:
@@ -718,6 +720,8 @@ class GLMEventAccumulator:
                             tool_name = str(tool_calls_data.get("name", "")).strip()
                             tool_id = str(tool_calls_data.get("id", "")).strip()
                             arguments = tool_calls_data.get("arguments", "{}")
+                            if tool_name.lower() in {"finish", "intervene", "cancel", "none"}:
+                                continue
                             if self.allowed_tool_names is not None and tool_name not in self.allowed_tool_names:
                                 if tool_name not in self.blocked_tool_attempt_names:
                                     self.blocked_tool_attempt_names.append(tool_name)
@@ -950,6 +954,7 @@ class GLMEventAccumulator:
                     name
                     for name in attempted_names
                     if name not in self.allowed_tool_names
+                    and name.lower() not in {"finish", "intervene", "cancel", "none"}
                 }
             )
             if unavailable_names:
@@ -1102,6 +1107,7 @@ class GLMEventAccumulator:
                 name
                 for name in attempted_names
                 if name not in self.allowed_tool_names
+                and name.lower() not in {"finish", "intervene", "cancel", "none"}
             )
 
         # Merge server-side and XML tool calls, re-indexing
