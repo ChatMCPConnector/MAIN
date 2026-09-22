@@ -41,6 +41,19 @@ def _finish_event(text="hello"):
     }
 
 
+def _reasoning_finish_event(text="planning only"):
+    return {
+        "status": "finish",
+        "parts": [
+            {
+                "logic_id": "p1",
+                "status": "finish",
+                "content": [{"type": "think", "think": text}],
+            }
+        ],
+    }
+
+
 def _process_event(text):
     return {
         "status": "process",
@@ -347,6 +360,23 @@ def test_empty_response_triggers_auto_retry_stream():
     )
     assert calls["count"] == 2  # erster versuch leer, retry erfolgreich
     assert "Ergebnis da" in content
+
+
+def test_reasoning_only_response_triggers_auto_retry_stream():
+    good_finish = _finish_event("Ergebnis nach Planung")
+    client, calls = _make_client(
+        [[_reasoning_finish_event("Let me inspect the workspace first")], [good_finish]]
+    )
+
+    chunks = list(
+        client.stream_chat_completion(
+            {"model": "glm-test", "messages": [{"role": "user", "content": "build it"}]}
+        )
+    )
+    output = "".join(chunk.decode("utf-8") for chunk in chunks)
+
+    assert calls["count"] == 2
+    assert "Ergebnis nach Planung" in output
 
 
 def test_empty_response_gives_up_after_max_retries():
