@@ -17,6 +17,15 @@ if [ ! -f "$APP_DIR/.env" ] && [ -f "$ENV_SRC" ]; then
   cp "$ENV_SRC" "$APP_DIR/.env"
 fi
 
+# Refresh-Token aus Secrets bereitstellen falls vorhanden
+SECRET_TOKEN="/workspaces/MAIN/.secrets/chatglm-refresh-token"
+if [ -f "$SECRET_TOKEN" ] && [ -f "$APP_DIR/.env" ]; then
+  TOKEN="$(cat "$SECRET_TOKEN" | tr -d '\n\r ')"
+  if [ -n "$TOKEN" ] && ! grep -q "^GLM_REFRESH_TOKEN=${TOKEN}" "$APP_DIR/.env"; then
+    sed -i "s|^GLM_REFRESH_TOKEN=.*|GLM_REFRESH_TOKEN=${TOKEN}|" "$APP_DIR/.env"
+  fi
+fi
+
 # Runtime-Artefakte, die nicht im Git landen dürfen
 mkdir -p "$APP_DIR/log"
 
@@ -35,7 +44,7 @@ if ss -tln | grep -q ":${PORT} "; then
 fi
 
 echo "Starte glm2api (aus $APP_DIR)..."
-(cd "$APP_DIR" && setsid nohup "$UV" run main.py >> "${LOG}" 2>&1 &)
+(cd "$APP_DIR" && setsid nohup "$UV" run main.py </dev/null >> "${LOG}" 2>&1 & disown)
 
 for i in $(seq 1 60); do
     if curl -sf -m 2 "http://${HOST}:${PORT}/health" >/dev/null 2>&1; then

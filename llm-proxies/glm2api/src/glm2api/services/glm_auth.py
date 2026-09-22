@@ -125,6 +125,10 @@ class GLMAccessTokenManager:
     def get_account_count(self) -> int:
         return len(self._accounts)
 
+    def get_registered_account_indices(self) -> list[int]:
+        with self._lock:
+            return [i for i, acc in enumerate(self._accounts) if not acc.is_guest]
+
     def get_current_account_index(self) -> int:
         with self._lock:
             return self._current_index

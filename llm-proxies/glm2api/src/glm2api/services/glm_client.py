@@ -1220,6 +1220,11 @@ class GLMWebClient:
         return " | ".join(parts)
 
     def _get_preferred_account_index(self, ticket: int) -> int | None:
+        get_registered = getattr(self.auth, "get_registered_account_indices", None)
+        if callable(get_registered):
+            registered = get_registered()
+            if isinstance(registered, list) and registered:
+                return registered[ticket % len(registered)]
         account_count = self.auth.get_account_count()
         if account_count <= 0:
             return None
