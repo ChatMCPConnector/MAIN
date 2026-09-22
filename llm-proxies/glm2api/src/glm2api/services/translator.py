@@ -234,19 +234,34 @@ def sanitize_tool_call_payload(
     if "param_name" in cleaned and "param_value" not in cleaned and len(cleaned) == 1:
         cleaned = {}
 
+    if "filePath" in cleaned and isinstance(cleaned["filePath"], str):
+        fp = cleaned["filePath"].strip()
+        if fp.startswith("file://"):
+            cleaned["filePath"] = fp.removeprefix("file://")
+
     # Repair: stringified JSON arrays or objects inside parameters (e.g. questions: "[{...}]")
-    for key, val in list(cleaned.items()):
-        if isinstance(val, str):
-            stripped_val = val.strip()
-            if (stripped_val.startswith("[") and stripped_val.endswith("]")) or (
-                stripped_val.startswith("{") and stripped_val.endswith("}")
-            ):
-                try:
-                    parsed_nested = json.loads(stripped_val)
-                    if isinstance(parsed_nested, (dict, list)):
-                        cleaned[key] = parsed_nested
-                except json.JSONDecodeError:
-                    pass
+    # Ausgenommen write/edit: deren Textinhalte (content, newString, oldString) MÜSSEN Strings bleiben.
+    if tool_name not in {"write", "edit"}:
+        for key, val in list(cleaned.items()):
+            if isinstance(val, str):
+                stripped_val = val.strip()
+                if (stripped_val.startswith("[") and stripped_val.endswith("]")) or (
+                    stripped_val.startswith("{") and stripped_val.endswith("}")
+                ):
+                    try:
+                        parsed_nested = json.loads(stripped_val)
+                        if isinstance(parsed_nested, (dict, list)):
+                            cleaned[key] = parsed_nested
+                    except json.JSONDecodeError:
+                        pass
+
+    # Sicherheitsnetz fuer write/edit: falls das Modell ein Dictionary/Array direkt
+    # als content/newString/oldString uebergeben hat, in einen formatierten JSON-String serialisieren
+    if tool_name in {"write", "edit"}:
+        for str_key in ("content", "newString", "oldString"):
+            val = cleaned.get(str_key)
+            if val is not None and not isinstance(val, str):
+                cleaned[str_key] = json.dumps(val, indent=2, ensure_ascii=False)
 
     if tool_name in {"bash", "shell", "run", "execute"}:
         command = cleaned.get("command")

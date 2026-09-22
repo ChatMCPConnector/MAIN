@@ -1059,3 +1059,62 @@ def test_repair_raw_tool_args_fixes_unescaped_triple_quotes():
     args = json.loads(sanitized[0]["function"]["arguments"])
     assert args["filePath"] == "/workspaces/benchmark/ledgervault/store.py"
     assert "def foo(): pass" in args["content"]
+
+
+def test_sanitize_write_preserves_json_string_and_serializes_dict():
+    from glm2api.services.translator import sanitize_tool_calls
+
+    tool_calls = [
+        {
+            "id": "c1",
+            "type": "function",
+            "function": {
+                "name": "write",
+                "arguments": {
+                    "filePath": "rules.json",
+                    "content": '{"max_error_rate_percent": 20}',
+                },
+            },
+        },
+        {
+            "id": "c2",
+            "type": "function",
+            "function": {
+                "name": "write",
+                "arguments": {
+                    "filePath": "rules2.json",
+                    "content": {"max_error_rate_percent": 20},
+                },
+            },
+        },
+    ]
+    sanitized = sanitize_tool_calls(tool_calls)
+    assert len(sanitized) == 2
+    args1 = json.loads(sanitized[0]["function"]["arguments"])
+    assert isinstance(args1["content"], str)
+    assert '{"max_error_rate_percent": 20}' in args1["content"]
+
+    args2 = json.loads(sanitized[1]["function"]["arguments"])
+    assert isinstance(args2["content"], str)
+    assert '"max_error_rate_percent": 20' in args2["content"]
+
+
+def test_sanitize_filePath_strips_file_uri_scheme():
+    from glm2api.services.translator import sanitize_tool_calls
+
+    tool_calls = [
+        {
+            "id": "c1",
+            "type": "function",
+            "function": {
+                "name": "read",
+                "arguments": {
+                    "filePath": "file:///workspaces/benchmark/src/doc_parser.py",
+                },
+            },
+        }
+    ]
+    sanitized = sanitize_tool_calls(tool_calls)
+    args = json.loads(sanitized[0]["function"]["arguments"])
+    assert args["filePath"] == "/workspaces/benchmark/src/doc_parser.py"
+
