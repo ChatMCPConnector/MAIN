@@ -67,7 +67,7 @@ def main():
                         first_line = txt.split("\n")[0]
                         print(f"💬 \033[1;32mAntwort:\033[0m {first_line[:120]}", flush=True)
                 elif ptype == "step-start":
-                    print(f"▶️  \033[33mNeuer Schritt gestartet...\033[0m", flush=True)
+                    print(f"▶️  \033[33mNeuer Schritt gestartet (Modell denkt nach / Thinking...)...\033[0m", flush=True)
 
             time.sleep(1.5)
     except KeyboardInterrupt:
