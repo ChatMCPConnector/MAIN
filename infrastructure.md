@@ -273,11 +273,12 @@ Proxy bei jedem Start automatisch hoch.
   Ordner unter `llm-proxies/` gelöscht, Watchdog-/Boot-Einträge in `proxy-watchdog.sh`,
   `start-on-boot.sh`, `setup.sh`, `ports.sh`, `secrets.sh` und Secrets-Bundle bereinigt.
   Google-Modelle laufen ausschließlich über `antigravity`.
-  (4) **glm2api Persistente Websession:** Anfragen erzeugen nicht mehr für jeden Call
-  eine neue ChatGLM-Web-Session (`conversation_id: ""`), sondern laufen standardmäßig
-  alle unter einer einzigen persistenten Web-Session (gespeichert in `conversation.txt`).
-  Verhindert das Fluten des ChatGLM-Accounts mit Einzelsitzungen. Fehlerhafte Sessions
-  werden bei Upstream-Fehlern automatisch zurückgesetzt.
+  (4) **glm2api Session-Isolation & Cleanup:** Persistente Websession (`GLM_PERSISTENT_CONVERSATION`)
+  standardmäßig deaktiviert (`false`). Grund: Eine einzige persistente Web-Session vermischte verschiedene
+  Tasks/Sessions, akkumulierte Historie quadratisch (da Clients wie opencode den Gesamtverlauf je Turn mitsenden)
+  und schleppte frühere Fehlversuche (z. B. `open_url`-Toolhalluzinationen) in neue Sessions ein. Stattdessen
+  wird je Request eine frische, isolierte Web-Session genutzt und per `GLM_DELETE_CONVERSATION=true` nach
+  Antwort sofort serverseitig gelöscht. Standalone-Bundle `dist/glm2api-bundle.zip` aktualisiert.
   (5) **Modell-Feinschliff Antigravity:** `Gemini 3.8 Flash` fest als Standardmodell
   mit erzwungenem High-Thinking hinterlegt (`gemini-3.8-flash-high`, 1M Context, 64k Output).
   `Claude Opus 4.6` auf 100k Context-Limit angehoben. Unbenutzte Modelle (`gemini-3.5-flash-light`,

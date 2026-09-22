@@ -242,11 +242,12 @@ def load_config(env_file: str = ".env") -> AppConfig:
         single_refresh_token = GUEST_REFRESH_TOKEN_MARKER
         explicit_guest_mode = True
 
+    persistent_conv = parse_bool(values.get("GLM_PERSISTENT_CONVERSATION"), False)
     conversation_file = Path(values.get("GLM_CONVERSATION_FILE", "conversation.txt"))
     if not conversation_file.is_absolute():
         conversation_file = (env_path.parent / conversation_file).resolve()
     conv_id = values.get("GLM_CONVERSATION_ID", "").strip()
-    if not conv_id and conversation_file.exists():
+    if persistent_conv and not conv_id and conversation_file.exists():
         try:
             stored = conversation_file.read_text(encoding="utf-8").strip()
             if stored and len(stored) == 24 and all(c in "0123456789abcdefABCDEF" for c in stored):
@@ -299,7 +300,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
             ),
         ).strip(),
         glm_delete_conversation=parse_bool(values.get("GLM_DELETE_CONVERSATION"), True),
-        glm_persistent_conversation=parse_bool(values.get("GLM_PERSISTENT_CONVERSATION"), True),
+        glm_persistent_conversation=persistent_conv,
         glm_conversation_file=conversation_file,
         glm_conversation_id=conv_id,
         glm_max_concurrency=glm_max_concurrency,
