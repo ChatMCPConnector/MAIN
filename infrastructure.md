@@ -44,7 +44,7 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 ## Enthalten
 
 - Ports 3000/8000 (Apps), 4096 (opencode-Server für Multi-Client), 8001 (glm2api LLM-Proxy), 9878 (antigravity-proxy), 6082/5920 (Browser-VNC, nur lokal)
-- opencode, Default-Modell `antigravity/gemini-3.8-flash-high` (Thinking immer aktiv auf high)
+- opencode, Default-Modell `antigravity/gemini-3.8-flash` (fest auf high Thinking gemappt)
 - `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
   (kostenlos, NIM-Keys), für Modell-Discovery
 
@@ -68,14 +68,14 @@ Secret-Schutz-Purismus:
 
 ## opencode-Konfiguration (`.opencode/`)
 
-Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash-high`):
+Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 
 | Provider | Modelle | Auth |
 |---|---|---|
 | nvidia | nemotron-3-ultra | nvidia-nim.key |
 | xinjianya | gpt-5.6-sol | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
-| **antigravity** | claude-opus-4-6 (250k, Thinking 1k/4k/8k), claude-sonnet-4-6 (250k, Thinking 1k/4k/8k), gemini-3.8-flash-high (1M, 64k Output, maximales Thinking) | lokal, Port 9878, Google Cloud Code OAuth |
+| **antigravity** | claude-opus-4-6 (250k, Thinking 1k/4k/8k), claude-sonnet-4-6 (250k, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,

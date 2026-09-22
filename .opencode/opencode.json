@@ -104,8 +104,8 @@
         "apiKey": "antigravity-secret-6fe2eaa404e1c91bfa0fec01e74ddcc1"
       },
       "models": {
-        "gemini-3.8-flash-high": {
-          "name": "Gemini 3.8 Flash (High Thinking)",
+        "gemini-3.8-flash": {
+          "name": "Gemini 3.8 Flash",
           "reasoning": true,
           "options": {
             "model": "gemini-3.8-flash-high",
@@ -231,7 +231,7 @@
       ]
     }
   },
-  "model": "antigravity/gemini-3.8-flash-high",
+  "model": "antigravity/gemini-3.8-flash",
   "disabled_providers": [
     "github-copilot"
   ],
