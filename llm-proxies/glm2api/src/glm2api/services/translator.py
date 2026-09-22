@@ -523,11 +523,10 @@ def convert_messages(
         transcript_parts.append(f"{title}: {item['content']}".strip())
 
     prompt = "\n\n".join(part for part in transcript_parts if part).strip()
-    # Re-Anchor: nach Tool-Result-Runden verliert das Modell die Format-
-    # Disziplin (prose statt JSON, halluzinierte Limits).
-    # Der Reminder steht damit DIREKT am Prompt-Ende, wo die
-    # []-Terminator-Wahrscheinlichkeit pro generiertem Token am staerksten wirkt.
-    if tools and tool_choice_policy.get("mode") != "none" and _conversation_has_tool_round(processed):
+    # Re-Anchor: am Prompt-Ende verankern, damit das Modell auch nach extrem
+    # langem Reasoning (60k+ Tokens im max/deep_thinking Modus) oder Tool-Result-Runden
+    # sofort mit dem JSON-Tool-Call startet statt in Prosa/Plaene abzudriften.
+    if tools and tool_choice_policy.get("mode") != "none":
         prompt = prompt + "\n\n" + TOOL_FORMAT_REMINDER
     return [{"role": "user", "content": [{"type": "text", "text": prompt + "\n\nAssistant: "}]}]
 

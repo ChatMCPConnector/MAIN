@@ -86,12 +86,12 @@ def build_tool_call_instructions(
         "# TOOL USE PROTOCOL",
         "",
         "## Allowed tools (EXHAUSTIVE list — no others exist)",
-        f"{available_xml_names}",
+        f"Available tools: {available_xml_names}. No other tools exist — no browser, no open_url, no web.search.",
         "",
         "## CRITICAL: Tool-call hallucination prevention",
         f"The following tools DO NOT EXIST in this environment and MUST NEVER be called: {blocked_examples}.",
         "If you call any tool not listed above, the call WILL BE REJECTED, nothing will execute, and you will waste an entire round.",
-        "Before emitting any tool call, verify the tool name appears in the allowed list above. If it does not, DO NOT call it — answer the user directly instead.",
+        "Before emitting any tool call, verify the tool name appears in the allowed list above. When a task requires tools (e.g. inspecting directories, creating files, running commands), you MUST call the appropriate allowed tool (e.g. bash, write). Never describe actions in prose instead of calling the tool.",
         "",
         "## Call format",
         "To call a tool, output this JSON format (and nothing else in the answer):",
@@ -131,13 +131,15 @@ def build_tool_call_instructions(
 
 
 TOOL_FORMAT_REMINDER = (
-    "[System instruction — highest priority]: If calling a tool, output the JSON "
-    "format from the TOOL USE PROTOCOL with the trailing [] — this is the ONLY "
-    "way tools get executed. Prose, XML, or fenced blocks will NOT be executed. "
+    "[System instruction — highest priority]: When the user task requires inspecting, creating, "
+    "or editing files, running commands, or calling any tool, you MUST IMMEDIATELY output the JSON "
+    "format from the TOOL USE PROTOCOL with the trailing [] — this is the ONLY way tools get executed. "
+    "Do NOT output plans, summaries, or descriptions in prose instead of calling the tool. "
+    "Prose, XML, or fenced blocks will NOT be executed. "
     "NEVER call tools that are not in the allowed list (especially not open_url, browse, or any browser tool). "
     "If you need information from a URL, use an allowed tool or tell the user — do NOT invent a tool. "
     "Do not output any preamble, commentary, or thoughts in Chinese or any other language before the tool call. "
-    "If answering the user directly, provide the answer in the conversation language (e.g. German)."
+    "If answering the user directly (only when no tools are needed), provide the answer in the conversation language (e.g. German)."
 )
 
 
