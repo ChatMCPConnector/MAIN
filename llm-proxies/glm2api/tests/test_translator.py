@@ -1037,3 +1037,25 @@ def test_native_open_maps_to_read_when_target_is_path():
     assert len(acc._server_side_tool_calls) == 1
     assert acc._server_side_tool_calls[0]["function"]["name"] == "read"
     assert "/workspaces/benchmark" in str(acc._server_side_tool_calls[0]["function"]["arguments"])
+
+
+def test_repair_raw_tool_args_fixes_unescaped_triple_quotes():
+    from glm2api.services.translator import sanitize_tool_calls
+
+    broken_tool_calls = [
+        {
+            "id": "c1",
+            "type": "function",
+            "function": {
+                "name": "write",
+                "arguments": {
+                    "_raw": '{"filePath":"/workspaces/benchmark/ledgervault/store.py","content":"\\"\\"\\"docstring\\"\\"\\"\\ndef foo(): pass\\n"}'
+                },
+            },
+        }
+    ]
+    sanitized = sanitize_tool_calls(broken_tool_calls)
+    assert len(sanitized) == 1
+    args = json.loads(sanitized[0]["function"]["arguments"])
+    assert args["filePath"] == "/workspaces/benchmark/ledgervault/store.py"
+    assert "def foo(): pass" in args["content"]

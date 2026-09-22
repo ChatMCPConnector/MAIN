@@ -171,6 +171,40 @@ def repair_python_command_quotes(command: str) -> str:
     return command
 
 
+def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | None:
+    if tool_name in {"write", "edit"}:
+        fp_match = re.search(r"\"filePath\"\s*:\s*\"([^\"]+)\"", raw_str)
+        c_match = re.search(r"\"content\"\s*:\s*\"", raw_str)
+        if fp_match and c_match:
+            file_path = fp_match.group(1)
+            content_start = c_match.end()
+            content_end = raw_str.rfind('"')
+            if content_end > content_start:
+                content_raw = raw_str[content_start:content_end]
+                try:
+                    content_decoded = content_raw.encode("utf-8").decode("unicode_escape")
+                except Exception:
+                    content_decoded = content_raw
+                return {"filePath": file_path, "content": content_decoded}
+    elif tool_name in {"read"}:
+        fp_match = re.search(r"\"filePath\"\s*:\s*\"([^\"]+)\"", raw_str)
+        if fp_match:
+            return {"filePath": fp_match.group(1)}
+    elif tool_name in {"bash", "shell"}:
+        cmd_match = re.search(r"\"command\"\s*:\s*\"", raw_str)
+        if cmd_match:
+            cmd_start = cmd_match.end()
+            cmd_end = raw_str.rfind('"')
+            if cmd_end > cmd_start:
+                cmd_raw = raw_str[cmd_start:cmd_end]
+                try:
+                    cmd_decoded = cmd_raw.encode("utf-8").decode("unicode_escape")
+                except Exception:
+                    cmd_decoded = cmd_raw
+                return {"command": cmd_decoded}
+    return None
+
+
 def sanitize_tool_call_payload(
     tool_name: str,
     arguments: object,
@@ -189,6 +223,10 @@ def sanitize_tool_call_payload(
         return None
 
     cleaned: dict[str, Any] = {str(key): value for key, value in parsed_arguments.items()}
+    if "_raw" in cleaned and isinstance(cleaned["_raw"], str):
+        repaired_raw = repair_raw_tool_args(tool_name, cleaned["_raw"])
+        if repaired_raw is not None:
+            cleaned = repaired_raw
     if cleaned == {"param_name": "url"} and fallback_url:
         cleaned = {"url": fallback_url}
     elif cleaned == {"param_name": "url"}:
