@@ -104,16 +104,34 @@
         "apiKey": "antigravity-secret-6fe2eaa404e1c91bfa0fec01e74ddcc1"
       },
       "models": {
+        "gemini-3.8-flash-high": {
+          "name": "Gemini 3.8 Flash (High Thinking)",
+          "reasoning": true,
+          "options": {
+            "model": "gemini-3.8-flash-high",
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "high": { "model": "gemini-3.8-flash-high", "reasoningEffort": "high" },
+            "medium": { "model": "gemini-3.8-flash-medium", "reasoningEffort": "medium" },
+            "low": { "model": "gemini-3.8-flash-low", "reasoningEffort": "low" }
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 65536
+          }
+        },
         "gemini-3.8-flash": {
           "name": "Gemini 3.8 Flash",
           "reasoning": true,
           "options": {
+            "model": "gemini-3.8-flash-high",
             "reasoningEffort": "high"
           },
           "variants": {
-            "low": { "model": "gemini-3.8-flash-low", "reasoningEffort": "low" },
+            "high": { "model": "gemini-3.8-flash-high", "reasoningEffort": "high" },
             "medium": { "model": "gemini-3.8-flash-medium", "reasoningEffort": "medium" },
-            "high": { "model": "gemini-3.8-flash-high", "reasoningEffort": "high" }
+            "low": { "model": "gemini-3.8-flash-low", "reasoningEffort": "low" }
           },
           "limit": {
             "context": 1000000,
@@ -230,7 +248,7 @@
       ]
     }
   },
-  "model": "antigravity/gemini-3.8-flash",
+  "model": "antigravity/gemini-3.8-flash-high",
   "disabled_providers": [
     "github-copilot"
   ],
