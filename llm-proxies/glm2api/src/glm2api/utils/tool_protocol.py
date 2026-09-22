@@ -11,8 +11,6 @@ BLOCKED_NATIVE_TOOL_NAMES = {
     "browser.open",
     "web.run",
     "web.open",
-    "web.search",
-    "web_search",
     "browse",
     "open_link",
 }
@@ -136,7 +134,7 @@ TOOL_FORMAT_REMINDER = (
     "[System instruction — highest priority]: If calling a tool, output the JSON "
     "format from the TOOL USE PROTOCOL with the trailing [] — this is the ONLY "
     "way tools get executed. Prose, XML, or fenced blocks will NOT be executed. "
-    "NEVER call tools that are not in the allowed list (especially not open_url, browse, web.search, or any browser tool). "
+    "NEVER call tools that are not in the allowed list (especially not open_url, browse, or any browser tool). "
     "If you need information from a URL, use an allowed tool or tell the user — do NOT invent a tool. "
     "Do not output any preamble, commentary, or thoughts in Chinese or any other language before the tool call. "
     "If answering the user directly, provide the answer in the conversation language (e.g. German)."
