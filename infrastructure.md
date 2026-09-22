@@ -273,6 +273,11 @@ Proxy bei jedem Start automatisch hoch.
   Ordner unter `llm-proxies/` gelöscht, Watchdog-/Boot-Einträge in `proxy-watchdog.sh`,
   `start-on-boot.sh`, `setup.sh`, `ports.sh`, `secrets.sh` und Secrets-Bundle bereinigt.
   Google-Modelle laufen ausschließlich über `antigravity`.
+  (4) **glm2api Persistente Websession:** Anfragen erzeugen nicht mehr für jeden Call
+  eine neue ChatGLM-Web-Session (`conversation_id: ""`), sondern laufen standardmäßig
+  alle unter einer einzigen persistenten Web-Session (gespeichert in `conversation.txt`).
+  Verhindert das Fluten des ChatGLM-Accounts mit Einzelsitzungen. Fehlerhafte Sessions
+  werden bei Upstream-Fehlern automatisch zurückgesetzt.
 
 - 2026-09-17: **Config-Watchdog + neue Modelle.**
   Neuer Daemon `infra/scripts/config-watchdog.sh`: überwacht `opencode.json`

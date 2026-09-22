@@ -131,6 +131,30 @@ class GLMWebClient:
             wait_timeout=config.glm_queue_wait_timeout,
             max_concurrency=config.glm_max_concurrency,
         )
+        self._persistent_conversation_id: str = getattr(config, "glm_conversation_id", "")
+        self._conversation_lock = threading.Lock()
+
+    def get_active_conversation_id(self) -> str:
+        with self._conversation_lock:
+            return self._persistent_conversation_id
+
+    def set_active_conversation_id(self, conv_id: str) -> None:
+        with self._conversation_lock:
+            if self._persistent_conversation_id != conv_id:
+                self._persistent_conversation_id = conv_id
+                self.logger.info("Persisted active GLM conversation_id: %s", conv_id)
+                conversation_file = getattr(self.config, "glm_conversation_file", None)
+                if conversation_file:
+                    try:
+                        if conv_id:
+                            conversation_file.write_text(conv_id, encoding="utf-8")
+                        elif conversation_file.exists():
+                            conversation_file.unlink(missing_ok=True)
+                    except Exception as exc:
+                        self.logger.warning("Failed to write GLM conversation_file: %s", exc)
+
+    def reset_active_conversation(self) -> None:
+        self.set_active_conversation_id("")
 
     def _resolve_tools(self, openai_payload: dict[str, object]) -> tuple[list[dict[str, object]] | None, set[str] | None]:
         raw_tools = list(openai_payload.get("tools", [])) if isinstance(openai_payload.get("tools"), list) else None # type: ignore
@@ -303,6 +327,8 @@ class GLMWebClient:
                 response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
         finally:
             response.close() # type: ignore
+            if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
+                self.set_active_conversation_id(accumulator.conversation_id)
             self.delete_conversation(accumulator.conversation_id, assistant_id=assistant_id)
             lease.release()
         return accumulator.build_response(), accumulator.conversation_id
@@ -535,6 +561,8 @@ class GLMWebClient:
                     response.close() # type: ignore
                 except Exception:
                     pass
+                if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
+                    self.set_active_conversation_id(accumulator.conversation_id)
                 self.delete_conversation(accumulator.conversation_id, assistant_id=assistant_id)
                 lease.release()
 
@@ -610,6 +638,8 @@ class GLMWebClient:
         return None
 
     def delete_conversation(self, conversation_id: str, assistant_id: str | None = None) -> None:
+        if getattr(self.config, "glm_persistent_conversation", False):
+            return
         if not self.config.glm_delete_conversation:
             return
         if not conversation_id:
@@ -719,10 +749,19 @@ class GLMWebClient:
             web_search=openai_payload.get("web_search"),
         )
 
+        target_conv_id = ""
+        client_conv_id = openai_payload.get("conversation_id")
+        if client_conv_id and isinstance(client_conv_id, str):
+            target_conv_id = client_conv_id.strip()
+        elif bool(openai_payload.get("new_session")) or bool(openai_payload.get("reset_conversation")):
+            target_conv_id = ""
+        elif getattr(self.config, "glm_persistent_conversation", False):
+            target_conv_id = self.get_active_conversation_id()
+
         request_body = json.dumps(
             {
                 "assistant_id": assistant_id,
-                "conversation_id": "",
+                "conversation_id": target_conv_id,
                 "project_id": "",
                 "chat_type": "user_chat",
                 "messages": converted_messages,
@@ -793,6 +832,9 @@ class GLMWebClient:
                         continue
 
                     message = self._build_error_message(exc.code, error_payload)
+                    if target_conv_id and (exc.code in {400, 404} or "conversation" in message.lower() or "对话" in message):
+                        self.logger.warning("GLM conversation %s seems invalid or expired (%s) — resetting active conversation", target_conv_id, message)
+                        self.reset_active_conversation()
                     raise UpstreamAPIError(status_code=exc.code, message=message, payload=error_payload) from exc
 
             raise UpstreamAPIError(status_code=429, message="GLM has been busy for a long time, please retry later.")

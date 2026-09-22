@@ -148,6 +148,9 @@ class AppConfig:
     glm_image_model_name: str
     glm_user_agent: str
     glm_delete_conversation: bool
+    glm_persistent_conversation: bool
+    glm_conversation_file: Path
+    glm_conversation_id: str
     glm_max_concurrency: int
     glm_queue_wait_timeout: int
     glm_busy_max_retries: int
@@ -239,6 +242,18 @@ def load_config(env_file: str = ".env") -> AppConfig:
         single_refresh_token = GUEST_REFRESH_TOKEN_MARKER
         explicit_guest_mode = True
 
+    conversation_file = Path(values.get("GLM_CONVERSATION_FILE", "conversation.txt"))
+    if not conversation_file.is_absolute():
+        conversation_file = (env_path.parent / conversation_file).resolve()
+    conv_id = values.get("GLM_CONVERSATION_ID", "").strip()
+    if not conv_id and conversation_file.exists():
+        try:
+            stored = conversation_file.read_text(encoding="utf-8").strip()
+            if stored and len(stored) == 24 and all(c in "0123456789abcdefABCDEF" for c in stored):
+                conv_id = stored
+        except Exception:
+            pass
+
     host = values.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
     api_prefix = values.get("API_PREFIX", "/v1").strip()
     if not api_prefix:
@@ -284,6 +299,9 @@ def load_config(env_file: str = ".env") -> AppConfig:
             ),
         ).strip(),
         glm_delete_conversation=parse_bool(values.get("GLM_DELETE_CONVERSATION"), True),
+        glm_persistent_conversation=parse_bool(values.get("GLM_PERSISTENT_CONVERSATION"), True),
+        glm_conversation_file=conversation_file,
+        glm_conversation_id=conv_id,
         glm_max_concurrency=glm_max_concurrency,
         glm_queue_wait_timeout=parse_int(values.get("GLM_QUEUE_WAIT_TIMEOUT_SECONDS"), 600),
         glm_busy_max_retries=parse_int(values.get("GLM_BUSY_MAX_RETRIES"), 30),
