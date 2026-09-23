@@ -18,7 +18,7 @@ deklarierten OpenCode-Tools.
 
 2. Einen frischen, leeren Laufpfad festlegen, zum Beispiel
    `/workspaces/benchmark/auditmesh-20260923-01`. Der Runner ersetzt im
-   Agentenauftrag unten `<BENCHMARK_ROOT>` durch genau diesen Pfad.
+   Agentenauftrag unten `/workspaces/benchmark/auditmesh-current` durch genau diesen Pfad.
 3. Eine frische OpenCode-Session mit **`glm2api/glm-5.3`** starten. Nicht das
    Defaultmodell verwenden und keinen bereits langen Chat fortsetzen.
 4. Ausschliesslich den Abschnitt **Agentenauftrag** einreichen. Keine
@@ -26,8 +26,8 @@ deklarierten OpenCode-Tools.
 5. Nach dem Abschluss unabhaengig vom Agenten ausfuehren:
 
    ```bash
-   uv run --directory "<BENCHMARK_ROOT>" pytest -q
-   python3 /workspaces/MAIN/llm-proxies/glm2api/benchmarks/verify_auditmesh.py "<BENCHMARK_ROOT>"
+   uv run --directory "/workspaces/benchmark/auditmesh-current" pytest -q
+   python3 /workspaces/MAIN/llm-proxies/glm2api/benchmarks/verify_auditmesh.py "/workspaces/benchmark/auditmesh-current"
    ```
 
 Der Verifier gehoert dem Runner, nicht dem erzeugten Projekt. Er startet die
@@ -37,18 +37,18 @@ prueft, ob die entscheidenden Analysen auf geaenderte Eingaben reagieren.
 
 ## Agentenauftrag
 
-Erstelle unter `<BENCHMARK_ROOT>` ein vollstaendiges Python-Projekt namens
+Erstelle unter `/workspaces/benchmark/auditmesh-current` ein vollstaendiges Python-Projekt namens
 `AuditMesh`. Es analysiert Markdown-Dokumente, Anwendungslogs,
 Sicherheitsereignisse und JSON-Konfigurationen und erzeugt einen Auditbericht.
 
 ### Grenzen und Arbeitsweise
 
-- Arbeite ausschliesslich unter `<BENCHMARK_ROOT>`. Der Pfad ist leer und wird
+- Arbeite ausschliesslich unter `/workspaces/benchmark/auditmesh-current`. Der Pfad ist leer und wird
   vom Runner vorbereitet. Weder `/workspaces/MAIN` noch Dateien ausserhalb des
   Laufpfads duerfen veraendert werden.
 - Nutze nur die in diesem Chat tatsaechlich deklarierten OpenCode-Tools (`read`, `write`, `edit`, `bash` etc.).
   Erfinde keine Toolnamen (insb. KEIN `execute_sandbox_code`, kein Browser, kein `open_url`).
-  Fuer alle Dateioperationen nutze `write`/`read` mit VOLLSTAENDIGEN ABSOLUTEN PFADEN (z. B. `<BENCHMARK_ROOT>/data/...`).
+  Fuer alle Dateioperationen nutze `write`/`read` mit VOLLSTAENDIGEN ABSOLUTEN PFADEN (z. B. `/workspaces/benchmark/auditmesh-current/data/...`).
   Fuer Code-Ausfuehrung und Tests nutze AUSSCHLIESSLICH `bash`.
 - Fuehre logisch abhaengige Tool-Aufrufe sequenziell aus: Ergebnis abwarten,
   pruefen, dann den naechsten Schritt ausfuehren.
@@ -69,8 +69,8 @@ fuer den genannten Zweck verwenden (sofern in der jeweiligen Laufumgebung deklar
 | `write` | alle neuen Projekt- und Fixture-Dateien | Pflicht |
 | `read` | Ruecklesen von Fixtures und Output | Pflicht |
 | `bash` | Verzeichnispruefung, Tests, CLI-Lauf | Pflicht |
-| `glob` | Phase 2: Mustersuche `**/*.md` unter `<BENCHMARK_ROOT>/data` | Pflicht |
-| `grep` | Phase 2: Inhaltssuche nach `ERR-101` unter `<BENCHMARK_ROOT>/data` | Pflicht |
+| `glob` | Phase 2: Mustersuche `**/*.md` unter `/workspaces/benchmark/auditmesh-current/data` | Pflicht |
+| `grep` | Phase 2: Inhaltssuche nach `ERR-101` unter `/workspaces/benchmark/auditmesh-current/data` | Pflicht |
 | `edit` | Phase 4: genau eine gezielte Nachaenderung nach dem ersten Schreiben | Pflicht |
 | `opencode-sessions_db_stats` | Phase 9: einmaliger read-only Abruf der Session-Statistik | Pflicht |
 | `todowrite` | Phase 0: Plan anlegen und waehrend des Laufs aktuell halten | falls deklariert (Haupt-Agent) |
@@ -96,32 +96,32 @@ nicht durch `bash`-Kombinationen wie `find | grep` ersetzt werden.
 1. **Phase 1 — Setup & Fixtures:** Verzeichnisse anlegen und alle 7 Fixture-Dateien
    (3 Docs, 2 Logs, 2 Configs) vollstaendig schreiben.
 2. **Phase 2 — Verifikation der Fixtures:** Pruefe mit
-   `find <BENCHMARK_ROOT>/data -type f | sort`, dass wirklich alle 7 Dateien existieren.
+   `find /workspaces/benchmark/auditmesh-current/data -type f | sort`, dass wirklich alle 7 Dateien existieren.
    Fuehre zusaetzlich einen `glob`-Aufruf mit Muster `**/*.md` unter
-   `<BENCHMARK_ROOT>/data` und einen `grep`-Aufruf nach `ERR-101` unter
-   `<BENCHMARK_ROOT>/data` aus (eigene Tools, nicht via `bash`).
-3. **Phase 3 — Implementierung:** Schreibe die Module unter `<BENCHMARK_ROOT>/src/auditmesh/`
-   und `<BENCHMARK_ROOT>/pyproject.toml`.
-4. **Phase 4 — Tests:** Schreibe Unit- und Integrationstests unter `<BENCHMARK_ROOT>/tests/`
+   `/workspaces/benchmark/auditmesh-current/data` und einen `grep`-Aufruf nach `ERR-101` unter
+   `/workspaces/benchmark/auditmesh-current/data` aus (eigene Tools, nicht via `bash`).
+3. **Phase 3 — Implementierung:** Schreibe die Module unter `/workspaces/benchmark/auditmesh-current/src/auditmesh/`
+   und `/workspaces/benchmark/auditmesh-current/pyproject.toml`.
+4. **Phase 4 — Tests:** Schreibe Unit- und Integrationstests unter `/workspaces/benchmark/auditmesh-current/tests/`
    und fuehre sie mit `bash` aus:
-   `PYTHONPATH=<BENCHMARK_ROOT>/src python3 -m pytest tests -v` (workdir: `<BENCHMARK_ROOT>`).
+   `PYTHONPATH=/workspaces/benchmark/auditmesh-current/src python3 -m pytest tests -v` (workdir: `/workspaces/benchmark/auditmesh-current`).
    Behebe Fehler im Code, bis alle Tests gruen sind. Setze danach mit genau
    einem `edit`-Aufruf den Docstring in
-   `<BENCHMARK_ROOT>/src/auditmesh/__init__.py` auf `AuditMesh audit pipeline.`
+   `/workspaces/benchmark/auditmesh-current/src/auditmesh/__init__.py` auf `AuditMesh audit pipeline.`
    und fuehre die Tests erneut aus.
 5. **Phase 5 — Pipeline-Lauf:** Starte die CLI:
-   `PYTHONPATH=<BENCHMARK_ROOT>/src python3 -m auditmesh --root <BENCHMARK_ROOT>`.
-   Erst im darauffolgenden Schritt/Turn pruefst du, dass `<BENCHMARK_ROOT>/output/metrics.json` und
-   `<BENCHMARK_ROOT>/output/audit_report.md` existieren und korrekte Werte enthalten (nicht im selben Turn).
+   `PYTHONPATH=/workspaces/benchmark/auditmesh-current/src python3 -m auditmesh --root /workspaces/benchmark/auditmesh-current`.
+   Erst im darauffolgenden Schritt/Turn pruefst du, dass `/workspaces/benchmark/auditmesh-current/output/metrics.json` und
+   `/workspaces/benchmark/auditmesh-current/output/audit_report.md` existieren und korrekte Werte enthalten (nicht im selben Turn).
 6. **Phase 6 — Output-Pruefung:** Lies `output/metrics.json` und
    `output/audit_report.md` mit `read` und vergleiche die Werte mit dem
    verbindlichen Metrik-Schema.
 7. **Phase 7 — Struktur-Selbstkontrolle:** Starte mit `task` genau einen
-   Subagenten vom Typ `explore`, der die Dateistruktur unter `<BENCHMARK_ROOT>`
+   Subagenten vom Typ `explore`, der die Dateistruktur unter `/workspaces/benchmark/auditmesh-current`
    gegen die erwartete Struktur praueft und Fehlendes zurueckmeldet. Der
    Subagent ist rein lesend.
 8. **Phase 8 — Lokaler Webfetch:** Starte mit `bash` im Hintergrund
-   `python3 -m http.server 8931 --bind 127.0.0.1 --directory <BENCHMARK_ROOT>/data`,
+   `python3 -m http.server 8931 --bind 127.0.0.1 --directory /workspaces/benchmark/auditmesh-current/data`,
    rufe mit `webfetch` `http://127.0.0.1:8931/configs/rules.json` ab,
    vergleiche die drei Grenzwerte mit den Vorgaben und beende den
    Server-Prozess danach wieder.
@@ -133,7 +133,7 @@ nicht durch `bash`-Kombinationen wie `find | grep` ersetzt werden.
 ### Erwartete Struktur
 
 ```text
-<BENCHMARK_ROOT>/
+/workspaces/benchmark/auditmesh-current/
 |-- data/
 |   |-- docs/
 |   |   |-- architecture.md
@@ -168,13 +168,13 @@ Pytest-Konfiguration enthalten. Der Einstiegspunkt muss ohne Installation
 funktionieren:
 
 ```bash
-PYTHONPATH=<BENCHMARK_ROOT>/src python3 -m auditmesh --root <BENCHMARK_ROOT>
+PYTHONPATH=/workspaces/benchmark/auditmesh-current/src python3 -m auditmesh --root /workspaces/benchmark/auditmesh-current
 ```
 
 Die Pipeline darf Eingabedaten und Quellcode nicht veraendern. Ihre fachlichen
 Artefakte liegen ausschliesslich in
-`<BENCHMARK_ROOT>/output/audit_report.md` und
-`<BENCHMARK_ROOT>/output/metrics.json`; uebliche Python-Cache-Dateien sind
+`/workspaces/benchmark/auditmesh-current/output/audit_report.md` und
+`/workspaces/benchmark/auditmesh-current/output/metrics.json`; uebliche Python-Cache-Dateien sind
 ausgenommen.
 
 ### Verbindliche Eingabedaten
