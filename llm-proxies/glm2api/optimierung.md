@@ -52,36 +52,46 @@ Status: **ERLEDIGT — BEACHTEN** (in künftigen Langläufen auf
 "Empty GLM response — auto-retrying"-Logzeilen und 10040-Halbierungen
 achten; Budget ggf. tunen).
 
-## THEMA 2 — Tool-Halluzination: GLM ruft nicht-existente Tools auf (DONE 2026-09-22)
+## THEMA 2 — Tool-Halluzination: GLM ruft nicht-existente Tools auf (DONE 2026-09-22 / ERWEITERT 2026-09-24)
 
 ### Symptom
 
-GLM-5.3 halluziniert Tool-Calls (`open_url`, `browse`, `web.search` etc.),
+GLM-5.3 halluziniert Tool-Calls (`open_url`, `browse`, `web.search`, `execute_sandbox_code` etc.),
 obwohl diese nicht in der Tool-Liste stehen. Der Proxy blockiert sie korrekt
 (bounded Follow-up, max 2 Runden), aber das Modell ignorierte die alte
 System-Instruktion ("no open_url") und halluzinierte persistent weiter.
 Ergebnis: alle Follow-up-Runden verbraucht, Fehlermeldung an Client.
+Zusätzlich: Bei Code-Ausführung rief GLM nativ `execute_sandbox_code` (ChatGLM-Builtin) auf
+und geriet in eine 5-Runden-Schleife, bis es mit einer erfundenen Ausrede ("Rundenlimit 5/5") abbrach.
 
 ### Root Cause
 
-Der alte System-Prompt in `build_tool_call_instructions()` erwähnte das
-Verbot nur beiläufig in einer Zeile ("No other tools exist — no browser,
-no open_url, no web.search"). Zu schwach für GLM-5.3, das nach Tool-Result-
-Runden die Format-Disziplin verliert.
+1. Der alte System-Prompt in `build_tool_call_instructions()` erwähnte das
+   Verbot nur beiläufig in einer Zeile ("No other tools exist — no browser,
+   no open_url, no web.search"). Zu schwach für GLM-5.3, das nach Tool-Result-
+   Runden die Format-Disziplin verliert.
+2. `execute_sandbox_code` fehlte in `BLOCKED_NATIVE_TOOL_NAMES` und hatte kein
+   Mapping auf `bash`.
 
-### Fix (tool_protocol.py)
+### Fix (tool_protocol.py, translator.py, glm_client.py)
 
 1. **`build_tool_call_instructions()`**: Restrukturiert mit eigener Sektion
    `## CRITICAL: Tool-call hallucination prevention` — listet alle
    `BLOCKED_NATIVE_TOOL_NAMES` explizit auf, warnt vor Rejection + Runden-
-   Verlust, fordert Verifikation vor dem Emit.
+   Verlust, fordert Verifikation vor dem Emit. Explizite Regel: Code-Ausführung
+   nur über `bash`.
 2. **`TOOL_FORMAT_REMINDER`** (Re-Anchor nach Tool-Result-Runden): Explizites
-   Verbot von `open_url`, `browse`, `web.search`; Instruktion, bei URL-Bedarf
-   ein erlaubtes Tool zu nutzen statt eines zu erfinden.
+   Verbot von `open_url`, `browse`, `web.search`, `execute_sandbox_code`;
+   Instruktion, für Python/Tests `bash` zu nutzen.
 3. **`tools_to_prompt()`** Schema-Header: "authoritative" → "COMPLETE and
    EXHAUSTIVE", plus "Do not guess, infer, or invent any tool names."
+4. **`map_native_sandbox_tool_call()`** in `translator.py`: Wandelt native
+   `execute_sandbox_code(code=...)`-Aufrufe transparent in `bash(command="python3 - << 'EOF'\n{code}\nEOF")`
+   bzw. Direktschalenbefehle um, wenn `bash` erlaubt ist.
+5. **`BLOCKED_NATIVE_TOOL_NAMES`**: Um `execute_sandbox_code`, `code_interpreter`,
+   `sandbox`, `run_code` erweitert.
 
-Status: **DONE** — Wirksamkeit in künftigen Benchmark-Läufen beobachten.
+Status: **DONE** (111/111 Tests grün).
 
 ---
 

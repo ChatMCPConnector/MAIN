@@ -342,6 +342,45 @@ def map_native_open_tool_call(
     return None
 
 
+def map_native_sandbox_tool_call(
+    arguments: object,
+    allowed_tool_names: set[str] | None = None,
+) -> tuple[str, dict[str, object]] | None:
+    """Maps ChatGLM's native execute_sandbox_code(code=...) call to bash
+    if bash is allowed. Runs python3 with the provided code.
+    Returns (mapped_tool_name, mapped_arguments) or None if unmappable."""
+    if allowed_tool_names is not None and "bash" not in allowed_tool_names:
+        return None
+
+    parsed = arguments
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(parsed, dict):
+        return None
+
+    code = str(
+        parsed.get("code", "")
+        or parsed.get("command", "")
+        or parsed.get("script", "")
+        or parsed.get("input", "")
+        or ""
+    ).strip()
+
+    if not code:
+        return None
+
+    first_word = code.split()[0] if code.split() else ""
+    if first_word in {"pytest", "python", "python3", "pip", "uv", "ls", "cd", "cat", "mkdir", "find", "grep"}:
+        bash_command = code
+    else:
+        bash_command = f"python3 - << 'EOF'\n{code}\nEOF"
+
+    return "bash", {"command": bash_command}
+
+
 def sanitize_tool_calls(
     tool_calls: list[dict[str, object]],
     fallback_url: str | None = None,
@@ -358,6 +397,12 @@ def sanitize_tool_calls(
         original_value: object = original_arguments
         if tool_name == "open":
             mapped = map_native_open_tool_call(original_arguments)
+            if mapped is not None:
+                tool_name, mapped_args = mapped
+                original_arguments = mapped_args
+                original_value = mapped_args
+        elif tool_name in {"execute_sandbox_code", "code_interpreter", "sandbox", "run_code"}:
+            mapped = map_native_sandbox_tool_call(original_arguments)
             if mapped is not None:
                 tool_name, mapped_args = mapped
                 original_arguments = mapped_args
@@ -797,7 +842,7 @@ class GLMEventAccumulator:
                 extra = meta.get("tool_result_extra")
                 if isinstance(extra, dict):
                     tool_call_name = str(extra.get("tool_call_name", "")).strip()
-                    if tool_call_name.lower() in {"finish", "intervene", "cancel", "none", "open"}:
+                    if tool_call_name.lower() in {"finish", "intervene", "cancel", "none", "open", "execute_sandbox_code", "code_interpreter", "sandbox", "run_code"}:
                         pass
                     elif tool_call_name in BLOCKED_NATIVE_TOOL_NAMES:
                         if tool_call_name not in self.blocked_tool_attempt_names:
@@ -829,6 +874,18 @@ class GLMEventAccumulator:
                                     if self.logger:
                                         self.logger.info(
                                             "Mapped native open tool call to %s args=%s",
+                                            tool_name,
+                                            mapped_args,
+                                        )
+                            elif tool_name in {"execute_sandbox_code", "code_interpreter", "sandbox", "run_code"}:
+                                mapped = map_native_sandbox_tool_call(arguments, self.allowed_tool_names)
+                                if mapped is not None:
+                                    mapped_name, mapped_args = mapped
+                                    tool_name = mapped_name
+                                    arguments = mapped_args
+                                    if self.logger:
+                                        self.logger.info(
+                                            "Mapped native sandbox tool call to %s args=%s",
                                             tool_name,
                                             mapped_args,
                                         )

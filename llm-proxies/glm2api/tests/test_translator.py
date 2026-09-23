@@ -1039,6 +1039,59 @@ def test_native_open_maps_to_read_when_target_is_path():
     assert "/workspaces/benchmark" in str(acc._server_side_tool_calls[0]["function"]["arguments"])
 
 
+def test_native_sandbox_maps_to_bash_when_bash_allowed():
+    from glm2api.services.translator import map_native_sandbox_tool_call, GLMEventAccumulator
+
+    mapped = map_native_sandbox_tool_call(
+        '{"code": "print(\'test\')"}',
+        allowed_tool_names={"bash", "read"},
+    )
+    assert mapped is not None
+    assert mapped[0] == "bash"
+    assert "print('test')" in mapped[1]["command"]
+
+    mapped_shell = map_native_sandbox_tool_call(
+        '{"code": "pytest -v tests"}',
+        allowed_tool_names={"bash", "read"},
+    )
+    assert mapped_shell == ("bash", {"command": "pytest -v tests"})
+
+    mapped_no_bash = map_native_sandbox_tool_call(
+        '{"code": "print(1)"}',
+        allowed_tool_names={"read", "write"},
+    )
+    assert mapped_no_bash is None
+
+    acc = GLMEventAccumulator(model="glm-5.3", allowed_tool_names={"bash", "write"})
+    event = {
+        "status": "init",
+        "parts": [
+            {
+                "id": "p2",
+                "logic_id": "l2",
+                "role": "assistant",
+                "status": "finish",
+                "content": [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": {
+                            "id": "call_sb1",
+                            "name": "execute_sandbox_code",
+                            "arguments": '{"code": "pytest tests -q"}',
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    chunks, status = acc.consume_event(event)
+    assert status != "intervene"
+    assert acc.blocked_tool_attempt_names == []
+    assert len(acc._server_side_tool_calls) == 1
+    assert acc._server_side_tool_calls[0]["function"]["name"] == "bash"
+    assert "pytest tests -q" in str(acc._server_side_tool_calls[0]["function"]["arguments"])
+
+
 def test_repair_raw_tool_args_fixes_unescaped_triple_quotes():
     from glm2api.services.translator import sanitize_tool_calls
 

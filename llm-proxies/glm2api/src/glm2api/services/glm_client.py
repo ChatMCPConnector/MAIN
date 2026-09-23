@@ -234,6 +234,7 @@ class GLMWebClient:
                         + " do NOT exist in this environment and were NOT executed. Do not call them again."
                         + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
                         + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
+                        + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
                         + " Continue the task now with the available tools."
                     ),
                 },
@@ -430,6 +431,7 @@ class GLMWebClient:
                         + " do NOT exist in this environment and were NOT executed. Do not call them again."
                         + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
                         + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
+                        + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
                         + " Continue the task now with the available tools."
                     ),
                 },
