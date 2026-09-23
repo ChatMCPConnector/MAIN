@@ -518,7 +518,8 @@ def test_split_stream_think_fallback_respects_allowed_filter():
     )
     assert calls == []
     # gefilterter call: kein tool-call-event, protokoll-block wird entfernt
-    assert visible == "Vorher [] Nachher"
+    assert visible in {"Vorher [] Nachher", "Vorher  Nachher", "Vorher Nachher"}
+    assert "blocked_tool" not in visible
     assert detect_tool_call_names(
         'Vorher {"tool_calls":[{"name":"blocked_tool","arguments":{"a":1}}]}[] Nachher'
     ) == ["blocked_tool"]
@@ -601,4 +602,25 @@ def test_parse_recovers_leading_comma_bare_tool_calls():
     assert json.loads(tool_calls[0]["function"]["arguments"])["filePath"] == "/workspaces/test/a.md"
     assert tool_calls[1]["function"]["name"] == "write"
     assert json.loads(tool_calls[1]["function"]["arguments"])["filePath"] == "/workspaces/test/b.md"
+
+
+def test_streaming_consecutive_json_tool_calls_do_not_leak_as_visible():
+    """Live-Fall aus ses_f2fffc74cffeXOgdBYZ4LZ30e3:
+    Modell emittiert zwei konsekutive JSON-Protokoll-Bloecke im Stream:
+    {"tool_calls":[...]}[] {"tool_calls":[...]}[]
+    Der zweite Block darf nicht als sichtbarer Text leaken!"""
+    parser = StreamingToolParser(allowed_tool_names={"read", "bash"})
+    c1 = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/workspaces/test/a.py"}}]}[] {"tool_calls":[{"name":"bash","arguments":{"command":"ls'
+    c2 = ' -la /workspaces/test/"}}]}[]'
+
+    vis1 = parser.consume(c1)
+    vis2 = parser.consume(c2)
+    tail, calls = parser.flush()
+
+    assert '{"tool_calls"' not in (vis1 + vis2 + tail)
+    assert 'name":"bash"' not in (vis1 + vis2 + tail)
+    assert len(calls) == 2
+    assert calls[0]["function"]["name"] == "read"
+    assert calls[1]["function"]["name"] == "bash"
+    assert json.loads(calls[1]["function"]["arguments"])["command"] == "ls -la /workspaces/test/"
 

@@ -891,10 +891,14 @@ def _find_bare_tool_call_array(
             })
     if not tool_calls:
         # nur gefilterte calls: array strippen, kein leak des rohen protokolls
-        visible = (text[:start] + rest).strip()
-        return visible, "", []
-    visible = (text[:start] + rest).strip()
-    return visible, "", tool_calls
+        visible = text[:start].strip()
+        if not final or find_tool_calls_protocol(rest) != -1 or _BARE_ARRAY_START_RE.search(rest):
+            return visible, rest, []
+        return (visible + (" " + rest.strip() if rest.strip() else "")).strip(), "", []
+    visible = text[:start].strip()
+    if not final or find_tool_calls_protocol(rest) != -1 or _BARE_ARRAY_START_RE.search(rest):
+        return visible, rest, tool_calls
+    return (visible + (" " + rest.strip() if rest.strip() else "")).strip(), "", tool_calls
 
 
 def _find_json_tool_call(
@@ -1091,10 +1095,13 @@ def _find_json_tool_call(
         # Never emit the raw protocol as visible text — strip the block so
         # the caller can detect the blocked attempt via a follow-up parse
         # with allowed_tool_names=None and answer with a negative result.
-        visible = (text[:start] + rest).strip()
-        return visible, "", []
-    visible = (text[:start] + rest).strip()
-    return visible, "", tool_calls
+        if rest.strip() and (not final or find_tool_calls_protocol(rest) != -1 or _BARE_ARRAY_START_RE.search(rest)):
+            return text[:start].strip(), rest, []
+        return (text[:start] + rest).strip(), "", []
+
+    if rest.strip() and (not final or find_tool_calls_protocol(rest) != -1 or _BARE_ARRAY_START_RE.search(rest)):
+        return text[:start].strip(), rest, tool_calls
+    return text[:start] + rest, "", tool_calls
 
 
 def _split_stream_text(
@@ -1103,6 +1110,9 @@ def _split_stream_text(
     final: bool,
 ) -> tuple[str, str, list[dict[str, object]]]:
     # 1) JSON-Protokoll prüfen (neues format)
+    if find_tool_calls_protocol(text) != -1:
+        visible, remainder, tool_calls = _find_json_tool_call(text, final, allowed_tool_names)
+        return visible, remainder, tool_calls
     visible, remainder, tool_calls = _find_json_tool_call(text, final, allowed_tool_names)
     if tool_calls or (remainder and not final and remainder.lstrip().startswith('{"tool_call')):
         if tool_calls:
@@ -1323,15 +1333,21 @@ class StreamingToolParser:
             return prefix + visible
 
         # JSON-tool-protokoll: partial am ende halten, komplette sofort parsen
+        if find_tool_calls_protocol(self.pending_text) != -1:
+            emitted_vis: list[str] = []
+            while find_tool_calls_protocol(self.pending_text) != -1:
+                jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False, allowed_tool_names=self.allowed_tool_names)
+                if jvis:
+                    emitted_vis.append(jvis)
+                self.tool_calls.extend(jcalls)
+                if jrem == self.pending_text:
+                    break
+                self.pending_text = jrem
+            return "".join(emitted_vis)
+
+        # Check partial JSON holdback
         jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False, allowed_tool_names=self.allowed_tool_names)
-        if jcalls:
-            self.pending_text = jrem
-            self.tool_calls.extend(jcalls)
-            return jvis
         if jrem:
-            # partial-JSON erkannt: nur den JSON-Teil halten, davorliegenden
-            # text ausgeben (pending aktualisieren, sonst wird der prefix
-            # beim naechsten consume doppelt emittiert)
             self.pending_text = jrem
             return jvis
         visible, remainder, parsed_calls = _split_stream_text(
@@ -1344,13 +1360,27 @@ class StreamingToolParser:
         return visible
 
     def flush(self) -> tuple[str, list[dict[str, object]]]:
-        visible, remainder, parsed_calls = _split_stream_text(
-            self.pending_text,
-            allowed_tool_names=self.allowed_tool_names,
-            final=True,
-        )
+        all_visible: list[str] = []
+        while self.pending_text:
+            visible, remainder, parsed_calls = _split_stream_text(
+                self.pending_text,
+                allowed_tool_names=self.allowed_tool_names,
+                final=True,
+            )
+            if parsed_calls:
+                self.tool_calls.extend(parsed_calls)
+                if visible:
+                    all_visible.append(visible)
+                if remainder == self.pending_text:
+                    break
+                self.pending_text = remainder
+                continue
+            else:
+                if visible:
+                    all_visible.append(visible)
+                self.pending_text = remainder
+            break
+        tail = "" if _looks_like_tool_markup_fragment(self.pending_text) else self.pending_text
         self.pending_text = ""
         self.buffering_dsml = False
-        self.tool_calls.extend(parsed_calls)
-        tail = "" if _looks_like_tool_markup_fragment(remainder) else remainder
-        return (visible + tail).strip(), self.tool_calls
+        return (" ".join(all_visible) + (" " + tail if tail else "")).strip(), self.tool_calls

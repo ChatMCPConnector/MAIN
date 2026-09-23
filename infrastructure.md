@@ -261,6 +261,9 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-23: **Freebuff2API-Provider entfernt.**
+  Freebuff2API samt `z-ai/glm-5.3-flash` und `deepseek/deepseek-v4.1-flash` aus
+  `.opencode/opencode.json` entfernt; JSON- und OpenCode-Config-Validierung erfolgreich.
 - 2026-09-23: **Secrets-Vereinheitlichung: `.secrets/` aufgelöst nach `~/.config/landscape/`.**
   (1) `chatglm-refresh-token` von `.secrets/chatglm-refresh-token` nach `~/.config/landscape/chatglm-refresh-token`
   migriert (gleicher Standard-Key-Pfad wie `pat`, `nvidia-nim.key`, `xinjianya.key`).

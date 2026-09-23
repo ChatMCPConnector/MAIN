@@ -106,52 +106,6 @@
         }
       }
     },
-    "freebuff": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Freebuff2API",
-      "options": {
-        "baseURL": "http://127.0.0.1:8080/v1",
-        "apiKey": "local"
-      },
-      "models": {
-        "z-ai/glm-5.3-flash": {
-          "name": "GLM 5.3 Flash",
-          "reasoning": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "max": {
-              "reasoningEffort": "max"
-            }
-          }
-        },
-        "deepseek/deepseek-v4.1-flash": {
-          "name": "DeepSeek V4.1 Flash",
-          "reasoning": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "max": {
-              "reasoningEffort": "max"
-            }
-          }
-        }
-      }
-    },
     "antigravity": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Antigravity OAuth Proxy",
