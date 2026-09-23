@@ -14,7 +14,7 @@ BEACHTEN (kein Fix nötig/sinnvoll, nur beobachten).
 Vier Benchmark-Läufe (~500 Tool-Calls) haben 5 Proxy-Bug-Klassen aufgedeckt —
 alle DONE (Commits 3cd794e, c33da91, fea9c22/79fca84, 7a2a2cd, efbc2e7).
 92/92 Tests. Proxy-Ebene: 100% Tool-Call-Ausführung, 0 Leaks nach letztem Fix.
-BEFUNDE.md im Repo-Root hat die Details inkl. Live-Leak-Strings.
+Details inkl. Live-Leak-Strings sind in Git (Commit 1039311) dokumentiert.
 
 ---
 
@@ -139,5 +139,5 @@ Content, echtes UTF-8 unberührt, jede Bereinigung geloggt.
 - Doppelausgabe Call+Text (Midstream) — DONE 7a2a2cd
 - Nacktes JSON-Array als Protokoll (Leak-Variante D) — DONE efbc2e7
 
-Siehe auch: BEFUNDE.md (Repo-Root, Härtetest-Kampagne komplett),
+Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).

@@ -396,7 +396,7 @@ Proxy bei jedem Start automatisch hoch.
   Terminator/Fence-Konsum, Recovery via _recover_call_elements) in
   parse_tool_calls_from_text + _split_stream_text (Streaming). Beide Live-Leak-
   Strings verifiziert, 92/92 Tests (2 neue Regressionstests), Proxy neu
-  gestartet, Bundle neu gebaut. Details: BEFUNDE.md.
+  gestartet, Bundle neu gebaut. Details: Git-Commit 1039311.
 - 2026-09-10 (13): **glm2api: Midstream-Guard gegen Protokoll-Fragmente in content-Deltas (Re-Befund C).**
   Auslöser: Re-Run-Doppelausgabe 22:35 (tool_calls=1 UND text_len=1630 im selben
   Turn — Protokoll lief parallel zum strukturierten Call als Text). Fix in
@@ -417,7 +417,7 @@ Proxy bei jedem Start automatisch hoch.
   89/89 Tests (inkl. Live-Leak-Regressionstest), am Original-Leak-String
   verifiziert (6 Calls, clean=""), Bundle neu gebaut. Offen bleibt
   Re-Befund C (Doppelausgabe Call+Text bei gespiegelten Parts — Re-Run mit
-  DEBUG_DUMP_ALL nötig). Details: BEFUNDE.md.
+  DEBUG_DUMP_ALL nötig). Details: Git-Commit 1039311.
 - 2026-09-10 (11): **glm2api: Parser-Recovery gegen Snipsel+Finish-Duplikat und
   Terminator-Whitespace-Leak (HARD-Benchmark-Befunde 1+2).**
   Auslöser: ~30-Min-Langlauf (HARD Benchmark v2, benchmark-hard.md + broken3.py
@@ -434,7 +434,7 @@ Proxy bei jedem Start automatisch hoch.
   whitespace-tolerant (lstrip + Skip). Verifikation: 88/88 Tests (3 neue
   Regressionstests inkl. Original-Live-Fall), Proxy neu gestartet, Live-Check
   strukturiert, Bundle neu gebaut. Echo-Filter (10) hielt im Langlauf stand
-  (keine server_tools-Cluster, keine Duplikate); Details siehe BEFUNDE.md.
+  (keine server_tools-Cluster, keine Duplikate); Details siehe Git-Commit 1039311.
 - 2026-09-10 (10): **glm2api: Echo-Filter für gespiegelte native tool_calls (Benchmark-Toolcall-Fix).**
   Auslöser: SWE-Benchmark-Run (Subagent auf glm2api/glm-5.3) — ~25% „unknown
   tool call"-Fehler, massive Duplikat-Executions (24 Tools in einem Timestamp-
