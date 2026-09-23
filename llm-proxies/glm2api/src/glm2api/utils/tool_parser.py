@@ -721,7 +721,61 @@ def _recover_tool_calls_json(candidate: str) -> dict[str, object] | None:
         search_from = idx + len(probe)
 
 
-_BARE_ARRAY_START_RE = re.compile(r"\[\s*\{\s*\"name\"\s*:")
+_BARE_ARRAY_START_RE = re.compile(r"(?:\[|\,)?\s*\{\s*\"name\"\s*:")
+
+
+def _scan_bare_objects_span(text: str, start: int) -> int:
+    """Scans contiguous {"name": ..., "arguments": ...} objects starting from start."""
+    pos = start
+    while pos < len(text) and text[pos] in " \t\r\n,":
+        pos += 1
+    end = pos
+    while pos < len(text):
+        if text[pos] != "{":
+            break
+        depth = 0
+        in_str = False
+        esc = False
+        obj_end = -1
+        for i in range(pos, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    obj_end = i + 1
+                    break
+        if obj_end == -1:
+            obj_end = len(text)
+            end = obj_end
+            break
+        end = obj_end
+        next_pos = obj_end
+        while next_pos < len(text) and text[next_pos] in " \t\r\n":
+            next_pos += 1
+        if next_pos < len(text) and text[next_pos] == ",":
+            after_comma = next_pos + 1
+            while after_comma < len(text) and text[after_comma] in " \t\r\n":
+                after_comma += 1
+            if after_comma < len(text) and text[after_comma] == "{" and '"name"' in text[after_comma:after_comma+30]:
+                pos = after_comma
+                continue
+        elif next_pos < len(text) and text[next_pos] == "{" and '"name"' in text[next_pos:next_pos+30]:
+            pos = next_pos
+            continue
+        break
+    return end
 
 
 def _find_bare_tool_call_array(
@@ -731,10 +785,10 @@ def _find_bare_tool_call_array(
 ) -> tuple[str, str, list[dict[str, object]]] | None:
     """Leak-Variante D (Final-Run 00:27/00:33): das Modell emittiert
     Tool-Calls als NACKTES JSON-Array '[{"name": ..., "arguments": ...}]'
-    — ohne {"tool_calls"}-Wrapper, teils mit prosa davor, teils in einem
-    (auch kaputten '``json'-)fence, teils mit '[]' dahinter. Das Wrapper-
-    format erkennt das nicht. Streng: jedes array-element NUR name+arguments.
-    Gibt None zurueck, wenn kein bare-array-protokoll gefunden wurde."""
+    oder nackte Objekte '{"name": ..., "arguments": ...}' (teils mit fuehrendem
+    Komma ',{"name": ...}') — ohne {"tool_calls"}-Wrapper.
+    Streng: jedes Element NUR name+arguments.
+    Gibt None zurueck, wenn kein bare-Call-Protokoll gefunden wurde."""
     masked = _mask_code_fences(text)
     match = _BARE_ARRAY_START_RE.search(masked)
     if match is None:
@@ -746,34 +800,39 @@ def _find_bare_tool_call_array(
                     return "", text[len(text) - 0 :], []  # unreachable fallback
         return None
     start = match.start()
-    # array-grenzen scannen: bracket-balance ueber den gesamttext ab start
-    depth = 0
-    in_str = False
-    esc = False
-    end = -1
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-            continue
-        if ch == '"':
-            in_str = True
-        elif ch == "[":
-            depth += 1
-        elif ch == "]":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    if end == -1:
-        if not final:
-            return "", text[start:], []
-        end = len(text)
+    matched_prefix = masked[start:].lstrip()
+    if matched_prefix.startswith("["):
+        # array-grenzen scannen: bracket-balance ueber den gesamttext ab start
+        depth = 0
+        in_str = False
+        esc = False
+        end = -1
+        bracket_start = start + (len(masked[start:]) - len(matched_prefix))
+        for i in range(bracket_start, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end == -1:
+            if not final:
+                return "", text[start:], []
+            end = len(text)
+    else:
+        end = _scan_bare_objects_span(text, start)
     candidate = text[start:end]
     rest = text[end:]
     # trailing '[]'-terminator + kaputtes/echtes fence-ende tolerieren

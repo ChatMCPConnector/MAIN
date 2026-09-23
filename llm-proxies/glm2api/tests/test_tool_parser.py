@@ -586,3 +586,19 @@ def test_parse_recovers_comma_separated_sibling_tool_calls():
     assert tool_calls[1]["function"]["name"] == "write"
     assert json.loads(tool_calls[1]["function"]["arguments"])["filePath"] == "/tmp/test/models.py"
 
+
+def test_parse_recovers_leading_comma_bare_tool_calls():
+    """Modell emittiert Calls mit fuehrendem Komma ohne Array-Bracket:
+    ,{"name":"write","arguments":{"filePath":"a.md","content":"A"}},{"name":"write","arguments":{"filePath":"b.md","content":"B"}}"""
+    text = (
+        ',{"name":"write","arguments":{"filePath":"/workspaces/test/a.md","content":"# A"}},'
+        '{"name":"write","arguments":{"filePath":"/workspaces/test/b.md","content":"# B"}}'
+    )
+    clean, tool_calls = parse_tool_calls_from_text(text, allowed_tool_names={"write"})
+    assert clean == ""
+    assert len(tool_calls) == 2
+    assert tool_calls[0]["function"]["name"] == "write"
+    assert json.loads(tool_calls[0]["function"]["arguments"])["filePath"] == "/workspaces/test/a.md"
+    assert tool_calls[1]["function"]["name"] == "write"
+    assert json.loads(tool_calls[1]["function"]["arguments"])["filePath"] == "/workspaces/test/b.md"
+
