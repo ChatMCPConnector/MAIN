@@ -24,7 +24,7 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
 
-| `.secrets/` `.env` `.runtime/` | GITIGNORED — Klartext-Secrets, Browser-Profil, Runtime (nie committen) |
+| `.env` `.runtime/` | GITIGNORED — Klartext-Secrets (.env), Browser-Profil, Runtime (nie committen) |
 
 ## Schnellstart
 
@@ -60,7 +60,7 @@ Secret-Schutz-Purismus:
 - `config/secrets.enc` (+ Manifest): verschlüsseltes Bundle mit
   `pat`, `nvidia-nim.key`, `xinjianya.key`, `antigravity-oauth_creds.json`, `chatglm-refresh-token`,
   `env`, `opencode-auth.json` → landen beim Unlock unter `~/.config/landscape/`,
-  `~/.local/share/opencode/auth.json` bzw. `.env`/`.secrets/`.
+  `~/.local/share/opencode/auth.json` bzw. `.env`.
 - `./infra/scripts/secrets.sh lock|unlock|status` verwaltet das Bundle.
 - Codespaces-Secrets pro Account: `LANDSCAPE_PAT` (Git-Auth), `LANDSCAPE_PASSPHRASE` (optional).
 - API-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` —
@@ -261,6 +261,13 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-23: **Secrets-Vereinheitlichung: `.secrets/` aufgelöst nach `~/.config/landscape/`.**
+  (1) `chatglm-refresh-token` von `.secrets/chatglm-refresh-token` nach `~/.config/landscape/chatglm-refresh-token`
+  migriert (gleicher Standard-Key-Pfad wie `pat`, `nvidia-nim.key`, `xinjianya.key`).
+  (2) `infra/scripts/secrets.sh`: `lock` & `unlock` unterstützen `~/.config/landscape/chatglm-refresh-token`
+  (mit abwärtskompatiblem Fallback auf `.secrets/`).
+  (3) `llm-proxies/scripts/start-glm2api.sh`: Liest Refresh-Token primär aus `~/.config/landscape/` (Fallback `.secrets/`).
+  (4) `infra/scripts/aliases.sh` (`landscape-diff`) & Doku aktualisiert. Workspace-Ordner `.secrets/` vollständig entfernt.
 - 2026-09-22: **Config-Watchdog Busy-Guard & Modell-Bereinigung.**
   (1) `config-watchdog.sh` mit Busy-Guard gehärtet: Vor dem Restart wird `http://127.0.0.1:4096/session/status`
   geprüft. Solange Sessions im Status `busy` sind (Agent antwortet/führt Tools aus),

@@ -45,7 +45,8 @@ cmd_lock() {
   [ -f "$HOME/.config/landscape/nvidia-nim.key" ] && { cp "$HOME/.config/landscape/nvidia-nim.key" "$stage/files/nvidia-nim-key"; found=1; }
   [ -f "$HOME/.config/landscape/xinjianya.key" ] && { cp "$HOME/.config/landscape/xinjianya.key" "$stage/files/xinjianya-key"; found=1; }
   [ -f "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ] && { cp "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" "$stage/files/antigravity-oauth_creds.json"; found=1; }
-  [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
+  [ -f "$HOME/.config/landscape/chatglm-refresh-token" ] && { cp "$HOME/.config/landscape/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
+  [ ! -f "$HOME/.config/landscape/chatglm-refresh-token" ] && [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
   [ -f "$HOME/.local/share/opencode/auth.json" ] && { cp "$HOME/.local/share/opencode/auth.json" "$stage/files/opencode-auth.json"; found=1; }
   [ -f "$HOME/.config/rclone/rclone.conf" ] && { cp "$HOME/.config/rclone/rclone.conf" "$stage/files/rclone.conf"; found=1; }
   [ -f ".env" ] && { cp ".env" "$stage/files/env"; found=1; }
@@ -91,8 +92,8 @@ cmd_unlock() {
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/xinjianya-key" "$HOME/.config/landscape/xinjianya.key" && chmod 600 "$HOME/.config/landscape/xinjianya.key"
     echo "    XinJianYa-Key wiederhergestellt."
   fi
-  if [ -f "$stage/files/chatglm-refresh-token" ] && [ ! -f ".secrets/chatglm-refresh-token" ]; then
-    mkdir -p ".secrets" && cp "$stage/files/chatglm-refresh-token" ".secrets/chatglm-refresh-token" && chmod 600 ".secrets/chatglm-refresh-token"
+  if [ -f "$stage/files/chatglm-refresh-token" ] && [ ! -f "$HOME/.config/landscape/chatglm-refresh-token" ]; then
+    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/chatglm-refresh-token" "$HOME/.config/landscape/chatglm-refresh-token" && chmod 600 "$HOME/.config/landscape/chatglm-refresh-token"
     echo "    ChatGLM-Refresh-Token wiederhergestellt."
   fi
   if [ -f "$stage/files/antigravity-oauth_creds.json" ] && [ ! -f "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ]; then

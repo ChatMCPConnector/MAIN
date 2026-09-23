@@ -17,8 +17,9 @@ if [ ! -f "$APP_DIR/.env" ] && [ -f "$ENV_SRC" ]; then
   cp "$ENV_SRC" "$APP_DIR/.env"
 fi
 
-# Refresh-Token aus Secrets bereitstellen falls vorhanden
-SECRET_TOKEN="/workspaces/MAIN/.secrets/chatglm-refresh-token"
+# Refresh-Token aus Secrets bereitstellen falls vorhanden (~/.config/landscape/, Fallback .secrets/)
+SECRET_TOKEN="${HOME}/.config/landscape/chatglm-refresh-token"
+[ ! -f "$SECRET_TOKEN" ] && [ -f "/workspaces/MAIN/.secrets/chatglm-refresh-token" ] && SECRET_TOKEN="/workspaces/MAIN/.secrets/chatglm-refresh-token"
 if [ -f "$SECRET_TOKEN" ] && [ -f "$APP_DIR/.env" ]; then
   TOKEN="$(cat "$SECRET_TOKEN" | tr -d '\n\r ')"
   if [ -n "$TOKEN" ] && ! grep -q "^GLM_REFRESH_TOKEN=${TOKEN}" "$APP_DIR/.env"; then
