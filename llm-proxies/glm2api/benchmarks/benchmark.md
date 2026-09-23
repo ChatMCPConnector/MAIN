@@ -69,9 +69,9 @@ Sicherheitsereignisse und JSON-Konfigurationen und erzeugt einen Auditbericht.
    `PYTHONPATH=<BENCHMARK_ROOT>/src python3 -m pytest tests -v` (workdir: `<BENCHMARK_ROOT>`).
    Behebe Fehler im Code, bis alle Tests gruen sind.
 5. **Phase 5 — Pipeline-Lauf:** Starte die CLI:
-   `PYTHONPATH=<BENCHMARK_ROOT>/src python3 -m auditmesh --root <BENCHMARK_ROOT>`
-   und pruefe, dass `<BENCHMARK_ROOT>/output/metrics.json` und
-   `<BENCHMARK_ROOT>/output/audit_report.md` existieren und korrekte Werte enthalten.
+   `PYTHONPATH=<BENCHMARK_ROOT>/src python3 -m auditmesh --root <BENCHMARK_ROOT>`.
+   Erst im darauffolgenden Schritt/Turn pruefst du, dass `<BENCHMARK_ROOT>/output/metrics.json` und
+   `<BENCHMARK_ROOT>/output/audit_report.md` existieren und korrekte Werte enthalten (nicht im selben Turn).
 6. **Phase 6 — Abschluss:** Knapper Abschlussbericht gemaess Vorgabe unten.
 
 ### Erwartete Struktur
@@ -225,6 +225,8 @@ kann:
 - Schreibe echte Unit- und Integrationstests, die aus den Rohdaten lesen oder
   die oeffentliche Analyse-API aufrufen. Tests, die nur bereits geschriebene
   Ausgabe lesen, sind nicht ausreichend.
+- Greife tolerant auf Fixture-Sammlungen zu (z. B. `docs.get('runbook.md')`),
+  damit isolierte Unit-Tests mit Teil-Fixtures nicht an `KeyError` scheitern.
 
 ### Verbindliches Metrik-Schema
 

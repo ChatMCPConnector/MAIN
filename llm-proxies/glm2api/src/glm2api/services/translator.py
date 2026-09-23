@@ -236,8 +236,11 @@ def sanitize_tool_call_payload(
 
     if "filePath" in cleaned and isinstance(cleaned["filePath"], str):
         fp = cleaned["filePath"].strip()
-        if fp.startswith("file://"):
-            cleaned["filePath"] = fp.removeprefix("file://")
+        while fp.startswith("file://"):
+            fp = fp[7:]
+        while fp.startswith("file:/"):
+            fp = fp[6:]
+        cleaned["filePath"] = fp
 
     # Repair: stringified JSON arrays or objects inside parameters (e.g. questions: "[{...}]")
     # Ausgenommen write/edit: deren Textinhalte (content, newString, oldString) MÜSSEN Strings bleiben.
@@ -342,6 +345,64 @@ def map_native_open_tool_call(
     return None
 
 
+_DUMMY_SANDBOX_PATTERNS = {
+    "placeholder",
+    "raise systemexit",
+    "true",
+    "pass",
+    "noop",
+    "no-op",
+    "none",
+    "exit()",
+    "sys.exit()",
+    "1",
+    "0",
+}
+
+
+def is_dummy_sandbox_code(arguments: object) -> bool:
+    """Detects self-chastising or dummy no-op code snippets emitted by GLM."""
+    parsed = arguments
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            parsed = {"code": arguments}
+    if not isinstance(parsed, dict):
+        return False
+    code = str(
+        parsed.get("code", "")
+        or parsed.get("command", "")
+        or parsed.get("script", "")
+        or parsed.get("input", "")
+        or ""
+    ).strip().lower()
+    if not code:
+        return True
+    if code in _DUMMY_SANDBOX_PATTERNS:
+        return True
+    if code.startswith("print(") and code.endswith(")"):
+        inner = code[6:-1].strip("'\" \t")
+        keywords = (
+            "stop",
+            "noop",
+            "no-op",
+            "switching",
+            "wrong tool",
+            "unused",
+            "stopped",
+            "acknowledge",
+            "switch to",
+            "sandbox",
+            "proper tools",
+            "misuse",
+            "proper tool",
+        )
+        if any(kw in inner for kw in keywords) or not inner:
+            return True
+    return False
+
+
 def map_native_sandbox_tool_call(
     arguments: object,
     allowed_tool_names: set[str] | None = None,
@@ -349,6 +410,8 @@ def map_native_sandbox_tool_call(
     """Maps ChatGLM's native execute_sandbox_code(code=...) call to bash
     if bash is allowed. Runs python3 with the provided code.
     Returns (mapped_tool_name, mapped_arguments) or None if unmappable."""
+    if is_dummy_sandbox_code(arguments):
+        return None
     if allowed_tool_names is not None and "bash" not in allowed_tool_names:
         return None
 
@@ -402,11 +465,15 @@ def sanitize_tool_calls(
                 original_arguments = mapped_args
                 original_value = mapped_args
         elif tool_name in {"execute_sandbox_code", "code_interpreter", "sandbox", "run_code"}:
+            if is_dummy_sandbox_code(original_arguments):
+                continue
             mapped = map_native_sandbox_tool_call(original_arguments)
             if mapped is not None:
                 tool_name, mapped_args = mapped
                 original_arguments = mapped_args
                 original_value = mapped_args
+            else:
+                continue
         if isinstance(original_arguments, str):
             try:
                 original_value = json.loads(original_arguments)
@@ -878,6 +945,13 @@ class GLMEventAccumulator:
                                             mapped_args,
                                         )
                             elif tool_name in {"execute_sandbox_code", "code_interpreter", "sandbox", "run_code"}:
+                                if is_dummy_sandbox_code(arguments):
+                                    if self.logger:
+                                        self.logger.info(
+                                            "Dropped dummy sandbox self-talk call args=%s",
+                                            arguments,
+                                        )
+                                    continue
                                 mapped = map_native_sandbox_tool_call(arguments, self.allowed_tool_names)
                                 if mapped is not None:
                                     mapped_name, mapped_args = mapped
@@ -1061,6 +1135,7 @@ class GLMEventAccumulator:
             tc_copy = dict(tc)
             tc_copy["index"] = len(all_tool_calls)
             all_tool_calls.append(tc_copy)
+        all_tool_calls = sanitize_tool_calls(all_tool_calls, fallback_url=self.fallback_tool_url)
 
         if self.logger:
             self.logger.info(

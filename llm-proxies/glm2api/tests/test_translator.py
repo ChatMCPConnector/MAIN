@@ -1092,6 +1092,42 @@ def test_native_sandbox_maps_to_bash_when_bash_allowed():
     assert "pytest tests -q" in str(acc._server_side_tool_calls[0]["function"]["arguments"])
 
 
+def test_dummy_sandbox_code_is_dropped():
+    from glm2api.services.translator import GLMEventAccumulator, is_dummy_sandbox_code
+
+    assert is_dummy_sandbox_code('{"code": "print(\'noop\')"}')
+    assert is_dummy_sandbox_code('{"code": "print(\'STOP using sandbox. Use write tool now.\')"}')
+    assert is_dummy_sandbox_code('{"code": "raise SystemExit"}')
+    assert is_dummy_sandbox_code('{"code": "placeholder"}')
+    assert not is_dummy_sandbox_code('{"code": "pytest tests -q"}')
+
+    acc = GLMEventAccumulator(model="glm-5.3", allowed_tool_names={"bash", "write"})
+    event = {
+        "status": "init",
+        "parts": [
+            {
+                "id": "p_dummy",
+                "logic_id": "l_dummy",
+                "role": "assistant",
+                "status": "finish",
+                "content": [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": {
+                            "id": "call_sb_dummy",
+                            "name": "execute_sandbox_code",
+                            "arguments": '{"code": "print(\'noop\')"}',
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    chunks, status = acc.consume_event(event)
+    assert status != "intervene"
+    assert len(acc._server_side_tool_calls) == 0
+
+
 def test_repair_raw_tool_args_fixes_unescaped_triple_quotes():
     from glm2api.services.translator import sanitize_tool_calls
 
