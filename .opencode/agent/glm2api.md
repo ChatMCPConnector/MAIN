@@ -1,6 +1,6 @@
 ---
 description: "Arbeits-Agent über den glm2api-Haupt-Proxy (chatglm.cn, Port 8001)"
-mode: subagent
+mode: all
 model: glm2api/glm-5.3
 permission:
   opencode-sessions_delete_sessions: deny
