@@ -322,12 +322,20 @@ def map_native_open_tool_call(
     if not isinstance(parsed, dict):
         return None
 
+    command = ""
     target = ""
     open_list = parsed.get("open")
     if isinstance(open_list, list) and open_list:
         first = open_list[0]
         if isinstance(first, dict):
+            command = str(first.get("command", "") or first.get("cmd", "") or "").strip()
             target = str(first.get("ref_id", "") or first.get("url", "") or first.get("path", "")).strip()
+    if not command:
+        command = str(parsed.get("command", "") or parsed.get("cmd", "") or "").strip()
+    if command:
+        if allowed_tool_names is None or "bash" in allowed_tool_names:
+            return "bash", {"command": command}
+
     if not target:
         target = str(parsed.get("ref_id", "") or parsed.get("url", "") or parsed.get("path", "") or parsed.get("file", "")).strip()
 

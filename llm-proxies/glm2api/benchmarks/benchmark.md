@@ -62,21 +62,26 @@ Sicherheitsereignisse und JSON-Konfigurationen und erzeugt einen Auditbericht.
 ### Verbindliche Tool-Abdeckung
 
 Der Lauf muss jedes der folgenden Tools mindestens einmal und ausschliesslich
-fuer den genannten Zweck verwenden:
+fuer den genannten Zweck verwenden (sofern in der jeweiligen Laufumgebung deklariert):
 
-| Tool | Vorgesehener Einsatz |
-|---|---|
-| `todowrite` | Phase 0: Plan anlegen und waehrend des Laufs aktuell halten |
-| `write` | alle neuen Projekt- und Fixture-Dateien |
-| `read` | Ruecklesen von Fixtures und Output |
-| `bash` | Verzeichnispruefung, Tests, CLI-Lauf, lokaler HTTP-Server |
-| `glob` | Phase 2: Mustersuche `**/*.md` unter `<BENCHMARK_ROOT>/data` |
-| `grep` | Phase 2: Inhaltssuche nach `ERR-101` unter `<BENCHMARK_ROOT>/data` |
-| `edit` | Phase 4: genau eine gezielte Nachaenderung nach dem ersten Schreiben |
-| `task` | Phase 7: genau ein rein lesender `explore`-Subagent |
-| `webfetch` | Phase 8: Abruf vom lokalen 127.0.0.1-Server |
-| `opencode-sessions_db_stats` | Phase 9: einmaliger read-only Abruf der Session-Statistik |
-| `question` | Phase 10: definierter Laufabschluss |
+| Tool | Vorgesehener Einsatz | Pflicht / Bedingung |
+|---|---|---|
+| `write` | alle neuen Projekt- und Fixture-Dateien | Pflicht |
+| `read` | Ruecklesen von Fixtures und Output | Pflicht |
+| `bash` | Verzeichnispruefung, Tests, CLI-Lauf | Pflicht |
+| `glob` | Phase 2: Mustersuche `**/*.md` unter `<BENCHMARK_ROOT>/data` | Pflicht |
+| `grep` | Phase 2: Inhaltssuche nach `ERR-101` unter `<BENCHMARK_ROOT>/data` | Pflicht |
+| `edit` | Phase 4: genau eine gezielte Nachaenderung nach dem ersten Schreiben | Pflicht |
+| `opencode-sessions_db_stats` | Phase 9: einmaliger read-only Abruf der Session-Statistik | Pflicht |
+| `todowrite` | Phase 0: Plan anlegen und waehrend des Laufs aktuell halten | falls deklariert (Haupt-Agent) |
+| `task` | Phase 7: genau ein rein lesender `explore`-Subagent | falls deklariert (Haupt-Agent) |
+| `webfetch` | Phase 8: Abruf vom lokalen 127.0.0.1-Server | falls deklariert |
+| `question` | Phase 10: definierter Laufabschluss | falls deklariert (Haupt-Agent) |
+
+Hinweis fuer Subagenten-Umgebungen: Wenn ein Tool (wie `todowrite`, `task`, `webfetch`
+oder `question`) nicht in deiner deklarierten Tool-Liste steht, ueberspringe die
+entsprechende Phase einfach und fahre direkt mit der naechsten Phase fort.
+Versuche niemals, nicht-deklarierte Tools aufzurufen.
 
 Verboten und als Proxy-Anomalie gewertet sind: alle
 `opencode-sessions_delete_*`-Tools, `skill` (kein Skill passt zu diesem
@@ -123,7 +128,7 @@ nicht durch `bash`-Kombinationen wie `find | grep` ersetzt werden.
 9. **Phase 9 — Session-Statistik:** Rufe einmal `opencode-sessions_db_stats`
    auf; Session-Anzahl und DB-Groesse gehoeren in den Abschlussbericht.
 10. **Phase 10 — Abschluss:** Knapper Abschlussbericht gemaess Vorgabe unten,
-    danach genau ein `question`-Aufruf als Laufende.
+    danach genau ein `question`-Aufruf als Laufende (sofern deklariert).
 
 ### Erwartete Struktur
 
@@ -342,9 +347,10 @@ und eine eigene Statuszeile `AUDIT_STATUS: NON_COMPLIANT`.
    Output-Pfade, wichtigste Metriken sowie die Zahlen aus
    `opencode-sessions_db_stats`. Keine Quellcode-Dumps und keine inhaltliche
    Rueckfrage an den Benutzer.
-5. Beende den Lauf mit genau einem `question`-Aufruf, dessen Frage exakt
-   `Benchmark-Lauf abgeschlossen?` lautet. Dieser Aufruf ist das definierte
-   Laufende und gilt nicht als Rueckfrage im Sinne von Punkt 4.
+5. Beende den Lauf mit genau einem `question`-Aufruf (sofern deklariert),
+   dessen Frage exakt `Benchmark-Lauf abgeschlossen?` lautet. Dieser Aufruf ist das definierte
+   Laufende und gilt nicht als Rueckfrage im Sinne von Punkt 4. In reinen
+   Subagenten-Umgebungen entfaellt dieser Schritt.
 
 ## Auswertung
 
