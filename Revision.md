@@ -13,9 +13,9 @@ Vollständige statische Revision des Pfads `/workspaces/MAIN`.
 
 | Bereich | Dateien laut Bestandsaufnahme | Bearbeitung |
 |---|---:|---|
-| versionierte Arbeitsdateien | 178 (Endstand S) | vollständig quellenah prüfen; `Revision.md` enthalten |
-| ignorierte Runtime-/Dependency-/Log-Dateien | 5.515 (Snapshot vor S; danach durch Reports höher) | vollständig inventarisieren; Text-/Konfigurationsdateien zeilenweise, Binärdateien strukturell |
-| Kandidaten ohne `.git`-Objektspeicher | 5.693 (Endstand S) | in Teilprozessen A–T abgedeckt |
+| versionierte Arbeitsdateien | 178 (Endstand U) | vollständig quellenah prüfen; `Revision.md` enthalten |
+| ignorierte Runtime-/Dependency-/Log-Dateien | 5.518 (aktueller Endstand nach U) | vollständig inventarisieren; Text-/Konfigurationsdateien zeilenweise, Binärdateien strukturell |
+| Kandidaten ohne `.git`-Objektspeicher | 5.696 (aktueller Endstand nach U) | in Teilprozessen A–U abgedeckt |
 | `.git` | separat als Versionsverzeichnis katalogisiert | keine Objekt-/Blob-Inhalte als Quellcode analysieren |
 
 ## Laufender Abdeckungsstatus
@@ -43,6 +43,7 @@ Vollständige statische Revision des Pfads `/workspaces/MAIN`.
 | R | historischer Gap-Check | abgeschlossen, durch S überholt |
 | S | korrigierter Gesamt-/Coverage-Check | abgeschlossen |
 | T | aktueller AuditMesh-Benchmark-Recheck | abgeschlossen |
+| U | Delta-Audit der extern übernommenen glm2api-Änderung | abgeschlossen |
 
 ## Laufende Protokolle
 
@@ -55,8 +56,8 @@ Die erste Inventur wurde aus dem tatsächlichen Dateisystem und der Git-Index-Li
 <!-- BEGIN PART A -->
 # Revision Partition A – statische Bestandsanalyse
 
-**Analysedatum:** 24.09.2026  
-**Arbeitsgrenze:** ausschließlich der unten aufgeführte Bestand unter `/workspaces/MAIN`  
+**Analysedatum:** 24.09.2026
+**Arbeitsgrenze:** ausschließlich der unten aufgeführte Bestand unter `/workspaces/MAIN`
 **Änderungen am analysierten Bestand:** keine
 
 ## 1. Prüfumfang und Methodik
@@ -754,9 +755,9 @@ Partition A umfasst 16 vollständig gelesene, strukturell lesbare Textdateien. E
 <!-- BEGIN PART C -->
 # Revision-Audit — Partition C: `infra/mcp/`
 
-**Audit-Datum:** 2026-09-24  
-**Scope:** ausschließlich `/workspaces/MAIN/infra/mcp/`; ergänzend nur die für die Registrierungs- und Aufrufgrenze benötigten, ausdrücklich benannten Querverweise in `.opencode/opencode.json`, `.devcontainer/setup.sh` und `.opencode/agent/glm2api.md`.  
-**Methode:** vollständiges Zeilenlesen aller Textdateien im Scope, statische Datenfluss-/SQL-/Fehleranalyse, Git-Inventar und rein statische Syntax-/Versionsprüfungen.  
+**Audit-Datum:** 2026-09-24
+**Scope:** ausschließlich `/workspaces/MAIN/infra/mcp/`; ergänzend nur die für die Registrierungs- und Aufrufgrenze benötigten, ausdrücklich benannten Querverweise in `.opencode/opencode.json`, `.devcontainer/setup.sh` und `.opencode/agent/glm2api.md`.
+**Methode:** vollständiges Zeilenlesen aller Textdateien im Scope, statische Datenfluss-/SQL-/Fehleranalyse, Git-Inventar und rein statische Syntax-/Versionsprüfungen.
 **Nicht ausgeführt:** kein MCP-Serverstart, keine SQLite-Datei geöffnet, keine Query ausgeführt, keine Löschung, kein `VACUUM`, keine Testdatenbank und keine Änderung an `Revision.md`.
 
 ## 1. Vollständiges Dateiinventar
@@ -2775,8 +2776,8 @@ Die Testquellen enthalten außerdem keine Tests für `chat_completions_handler.g
 <!-- BEGIN PART H -->
 # Revision H — `llm-proxies/` / `glm2api` Betriebs- und Reproduzierbarkeitsprüfung
 
-Datum: 2026-09-24  
-Prüfmodus: ausschließlich statisch  
+Datum: 2026-09-24
+Prüfmodus: ausschließlich statisch
 Gesamtstatus: **BEFUND — nicht abnahmefähig ohne die unten genannten Klärungen**
 
 ## 1. Scope und Methodik
@@ -3230,8 +3231,8 @@ Statusdefinition:
 <!-- BEGIN PART I -->
 # Partition I — Statischer Audit des produktiven Python-Codes von `glm2api`
 
-**Stand:** 2026-09-24  
-**Arbeitsverzeichnis:** `/workspaces/MAIN`  
+**Stand:** 2026-09-24
+**Arbeitsverzeichnis:** `/workspaces/MAIN`
 **Prüfungsart:** ausschließlich lokale statische Prüfung
 
 ## 1. Scope und Vollständigkeitsnachweis
@@ -4814,9 +4815,9 @@ Erstellt wurde ausschließlich dieser redigierte Bericht unter `.runtime/revisio
 <!-- BEGIN PART O -->
 # Revision O — `.opencode`-Agent und Quota-Command
 
-**Prüfdatum:** 2026-09-24  
-**Prüfgrenze:** ausschließlich `/workspaces/MAIN`  
-**Prüfmodus:** statische Vollprüfung der beiden Zieldateien zeilenweise; relevante lokale Querverweise gezielt geprüft. Kein Dienststart, keine Netzwerkanfrage, keine Runtime-Credential-Datei geöffnet und keine Credentials verwendet; die unterstützende Konfiguration wurde nur zur Risiko-Einordnung gelesen. Keine Tests oder Benchmarks ausgeführt.  
+**Prüfdatum:** 2026-09-24
+**Prüfgrenze:** ausschließlich `/workspaces/MAIN`
+**Prüfmodus:** statische Vollprüfung der beiden Zieldateien zeilenweise; relevante lokale Querverweise gezielt geprüft. Kein Dienststart, keine Netzwerkanfrage, keine Runtime-Credential-Datei geöffnet und keine Credentials verwendet; die unterstützende Konfiguration wurde nur zur Risiko-Einordnung gelesen. Keine Tests oder Benchmarks ausgeführt.
 **Vertraulichkeit:** Es werden keine Geheimniswerte wiedergegeben. Secretbezüge werden nur als Pfad, Zeilennummer, Schlüsselname und Risikoklasse beschrieben.
 
 ## 1. Kurzfazit
@@ -5033,8 +5034,8 @@ Im Fallbackpfad `quota.sh:107-130` wird anhand des Reset-Strings geraten, ob ein
 <!-- BEGIN PART P -->
 # Redigierter Report — `config/`
 
-**Beobachtungszeitpunkt:** 24.09.2026, lokale Workspace-Zeit (`+0200`)  
-**Scope:** ausschließlich `/workspaces/MAIN/config/`; Querverweise nur innerhalb von `/workspaces/MAIN`.  
+**Beobachtungszeitpunkt:** 24.09.2026, lokale Workspace-Zeit (`+0200`)
+**Scope:** ausschließlich `/workspaces/MAIN/config/`; Querverweise nur innerhalb von `/workspaces/MAIN`.
 **Zweck:** Existenz, Metadaten, Hash-/Strukturinformationen, Schutzstatus, Risiken und beobachtete Referenzen.
 
 ## Kurzurteil
@@ -5102,9 +5103,9 @@ Im Fallbackpfad `quota.sh:107-130` wird anhand des Reset-Strings geraten, ob ein
 1. **Klartext-Passphrase im selben Repository (kritisch):** Ein Repository-/Bundle-Leser kann Passphrase und Chiffretext gemeinsam verwenden.
 2. **Weltweit beschreibbare Dateien (hoch):** `0666` erlaubt lokale Manipulation; bei CBC ohne MAC ist Bitänderung nicht zuverlässig erkennbar.
 3. **Keine authentifizierte Verschlüsselung (hoch):** CBC-Schutz gegen Vertraulichkeit ist kein Integritäts-/Authentizitätsschutz.
-4. **Nicht-atomare Bundle-/Manifest-Paare (hoch):** Abbruch kann Chiffretext und Manifest不同 Generationen hinterlassen.
+4. **Nicht-atomare Bundle-/Manifest-Paare (hoch):** Abbruch kann Chiffretext und Manifest verschiedener Generationen hinterlassen.
 5. **TAR-Extraktion ohne Allowlist (hoch):** `tar -xzf` in `secrets.sh:71-76` prüft keine Pfad-, Symlink- oder Metadatenregeln.
-6. **Implizite KDF-/Formatparameter (mittel):` OpenSSL-Standardwerte und Script-Version bestimmen Lesbarkeit/Schutz, ohne versioniertes Formatfeld.
+6. **Implizite KDF-/Formatparameter (mittel):** OpenSSL-Standardwerte und Script-Version bestimmen Lesbarkeit/Schutz, ohne versioniertes Formatfeld.
 7. **Prozesskontext (mittel bis hoch):** Passphrase wird exportiert; PAT-Restoration nutzt in `secrets.sh:80` ein Kommandozeilenargument.
 
 ## Backup- und Restore-Risiken
@@ -5251,9 +5252,9 @@ Alle 35 nicht-geschützten Dateien wurden vollständig aus dem ZIP gelesen, byte
 <!-- BEGIN PART S -->
 # Revision S — korrigierter read-only Endstatus
 
-**Prüfzeitpunkt:** 24.09.2026, 01:40:47 +0200 (Snapshot vor dem Schreiben dieser Datei)  
-**Wurzel:** ausschließlich `/workspaces/MAIN`  
-**HEAD:** `8e483ea195c53019a8956707fd0b82c56d85aa71`  
+**Prüfzeitpunkt:** 24.09.2026, 01:40:47 +0200 (Snapshot vor dem Schreiben dieser Datei)
+**Wurzel:** ausschließlich `/workspaces/MAIN`
+**HEAD:** `8e483ea195c53019a8956707fd0b82c56d85aa71`
 **Modus:** statischer, read-only Abschlusscheck. Kein Dienststart, kein Build, kein Testlauf, keine Netzwerkanfrage und keine Löschung.
 
 ## Kurzurteil
@@ -5299,10 +5300,10 @@ Alle 35 nicht-geschützten Dateien wurden vollständig aus dem ZIP gelesen, byte
 <!-- BEGIN PART T -->
 # Revision T — AuditMesh-Benchmark-Vertrag
 
-**Analysedatum:** 24.09.2026  
-**Arbeitsgrenze:** ausschließlich `/workspaces/MAIN`  
-**Prüfmodus:** statisch, read-only; keine Tests, Starts, HTTP-/Netzwerkaktionen oder Secret-Inhalte ausgegeben  
-**Zieldatei:** `llm-proxies/glm2api/benchmarks/benchmark.md`  
+**Analysedatum:** 24.09.2026
+**Arbeitsgrenze:** ausschließlich `/workspaces/MAIN`
+**Prüfmodus:** statisch, read-only; keine Tests, Starts, HTTP-/Netzwerkaktionen oder Secret-Inhalte ausgegeben
+**Zieldatei:** `llm-proxies/glm2api/benchmarks/benchmark.md`
 **Zielstand:** 379 Zeilen, vollständig gelesen
 
 ## Kurzurteil
@@ -5449,5 +5450,89 @@ Der Report wurde vor dem Schreiben von Q und vor der Integration von O/P/Q erste
 
 **Keine Anwendungsdatei wurde durch R verändert.** Der vollständige historische Zwischenreport bleibt unter `/workspaces/MAIN/.runtime/revision-parts/R.md`.
 <!-- END PART R -->
+
+## Anhang U — Delta-Audit der extern übernommenen glm2api-Änderung
+
+<!-- BEGIN PART U -->
+# Partition U – Statischer Delta-Audit der extern geänderten glm2api-Dateien
+
+**Stand:** 24.09.2026
+**Arbeitsverzeichnis:** `/workspaces/MAIN`
+**Vergleichsbasis:** Commit-Parent `8e483ea195c53019a8956707fd0b82c56d85aa71`
+**HEAD bei Abschlussprüfung:** `ac780204b00e97d89f95ea2f5a6ea08e5dcfe64a`
+
+## Scope, Methode und Redaktion
+
+Analysiert wurden ausschließlich:
+
+- `llm-proxies/glm2api/src/glm2api/services/glm_client.py` – 1.346 Zeilen vollständig gelesen.
+- `llm-proxies/glm2api/src/glm2api/services/translator.py` – 1.567 Zeilen vollständig gelesen.
+
+Vorgehen: `git diff` für genau diese Pfade, vollständige zeilenweise Lektüre, Abgleich mit F/I, statisches `ast.parse` ohne Import/Ausführung, `git diff --check` und anschließende read-only Verifikation des externen Commit-Deltas. Keine Tests, Server, Clients, Netzwerkaktionen oder Installationen. Keine Secret-/Token-/Payloadwerte ausgegeben. Revision.md und Quelldateien wurden nicht verändert.
+
+## Beobachtetes Delta
+
+| Datei | Ergänzungen | Löschungen | Inhalt |
+|---|---:|---:|---|
+| `glm_client.py` | 2 | 2 | Dieselbe Follow-up-Anweisung in zwei nahezu identischen Payload-Buildern: strukturierter Tool-Call nach blockiertem Tool, keine Entschuldigungs-/Meta-Texte. |
+| `translator.py` | 43 | 0 | `filePath`-Reparatur, Meta-Chatter-Keyword-/Zeilenfilter und Integration in `finalize()`. |
+
+Aktuelle Stellen: `glm_client.py:211-243,403-440`; `translator.py:237-247,374-406,1259-1263`. Das Delta wurde während des Audits extern als Commit `ac780204` mit Parent `8e483ea` übernommen; die Blob-IDs stimmen überein.
+
+## Klassifikation älterer Befunde
+
+- Kein Befund aus F/I wurde durch die Änderung beseitigt.
+- I-001 bis I-006 und I-010 bis I-020 bleiben im aktuellen Stand bestehen, soweit ihre Dateien nicht geändert wurden.
+- I-007 (Streamabbruch als Erfolg), I-008 (History-Paare) und I-009 (Wildcard-/Native-Mapping) bleiben bestehen und sind durch den neuen Stream-Filter bzw. die Pfadumschreibung teilweise stärker relevant.
+- I-005, I-006, I-014–I-016 bleiben unverändert; die Änderung fügt keine Redaktion, kein Ressourcenlimit, keine Sessionbindung und keine strikte Terminierung hinzu.
+- F-01–F-29 betreffen ausschließlich den Go-Scope unter `llm-proxies/antigravity-proxy/`; U berührt keine F-Datei.
+
+## Neue Befunde
+
+### U-01 — Mittel: Meta-Chatter-Filter ist all-or-nothing, stream-only und semantisch inkonsistent
+
+`strip_meta_chatter()` entfernt ganze Zeilen anhand harter Sprach-/Schreibweisenmarker. Ohne Tool-Call wird Originaltext nur dann verworfen, wenn der Filter das gesamte Ergebnis leert. Mit Tool-Call wird der Text gefiltert, aber bei `all_tool_calls` nicht emittiert. Bereits gesendete Stream-Deltas werden nicht zurückgenommen; `build_response()` im Non-Stream-Pfad ruft den Helper nicht auf.
+
+**Auswirkung:** Legitimer Text kann still verschwinden; Stream- und Non-Stream-Antworten behandeln denselben Modelltext unterschiedlich; der Filter ist keine Qualitäts- oder Sicherheitsgarantie.
+
+**Empfehlung:** Keine hartcodierte Zeilenbereinigung in Nutzerausgaben; strukturierten Abschlusszustand und konsistente Anwendung auf beide Response-Pfade verwenden.
+
+### U-02 — Mittel bis Hoch: `filePath` wird ohne Root-Kontext umgeschrieben
+
+`workspaces/...` wird auf `/workspaces/...`, `benchmark/...` auf `/workspaces/benchmark/...` abgebildet, ohne Existenz-, Root-, Schema- oder kanonische Pfadprüfung. Das gilt auch für Conversation-Historie und nicht nur für Read/Write/Edit. Non-Stream- und serverseitige Call-Sanitisation bleiben uneinheitlich.
+
+**Auswirkung:** Ein gültiger, absichtlich anders verankerter Pfad kann auf einen festen Hostpfad umgeleitet werden; bereits ausgeführte History-Calls können semantisch umgeschrieben werden.
+
+**Empfehlung:** Nur explizit gegen den tatsächlichen Projektroot validierte absolute Pfade akzeptieren; Root als strukturiertes Toolargument und dieselbe Sanitisation für Streaming, Non-Stream und History verwenden.
+
+### U-03 — Niedrig: Follow-up-Anweisung dupliziert Verzweigungslogik
+
+Die neue Anweisung wurde in zwei lokalen Buildern wiederholt. Die doppelte History-Signatur-Extraktion und fehlende zentrale Follow-up-Repräsentation aus Anhang I bleiben bestehen; Drift-/Paritätsrisiko steigt.
+
+## Nicht nummerierte Altbefunde
+
+- Doppelte Signatur-Extraktion unverändert (`glm_client.py:186-191`).
+- Präambeltextverlust bei Tool-Calls bleibt bestehen.
+- Serverseitige Calls werden nicht in allen Pfaden final sanitisiert.
+- History-Echo-/Signatur-Deduplizierung und fehlende ID-Berücksichtigung bleiben bestehen.
+- Logik-IDs werden weiterhin nicht zwingend Ereignisreihenfolge folgend sortiert.
+- Usage bleibt Dummy; ungenutzte Helper bleiben bestehen.
+
+## Schlussfolgerung
+
+Das externe Delta ist syntaktisch sauber, beseitigt keinen priorisierten I-Befund und verbessert weder Queue-Leasing, Ressourcenlimits, Session-Isolation, SSE-Terminierung, Tool-Allowlisting noch Inputvalidierung. Es kommen eine mögliche Output-Unterdrückung und eine kontextunabhängige Pfadumschreibung hinzu. Für den bestehenden Happy Path ist keine Verhaltensregression statisch belegt; die neuen Vertragsrisiken sind dennoch relevant.
+
+Vollständiger Recheck: `/workspaces/MAIN/.runtime/revision-parts/U.md`.
+<!-- END PART U -->
+
+## Endkontrolle nach U
+
+- **Aktueller Git-Stand:** `ac780204b00e97d89f95ea2f5a6ea08e5dcfe64a`; der externe Commit enthält die in U analysierte glm2api-Änderung.
+- **Aktueller Bestand:** 178 tracked, 5.518 ignorierte, 0 untracked-nicht-ignorierte Einträge; 14 Symlinks außerhalb `.git`.
+- **Arbeitsbaum:** Nur `Revision.md` ist als `M` sichtbar; die beiden in U genannten Quelldateien wurden inzwischen extern committed und sind sauber.
+- **Revision.md:** A–T sowie U strukturell vollständig eingebettet; ein einzelner Append-Marker bleibt als technischer Endmarker erhalten.
+- **Integrität:** `git diff --check` ist nach bereinigtem Markdown ohne Whitespace-Fehler; Secret-Mustersuche nach JWT/PEM/GitHub-/Google-Key-Formen ergibt 0 Treffer.
+- **Offen:** Keine Test-, Build-, Runtime-, Remote- oder Portverifikation; die in den Anhängen dokumentierten Befunde bleiben unverändert, sofern nicht ausdrücklich als behoben/superseded markiert.
+<!-- END FINAL CHECK -->
 
 <!-- APPEND-MARKER -->
