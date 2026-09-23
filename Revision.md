@@ -13,27 +13,36 @@ Vollständige statische Revision des Pfads `/workspaces/MAIN`.
 
 | Bereich | Dateien laut Bestandsaufnahme | Bearbeitung |
 |---|---:|---|
-| versionierte Arbeitsdateien | 177 | vollständig quellenah prüfen |
-| ignorierte Runtime-/Dependency-/Log-Dateien | 5.497 | vollständig inventarisieren; Text-/Konfigurationsdateien zeilenweise, Binärdateien strukturell |
-| Kandidaten ohne `.git`-Objektspeicher | 5.672 | in Teilprozessen abdecken |
-| `.git` | wird separat als Versionsverzeichnis katalogisiert | keine Objekt-/Blob-Inhalte als Quellcode analysieren |
+| versionierte Arbeitsdateien | 178 (Endstand S) | vollständig quellenah prüfen; `Revision.md` enthalten |
+| ignorierte Runtime-/Dependency-/Log-Dateien | 5.515 (Snapshot vor S; danach durch Reports höher) | vollständig inventarisieren; Text-/Konfigurationsdateien zeilenweise, Binärdateien strukturell |
+| Kandidaten ohne `.git`-Objektspeicher | 5.693 (Endstand S) | in Teilprozessen A–T abgedeckt |
+| `.git` | separat als Versionsverzeichnis katalogisiert | keine Objekt-/Blob-Inhalte als Quellcode analysieren |
 
 ## Laufender Abdeckungsstatus
 
 | Prozess | Bereich | Status |
 |---|---|---|
 | Initialisierung | Gesamtbestand und Methodik | abgeschlossen |
-| A | Top-Level, Dokumentation, Devcontainer, OpenCode, Config | gestartet |
-| B | Infrastruktur-Skripte und Infra-Dokumentation | gestartet |
-| C | MCP-Server und dessen Tests/Referenzen | gestartet |
-| D | antigravity-proxy: Konfiguration und Betrieb | gestartet |
-| E | antigravity-proxy: Go-Code und Tests | gestartet |
-| F | antigravity-proxy: Pakete, Build, CI, Hilfsdateien | gestartet |
-| G | glm2api: Betrieb, Rebuild, Bundle, Dokumentation | gestartet |
-| H | glm2api: Python-Anwendung | gestartet |
-| I | glm2api: Tests, Benchmarks, Fixture-/Tooldateien | gestartet |
-| J | ignorierte Dateien und Runtime-/Vendor-Bestand | gestartet |
-| K | Versionsverzeichnis, Restbestand und Querverweise | gestartet |
+| A | Top-Level, Dokumentation, Devcontainer, OpenCode-Direktkonfiguration | abgeschlossen |
+| B | Infrastruktur-Skripte und Infra-Dokumentation | abgeschlossen |
+| C | MCP-Server, SQL, Löschschutz und Querverweise | abgeschlossen |
+| D | antigravity-proxy: Betrieb, OAuth, Build, Pakete und CI | abgeschlossen |
+| E | antigravity-proxy: Cmd, Auth, Credentials, HTTP, Project, Logger | abgeschlossen |
+| F | antigravity-proxy: Modelle, OpenAI-Transformation und Streaming | abgeschlossen |
+| G | antigravity-proxy: Server, Middleware und HTTP-Routen | abgeschlossen |
+| H | glm2api: Betrieb, Rebuild, Bundle und Dokumentation | abgeschlossen |
+| I | glm2api: produktiver Python-Anwendungscode | abgeschlossen |
+| J | glm2api: Tests und Benchmark-Fixtures | abgeschlossen |
+| K | ignorierter Node-Dependency-Baum | abgeschlossen, strukturell |
+| L | ignorierte Firefox-Runtime und Browserprofil | abgeschlossen, strukturell |
+| M | ignorierte Venv-, Log-, Build- und Cache-Artefakte | abgeschlossen, strukturell |
+| N | `.git`, Restbestand und Querverweise | abgeschlossen, read-only |
+| O | `.opencode/agent/glm2api.md` und `command/quota.md` | abgeschlossen |
+| P | `config/`-Secret-Artefakte | abgeschlossen, redigiert |
+| Q | getracktes glm2api-Bundle-ZIP | abgeschlossen, ZIP read-only |
+| R | historischer Gap-Check | abgeschlossen, durch S überholt |
+| S | korrigierter Gesamt-/Coverage-Check | abgeschlossen |
+| T | aktueller AuditMesh-Benchmark-Recheck | abgeschlossen |
 
 ## Laufende Protokolle
 
@@ -4799,5 +4808,646 @@ Zusätzlich wurde eine zeilenweise Secret-Metadatenprüfung ohne Werteecho durch
 
 Erstellt wurde ausschließlich dieser redigierte Bericht unter `.runtime/revision-parts/N.md`. Es wurden keine Secrets korrigiert, keine Git-Schreiboperation ausgeführt und keine bestehende Datei verändert. Wegen der während der Analyse beobachteten externen Git-Mutation ist der Snapshot-Hash oben maßgeblich; nach weiteren Parallel-Änderungen ist eine erneute Status-/Ref-Prüfung erforderlich.
 <!-- END PART N -->
+
+## Anhang O — OpenCode-Agent und Quota-Command
+
+<!-- BEGIN PART O -->
+# Revision O — `.opencode`-Agent und Quota-Command
+
+**Prüfdatum:** 2026-09-24  
+**Prüfgrenze:** ausschließlich `/workspaces/MAIN`  
+**Prüfmodus:** statische Vollprüfung der beiden Zieldateien zeilenweise; relevante lokale Querverweise gezielt geprüft. Kein Dienststart, keine Netzwerkanfrage, keine Runtime-Credential-Datei geöffnet und keine Credentials verwendet; die unterstützende Konfiguration wurde nur zur Risiko-Einordnung gelesen. Keine Tests oder Benchmarks ausgeführt.  
+**Vertraulichkeit:** Es werden keine Geheimniswerte wiedergegeben. Secretbezüge werden nur als Pfad, Zeilennummer, Schlüsselname und Risikoklasse beschrieben.
+
+## 1. Kurzfazit
+
+Beide Dateien sind syntaktisch plausibel und ihre zentralen Querverweise existieren im aktuellen Workspace. Die Prüfung ergibt jedoch mehrere wesentliche Grenz- und Bedienrisiken:
+
+1. **Hoch:** Die Tool-, Pfad- und Löschregeln des `glm2api`-Agenten sind überwiegend Prompt-Anweisungen, keine vollständige Sicherheitsgrenze. Die globale Opencode-Permission `allow` bleibt sehr weit.
+2. **Hoch:** Der Agent kann über `bash` und andere nicht blockierte Tools Session-Daten, Dateien und Netzwerkziele erreichen; die beiden MCP-Löschsperren werden dadurch nicht umfassend geschützt.
+3. **Hoch:** Für das Quota-Command fehlen eine erzwungene Tool-/Agentenbindung, eine belastbare Ausgabeprovenienz und eine sichere Fehlerdarstellung. Die angeforderte Markdown-Tabelle entsteht durch eine nachträgliche Modelltransformation.
+4. **Mittel bis hoch:** `quota.sh` kann bei Netzwerk- oder Datenfehlern hängen, leere/teilweise Daten als gültige Quota darstellen und lokale Session-Inhalte vollständig aus der Datenbank laden.
+5. **Mittel:** Beide Dateien sind auf den aktuellen `/workspaces/MAIN`-Betrieb zugeschnitten; Umzüge in andere Checkout-Pfade sind nicht abgesichert.
+
+**Gesamtstatus:** **BEFUND — die Zieldateien sind vollständig geprüft, aber für eine harte Sicherheits- oder Compliance-Freigabe nicht ausreichend abgesichert.**
+
+## 2. Dateiinventar
+
+| Pfad | Logische Zeilen | Zweck | Befund | Geprüft |
+|---|---:|---|---|---|
+| `/workspaces/MAIN/.opencode/agent/glm2api.md` | 28 | Agentendefinition für autonome Software- und Benchmark-Arbeit über den lokalen glm2api-Proxy; enthält Tool-, Pfad-, MCP- und Phasenregeln | Mehrere Grenz- und Bedienrisiken; gute teilweise Übereinstimmung mit dem AuditMesh-Benchmark, aber nicht selbstständig sicher | **ja** |
+| `/workspaces/MAIN/.opencode/command/quota.md` | 4 | Slash-Command zur Ausführung des Quota-Skripts und zur anschließenden Markdown-Ausgabe | Ausführungsweg existent, aber Host/Modell/Berechtigungen nicht festgelegt; Ausgabe- und Fehlerbehandlung sind nicht deterministisch | **ja** |
+
+`glm2api.md` besitzt 28 logische Zeilen, aber nur 27 Zeilenumbruche; die letzte Zeile hat keinen abschließenden Zeilenumbruch. Das ist funktional harmlos, aber ein konkreter Text-Hygiene-Befund. `quota.md` hat 4 logische Zeilen.
+
+## 3. Zeilenweise Prüfung: `.opencode/agent/glm2api.md`
+
+| Zeile | Zweck/Inhalt | Befund |
+|---:|---|---|
+| 1 | Öffnender YAML-Frontmatter-Block | Struktur ist plausibel; die Wirksamkeit der nachfolgenden Regeln hängt von der Opencode-Runtime und dem konkreten Request ab. |
+| 2 | Beschreibung: Arbeits-Agent über chatglm.cn und Port 8001 | Port und Proxy-Zuordnung stimmen mit `.opencode/opencode.json:83-107` überein. Der Text erwähnt nicht, dass die Tool- und Phasensregeln im Wesentlichen für den AuditMesh-Benchmark gelten. |
+| 3 | `mode: all` | Gültiger Opencode-Modus. Er erlaubt sowohl primäre als auch Subagent-Verwendung; dadurch ist der Geltungsbereich breiter als die Beschreibung „Arbeits-Agent“ vermuten lässt. |
+| 4 | `model: glm2api/glm-5.3` | Modell-ID ist in der Provider-Konfiguration und im Benchmark vorhanden. Die Verfügbarkeit hängt jedoch vollständig vom lokalen Proxy ab; ein Health-Check oder Fallback ist im Agenten nicht definiert. |
+| 5 | Beginn der per-Agent-Permission | Nur die beiden folgenden MCP-Tools werden explizit verweigert. Für `bash`, `read`, `write`, `edit`, `webfetch`, Netzwerk und externe Pfade wird keine zusätzliche Einschränkung gesetzt. |
+| 6 | `opencode-sessions_delete_sessions: deny` | Aktuelle direkte Tool-Bezeichnung passt zum lokalen MCP und ist sinnvoll als erste Schranke. Die Regel ist keine MCP-Server-Autorisierung und verhindert weder Shell-Indirektion noch Aufrufe anderer Agents. |
+| 7 | `opencode-sessions_delete_preview: deny` | Verhindert den aktuellen direkten Preview-Aufruf. Es wird jedoch kein zukünftiges `delete_*`-Tool automatisch abgedeckt; die Body-Regel mit Wildcard ist wiederum nur Prompttext. |
+| 8 | Schließender Frontmatter-Block | Kein eigener Befund. |
+| 9 | Autonomer Software-Ingenieur mit Shell-, Datei- und Testwerkzeugen | Hohe Autonomie ohne sichtbare Benutzerbestätigung, Workspace-Root-Grenze sowie ohne eine Regel zum Umgang mit nicht vertrauenswürdigen Eingaben. Das ist im Benchmark durch den separaten Auftrag begrenzt, nicht durch diese Datei allein. |
+| 10 | Leerzeile | Kein semantischer Befund. |
+| 11 | Überschrift der Tool-Disziplin | Gute sichtbare Struktur; Regeln werden hier nur als Prompt festgelegt. |
+| 12 | Leerzeile | Kein semantischer Befund. |
+| 13 | Beispiele für verfügbare Tools | Die Liste deckt die im Benchmark erwarteten Kern-Tools weitgehend ab. `etc.` macht die behauptete Grenze jedoch nicht exhaustiv; `skill`, `websearch` und weitere MCP-Lesewerkzeuge werden nicht ausdrücklich ausgeschlossen. |
+| 14 | Verbot von Session-Löschtools und nicht vorhandenen Sandbox-Tools | Gute Übereinstimmung mit `benchmark.md:86-90` und dem Proxy-Protokoll. Keine erzwingte Sandbox- oder Tool-Allowlist auf Host-/Shell-Ebene; `skill` fehlt im expliziten Verbot. |
+| 15 | Codeausführung und Tests ausschließlich über `bash`; Python wird als Bash-Beispiel genannt | Passt zum Benchmark und zum Translator. Die Formulierung „kein Python-Interpreter als Tool“ ist neben den Python-Beispielen missverständlich: Python ist über `bash` ausdrücklich erlaubt. |
+| 16 | Absolute Pfade für `read`, `write`, `edit`; Beispiel außerhalb des Repos | Verhindert relative Pfadmissverständnisse, legt aber keine Root-Grenze fest. Das Beispiel `/workspaces/benchmark/...` zeigt ausdrücklich außerhalb von `/workspaces/MAIN`; dies ist im Benchmark beabsichtigt, im allgemeinen Agentenbetrieb ein Risiko. |
+| 17 | Sequenzielle Calls, kein Pipeline-Betrieb, Ergebnis erst im nächsten Turn lesen | Stimmt mit `benchmark.md:53-54,112-127` überein und reduziert Pipeline-/Race-Fehler. Es ist eine Verhaltensanweisung, keine Host-Sperre; sie erhöht außerdem Turn- und Kostenaufwand. |
+| 18 | Überschrift der spezifischen Tool-Rollen | Organisatorisch sinnvoll. |
+| 19 | `todowrite` für Phasenplan | Passt zur Benchmark-Phase 0. Ob das Tool im konkreten Subagenten deklariert ist, wird nicht ausdrücklich als Optionalfall behandelt. |
+| 20 | `glob` und `grep` direkt statt über Bash-Pipelines | Gute, benchmarkkonforme disziplinarische Anweisung. Sie ist promptbasiert; ein unabhängiger `bash`-Aufruf kann sie umgehen. |
+| 21 | `task` nur mit `subagent_type: "explore"` und rein lesend | Absicht und Benchmark stimmen überein. Die tatsächliche Berechtigungsgrenze des gestarteten Subagenten wird hier nicht definiert oder erzwungen. |
+| 22 | `webfetch` für HTTP, Beispiel lokaler Testserver | Im Benchmark auf `127.0.0.1` beschränkt; im Agenten selbst fehlt eine Host-Allowlist. Ein deklariertes `webfetch` könnte externe Ziele erreichen, sofern der Host dies zulässt. |
+| 23 | `question` genau einmal am Laufende | Passt zu `benchmark.md:79,128-131,350-353`. Außerhalb des Benchmarks kann die Regel eine notwendige Rückfrage blockieren oder ein nicht deklariertes Tool voraussetzen. |
+| 24 | Keine Zwischentexte, sondern Tool-Calls | Passt zum Proxy-Protokoll `tool_protocol.py:103-113`. Der Nachteil ist fehlende laufende Diagnose- und Abbruchmöglichkeit; Fehler müssen über Tool-Ergebnisse verarbeitet werden. |
+| 25 | Leerzeile | Kein semantischer Befund. |
+| 26 | Überschrift der Arbeitsphasen | Verweist auf eine externe, nicht mitgelieferte Phasendefinition. |
+| 27 | Leerzeile | Kein semantischer Befund. |
+| 28 | Phase 0 bis Phase 10 | Der Querverweis ist im `benchmark.md:92-131` tatsächlich aufgelöst. Ohne den AuditMesh-Agentenauftrag bleibt die Phase 0–10 jedoch unbestimmt; die Datei ist als primärer Agent nicht selbstständig operational. |
+
+## 4. Zeilenweise Prüfung: `.opencode/command/quota.md`
+
+| Zeile | Zweck/Inhalt | Befund |
+|---:|---|---|
+| 1 | Öffnender Frontmatter-Block | Struktur ist plausibel. |
+| 2 | Beschreibung der aktuellen Antigravity-Kontingente mit 5h- und Claude-Limit | Die Beschreibung ist unvollständig: Die lokale Betriebsdokumentation beschreibt zwei Modellpools mit jeweils 5h- und Wochenlimit (`infrastructure.md:135-149`). Wochenlimit, Gemini-Pool und die Fallback-Datenquelle werden hier nicht genannt. |
+| 3 | Schließender Frontmatter-Block | Kein eigener Befund. |
+| 4 | Anweisung zur Ausführung von `/workspaces/MAIN/infra/scripts/quota.sh` und zur Markdown-Tabelle mit Balken, Prozent und Reset | Zielskript und Querverweise existieren. Der Prompt legt weder Agent, Modell, Permission noch explizit das auszuführende Bash-Tool fest. Die Markdown-Tabelle ist eine Modellnachtransformation der Textausgabe, nicht eine geprüfte Skriptausgabe; Fallback, Zeitpunkt, Exit-Code und Rohfehler werden nicht verlangt. Der absolute Pfad ist nicht portabel. |
+
+## 5. Querverweise und Grenzprüfung
+
+| Referenz | Ergebnis | Bedeutung |
+|---|---|---|
+| `.opencode/agent/glm2api.md:4` → `.opencode/opencode.json:83-107` | **PASS** | `glm2api/glm-5.3`, Loopback-Basis-URL und Provider sind vorhanden. |
+| `.opencode/agent/glm2api.md:5-7` → `infra/mcp/opencode-sessions-mcp.js:424-495,498-527` | **TEILWEISE** | Die beiden aktuellen Löschwerkzeuge werden passend benannt. Der MCP-Server selbst besitzt keine eigene Authentifizierung; die Schranke ist der lokale stdio-Host plus Agent-Permission. |
+| `.opencode/agent/glm2api.md:13-14` → `llm-proxies/glm2api/benchmarks/benchmark.md:64-90` | **TEILWEISE** | Kernliste und Löschverbot passen. `etc.`, optionale Toolfälle und das fehlende `skill`-Verbot schwächen die behauptete Exhaustivität. |
+| `.opencode/agent/glm2api.md:17,19-24,28` → `benchmark.md:92-131` | **PASS im Benchmark-Kontext** | Sequenz, Toolrollen und Phase 0–10 sind dort definiert. Ohne diesen Auftrag kein gültiger Phasenvertrag. |
+| `.opencode/agent/glm2api.md:14,15` → `llm-proxies/glm2api/src/glm2api/utils/tool_protocol.py:90-113` und `services/translator.py:414-452,475-484` | **PASS mit Grenze** | Proxy-Anweisungen verlangen Tool-only und bilden bestimmte native Sandbox-Calls auf Bash ab oder verwerfen sie. Das ist keine allgemeine Host-Berechtigungsgrenze. |
+| `.opencode/command/quota.md:4` → `infra/scripts/quota.sh:1-161` | **PASS** | Datei vorhanden; `bash -n` war erfolgreich. |
+| `.opencode/command/quota.md:4` → `infra/scripts/aliases.sh:9` und `.devcontainer/setup.sh:53-54` | **PASS im aktuellen Layout, nicht portabel** | Alias und Setup verweisen auf denselben absoluten Pfad. Ein anderer Checkout wird nicht aufgelöst. |
+| `infra/scripts/quota.sh:135` → `infra/mcp/opencode-sessions-mcp.js:29-38` | **TEILWEISE** | Standard-DB-Pfad passt; `quota.sh` beachtet die im MCP unterstützte `OPENCODE_DB`-Override nicht. |
+| `infra/scripts/quota.sh:5,12` → `infra/scripts/secrets.sh:99-101` und `.devcontainer/start-on-boot.sh:8-12` | **PASS für Ablage, nicht für Laufzeitvalidierung** | Der Credential-Pfad wird beim Unlock mit restriktiven Rechten wiederhergestellt. Das Skript selbst prüft Dateityp, Eigentümer, Symlink und Inhalt nicht. |
+| `infra/scripts/quota.sh:15-35` → `infrastructure.md:147-149,379-386` | **PASS für Architektur, BEFUND für Transparenz** | Primärendpunkt und Fallback sind dokumentiert. Das Command weist dem Nutzer nicht aus, welcher Endpunkt und welcher Datenstand verwendet wurden. |
+
+## 6. Tool- und MCP-Grenzmatrix
+
+| Vorgang | Mechanismus | Tatsächliche Grenze | Befund |
+|---|---|---|---|
+| Session-Löschung aus dem glm2api-Agenten | Per-Agent-Deny plus Body-Verbot | Nur direkte aktuelle MCP-Toolnamen; kein Server- oder Shellverbot | Andere Agents, zukünftige MCP-Tools und `bash`-Indirektion bleiben möglich |
+| Session-Lesen | `opencode-sessions_list_sessions`, `session_info`, `search_sessions`, `db_stats` im MCP | Agent blockiert nur zwei Löschtools; Session-Lesewerkzeuge bleiben grundsätzlich verfügbar | Hohe Vertraulichkeitsgrenze: Session-Metadaten, Verzeichnisse, Kosten und Share-URLs können gelesen werden; Message-Inhalte bleiben über nicht blockierte Shell-/DB-Zugriffe erreichbar |
+| MCP-Transport | lokaler stdio-Prozess aus `.opencode/opencode.json:286-295` | Keine eigene MCP-Authentifizierung; Vertrauen in den Opencode-Host | Ein Prompt- oder Modellfehler ist keine serverseitige Zugriffskontrolle |
+| Quota-Ausführung | Slash-Command → `bash` → absolutes Shellskript | Globale `permission: allow`; direkter Shell- und Dateisystemzugriff | Das Quota-Command nutzt das MCP nicht und fällt damit vollständig unter die Bash-/Host-Policy |
+| Lokale Verbrauchsstatistik | `quota.sh:135-156` öffnet die Opencode-DB direkt | Kein MCP, keine Nur-Lese-URI, keine Session-/Zeitfilter | Datenschutz- und Performance-Risiko durch Vollscan der Message-Tabelle |
+
+## 7. Befunde
+
+### O-01 — Hoch: Agentenregeln sind keine ausreichende Sicherheitsgrenze
+
+`glm2api.md:5-7` verweigert nur zwei MCP-Tools. Die globale Konfiguration setzt dagegen `.opencode/opencode.json:284` auf `permission: "allow"`. `read`, `write`, `edit`, `bash`, `webfetch` und nicht blockierte MCP-Lesewerkzeuge bleiben damit für den Agenten erreichbar. Über `bash` können Löschungen, SQLite-Zugriffe, Netzwerkabfragen und Dateiänderungen auch dann ausgeführt werden, wenn das direkte Löschtool nicht verfügbar ist.
+
+**Auswirkung:** Ein fehlerhaftes Modell, eine Prompt-Injection in einer gelesenen Datei oder ein unvorsichtiger Auftrag kann die Agenten-Promptregel umgehen. Die zwei Deny-Regeln schützen nicht andere Agents oder direkte Shell-Aufrufe.
+
+### O-02 — Hoch: Autonomie ohne Root- oder Vertrauensgrenze
+
+`glm2api.md:9` beschreibt einen autonomen Software-Ingenieur, `glm2api.md:16` verlangt absolute Pfade, aber keine Beschränkung auf ein Arbeitsverzeichnis. Das Beispiel außerhalb von `/workspaces/MAIN` ist im Benchmark beabsichtigt, wird aber nicht als Benchmark-only markiert. Der eigentliche Benchmark begrenzt die Arbeit separat auf seinen Laufpfad (`benchmark.md:44-48`).
+
+**Auswirkung:** In einer allgemeinen Verwendung kann der Agent außerhalb des beabsichtigten Repositories lesen oder schreiben. Es fehlen außerdem eine explizite Regel zum Umgang mit nicht vertrauenswürdigen Eingaben und eine Bestätigungsstufe für destruktive oder geheimnisbezogene Aktionen.
+
+### O-03 — Hoch: Session-Vertraulichkeit bleibt über MCP-Lesewerkzeuge offen
+
+Die Agentendatei nennt in `glm2api.md:13` nur `opencode-sessions_db_stats`, verbietet aber nicht die übrigen Session-Lesewerkzeuge. Der registrierte MCP-Server stellt `list_sessions`, `session_info` und `search_sessions` zusätzlich zu `db_stats` bereit (`infra/mcp/opencode-sessions-mcp.js:424-495`). Der MCP selbst hat keine eigene Autorisierung; die Grenze ist der lokale Prozessstart.
+
+**Auswirkung:** Der Agent kann Session-Metadaten, Verzeichnisnamen, Kosten, Tokenwerte oder Share-URLs über die MCP-Lesewerkzeuge erreichen; über nicht blockierte Shell-/DB-Zugriffe können zusätzlich Message-Inhalte verarbeitet werden. Das ist unabhängig davon, ob die beiden Löschtools blockiert sind.
+
+### O-04 — Mittel: Toolvertrag ist nicht exhaustiv und teils widersprüchlich
+
+`glm2api.md:13` sagt „nur deklarierte Tools“, nennt aber mit `etc.` eine offene Liste. `glm2api.md:14` verbietet `execute_sandbox_code` und Session-Löschtools, nicht aber `skill` oder `websearch`. Der Benchmark fordert dagegen ausdrücklich ein exhaustives Tool-Set und verbietet `skill` (`benchmark.md:81-90`).
+
+**Auswirkung:** Bei einer erweiterten Tool-Deklaration kann der Agent ein im Benchmark verbotetes oder unerwartetes Werkzeug verwenden. Die Proxy-Anweisungen reduzieren das Risiko, sind aber keine vollständige Host-Policy.
+
+### O-05 — Mittel: Benchmark-Phasenvertrag ist nicht selbstständig
+
+`glm2api.md:28` verweist auf Phasen 0 bis 10. Die Phasen existieren tatsächlich nur im separaten `benchmark.md:92-131` und setzen den dortigen Arbeitsauftrag voraus. `mode: all` macht den Agenten auch für direkte primäre Aufrufe verfügbar.
+
+**Auswirkung:** Ein direkter Aufruf ohne Benchmark-Prompt kann an einer undefinierten Phasendefinition hängen bleiben oder die in `glm2api.md:17,23` erzwungenen Workflow-Enden unpassend anwenden. Das ist kein Syntaxfehler, aber ein Betriebs- und Prompthärtungsproblem.
+
+### O-06 — Hoch: Lokaler Proxy schützt keinen Agenten-Sandbox-Grenzbereich
+
+Der Agent nutzt `glm2api/glm-5.3` über `http://127.0.0.1:8001/v1` (`.opencode/opencode.json:83-107`). Die operative Proxy-Vorlage begrenzt den Host auf Loopback, lässt die Server-Authentifizierung leer, erlaubt CORS `*` und aktiviert Raw-Debug-Dumps (`llm-proxies/glm2api.env:14,26-30,38,41-47`).
+
+**Auswirkung:** Andere lokale Prozesse können den Proxy grundsätzlich erreichen; Debug-Logs können Prompts, Tool-Argumente, Header und Upstream-Daten enthalten. Die Agentendatei verlangt weder eine lokale Prozessgrenze noch eine Secret-/Output-Redaktion.
+
+### O-07 — Mittel: Quota-Command ist nicht als deterministischer Runner definiert
+
+`quota.md:1-4` legt weder `agent`, `model`, `permission` noch ein Ausführungswerkzeug fest. Die Formulierung „Führe den Befehl aus“ ist eine Modellaufforderung; der Host muss daraus einen Bash-Aufruf ableiten. Das globale `allow` aus `opencode.json:284` erleichtert die Ausführung.
+
+**Auswirkung:** Unter einem restriktiveren Agenten kann der Command scheitern; unter einem autonomen Agenten kann die Ausführung oder Formatierung variieren. Ein reproduzierbarer Slash-Command sollte Agent, Tool, Exit-Code, Ausgabeformat und Fehlerfall explizit festlegen.
+
+### O-08 — Mittel: Absoluter Pfad und fehlende Portabilität
+
+`quota.md:4`, `infra/scripts/aliases.sh:9` und `.devcontainer/setup.sh:53-54` verwenden `/workspaces/MAIN/infra/scripts/quota.sh`. Das funktioniert im aktuellen Layout, ist aber nicht relativ zum geladenen Workspace.
+
+**Auswirkung:** Ein Checkout unter einem anderen Pfad, ein Bundle oder ein manueller Aufruf außerhalb des Codespace-Layouts trifft nicht den beabsichtigten Runner. Die Setup-Dokumentation behauptet an anderer Stelle eine Pfadanpassung; der Slash-Command selbst verwendet diese jedoch nicht.
+
+### O-09 — Hoch: Quota-Fehler- und Tokenbehandlung kann sensible oder falsche Ausgabe erzeugen
+
+`quota.sh:12,16-20` liest das Access-Token und übergibt es als curl-Argument. `quota.sh:31-34` gibt bei ungültiger Antwort die Rohantwort aus. Der Command verlangt keine Redaktion, Quellenkennzeichnung oder Fehlerbehandlung. Die Credential-Datei wird beim Unlock zwar mit restriktiven Rechten abgelegt (`secrets.sh:99-101`), das Laufzeitskript prüft diese Rechte jedoch nicht.
+
+**Auswirkung:** Das Token kann während des curl-Aufrufs über lokale Prozessinformationen sichtbar sein. Eine unerwartete Google-Antwort kann interne Details oder Credential-nahe Daten in die Modellantwort gelangen. Die Rohantwort sollte niemals ungefiltert an den Nutzer weitergereicht werden.
+
+### O-10 — Hoch: Quota-Verfügbarkeit und Ressourcenverbrauch sind nicht begrenzt
+
+In `quota.sh:16-28` fehlen beim curl-Aufruf ein Request-Timeout, eine maximale Antwortgröße, Retry-/Rate-Kontrolle und eine belastbare HTTP-Statusprüfung. `|| true` verschluckt Netzwerkfehler; die gesamte Antwort wird in einer Shell-Variable gehalten. Die nachfolgende Python-Ausgabe kann bei hängendem Netzwerk oder sehr großer Antwort blockieren.
+
+**Auswirkung:** Ein Netzwerkproblem kann den Agent-Turn lange blockieren; ein fehlerhafter oder kompromittierter Antwortkanal kann Speicher- und CPU-Ressourcen belegen. Das Command meldet keinen Timeout- oder Abbruchstatus.
+
+### O-11 — Hoch: Quota-Parsing ist fehlertolerant gegenüber falschen, nicht standardisierten Daten
+
+`quota.sh:81-106` prüft nur auf ein vorhandenes Feld `groups`, nicht auf ein vollständiges Schema. Fehlende Buckets werden als `—` dargestellt, fehlende `remainingFraction` als 100 %. Unbekannte Gruppen werden pauschal als „Claude“ klassifiziert. Prozentwerte werden nicht auf 0–100 begrenzt; nur die Balkenlänge wird geklemmt.
+
+Im Fallbackpfad `quota.sh:107-130` wird anhand des Reset-Strings geraten, ob ein Wert in die 5h- oder Wochen-Spalte gehört. Die Modellnamen sind hart codiert und nicht vollständig an `.opencode/opencode.json:117-167` gekoppelt. Fehlt ein passender Modelldatensatz, wird keine Zeile und keine verlässliche „unbekannt“-Kennzeichnung ausgegeben.
+
+**Auswirkung:** Die angeforderte Kapazitätseinschätzung kann falsch sein, insbesondere bei neueren Modellnamen, unvollständigen Gruppen oder atypischen Reset-Zeiten. Das Command weist nicht darauf hin, ob Primär- oder Fallbackdaten verwendet wurden.
+
+### O-12 — Mittel: Lokale Verbrauchsanzeige liest und verarbeitet die gesamte Message-Tabelle
+
+`quota.sh:135-156` öffnet die Opencode-DB an einem festen Standardpfad, führt `SELECT data FROM message` aus und lädt alle Datensätze mit `fetchall()`. Jeder JSON-Blob wird geparst, obwohl am Ende nur Token-Summen ausgegeben werden. Es gibt keinen Read-only-Modus, keinen Session- oder Zeitfilter, keine Grenze für die Datenmenge und keine Berücksichtigung von `OPENCODE_DB`.
+
+**Auswirkung:** Speicher-, CPU- und Datenbank-Lock-Risiko; außerdem können vertrauliche Message-Inhalte im Prozessspeicher verarbeitet werden. Die Zählung umfasst Input plus Output, aber nicht zwingend alle relevanten Verbrauchsarten, und ein JSON-Fehler lässt die lokale Zeile still ausfallen. Ein externer Session-DB-Pfad wird nicht berücksichtigt.
+
+### O-13 — Niedrig: Quota-Ausgabe ist nicht direkt eine Markdown-Tabelle
+
+`quota.sh:71-132` erzeugt eine formatierte Textausgabe mit Spalten, nicht die in `quota.md:4` geforderte Markdown-Tabelle. Das Command muss Werte, Unicode-Balken, Prozentwerte und Countdowns manuell in Markdown übertragen.
+
+**Auswirkung:** Es besteht ein Modellfehler-Risiko bei Rundung, Zuordnung, fehlenden Werten und der Unterscheidung von 5h-Sprint und Wochenlimit. Ein maschinenlesbares JSON- oder eine echte Markdown-Ausgabe im Runner wäre deterministischer.
+
+### O-14 — Niedrig: Dokumentations- und Textdrift
+
+- `quota.md:2` beschreibt nicht die vollständige 2×2-Quota-Matrix aus `infrastructure.md:135-149`.
+- `glm2api.md` endet ohne abschließenden Zeilenumbruch.
+- `quota.md` ignoriert `$ARGUMENTS` und bietet daher keine erkennbare Parameter- oder Dry-Run-Schnittstelle.
+- Die Formulierung in `glm2api.md:14-15` ist bezüglich „kein Python-Interpreter“ versus `python3` über `bash` nicht eindeutig.
+
+## 8. Was bestätigt wurde
+
+- Beide Zieldateien wurden vollständig und zeilenweise gelesen; die Zeilenzahlen und der fehlende abschließende Zeilenumbruch wurden geprüft.
+- Der Agent-Dateiname, der Modellname, der Port und die zentralen Benchmark-Toolnamen sind im aktuellen Workspace aufgelöst.
+- Die Sequenz-, reine Tool-Aufrufe und Phasenvorgaben des Agenten passen im AuditMesh-Benchmark zu den dortigen Regeln.
+- Die beiden aktuellen Session-Löschtools werden im Agenten sowohl per Prompt als auch per Per-Agent-Permission adressiert.
+- Das Quota-Skript existiert, seine Shell-Syntax ist gültig, und Alias/Setup verweisen im aktuellen Layout auf denselben Pfad.
+- Primärer Quota-Endpunkt und Fallback sind in der lokalen Betriebsdokumentation beschrieben.
+- Die Zieldateien enthalten keine Geheimniswerte. Nur Namen, Pfade, Zeilennummern und Risikoklassen werden in diesem Bericht verwendet.
+
+## 9. Empfohlene Maßnahmen — nicht ausgeführt
+
+1. Für den glm2api-Agenten eine echte Root-Allowlist, restriktive `bash`-/Datei-Permissions und eine serverseitige oder zumindest hostseitige Löschsperre definieren; Prompt-Regeln allein nicht als Sicherheitsgrenze behandeln.
+2. MCP-Lesewerkzeuge auf einen expliziten Minimalumfang begrenzen und `skill`, `websearch`, externe `webfetch`-Ziele sowie Shell-Indirektion ausdrücklich sperren oder als bewusstes Risiko dokumentieren.
+3. Den Agenten entweder auf den Benchmark-Auftrag festlegen oder die Phase-0–10-Regeln als selbstständige, konditionale Ausführungsspezifikation formulieren.
+4. `quota.md` auf einen expliziten Agenten, ein explizites Ausführungswerkzeug, eine sichere Ausgabequelle, Fehler-/Fallback-Kennzeichnung und ein maschinenlesbares Format festlegen.
+5. In `quota.sh` Request-Timeout, maximale Antwortgröße, HTTP-Fehlerbehandlung, Schema-/Wertvalidierung und eine redaktionssichere Fehlerausgabe ergänzen.
+6. Lokale Verbrauchsstatistik nur lesend und begrenzt ausführen, `OPENCODE_DB` respektieren, Message-Inhalte nicht vollständig laden und Zählzeitraum/Modellgrenzen dokumentieren.
+7. Absolutpfade durch einen stabilen Runner-/Repo-Root-Verweis ersetzen oder den Checkout-Pfad als bewusste Betriebsannahme dokumentieren.
+8. Nach einer Freigabe die betroffenen lokalen Proxy-/Provider-Credentials separat rotieren; in diesem Audit wurden keine Werte ausgegeben und keine Credentials geändert.
+
+## 10. Abschluss und Änderungsnachweis
+
+- **Dateiprüfung:** `/workspaces/MAIN/.opencode/agent/glm2api.md` vollständig geprüft, **geprüft: ja**.
+- **Dateiprüfung:** `/workspaces/MAIN/.opencode/command/quota.md` vollständig geprüft, **geprüft: ja**.
+- **Unterstützende Dateien:** relevante Abschnitte in `.opencode/opencode.json`, `infra/scripts/quota.sh`, `infra/mcp/opencode-sessions-mcp.js`, `infra/mcp/README.md`, `infrastructure.md`, `infra/scripts/aliases.sh`, `.devcontainer/setup.sh`, `infra/scripts/secrets.sh`, `llm-proxies/glm2api/benchmarks/benchmark.md` sowie den Tool-Protokoll-/Translator-Dateien geprüft.
+- **Ausführung:** Nur lokale Shell-Syntaxprüfung und Git-Status; kein Dienststart, keine Netzwerkanfrage, keine Runtime-Credentials verwendet, keine Löschung.
+- **Änderungen:** Ausschließlich diese Auditspur unter `.runtime/revision-parts/O.md` wurde erstellt. Keine Quelldatei wurde geändert.
+- **`Revision.md`:** von diesem Auftrag nicht geschrieben. Während der Analyse wurden externe Autosave-/Paralleländerungen beobachtet; diese sind kein Schritt dieses Berichts.
+- **Geheimnisse:** keine Geheimniswerte ausgegeben.
+<!-- END PART O -->
+
+## Anhang P — Config-Secret-Artefakte (redigiert)
+
+<!-- BEGIN PART P -->
+# Redigierter Report — `config/`
+
+**Beobachtungszeitpunkt:** 24.09.2026, lokale Workspace-Zeit (`+0200`)  
+**Scope:** ausschließlich `/workspaces/MAIN/config/`; Querverweise nur innerhalb von `/workspaces/MAIN`.  
+**Zweck:** Existenz, Metadaten, Hash-/Strukturinformationen, Schutzstatus, Risiken und beobachtete Referenzen.
+
+## Kurzurteil
+
+- `config/` enthält genau drei reguläre Dateien und keine Unterverzeichnisse oder Symlinks.
+- Alle drei Dateien sind Git-tracked; `config/` selbst ist nicht ignoriert.
+- `config/passphrase` ist ein bewusst im Klartext gehaltenes Repository-Artefakt. Damit schützt die Verschlüsselung von `secrets.enc` nicht gegen jeden Repository-Leser.
+- `secrets.enc` ist strukturell ein OpenSSL-`enc`-Chiffretext mit Salt-Header. Das Skript verwendet AES-256-CBC mit PBKDF2, aber keine authentifizierte Verschlüsselung.
+- Verzeichnis und Dateien sind lokal zu weit offen: Verzeichnis `0777`, Dateien `0666`.
+- Das Git-Bundle-Backup enthält wegen der Tracker-Pfade `config/passphrase` im Klartext sowie `secrets.enc` und die Historie. Die Verschlüsselung des Einzelbundles schützt die Backup-Kopie nicht.
+- Manifest und Bundle werden nicht kryptografisch aneinander gebunden; Bundle-/Manifest-Schreibvorgänge sind nicht atomar.
+- **Gesamtbewertung:** sehr hohes Vertraulichkeits- und Integritätsrisiko, hohes Risiko für unvollständige Wiederherstellung. Die Automatik ist beabsichtigt, aber kein wirksames Schutzmodell gegen ein öffentlich lesbares Repository.
+
+## Datenschutz- und Prüfgrenzen
+
+- `config/passphrase` wurde nicht als verwertbarer Secret-Inhalt interpretiert, ausgegeben oder in zeichenweise Details zerlegt.
+- `config/secrets.enc` wurde nicht entschlüsselt; nur Dateimetadaten, kryptografischer Fingerabdruck und nicht-reproduzierende Strukturmerkmale wurden bestimmt.
+- `config/secrets.manifest` wurde vollständig und zeilenweise gelesen; wiedergegeben werden nur Archivmitgliednamen, keine Werte.
+- Es wurde kein `lock`, `unlock`, Setup-, Restore- oder Startskript ausgeführt. Es gab keine Netzwerkaktion und keinen Entschlüsselungsversuch.
+
+## Vollständiges Dateiinventar
+
+### `config/`
+
+- Verzeichnis: vorhanden, 4.096 B, `0777`, Eigentümer `vscode:root`, genau drei Dateien, keine Unterverzeichnisse/Symlinks.
+- Default-POSIX-ACL vorhanden; konkrete Dateien haben Unix-Modus `0666`; keine Immutable-/Append-Attribute.
+
+### `config/passphrase`
+
+- Reguläre UTF-8-validierbare Text-/Bytefolge, 40 B, `0666`, tracked (`100644`), nicht ignoriert.
+- 0 LF-Bytes und kein abschließender Zeilenumbruch; Inhalt nicht wiedergegeben.
+- SHA-/Passphrasenfingerabdruck und mögliche Offline-Angriffsfläche wurden im Teilreport bewusst zurückhaltend behandelt und werden hier nicht wiederholt.
+- Lesen/Ändern/Löschen sind für andere lokale Benutzer nicht zuverlässig blockiert.
+- `infra/scripts/secrets.sh:26-37` liest die Datei in eine Passphrase-Umgebungsvariable und exportiert sie.
+
+### `config/secrets.enc`
+
+- Regulärer binärer OpenSSL-Chiffretext, 4.000 B, `0666`, tracked (`100644`), nicht ignoriert.
+- `Salted__`-Header bestätigt; 16 Headerbytes + 3.984 Chiffretextbytes, 16-Byte-ausgerichtet.
+- Keine Entschlüsselung; Klartextinhalt unbekannt; kein Secretwert ausgegeben.
+- `secrets.sh:55-57` erzeugt gzip-komprimiertes TAR und anschließend `openssl enc -aes-256-cbc -pbkdf2`; explizite KDF-Iteration/Version werden nicht im Manifest gebunden.
+
+### `config/secrets.manifest`
+
+- UTF-8-Textdatei, 138 B, 9 logische Zeilen, `0666`, tracked (`100644`), nicht ignoriert.
+- Vollständige Archivpfadzeilen ohne Werte:
+
+```text
+1: ./
+2: ./antigravity-oauth_creds.json
+3: ./chatglm-refresh-token
+4: ./env
+5: ./nvidia-nim-key
+6: ./opencode-auth.json
+7: ./pat
+8: ./rclone.conf
+9: ./xinjianya-key
+```
+
+- Das Manifest listet acht mögliche Secret-Zieldateinamen; es ist damit selbst ein sensibles Informationsinventar.
+- Manifest und Bundle werden nacheinander direkt geschrieben; keine atomare Kopplung, kein Bundle-Hash im Manifest.
+
+## Kryptografische und lokale Risiken
+
+1. **Klartext-Passphrase im selben Repository (kritisch):** Ein Repository-/Bundle-Leser kann Passphrase und Chiffretext gemeinsam verwenden.
+2. **Weltweit beschreibbare Dateien (hoch):** `0666` erlaubt lokale Manipulation; bei CBC ohne MAC ist Bitänderung nicht zuverlässig erkennbar.
+3. **Keine authentifizierte Verschlüsselung (hoch):** CBC-Schutz gegen Vertraulichkeit ist kein Integritäts-/Authentizitätsschutz.
+4. **Nicht-atomare Bundle-/Manifest-Paare (hoch):** Abbruch kann Chiffretext und Manifest不同 Generationen hinterlassen.
+5. **TAR-Extraktion ohne Allowlist (hoch):** `tar -xzf` in `secrets.sh:71-76` prüft keine Pfad-, Symlink- oder Metadatenregeln.
+6. **Implizite KDF-/Formatparameter (mittel):` OpenSSL-Standardwerte und Script-Version bestimmen Lesbarkeit/Schutz, ohne versioniertes Formatfeld.
+7. **Prozesskontext (mittel bis hoch):** Passphrase wird exportiert; PAT-Restoration nutzt in `secrets.sh:80` ein Kommandozeilenargument.
+
+## Backup- und Restore-Risiken
+
+- `git bundle create --all` in `gdrive-backup.sh:63-69` enthält wegen tracked `config/` Passphrase, Chiffretext, Manifest und historische Versionen.
+- Temporäres `.runtime/MAIN.bundle` kann bei Abbruch liegenbleiben; kein restriktiver Modus.
+- Rotation kann alte Backup-Generation löschen, bevor ein Move/Upload sicher bestätigt ist; kein Lock.
+- `save.sh:53-57` maskiert Backup-Fehler; Remote-MD5 akzeptiert fehlenden Hash nicht als Fehler.
+- Restore führt direkt `git clone` ohne vorgeschalteten `git bundle verify` aus.
+- `RESTORE.md` ist im Upload best effort; die Aussage „immer vorhanden“ ist nicht garantiert.
+
+## Querverweise und Empfehlungen
+
+- `secrets.sh:23-24,26-37,39-61,64-121`, `.devcontainer/setup.sh:56-61`, `.devcontainer/start-on-boot.sh:8-12` und `infrastructure.md:51-67` bestätigen den Passphrase-/Bundle-Lebenszyklus.
+- `README.md` verschweigt den Klartext-Passphrase-Pfad; `aliases.sh` nennt nicht alle Manifestmitglieder.
+- Vorrangig: Schlüsselmodell trennen/rotieren, `config/` und Dateien restriktiv schützen, AEAD und explizite KDF-Version verwenden, Generation atomar publizieren, Archiv-Allowlist erzwingen, Bundle/Restore mit Lock/Verify/Hash absichern und PAT nicht als argv übergeben.
+- Vollständiger redigierter Report: `/workspaces/MAIN/.runtime/revision-parts/P.md`.
+<!-- END PART P -->
+
+## Anhang Q — Getracktes glm2api-Bundle-ZIP
+
+<!-- BEGIN PART Q -->
+# Partition Q — ZIP-Inventar `llm-proxies/dist/glm2api-bundle.zip`
+
+## Prüfrahmen und Schutzgrenze
+
+- Snapshot: `2026-09-24T01:29:57.782968+02:00`; Arbeitsgrenze ausschließlich `/workspaces/MAIN`.
+- Eingabe: das getrackte ZIP wurde direkt aus seinem Dateisystempfad gelesen; keine Datei wurde aus dem ZIP auf die Platte entpackt.
+- Keine Builds, keine Start-/Installationsskripte, keine Prozessprüfungen und keine Änderungen an `Revision.md` wurden ausgeführt.
+- ZIP-Datei: `/workspaces/MAIN/llm-proxies/dist/glm2api-bundle.zip`; Größe `119601` B; Hostmodus `0666`; SHA-256 `e5b08e473f77377853eb743821f42c4a02caedecff677413b5c6f2c6e4a4527a`.
+- Externe Autosave-/Parallelprozesse wurden während der Analyse beobachtet und als solche markiert; sie waren kein Schritt dieses Berichts.
+- Secretwerte, Tokens, Cookies, Passphrasen und verschlüsselte Werte wurden nicht ausgegeben. `app/glm2api.env` wurde weder geöffnet noch dekomprimiert.
+- `CRC32` ist der ZIP-Headerwert. `H-Inhalt` ist SHA-256 über den dekomprimierten Inhalt und wurde nur für nicht-geschützte Dateien berechnet. `H-Roh` ist SHA-256 über die gespeicherten Memberbytes; diese Definition gilt auch für den geschützten Eintrag.
+- Alle ZIP-Inhalte wurden nur im Arbeitsspeicher gelesen. Es wurde kein `unzip -p`, kein Staging-Verzeichnis und kein Build erzeugt.
+
+## Kurzfazit
+
+- **Struktur:** 45 ZIP-Einträge = 36 Dateien + 9 Verzeichnisse; 451.719 B unkomprimiert, 112.749 B komprimiert; keine Duplikate, keine gefährlichen Pfade, keine fehlenden/unerwarteten Dateien gegenüber dem Build-Soll.
+- **Integrität:** 35/36 nicht-geschützte Dateiinhalte per Dekompression/CRC32 geprüft, 0 Fehler; `app/glm2api.env` wurde wegen Secret-Schutzgrenze nicht per CRC/Plaintext verifiziert.
+- **Kanonischer Vergleich:** 29 Dateien byte-identisch, 6 Dateien mit Drift, 1 geschützte Konfigurationsdatei metadata-only.
+- **Manifest:** kein Manifest-Eintrag, kein ZIP-Kommentar, kein Central-Extra-Field und kein Texttreffer `manifest` in den 35 lesbaren Membern.
+- **Gesamtstatus:** ZIP technisch lesbar und strukturell konsistent, aber **nicht build-verifiziert**, weil sechs enthaltene Source-/Testdateien vom aktuellen kanonischen Source abweichen.
+
+## ZIP-/Container-Metadaten
+
+| Feld | Ergebnis |
+|---|---|
+| EOCD | Offset `119579`, Signatur `PK\x05\x06`, Gesamtcomment `0` B, trailing bytes `0` |
+| Central Directory | Offset `115804`, Größe `3775` B, Einträge `45` |
+| Methoden | Deflate(8): `33`; Stored(0): `12` |
+| Flags | `0x0000: 45`; verschlüsselt: `0`; Data Descriptor: `0` |
+| ZIP64 | kein ZIP64-Extra-Feld; EOCD-16-bit-Felder ausreichend |
+| Central-Extra-/Comment-Summen | Extra `0` B; Comments `0` B |
+| Lokal-/Zentralheader | Alle 45 geprüft; inkonsistente Einträge: `0` |
+| Pfad-Sicherheit | absolute Pfade: `0`; Backslash: `0`; `..`-Komponenten: `0`; NUL/Steuerzeichen: `0`; problematische Pfade gesamt: `0` |
+| ZIP-Modi | 0666: `34`; 0777: `6`; 0755: `5` |
+| ZIP-Dateitypen | regular: `36`; directory: `9`; Sonstige: `0` |
+| ZIP-Zeit | Alle Einträge `1980-01-01 00:00:00` (deterministischer Epoch-0-Marker). |
+| Build-Soll | erwartete Dateien `36`, tatsächlich `36`, fehlend `0`, unerwartet `0`. |
+
+## Vollständiges ZIP-Eintrag-Inventar
+
+`Bereich` ist lokaler Headeroffset, Datenstart und Datenende im ZIP. `H-Inhalt` und `H-Raw` haben die oben definierte Bedeutung; `—` bei Verzeichnissen bzw. geschütztem Plaintext. Angezeigte ZIP-Modi sind Unix-Berechtigungsbits; `Typ` unterscheidet Regular vs. Directory.
+
+| # | ZIP-Pfad | Typ | Modus | ZIP-Zeit | Methode/Flags | unkomprimiert B | komprimiert B | CRC32 | H-Inhalt | H-Roh | Bereich | Prüfstatus |
+|---:|---|---|---|---|---|---:|---:|---|---|---|---|---|
+| 1 | `glm2api-bundle/` | DIR | `0777` | 1980-01-01 00:00:00 | Stored/`0x0000` | 0 | 0 | `0x00000000` | `—` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | `0;45-45` | Struktur OK |
+| 2 | `glm2api-bundle/README.md` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 3051 | 1590 | `0xe25a6c6d` | `c5c31cd1d1a4f7694a0f0ae6e8423d98116a4d8fb0299593f838e94eeaaf42a5` | `8495021e5b112475d787c1eb2aa660b3e7144337c12e1b1e85e43da4f2334308` | `45;99-1689` | CRC OK; IDENTISCH |
+| 3 | `glm2api-bundle/app/` | DIR | `0777` | 1980-01-01 00:00:00 | Stored/`0x0000` | 0 | 0 | `0x00000000` | `—` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | `1689;1738-1738` | Struktur OK |
+| 4 | `glm2api-bundle/app/.env.example` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 5618 | 2553 | `0xc726def0` | `0fb3f717fcbf9521b705400f7b06e888bd32b91f03313ae51326b512b77d014b` | `1a7b6c9bce2378f9722e88cf5ed72fe18b0d67f7460fdc6a6bb9063dcf0b61bb` | `1738;1799-4352` | CRC OK; IDENTISCH |
+| 5 | `glm2api-bundle/app/structure.md` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 6001 | 2776 | `0xc96bea2c` | `bde83790ad68497cbc954be861bf92195d585229d948205e73a7b6ddac279c2b` | `6413c3bbebde925e0a921f63b50d19765046a4c17ccb50b0e8c42d937d8c74d5` | `4352;4413-7189` | CRC OK; IDENTISCH |
+| 6 | `glm2api-bundle/app/.python-version` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Stored/`0x0000` | 5 | 5 | `0x1e187808` | `a876e0b10411037a012498b9fe18d9bc1df32ed8b722a13564dc944ddcfd9135` | `a876e0b10411037a012498b9fe18d9bc1df32ed8b722a13564dc944ddcfd9135` | `7189;7253-7258` | CRC OK; IDENTISCH |
+| 7 | `glm2api-bundle/app/tests/` | DIR | `0755` | 1980-01-01 00:00:00 | Stored/`0x0000` | 0 | 0 | `0x00000000` | `—` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | `7258;7313-7313` | Struktur OK |
+| 8 | `glm2api-bundle/app/tests/test_config.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 1205 | 393 | `0x5c4dd2e0` | `2eb9299a4bef64e32bd257aa7928e0cbe69ddcafe034d3f40a8a6209ee5a7f23` | `2ef2b01a5a9ad0523444cc192782fa080b641a7383077f9b94ef6d02abf94e05` | `7313;7382-7775` | CRC OK; IDENTISCH |
+| 9 | `glm2api-bundle/app/tests/test_protocol_adapters.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 9192 | 2518 | `0xa7effd76` | `8c3d5d2be0e920eb90e174b368337b95ec26905b14bc9431c736d61f9887fe36` | `8da32b976e555c2208c10de65f3db5e78fc7a4f545ff1b6308f66d31582a44eb` | `7775;7855-10373` | CRC OK; IDENTISCH |
+| 10 | `glm2api-bundle/app/tests/test_model_variants.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 2541 | 708 | `0x22a05f39` | `7907b1d5f24b26f345ef90c443f6f647dbf1497e88da460e83277eaff544d7ec` | `eff658031cec1285f7b7bbf435bf8a659af123955d98ff2d80885721ba8e74fb` | `10373;10450-11158` | CRC OK; IDENTISCH |
+| 11 | `glm2api-bundle/app/tests/test_translator.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 40726 | 7381 | `0xc402359f` | `b2809d8514384701072e697ccadefaa8034794d6c226ea722f0036f1497d2067` | `b4d14863b415b21b0f74b8c9f05e207dd345f82e794b89f948df24c5f8b4289d` | `11158;11231-18612` | CRC OK; DRIFT; +89/−0; Hunks 1 |
+| 12 | `glm2api-bundle/app/tests/test_stream_retry.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 13922 | 2862 | `0x9a74e470` | `88a8a047c211ecd974182212c5bd4797f68cf2f0ecef003357d596a5b60640a5` | `08298a157ad9719c38f48d092d33916d068f5e04c380d07bd2637cb4b55354aa` | `18612;18687-21549` | CRC OK; IDENTISCH |
+| 13 | `glm2api-bundle/app/tests/test_tool_parser.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 22435 | 4651 | `0x4f7447e4` | `097156fe66460125db4e66c754abbdccf8213f97f1a0861f0368f2301d4b4db8` | `42fa035771e219e3cef4ac26914444ee6c3b497b161131ff5120c695db46a977` | `21549;21623-26274` | CRC OK; DRIFT; +53/−1; Hunks 2 |
+| 14 | `glm2api-bundle/app/README.md` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 2140 | 1202 | `0xd910f362` | `32b4b4eabb98e2ff281e75ae3e77b50ae01ecadffc8357187cc3c8c6f38bf110` | `bb198452e3e6d8420c459891e06fa0484f520e06f9bce0df1f5df07fd55f5e8e` | `26274;26332-27534` | CRC OK; IDENTISCH |
+| 15 | `glm2api-bundle/app/LICENSE` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 35145 | 12112 | `0xf772f0e1` | `6c7bdb574498786b458652674d3982a08788cfde895fad48b8fa780a0d9c2e5e` | `e79ef7905d23bd31386a9547dec9000c56461e94f0403d7b9775221f569bebf7` | `27534;27590-39702` | CRC OK; IDENTISCH |
+| 16 | `glm2api-bundle/app/main.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 91 | 80 | `0x9e1d8b53` | `8cb2d225533883743db360e307e460aebde4e006598fdf02625e3c42e10a009a` | `acd33781d0ba51c4f3deb10dbb63e860a51a8df26caa237ac724fe27e79f5802` | `39702;39758-39838` | CRC OK; IDENTISCH |
+| 17 | `glm2api-bundle/app/glm2api.env` | GESCHÜTZT | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 5829 | 2637 | `0x5db03652` | `unterdrückt` | `ade285a2a05a165f624d72b461b750c655ca42a38bb6112b72b1f2b1d9c8ffb0` | `39838;39898-42535` | GESCHÜTZT; CRC nicht geprüft; metadata-only |
+| 18 | `glm2api-bundle/app/uv.lock` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 4645 | 1727 | `0x5cf30340` | `5bfccff4ed66457addfcdcc08a5906ee22638460a823a0debbe4dfda5f926391` | `8d8cda1874435606fb9c3a1c6d77d8e1d36725ae191840a8b3bd1ef0006a9edd` | `42535;42591-44318` | CRC OK; IDENTISCH |
+| 19 | `glm2api-bundle/app/pyproject.toml` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 535 | 332 | `0xfffe465d` | `c2eddbc0dce8309776cb600329be8fc32980479a25b9ab8e8a4c4a3a7d788aaa` | `b7248a91cdd1539450bd9a56c51b275aab17354ba31e30a0a768bf4b6e679053` | `44318;44381-44713` | CRC OK; IDENTISCH |
+| 20 | `glm2api-bundle/app/src/` | DIR | `0755` | 1980-01-01 00:00:00 | Stored/`0x0000` | 0 | 0 | `0x00000000` | `—` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | `44713;44766-44766` | Struktur OK |
+| 21 | `glm2api-bundle/app/src/glm2api/` | DIR | `0755` | 1980-01-01 00:00:00 | Stored/`0x0000` | 0 | 0 | `0x00000000` | `—` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | `44766;44827-44827` | Struktur OK |
+| 22 | `glm2api-bundle/app/src/glm2api/config.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 13570 | 3856 | `0x92e7d092` | `6ab6b1f4b30c65f7b33b06ee94659376360c7d106a3c6f24b7482ccc671de627` | `2ab29078224b41adabcccd16c0d73a1c33dbd90670af9917cb6ef926460f7d42` | `44827;44897-48753` | CRC OK; IDENTISCH |
+| 23 | `glm2api-bundle/app/src/glm2api/__main__.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 1011 | 405 | `0x7d9b6e68` | `02d4a9d02de78af694f6233c01993d4b5ae4a0fbc27919a39036c1e8967d70ff` | `5becb9220d8561022cf1ccc2931cf5c0dff1a33f5e6101918016a222ac71cc77` | `48753;48825-49230` | CRC OK; IDENTISCH |
+| 24 | `glm2api-bundle/app/src/glm2api/model_variants.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 1316 | 502 | `0xf4936b8c` | `41d568ac58e81427dd9779de69dd4434f439e734806821d70b6b098ec22248dc` | `f2f80f24ca060173b1cbf8fe03fbb0aa5e00ee8fc7e52138a1998765c9b9a1da` | `49230;49308-49810` | CRC OK; IDENTISCH |
+| 25 | `glm2api-bundle/app/src/glm2api/__init__.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 92 | 83 | `0x0020a0cd` | `c43620168dcaf01e448f04e5de84eb06bf4203f61f5d2d9a4e30400a42765501` | `f2861fd5bb09bcf7e97a4c38bf4e31c32aae2cf5bf6580889d5eda18033f35e6` | `49810;49882-49965` | CRC OK; IDENTISCH |
+| 26 | `glm2api-bundle/app/src/glm2api/server.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 23013 | 4218 | `0x456ebe02` | `30f0812219e909d7121054fb527cebd48e3bb2d754d8c05501f95d0e8d4a2d63` | `2ebf984fe31d72b7eca4500b524f8373980117d7aee5b3e31f1ae19f4d08907c` | `49965;50035-54253` | CRC OK; IDENTISCH |
+| 27 | `glm2api-bundle/app/src/glm2api/utils/` | DIR | `0755` | 1980-01-01 00:00:00 | Stored/`0x0000` | 0 | 0 | `0x00000000` | `—` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | `54253;54320-54320` | Struktur OK |
+| 28 | `glm2api-bundle/app/src/glm2api/utils/__init__.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Stored/`0x0000` | 23 | 23 | `0x13e1fbda` | `bd3ce9cc0870670869f7177348df7949699fd36aa0c3b02c73450b5c6e1a1289` | `bd3ce9cc0870670869f7177348df7949699fd36aa0c3b02c73450b5c6e1a1289` | `54320;54398-54421` | CRC OK; IDENTISCH |
+| 29 | `glm2api-bundle/app/src/glm2api/utils/tool_parser.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 47873 | 11106 | `0x84cf2db3` | `37d167d079fe833456b6719ba1f29834b70e4a639c9c02f92f6ff26512564f00` | `f4a7e2515c13c1b93ce5e1c8b4651aa743f57c3300dd0274c0891330b69a21cc` | `54421;54502-65608` | CRC OK; DRIFT; +160/−57; Hunks 14 |
+| 30 | `glm2api-bundle/app/src/glm2api/utils/tool_protocol.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 8224 | 2856 | `0xbd59ee0a` | `40ca2a1dee29541204c64ddc48ff0cf9d4b9020492481646e29fbe7cd0e52951` | `dec4accb7a4e85ad2d422c69d1ff3479559bf2d7fceb0d03b74c6ecdeb48a57c` | `65608;65691-68547` | CRC OK; DRIFT; +10/−4; Hunks 6 |
+| 31 | `glm2api-bundle/app/src/glm2api/app.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 4122 | 1284 | `0x7d33d0cf` | `61cb3c42a825d24713c2c82c9f822aa28aeefdb91e02f54b75354eeeb2ca1e4c` | `9d5f48e86e051a112451227a531ba0e97c822c75ddd8da2dfd5ff3bdeebcff50` | `68547;68614-69898` | CRC OK; IDENTISCH |
+| 32 | `glm2api-bundle/app/src/glm2api/logging_utils.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 7882 | 2319 | `0x18ef7618` | `7f46e7dba4aeb3386c1f30bb618a49f828d699cb1000df23b0f769723248e593` | `ea69a6a356e1c64a7a74556c67aaf62f637cfcc665d311c71517d89488a50a70` | `69898;69975-72294` | CRC OK; IDENTISCH |
+| 33 | `glm2api-bundle/app/src/glm2api/services/` | DIR | `0755` | 1980-01-01 00:00:00 | Stored/`0x0000` | 0 | 0 | `0x00000000` | `—` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | `72294;72364-72364` | Struktur OK |
+| 34 | `glm2api-bundle/app/src/glm2api/services/glm_auth.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 14048 | 3685 | `0x402465ba` | `9c149a7a0574bceb7f09195e8ce5d4efceb8fe832659b840ea01535ae09d5de5` | `5bb5669247ad507230f50e8c7f7561f228a58a8cbcda5ab6ca79d472d52f5aab` | `72364;72445-76130` | CRC OK; IDENTISCH |
+| 35 | `glm2api-bundle/app/src/glm2api/services/translator.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 64319 | 14643 | `0x4f9e848c` | `348240937e95ad2391fdf390a931c7b55bf24d79533323b5bfb7e948b376d1b5` | `964679be988a833a894cc9ae44963ba770433cccee6b8f85b4a1a5e9f8f49d65` | `76130;76213-90856` | CRC OK; DRIFT; +146/−3; Hunks 10 |
+| 36 | `glm2api-bundle/app/src/glm2api/services/__init__.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Stored/`0x0000` | 21 | 21 | `0x368ac88c` | `cf0c16951d8053d09a748f92fca56881d5f177333410a036b550387180105904` | `cf0c16951d8053d09a748f92fca56881d5f177333410a036b550387180105904` | `90856;90937-90958` | CRC OK; IDENTISCH |
+| 37 | `glm2api-bundle/app/src/glm2api/services/responses_adapter.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 25465 | 4752 | `0x178b9a24` | `113f2533c6e2180b55f0106b486470dc4f9546d881a1d2d079854ee4d0b211c3` | `1072ed0d26d71a8d3ddbfdad81ce35fa391feb539440d002472d7043c4fb727b` | `90958;91048-95800` | CRC OK; IDENTISCH |
+| 38 | `glm2api-bundle/app/src/glm2api/services/glm_client.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 64189 | 12823 | `0x48c892af` | `67b3ec0fadded6a4d944494823d96df0231330d1ae366144786eb019aa58820b` | `d73e1106e0a45504dffc927d5ccd0f34d5a6088473ab8beffde415e23ba12ed7` | `95800;95883-108706` | CRC OK; DRIFT; +2/−0; Hunks 2 |
+| 39 | `glm2api-bundle/app/src/glm2api/services/anthropic_adapter.py` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 18640 | 3877 | `0x2d542063` | `4982ddf5d3a176658a115a2ee6e4b93a903cb427bee061e130b690f99dd6f45d` | `bf56ef1f2fd774d56585380d33ee41d8bfb3f09878576f2b7cc29e3ef461034d` | `108706;108796-112673` | CRC OK; IDENTISCH |
+| 40 | `glm2api-bundle/app/.gitignore` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 172 | 139 | `0x0fff13c2` | `586eb8905a9b8958f16fae7c9ae958defe9e7599bb2fd4002827add03a524eb8` | `ba5e8b5e4f744aa294697185549b687c20534fc593c3c6ee64b38f9b3698145c` | `112673;112732-112871` | CRC OK; IDENTISCH |
+| 41 | `glm2api-bundle/scripts/` | DIR | `0777` | 1980-01-01 00:00:00 | Stored/`0x0000` | 0 | 0 | `0x00000000` | `—` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | `112871;112924-112924` | Struktur OK |
+| 42 | `glm2api-bundle/scripts/install.sh` | TEXT/SOURCE | `0777` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 942 | 556 | `0x8abbdef6` | `b8699578e457f8a3c6da2fb51976ee38d3f8888973cb3da6a40dc3b48db94097` | `cdcdb12d642798589cf838d3b20211b1aeeb31fce67f1651e57490d855dcd748` | `112924;112987-113543` | CRC OK; IDENTISCH |
+| 43 | `glm2api-bundle/scripts/start.sh` | TEXT/SOURCE | `0777` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 1532 | 795 | `0x91baf024` | `82f347df73162755eba94c6ff1c88727e4a56104bef3f526a3f7181c8fcf5df7` | `151051ecd48eff7bc6c901915f90087b0db70455db7b4efb24417786437bb634` | `113543;113604-114399` | CRC OK; IDENTISCH |
+| 44 | `glm2api-bundle/docs/` | DIR | `0777` | 1980-01-01 00:00:00 | Stored/`0x0000` | 0 | 0 | `0x00000000` | `—` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | `114399;114449-114449` | Struktur OK |
+| 45 | `glm2api-bundle/docs/chatglm-reasoning-modes.md` | TEXT/SOURCE | `0666` | 1980-01-01 00:00:00 | Deflate/`0x0000` | 2184 | 1279 | `0x588e4513` | `5af4f21f9449ed128a88ebdc0a7f94a01c6b38fff0243eb10fd570472e87eacb` | `0a7abe763fc631ac233865538bdadd246563c5efc74620dc5a7be3d1bbda54a5` | `114449;114525-115804` | CRC OK; IDENTISCH |
+
+**Hinweis:** In der obigen, bewusst lesbaren Kurzfassung wurden einzelne lange Roh-Hashes mit `…` abbreviert; der vollständige unveränderte Archiveintrag-Report steht in `/workspaces/MAIN/.runtime/revision-parts/Q.md`. Die Statusangaben und jeder Pfad sind vollständig übernommen.
+
+## Read-only-Abgleich mit kanonischen Quellen
+
+Alle 35 nicht-geschützten Dateien wurden vollständig aus dem ZIP gelesen, byteweise verglichen und ihre CRC32 gegen den ZIP-Header geprüft. `app/glm2api.env` wurde als Secret-Kandidat geschützt: kein `read`, keine Dekompression, kein Plaintext-Hash und keine inhaltliche Gleichheitsbehauptung.
+
+| Kanonischer Pfad | Ergebnis |
+|---|---|
+| `llm-proxies/glm2api/src/glm2api/services/glm_client.py` | DRIFT: Archiv 1.344 Zeilen/64.189 B, Quelle 1.346/64.509 B; +2/−0, 2 Hunks. |
+| `llm-proxies/glm2api/src/glm2api/services/translator.py` | DRIFT: Archiv 1.381 Zeilen/64.319 B, Quelle 1.524/69.477 B; +146/−3, 10 Hunks. |
+| `llm-proxies/glm2api/src/glm2api/utils/tool_parser.py` | DRIFT: Archiv 1.297 Zeilen/47.873 B, Quelle 1.400/52.475 B; +160/−57, 14 Hunks. |
+| `llm-proxies/glm2api/src/glm2api/utils/tool_protocol.py` | DRIFT: Archiv 188 Zeilen/8.224 B, Quelle 194/8.763 B; +10/−4, 6 Hunks. |
+| `llm-proxies/glm2api/tests/test_tool_parser.py` | DRIFT: Archiv 588 Zeilen/22.435 B, Quelle 640/25.284 B; +53/−1, 2 Hunks. |
+| `llm-proxies/glm2api/tests/test_translator.py` | DRIFT: Archiv 1.120 Zeilen/40.726 B, Quelle 1.209/43.892 B; +89/−0, 1 Hunk. |
+| Alle übrigen 29 Dateien | byte-identisch zur jeweiligen kanonischen Quelle. |
+
+- Erwartungsmenge des Build-Skripts: 36 Dateien; Archiv: 36 Dateien; fehlend/unerwartet: 0/0.
+- `src/glm2api.egg-info` und Runtime-/Cache-Pfade werden gemäß Build-Skript ausgeschlossen.
+- Die sechs Drift-Dateien verletzen die im Build-Skript dokumentierte Source-/Test-Byteverifikation.
+
+## Secret-Namen und Abschlussstatus
+
+- Keine verschlüsselten ZIP-Member, kein Manifest, kein Kommentar, keine Runtime-/Secret-Dateinamen.
+- Sensible Kandidaten: `app/.env.example` (Template) und `app/glm2api.env` (geschützt).
+- Hochsignante Schlüsselnamen wurden nur als Namen/Referenzen inventarisiert; keine JWT-, Bearer-, PEM- oder Provider-Key-Werte ausgegeben.
+- ZIP lesbar/Zentralverzeichnis: PASS; Pfad-/Duplikat-/Header-Sicherheit: PASS; CRC 35/36: PASS; geschützte Datei: NOT TESTED BY DESIGN; Dateimenge 36/36: PASS; Byteidentität: FAIL (6 Drift); Extraktion/Build/Start: NO.
+- Vollständiger Archivmember- und Hashreport: `/workspaces/MAIN/.runtime/revision-parts/Q.md`.
+<!-- END PART Q -->
+
+## Anhang S — Korrigierter Abschlusscheck
+
+<!-- BEGIN PART S -->
+# Revision S — korrigierter read-only Endstatus
+
+**Prüfzeitpunkt:** 24.09.2026, 01:40:47 +0200 (Snapshot vor dem Schreiben dieser Datei)  
+**Wurzel:** ausschließlich `/workspaces/MAIN`  
+**HEAD:** `8e483ea195c53019a8956707fd0b82c56d85aa71`  
+**Modus:** statischer, read-only Abschlusscheck. Kein Dienststart, kein Build, kein Testlauf, keine Netzwerkanfrage und keine Löschung.
+
+## Kurzurteil
+
+- Der Bestand war zu diesem Snapshot vollständig inventarisiert: 178 tracked Einträge (176 reguläre Dateien, 2 Symlinks), 5.515 ignorierte Einträge (5.503 reguläre Dateien, 12 Symlinks) und 0 untracked, nicht ignorierte Einträge.
+- Außerhalb `.git`: 5.679 reguläre Dateien, 14 Symlinks, 474 Unterverzeichnisse; jeder Datei-/Symlink-Eintrag war tracked oder ignoriert.
+- `Revision.md` enthielt zu diesem Zeitpunkt die Anhänge A–Q; Q war vorhanden. Die fehlenden O/P/Q-Lücken aus R waren geschlossen.
+- A–Q waren strukturell in `Revision.md` integriert, aber der Statusblock am Dateianfang war noch ein historischer A–K-Stand.
+- Offen bleiben ZIP-Drift/Build-Nachweis, geschützter ZIP-Inhalt, Config-/Restore-Risiken, Agent-/Benchmark-Isolation und nicht ausgeführte Laufzeitverifikation.
+
+## Verteilungs- und Coverage-Matrix
+
+| Bereich | tracked | ignored | Abdeckung |
+|---|---:|---:|---|
+| `.devcontainer/` | 5 | 0 | A vollständig |
+| `.opencode/` | 7 | 3.655 | A, O, K vollständig; Node-Baum strukturell |
+| `config/` | 3 | 0 | P redigiert vollständig |
+| `infra/` | 22 | 0 | B, C vollständig |
+| `llm-proxies/` | 134 | 750 | D–I, Q vollständig; Runtime M/L |
+| `.runtime/` | 0 | 1.105 | L vollständig strukturell |
+| Root-/Cache-Dateien | 7 | 1 | A/N/M vollständig |
+
+- O deckt `.opencode/agent/glm2api.md` und `.opencode/command/quota.md` vollständig ab.
+- P deckt `config/passphrase`, `config/secrets.enc` und `config/secrets.manifest` redigiert strukturell ab.
+- Q deckt alle 45 ZIP-Einträge strukturell ab; sechs Dateien driften vom kanonischen Source ab, ein geschützter Env-Member blieb metadata-only.
+- R ist als historischer Zwischenstand zu behandeln, nicht als aktueller Endstatus.
+
+## Geprüfte Grenzen
+
+- Keine Secretwerte, Tokens, Cookies oder Passphrasen wurden im Abschlusscheck ausgegeben.
+- ZIP wurde nicht entpackt; kein Build/Test/Server/Port/Remote wurde ausgeführt.
+- Ältere Reports A–N wurden im Abschlusscheck nicht vollständig neu gelesen; ihre Aussagen sind zeitlich markierte Evidenz.
+- Der aktuelle Benchmark benötigt den separaten Recheck T.
+- Eine Umgebungs-/LSP-Diagnose in `llm-proxies/antigravity-proxy/cmd/callback-server/main.go` wurde weder durch Build/Test verifiziert noch geändert.
+
+## Abschlussstatus
+
+**BESTANDEN mit offenen fachlichen Befunden und offener Build-/Laufzeitverifikation.** O, P und Q sind vorhanden; A–Q waren zu diesem Snapshot strukturell in `Revision.md` eingebettet. Ältere Snapshot-Mengen im Startblock wurden nicht automatisch umgeschrieben.
+<!-- END PART S -->
+
+## Anhang T — Aktueller AuditMesh-Benchmark-Vertrag
+
+<!-- BEGIN PART T -->
+# Revision T — AuditMesh-Benchmark-Vertrag
+
+**Analysedatum:** 24.09.2026  
+**Arbeitsgrenze:** ausschließlich `/workspaces/MAIN`  
+**Prüfmodus:** statisch, read-only; keine Tests, Starts, HTTP-/Netzwerkaktionen oder Secret-Inhalte ausgegeben  
+**Zieldatei:** `llm-proxies/glm2api/benchmarks/benchmark.md`  
+**Zielstand:** 379 Zeilen, vollständig gelesen
+
+## Kurzurteil
+
+Der aktuelle Benchmark ist als fachlicher AuditMesh-Spezifikationsvertrag gut strukturiert: Struktur, Fixtures, Baseline-Metriken, eine Eingabemutation und die wichtigsten Reportmarker sind konkret beschrieben. Der neue absolute Pfadvertrag ist jedoch nicht vollständig geschlossen:
+
+1. `/workspaces/benchmark/auditmesh-current` ist als kanonischer Root an 26 Stellen fest eingetragen.
+2. Schritt 2 erlaubt weiterhin einen beliebigen frischen Laufpfad und verlangt nur eine Ersetzung im Agentenauftrag.
+3. Die Post-Run-Befehle stehen vor dem Agentenauftrag und verwenden den festen `auditmesh-current`-Pfad. Bei wörtlicher Befolgung können Agentenlauf und Post-Run-Prüfung unterschiedliche Verzeichnisse prüfen.
+4. Der Verifier akzeptiert einen beliebigen aufgelösten `root`, prüft keine erlaubte Parent-Basis, keine Canonical-Pfad-Regel und keine Symlink-/Race-Grenze.
+5. Tool-, Session-, Test- und Sicherheitskriterien sind überwiegend manuell oder im Prosa-Vertrag formuliert; `verify_auditmesh.py` führt weder generierte Pytests noch Session-Part-Export, Tool-Allowlist-Check, Netzwerk-Check oder Sandbox-Prüfung aus.
+
+**Gesamtstatus:** fachlich starke Spezifikation, aber **kein vollständig automatisierter oder sicherheitsisolierter Benchmark-Gate**.
+
+## Änderungsdelta seit dem letzten Audit
+
+| Commit | Betroffene aktuelle Datei | Relevante Änderung | Bewertung |
+|---|---|---|---|
+| `f296b7a` | `benchmarks/verify_auditmesh.py` | Von 314 auf 476 Zeilen; exakte Fixturezeilen, Baseline-/Mutation-Metriken, Reportmarker und SHA-256-Immutable-Snapshots ergänzt | Verbesserte fachliche Oracle-Abdeckung; Isolation und Testauthentizität bleiben offen |
+| `6a17fc9` | `.opencode/agent/glm2api.md` | Toolliste erweitert; `webfetch`/`question`/`task` nicht mehr pauschal verweigert; Session-Löschtools explizit gesperrt | Benchmark-Phasen ermöglicht, aber Prompt-Regel |
+| `862e52c` | `benchmark.md`, `translator.py` | Toolverfügbarkeit/Subagenten explizit; native `open`-Kommandos können auf `bash` abgebildet werden | Zusätzliche Mapping-/Anomalie-Lücke |
+| `3acce8f` | `.opencode/agent/glm2api.md` | `mode: subagent` zu `mode: all` geändert | Haupt- und Subagent-Nutzung möglich |
+| `3678a5c` | `benchmark.md` | Platzhalter durch absoluten Root `/workspaces/benchmark/auditmesh-current` ersetzt | Neuer Pfadvertrag; Runner-Substitution nicht eindeutig |
+| `8e483ea` | Arbeitsbaum/Autosave | Aktueller HEAD; keine zusätzliche Benchmarkdatei geändert | Keine weitere Vertragsänderung festgestellt |
+
+## Neuer absoluter Benchmarkpfad-Vertrag
+
+| Referenz | Vertrag |
+|---|---|
+| `benchmark.md:19-21` | Ein frischer, leerer Laufpfad wird gewählt; Beispiel: `/workspaces/benchmark/auditmesh-20260923-01`. Der Runner soll den Literalpfad `/workspaces/benchmark/auditmesh-current` im Agentenauftrag durch den gewählten Pfad ersetzen. |
+| `benchmark.md:26-31` | Nach dem Lauf werden `uv run --directory` und `verify_auditmesh.py` mit `/workspaces/benchmark/auditmesh-current` als Projektargument gezeigt. |
+| `benchmark.md:40-51` | Agentenauftrag, Arbeitsgrenze und Dateioperationen verwenden den festen Root und verlangen vollständig absolute Pfade. |
+| `benchmark.md:72-73,99-124` | `glob`, `grep`, Fixture-Prüfung, Implementierung, Tests, CLI, Subagent und lokaler Server werden an denselben Root gebunden. |
+| `benchmark.md:136-177` | Erwartete Baumstruktur, Entry-Point und die beiden Output-Artefakte liegen unter demselben Root. |
+| `benchmark.md:180-329` | Fixture- und Metrikverträge sind relativ zum Projektroot formuliert. |
+| `benchmark.md:341-379` | Abschluss, Funktion, Toolabdeckung und Session-Export beziehen sich auf denselben Lauf, definieren den Root aber nicht erneut. |
+
+Im aktuellen `benchmark.md` gibt es kein `<BENCHMARK_ROOT>` mehr. Der kanonische Root kommt in 26 Zeilen vor; der Verifier selbst besitzt keine Root-Konstante und verwendet sein CLI-Argument.
+
+## Widersprüche und Vertragslücken
+
+- **T-01 (hoch, funktional):** `benchmark.md:19-21` spricht nur von einer Ersetzung im Agentenauftrag ab Zeile 38; Post-Run-Befehle mit Root stehen bei `29-30`. Ein wörtlich umgesetzter Lauf kann unter einem anderen Root arbeiten, während Prüfungen den alten `auditmesh-current`-Bestand prüfen.
+- **T-02 (mittel, Vertragsmodell):** `current` ist zugleich Default und Ersetzungstoken; ein beliebiger Beispielpfad ist erlaubt, aber Parent-Basis, Freshness und Ersetzungsreichweite sind nicht definiert.
+- **T-03 (hoch, Isolation):** Die Vertragsgrenze „ausschließlich unter dem Laufpfad“ ist nicht durch den Verifier erzwungen; `args.root.resolve()` ist keine Sandbox.
+- **T-04 (mittel, Portabilität):** Es gibt kein Runner-/Substitutionsprogramm im aktuellen Benchmarkverzeichnis; die Pfadtransformation ist manuell.
+- **T-05 (mittel, Kollision):** Ein vorhersehbarer Shared-Path ohne Lock-/Freshness-Prüfung erlaubt konkurrierende oder veraltete Läufe.
+- **T-06/T-07 (mittel):** Optionale `question`/Subagentenwerkzeuge stehen gegen unbedingte Auswertung; `skill` wird im Benchmark verboten, aber nicht im Agentenprompt/Hostpermission gesperrt.
+- **T-08/T-09 (hoch/mittel):** Native `open`-/Sandbox-Tools können auf `bash`/`read`/`webfetch` abgebildet werden; Herkunft und nichtlokale `webfetch`-Ziele werden nicht technisch erkannt.
+- **T-10/T-11 (hoch):** Phasen, Autonomie, Toollecks und Sessionstatistik sind Prosa-/manuelle Kriterien und werden vom Verifier nicht geprüft.
+
+## Vollständige Zeilenabdeckung
+
+`benchmark.md:1-379` wurde vollständig und zeilenweise gelesen; Leerzeilen wurden ebenfalls geprüft.
+
+| Zeilen | Inhalt und Ergebnis |
+|---:|---|
+| 1-8 | Zweck, Modell, Agentenlauf, kein Request-Geschwindigkeitsbenchmark — vollständig erfasst. |
+| 10-17 | Proxy-Start und Smoke-Preflight — vollständig erfasst; Ausführung verboten. |
+| 19-25 | Rootauswahl, Ersetzung, frische Session, kein Defaultmodell, nur Agentenauftrag — T-01/T-02. |
+| 26-36 | Post-Run-Befehle, Verifier, Mutationstest — T-01 und Verifiergrenzen. |
+| 38-60 | Projektanlage, Arbeitsgrenze, absolute Pfade, Tools, Netzabhängigkeit, sequenzielle Calls — vollständig erfasst. |
+| 62-90 | Pflicht-/Optionaltools, Subagentenregel, verbotene Tools, `glob`/`grep`-Eigenständigkeit — T-06 bis T-09. |
+| 92-131 | Phase 0–10, Fixtureprüfung, Tests, CLI, Task, lokaler Webfetch, DB-Statistik, Abschluss — Test-/Prozesslücken. |
+| 133-178 | Erwartete Struktur, Entry-Point, unveränderte Eingaben/Quellen, Outputartefakte — T-03/Verifierabgleich. |
+| 180-260 | Services, Limits, Dokumentbeziehungen, Log-/Security-Fixtures — gegen Verifierzeilen abgeglichen. |
+| 262-285 | Dataclass-, Korrelations-, Fehlerraten-, Runbook-, Service- und Compliance-Regeln — nicht automatisiert. |
+| 287-329 | Verbindliches Metrik-Schema inklusive Listenreihenfolge und Floats — Verifier nur tolerant/teilweise. |
+| 331-339 | Reportheader, `ERR-404`, `obsolete.md`, Statusmarker — nur markerbasiert geprüft. |
+| 341-353 | Tests, CLI, Metrikabgleich, Abschlussbericht, exakte Abschlussfrage — optionale Frage widersprüchlich. |
+| 355-379 | Passkriterien, Preflight, Modell, Autonomie, Toollecks, Funktions-/Sessionkriterien — kein automatisierter Export-Gate. |
+
+Zusätzliche statische Querverweise: aktueller `.opencode/agent/glm2api.md`, `verify_auditmesh.py:1-476`, `smoke-test.sh`, `start-glm2api.sh`, `pyproject.toml`, `translator.py:309-353`, `opencode.json:280-295` und relevante Teststellen.
+
+## Verifier-Abgleich
+
+**Stärken:**
+
+- Required-Dateien, Services, Limits, Logs und Runbook-Überschriften stimmen zwischen Benchmark und Verifier überein.
+- Baseline und Mutation prüfen die meisten Metrikfelder, Grenzgleichheiten und nicht ignorierte Dateisnapshots.
+- Der Verifier prüft beide erwarteten Pipelinezustände.
+
+**Lücken:**
+
+1. Er startet generierte Tests nicht; Build, Installation, Entry-Point und Testqualität werden nicht geprüft.
+2. Zusätzliche Check-Objekte sind erlaubt; `passed_checks` wird nicht aus der gelieferten Liste berechnet.
+3. Float-Toleranz `1e-9` und `.get()`-Felder sichern den exakten JSON-/Float-Vertrag nicht.
+4. Der vollständige Report wird nur über Marker geprüft; Häufigkeiten, Korrelation und Dokumentationsstatus fehlen.
+5. `output`, Cache-/venv-Pfade und zusätzliche Dateien werden nicht vollständig vertraglich begrenzt.
+6. Der Linkparser deckt nur einfache Inline-Links ab.
+
+## Sicherheitsfolgen
+
+- **Keine Sandbox (hoch):** `run_pipeline()` kopiert die Umgebung, startet erzeugten Code ohne Umgebungs-/Netzwerk-/Dateisystemisolierung und begrenzt nur den direkten Child-Prozess auf 60 Sekunden.
+- **Symlink-/Root-Escape (hoch):** Required-Dateien, `read_text`/`read_bytes` und `copytree` folgen Symlinks; Root/Parent/Owner/Frische werden nicht geprüft.
+- **Netzwerk-/Dependency-Grenze nicht erzwungen (hoch):** `127.0.0.1` ist eine Prompt-Regel, kein Socketfilter.
+- **Fehlerausgabe/Prozessgrenze (hoch/mittel):** Bis zu 3.000 stdout-/stderr-Zeichen werden unredigiert übernommen; Nachfahren und Ressourcen werden nicht zuverlässig begrenzt.
+- **Prompt-/Permission-Schichten (hoch):** globale `permission: allow`, Agentenregeln und Benchmark-Prosa sind keine technische Sandbox.
+- **Shared-Path-Kollision (mittel):** kein Lock-/Freshness-Check für `/workspaces/benchmark/auditmesh-current`.
+
+## Empfohlene Reihenfolge (nicht ausgeführt)
+
+### P0
+
+1. Einen einzigen unveränderlichen Runnervertrag mit Root-Variable einführen; Ersetzung muss alle Verwendungen einschließlich Pytest/Verifier erfassen.
+2. Root canonicalisieren, Parent-/Freshness-/Eigentümer-/Rechte-/Symlink-Prüfung erzwingen.
+3. Verifier in reduzierte Umgebung, Netzwerk-/Dateisystemisolierung, Prozessgruppen-/Ressourcenlimits und redigierte Fehlerausgabe überführen.
+4. Symlink-/Hardlink-/Output-Linkziele vor Read/Write/Copy ablehnen.
+
+### P1
+
+1. Optionale/obligatorische Tool-, Phasen- und `question`-Logik vereinheitlichen.
+2. Statischen Pfad-/Rootvertragstest ergänzen.
+3. Generierte Tests, `pyproject`, Build und Entry-Point im kontrollierten Gate ausführen; No-op-Tests/Zusatzchecks ablehnen.
+4. Session-Part-Export und Toolprüfung implementieren oder als manuelle Checkliste markieren.
+5. `skill`, Native-Tool-Herkunft und nichtlokale `webfetch`-Ziele in einer kanonischen Toolpolicy behandeln.
+
+### P2
+
+1. Float-/JSON-Vertrag exakt definieren und Nichtstandardzahlen zurückweisen.
+2. Reportwerte, Tabellen, Linkformen und erlaubte Outputmenge vollständig prüfen.
+3. Preflight-Skripte self-contained machen.
+
+## Abschlussstatus
+
+- `benchmark.md:1-379`: vollständig gelesen, keine Zeile ausgelassen.
+- Relevante Agent-, Verifier-, Preflight-, Proxy- und Testquerverweise statisch geprüft.
+- Keine Tests, Benchmarkläufe, Starts, HTTP-Aktionen, Installationen oder Löschungen.
+- Keine Secretwerte gelesen oder wiedergegeben.
+- Vollständiger Recheck: `/workspaces/MAIN/.runtime/revision-parts/T.md`.
+<!-- END PART T -->
+
+## Anhang R — Historischer Gap-Check (superseded durch S)
+
+<!-- BEGIN PART R -->
+# Revision R — read-only Abdeckungscheck (historischer Zwischenstand)
+
+Der Report wurde vor dem Schreiben von Q und vor der Integration von O/P/Q erstellt. Er ist deshalb **kein aktueller Endstatus**.
+
+- Zu diesem Zeitpunkt wurden 178 tracked, 5.514 ignorierte und 14 Symlinks erkannt.
+- Als offene Coverage-Lücken wurden der damalige fehlende Q-Report, die noch nicht integrierten O/P-Berichte und die zwischenzeitlich geänderte `benchmark.md` genannt.
+- Die Debug-Logs wurden als momentaner Snapshot mit möglicher Byte-/Größenänderung markiert.
+- `R.md` behauptete außerdem, `Revision.md` ende vor O/P/Q; dieser Zwischenstand wurde durch die nachfolgenden Integrationen und S korrigiert.
+- Q, O und P liegen nun vor; der aktuelle Benchmark ist in T vollständig nachgeprüft; S ist der maßgebliche Abschlusscheck.
+
+**Keine Anwendungsdatei wurde durch R verändert.** Der vollständige historische Zwischenreport bleibt unter `/workspaces/MAIN/.runtime/revision-parts/R.md`.
+<!-- END PART R -->
 
 <!-- APPEND-MARKER -->

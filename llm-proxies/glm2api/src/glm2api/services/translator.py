@@ -240,6 +240,10 @@ def sanitize_tool_call_payload(
             fp = fp[7:]
         while fp.startswith("file:/"):
             fp = fp[6:]
+        if fp.startswith("workspaces/"):
+            fp = "/" + fp
+        elif fp.startswith("benchmark/"):
+            fp = "/workspaces/" + fp
         cleaned["filePath"] = fp
 
     # Repair: stringified JSON arrays or objects inside parameters (e.g. questions: "[{...}]")
@@ -366,6 +370,40 @@ _DUMMY_SANDBOX_PATTERNS = {
     "1",
     "0",
 }
+
+_META_CHATTER_KEYWORDS = (
+    "execute_sandbox_code ist",
+    "execute_sandbox_code calls",
+    "open ist kein",
+    "open ist nicht",
+    "open ist für",
+    "fehler meinerseits",
+    "fehler erkannt: open",
+    "fehler erkannt: execute_sandbox",
+    "kein weiteres open",
+    "ich stoppe die open",
+    "dieser aufruf war fehlerhaft",
+    "wechsle auf das datei-tool",
+    "tool call attempt:",
+    "the tool(s) `open` do not exist",
+    "the tool(s) `execute_sandbox_code` do not exist",
+)
+
+
+def strip_meta_chatter(text: str) -> str:
+    """Strips self-apology and meta-commentary sentences about failed/blocked tools."""
+    if not text:
+        return ""
+    lines = text.splitlines(keepends=True)
+    kept_lines = []
+    for line in lines:
+        lower = line.lower()
+        if any(kw in lower for kw in _META_CHATTER_KEYWORDS):
+            continue
+        if lower.strip() in {"read", "read read", "read\nread", "open", "write"}:
+            continue
+        kept_lines.append(line)
+    return "".join(kept_lines).strip()
 
 
 def is_dummy_sandbox_code(arguments: object) -> bool:
@@ -1218,6 +1256,11 @@ class GLMEventAccumulator:
                     + ", ".join(f"`{name}`" for name in unavailable_names)
                     + f". Blocked. Only these tools are allowed in this round: {allowed_names}."
                 )
+        if final_text:
+            if all_tool_calls:
+                final_text = strip_meta_chatter(final_text)
+            elif strip_meta_chatter(final_text) == "":
+                final_text = ""
         if final_text and not all_tool_calls:
             delta_payload: dict[str, object] = {"content": final_text}
             if not self.emitted_role:

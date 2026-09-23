@@ -235,7 +235,7 @@ class GLMWebClient:
                         + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
                         + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
                         + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
-                        + " Continue the task now with the available tools."
+                        + " Continue the task now with the available tools. Output ONLY the structured tool call for the next step. Do NOT output any apologies, conversational text, or meta-explanations."
                     ),
                 },
             ]
@@ -432,7 +432,7 @@ class GLMWebClient:
                         + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
                         + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
                         + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
-                        + " Continue the task now with the available tools."
+                        + " Continue the task now with the available tools. Output ONLY the structured tool call for the next step. Do NOT output any apologies, conversational text, or meta-explanations."
                     ),
                 },
             ]
