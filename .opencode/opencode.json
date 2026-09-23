@@ -1,6 +1,22 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
+    "tokenrouter": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "TokenRouter",
+      "whitelist": [
+        "stealth/union-alpha"
+      ],
+      "options": {
+        "baseURL": "https://api.tokenrouter.com/v1",
+        "apiKey": "sk-zaza5l2AkaQiVsJ3x97hvos9KLldUkybave96omfHQNmDVuL"
+      },
+      "models": {
+        "stealth/union-alpha": {
+          "name": "Stealth Union Alpha"
+        }
+      }
+    },
     "nvidia": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "NVIDIA NIM",
