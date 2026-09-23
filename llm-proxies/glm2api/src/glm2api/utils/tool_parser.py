@@ -721,7 +721,8 @@ def _recover_tool_calls_json(candidate: str) -> dict[str, object] | None:
         search_from = idx + len(probe)
 
 
-_BARE_ARRAY_START_RE = re.compile(r"(?:\[|\,)?\s*\{\s*\"name\"\s*:")
+_BARE_ARRAY_START_RE = re.compile(r"(?:\[|\,)\s*\{\s*\"name\"\s*:")
+_NAKED_WRITE_START_RE = re.compile(r"\{\s*\"filePath\"\s*:\s*\"[^\"]+\"\s*,\s*\"content\"\s*:")
 
 
 def _scan_bare_objects_span(text: str, start: int) -> int:
@@ -768,10 +769,10 @@ def _scan_bare_objects_span(text: str, start: int) -> int:
             after_comma = next_pos + 1
             while after_comma < len(text) and text[after_comma] in " \t\r\n":
                 after_comma += 1
-            if after_comma < len(text) and text[after_comma] == "{" and '"name"' in text[after_comma:after_comma+30]:
+            if after_comma < len(text) and text[after_comma] == "{" and any(k in text[after_comma:after_comma+30] for k in ('"name"', '"filePath"', '"command"')):
                 pos = after_comma
                 continue
-        elif next_pos < len(text) and text[next_pos] == "{" and '"name"' in text[next_pos:next_pos+30]:
+        elif next_pos < len(text) and text[next_pos] == "{" and any(k in text[next_pos:next_pos+30] for k in ('"name"', '"filePath"', '"command"')):
             pos = next_pos
             continue
         break
@@ -791,6 +792,8 @@ def _find_bare_tool_call_array(
     Gibt None zurueck, wenn kein bare-Call-Protokoll gefunden wurde."""
     masked = _mask_code_fences(text)
     match = _BARE_ARRAY_START_RE.search(masked)
+    if match is None:
+        match = _NAKED_WRITE_START_RE.search(masked)
     if match is None:
         # hold-back: partielle array-anfaenge am textende
         if not final:
@@ -849,6 +852,8 @@ def _find_bare_tool_call_array(
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
         parsed = None
+    if isinstance(parsed, dict):
+        parsed = [parsed]
     if not isinstance(parsed, list) or not parsed:
         # Recovery: das modell laesst gern die schliessende ']' weg und
         # haengt direkt einen (kaputten) '``json'-marker + ein duplikat-array
@@ -876,7 +881,16 @@ def _find_bare_tool_call_array(
             return None
         keys = set(item.keys())
         if "name" not in keys:
-            return None
+            if "filePath" in keys and "content" in keys:
+                item = {"name": "write", "arguments": dict(item)}
+            elif "filePath" in keys and ("newString" in keys or "oldString" in keys):
+                item = {"name": "edit", "arguments": dict(item)}
+            elif "command" in keys:
+                item = {"name": "bash", "arguments": dict(item)}
+            elif "filePath" in keys and len(keys) == 1:
+                item = {"name": "read", "arguments": dict(item)}
+            else:
+                return None
         name = str(item.get("name", "")).strip()
         if not name:
             return None

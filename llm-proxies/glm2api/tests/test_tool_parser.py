@@ -624,3 +624,17 @@ def test_streaming_consecutive_json_tool_calls_do_not_leak_as_visible():
     assert calls[1]["function"]["name"] == "bash"
     assert json.loads(calls[1]["function"]["arguments"])["command"] == "ls -la /workspaces/test/"
 
+
+def test_parse_recovers_naked_write_object_without_name():
+    """Live-Fall aus ses_f2fd31507ffeox6tR1Lp6H61DJ:
+    Modell emittiert {'filePath': '...', 'content': '...'} als nacktes JSON-Objekt ohne name/arguments-Wrapper.
+    Darf nicht als sichtbarer Chat-Text leaken, sondern muss als write-Tool-Call geparst werden!"""
+    text = '{"filePath":"/workspaces/benchmark/auditmesh-20260923-03/data/logs/audit_security.txt","content":"2026-01-15T09:00:20Z | AUTH_FAIL | user=alice"}'
+    clean, tool_calls = parse_tool_calls_from_text(text, allowed_tool_names={"write"})
+    assert clean == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "write"
+    args = json.loads(tool_calls[0]["function"]["arguments"])
+    assert "audit_security.txt" in args["filePath"]
+    assert "AUTH_FAIL" in args["content"]
+

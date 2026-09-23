@@ -494,6 +494,9 @@ def sanitize_tool_calls(
         )
         if cleaned_arguments is None:
             continue
+        if tool_name == "write":
+            if not isinstance(cleaned_arguments, dict) or not cleaned_arguments.get("filePath") or "content" not in cleaned_arguments:
+                continue
         repaired = not isinstance(original_value, dict) or safe_json_dumps(cleaned_arguments) != safe_json_dumps(original_value)
         sanitized.append(
             {
