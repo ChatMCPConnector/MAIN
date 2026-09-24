@@ -710,8 +710,127 @@ def _recover_tool_calls_json(candidate: str) -> dict[str, object] | None:
         search_from = idx + len(probe)
 
 
-_BARE_ARRAY_START_RE = re.compile(r"(?:\[|\,)\s*\{\s*\"name\"\s*:")
-_NAKED_WRITE_START_RE = re.compile(r"\{\s*\"filePath\"\s*:\s*\"[^\"]+\"\s*,\s*\"content\"\s*:")
+# Erkennt den Start eines nackten Tool-Call-Objekts '{"name": ...}'. Erlaubt
+# '[' (Array-Anfang), ',' (Object-Separator) und — neu — Textanfang bzw.
+# Zeilenumbruch davor: das Modell liefert die Calls oft OHNE
+# 'tool_calls'-Wrapper und OHNE Array-Klammern, beginnt dann aber mit
+# '{\n"name"' oder direkt mit '{"name"'. Vorher wurden genau diese Calls
+# nicht erkannt und landeten als Roh-Fragment im sichtbaren Text.
+_BARE_ARRAY_START_RE = re.compile(r"(?:^|[\[,]|\n)\s*\{\s*\"name\"\s*:")
+_NAKED_WRITE_START_RE = re.compile(r"(?:^|[\[,]|\n)\s*\{\s*\"filePath\"\s*:\s*\"[^\"]+\"\s*,\s*\"content\"\s*:")
+
+# Halluziniertes eigenes konversations-format: 'User: [{"call_id": "..."}]'.
+# Erkennt den START einer Echo-Zeile; das JSON darin kann mehrzeilig sein
+# (content enthaelt newlines), deshalb wird das blockende per balance-scan
+# bestimmt, nicht per zeilenanker.
+_TRANSCRIPT_ECHO_START_RE = re.compile(
+    r'(?:^|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
+)
+_TRANSCRIPT_ECHO_ROW_RE = re.compile(
+    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
+)
+# gleiche zeile, aber ohne den zeilenanker — wird direkt an der position
+# nach whitespace geprueft (follow-up-echo-zeilen).
+_TRANSCRIPT_ECHO_ROW_TAIL_RE = re.compile(
+    r'[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
+)
+# Maximale praefixe, die am chunkende noch gehalten werden muessen, damit
+# ein ueber chunk-grenzen verteilter echo-beginn nicht leakt.
+_TRANSCRIPT_ECHO_PARTIAL_PROBES = (
+    'User: [{"call_id": "',
+    'Assistant: [{"call_id": "',
+    'User: [{"name": "',
+    'Assistant: [{"name": "',
+    'User: [{"call_id":',
+    'Assistant: [{"call_id":',
+    'User: [{"name":',
+    'Assistant: [{"name":',
+    'User: [{"',
+    'Assistant: [{"',
+    'User: [{',
+    'Assistant: [{',
+    'User: [',
+    'Assistant: [',
+    'User:',
+    'Assistant:',
+)
+# Laufender, noch unvollstaendiger echo-präfix: die rolle steht, das json
+# ist angebrochen ('User: [{"', 'User: [{"call_id": ...') und noch nicht
+# balanciert — dann muss der rest des fragments zurueckgehalten werden.
+_TRANSCRIPT_ECHO_OPEN_RE = re.compile(
+    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*\[?\s*\{[^{}]*$'
+)
+
+
+def _balanced_json_end(text: str, start: int) -> int:
+    """Index NACH dem balanced JSON-Objekt/-Array ab start, oder -1."""
+    pos = start
+    while pos < len(text) and text[pos] in " \t\r\n":
+        pos += 1
+    if pos >= len(text) or text[pos] not in "[{":
+        return -1
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(pos, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return -1
+
+
+def _find_transcript_echo_span(text: str) -> tuple[int, int]:
+    """(start, end) des halluzinierten transcript-echo-blocks, sonst (-1, -1).
+    Das block umfasst alle aufeinanderfolgenden 'User:'/'Assistant:'-json-zeilen."""
+    first = _TRANSCRIPT_ECHO_START_RE.search(text)
+    if first is None:
+        return -1, -1
+    start = first.start() + (1 if text[first.start()] == "\n" else 0)
+    pos = start
+    end = -1
+    while True:
+        # role + json-beginn ab pos finden
+        row = _TRANSCRIPT_ECHO_ROW_RE.search(text, pos if pos == 0 else max(pos - 1, 0))
+        if row is None or (row.start() > pos and end != -1):
+            break
+        row_start = row.start() + (1 if text[row.start()] == "\n" else 0)
+        # json-beginn ('[' oder '{') der zeile; find() liefert absolut
+        json_start = text.find("[", row_start)
+        brace = text.find("{", row_start)
+        if brace != -1 and (json_start == -1 or brace < json_start):
+            json_start = brace
+        if json_start == -1:
+            break
+        obj_end = _balanced_json_end(text, json_start)
+        if obj_end == -1:
+            end = len(text) if end == -1 else end
+            break
+        end = obj_end
+        # weitere aufeinanderfolgende echo-zeilen (tolerante whitespace)
+        nxt = end
+        while nxt < len(text) and text[nxt] in " \t\r\n":
+            nxt += 1
+        follow = _TRANSCRIPT_ECHO_ROW_TAIL_RE.match(text, nxt)
+        if follow is None:
+            break
+        pos = nxt
+    if end == -1:
+        return -1, -1
+    return start, end
 
 
 def _scan_bare_objects_span(text: str, start: int) -> int:
@@ -792,15 +911,15 @@ def _find_bare_tool_call_array(
                 if text.endswith(probe[:length]):
                     return text[:-length], text[-length:], []
         return None
-    start = match.start()
-    matched_prefix = masked[start:].lstrip()
+    matched_prefix = masked[match.start():].lstrip()
+    start = match.start() + (len(masked[match.start():]) - len(matched_prefix))
     if matched_prefix.startswith("["):
         # array-grenzen scannen: bracket-balance ueber den gesamttext ab start
         depth = 0
         in_str = False
         esc = False
         end = -1
-        bracket_start = start + (len(masked[start:]) - len(matched_prefix))
+        bracket_start = start
         for i in range(bracket_start, len(text)):
             ch = text[i]
             if in_str:
@@ -1108,11 +1227,72 @@ def _find_json_tool_call(
     return text[:start] + rest, "", tool_calls
 
 
+_UNPARSEABLE_CALL_START_RE = re.compile(r'(?:\A|\n)[ \t]*\{\s*"(?:tool_calls|name|filePath|command)"\s*:')
+
+
+def strip_unparseable_call_fragments(text: str) -> tuple[str, int]:
+    """Entfernt tool-call-Fragmente, die NICHT parsebar sind (typisch: der
+    upstream-stream brach mitten im JSON ab). Sie sind nie eine echte antwort
+    und duerfen nicht als sichtbarer text durchgehen.
+
+    Greift nur, wenn der text an einer zeilengrenze mit einer
+    call-struktur beginnt und von dort bis zum textende nicht parsebar ist —
+    also genau der 'fragment-ist-der-ganze-text'-fall. Proma, die echten
+    call-aufrufe enthaelt, wird nicht angefasst.
+
+    Gibt (bereinigter_text, anzahl_entfernter_fragmente) zurueck."""
+    if not text:
+        return text, 0
+    match = _UNPARSEABLE_CALL_START_RE.search(text)
+    if match is None:
+        return text, 0
+    start = match.start() + (1 if text[match.start()] == "\n" else 0)
+    fragment = text[start:]
+    if not fragment.lstrip().startswith("{"):
+        return text, 0
+    # wenn das fragment bis zum ende balanciert ist, ist es parsebar und
+    # kein unparsebares fragment (parse_tool_calls_from_text hat es dann
+    # bereits entfernt) — dann nichts tun.
+    if _balanced_json_end(fragment, 0) == len(fragment):
+        return text, 0
+    kept = text[:start].rstrip()
+    return kept, 1
+
+
 def _split_stream_text(
     text: str,
     allowed_tool_names: set[str] | None,
     final: bool,
 ) -> tuple[str, str, list[dict[str, object]]]:
+    # 0) Halluziniertes eigenes konversations-format: das Modell schreibt
+    #    'User: [{"call_id": "..."}]'-zeilen (seine eigene transcript-
+    #    representation) als antwort. Nie eine echte antwort. Im stream
+    #    zurueckhalten (chunk-grenzen uebergreifend), bei final entfernen
+    #    und den text danach weiterverarbeiten.
+    echo_start, echo_end = _find_transcript_echo_span(text)
+    if echo_start != -1:
+        if not final:
+            return text[:echo_start], text[echo_start:], []
+        return _split_stream_text(
+            text[:echo_start] + text[echo_end:],
+            allowed_tool_names,
+            final=True,
+        )
+    if not final:
+        # Exakte echo-praefixe am textende zurueckhalten — sonst leakt der
+        # zeilenanfang, wenn er ueber eine chunk-grenze verteilt ist. Geprueft
+        # wird das komplette pending, nicht nur ein chunk, weil consume() den
+        # rest bereits angehaengt hat.
+        for probe in _TRANSCRIPT_ECHO_PARTIAL_PROBES:
+            if text.endswith(probe):
+                return text[: -len(probe)], probe, []
+        # laufender echo-präfix: text endet auf 'User: [{"' o.ae. und ist
+        # noch unvollstaendig (kein balanciertes objekt) → zurueckhalten.
+        if _TRANSCRIPT_ECHO_OPEN_RE.search(text):
+            echo_start, echo_end = _find_transcript_echo_span(text)
+            if echo_start == -1:
+                return "", text, []
+
     # 1) JSON-Protokoll prüfen (neues Format); ohne Treffer bleibt nur der
     # Partial-Suffix-Holdback von _find_json_tool_call relevant.
     if find_tool_calls_protocol(text) != -1:
@@ -1190,6 +1370,13 @@ def _find_text_function_call(
 def parse_tool_calls_from_text(text: str, allowed_tool_names: set[str] | None = None) -> tuple[str, list[dict[str, object]]]:
     if not text:
         return "", []
+    # Halluziniertes eigenes konversations-format zuerst entfernen — es ist
+    # nie ein tool-call und darf nie als antwort durchgehen.
+    echo_start, echo_end = _find_transcript_echo_span(text)
+    if echo_start != -1:
+        text = text[:echo_start] + text[echo_end:]
+        if not text.strip():
+            return "", []
     # zuerst neues JSON-protokoll pruefen
     visible, remainder, tool_calls = _find_json_tool_call(text, final=True, allowed_tool_names=allowed_tool_names)
     if tool_calls:

@@ -8,6 +8,7 @@ from glm2api.services.translator import (
     repair_raw_tool_args,
     sanitize_control_characters,
     sanitize_tool_call_payload,
+    strip_meta_chatter,
 )
 
 
@@ -1379,3 +1380,59 @@ def test_sanitize_filePath_strips_file_uri_scheme():
     args = json.loads(sanitized[0]["function"]["arguments"])
     assert args["filePath"] == "/workspaces/benchmark/src/doc_parser.py"
 
+
+
+def test_strip_meta_chatter_removes_hallucinated_transcript_echo():
+    """Regression (Live-Fall ses_f2bc23762ffeoOkPYHAoqhwpwm): das Modell
+    halluzinierte sein eigenes konversations-format inkl. erfundener
+    tool-result-zeilen ('User: [{"call_id":"call_webfetch_rules",...}]')."""
+    text = (
+        'User: [{"call_id":"call_webfetch_rules","name":"webfetch","content":"{\\"ok\\":true}"}]\n'
+        'User: [{"call_id":"call_pkill","name":"bash","content":"stopped"}]\n'
+        'Hier ist der Abschlussbericht. Alles erledigt.'
+    )
+
+    cleaned = strip_meta_chatter(text)
+
+    assert cleaned == "Hier ist der Abschlussbericht. Alles erledigt."
+
+
+def test_strip_meta_chatter_keeps_normal_user_quotes():
+    text = 'User: das ist eine normale zustandsmeldung\nAlles ok'
+
+    cleaned = strip_meta_chatter(text)
+
+    assert cleaned == text
+
+
+def test_accumulator_strips_transcript_echo_from_final_text():
+    """Live-Fall ses_f2bc23762ffeoOkPYHAoqhwpwm: das Modell schrieb sein
+    eigenes konversations-format (User: [{"call_id":...}]) als antwort."""
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"read", "bash"})
+    accumulator.consume_event(
+        {
+            "conversation_id": "conv_echo",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                'User: [{"call_id":"call_x","name":"read","content":"datei.txt"}]\n'
+                                'Assistant: erledigt, alle Phasen abgeschlossen.'
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    response = accumulator.build_response()
+    content = response["choices"][0]["message"]["content"]
+
+    assert "call_id" not in content
+    assert content == "Assistant: erledigt, alle Phasen abgeschlossen."

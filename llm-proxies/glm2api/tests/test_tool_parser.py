@@ -689,3 +689,105 @@ def test_stream_parser_keeps_prefix_before_incomplete_bare_array_midstream():
     assert len(calls) == 1
     assert json.loads(calls[0]["function"]["arguments"])["filePath"] == "/b.py"
 
+
+
+def test_bare_call_object_at_text_start_without_wrapper_is_parsed():
+    """Regression (Live-Fall ses_f2bc23762ffeoOkPYHAoqhwpwm, 2026-09-24):
+    das Modell lieferte die Calls als nackte '{"name": ...}'-Objekte OHNE
+    'tool_calls'-Wrapper und OHNE array-klammern, direkt am Textanfang.
+    Der bare-start-regex verlangte aber '[' oder ',' davor -> die Calls
+    wurden nicht erkannt und landeten als Roh-JSON im sichtbaren Text."""
+    text = (
+        '{"name":"write","arguments":{"filePath":"/tmp/a.py","content":"print(1)\\n"}}'
+        '{"name":"write","arguments":{"filePath":"/tmp/b.py","content":"print(2)\\n"}}'
+    )
+
+    clean, calls = parse_tool_calls_from_text(text, allowed_tool_names={"write"})
+
+    assert clean == ""
+    assert len(calls) == 2
+    assert json.loads(calls[0]["function"]["arguments"])["filePath"] == "/tmp/a.py"
+    assert json.loads(calls[1]["function"]["arguments"])["filePath"] == "/tmp/b.py"
+
+
+def test_bare_call_object_after_newline_is_parsed():
+    text = (
+        'Hier kommt der naechste Schritt.\n'
+        '{"name":"read","arguments":{"filePath":"/tmp/x.py"}}'
+    )
+
+    clean, calls = parse_tool_calls_from_text(text, allowed_tool_names={"read"})
+
+    assert clean == "Hier kommt der naechsten Schritt." or clean.startswith("Hier kommt")
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "read"
+
+
+def test_truncated_bare_call_is_held_back_and_never_streamed_as_text():
+    """Regression: abgeschnittenes call-json (stream-abruch mitten im
+    content) darf nicht als sichtbarer Text raus — es wird gehalten und
+    erst bei final verarbeitet."""
+    parser = StreamingToolParser(allowed_tool_names={"write"})
+
+    emitted = parser.consume('{"name":"write","arguments":{"filePath":"/tmp/a.py","content":"print(1)\\nprint(')
+
+    assert emitted == ""
+    assert parser.pending_text.startswith('{"name":"write"')
+
+
+def test_transcript_echo_is_held_back_across_chunk_boundaries():
+    """Live-Fall ses_f2bc23762ffeoOkPYHAoqhwpwm: das Modell halluzinierte
+    'User: [{"call_id":...}]'-zeilen (sein eigenes konversations-format).
+    Der echo muss ueber chunk-grenzen zurueckgehalten werden."""
+    parser = StreamingToolParser(allowed_tool_names={"read", "bash"})
+
+    chunks = [
+        'Alles erledigt.\n\n',
+        'User: [{"call_id":"call_x","name":"read",',
+        '"content":"datei.txt"}]\n\n',
+        'Abschlussbericht: alle Phasen fertig.',
+    ]
+    visible = "".join(parser.consume(c) for c in chunks)
+    tail, calls = parser.flush()
+
+    total = visible + tail
+    assert "call_id" not in total
+    assert "Abschlussbericht: alle Phasen fertig." in total
+    assert calls == []
+
+
+def test_transcript_echo_between_normal_text_is_removed():
+    text = 'Vorrede.\nUser: [{"call_id":"c1","name":"bash","content":"ok"}]\nNachwort.'
+
+    clean, calls = parse_tool_calls_from_text(text, allowed_tool_names={"bash"})
+
+    assert calls == []
+    assert "call_id" not in clean
+    assert "Vorrede." in clean
+    assert "Nachwort." in clean
+
+
+def test_unparseable_truncated_call_fragment_is_stripped():
+    """Der upstream brach mitten im call-json ab — das fragment ist keine
+    antwort und darf nicht als sichtbarer text durchgehen."""
+    from glm2api.utils.tool_parser import strip_unparseable_call_fragments
+
+    truncated = '{"name":"write","arguments":{"filePath":"/tmp/a.py","content":"print(1)\\nprint('
+    cleaned, removed = strip_unparseable_call_fragments(truncated)
+
+    assert removed == 1
+    assert cleaned == ""
+
+    # mit prosa davor bleibt die prosa erhalten
+    mixed = 'Hier der Code:\n' + truncated
+    cleaned2, removed2 = strip_unparseable_call_fragments(mixed)
+    assert removed2 == 1
+    assert cleaned2 == "Hier der Code:"
+
+    # vollstaendiges parsebares call-fragment wird nicht angefasst
+    complete = '{"name":"write","arguments":{"filePath":"/a.py","content":"x"}}'
+    assert strip_unparseable_call_fragments(complete) == (complete, 0)
+
+    # normaler text bleibt unangetastet
+    plain = "Ein ganz normaler Satz ohne Calls."
+    assert strip_unparseable_call_fragments(plain) == (plain, 0)

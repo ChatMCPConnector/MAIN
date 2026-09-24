@@ -70,6 +70,67 @@ Status: **DONE** (141/141 Tests grün).
 
 ---
 
+## THEMA 5 — Roh-Tool-Calls & Halluzinations-Echo im Antworttext (DONE 2026-09-24)
+
+### Symptom
+
+Benchmark-Session `ses_f2bc23762ffeoOkPYHAoqhwpwm` (18:26–19:16) lief
+erfolgreich durch, lieferte aber hässliche Antworten:
+
+- **4903 Zeichen** rohes `{"name":"write","arguments":{...}}-JSON` im
+  sichtbaren Text (2 abgeschnittene Call-Fragmente, u.a. `log_parser.py`,
+  `reporter.py`) → opencode Execute-Host PipeError, Agent musste die
+  Dateien neu schreiben
+- **1615 Zeichen** python-Code-Fragment (`{'...`) — ebenfalls Tail eines
+  abgeschnittenen Write-Calls
+- **2044 Zeichen** halluziniertes Konversations-Echo: das Modell schrieb
+  `User: [{"call_id":"call_webfetch_rules",...}]` (sein eigenes internes
+  Transcript-Format) mit erfundenen call_ids in die Antwort
+
+### Ursachen
+
+1. `tool_parser._BARE_ARRAY_START_RE` verlangte `[` oder `,` vor
+   `{"name":`. Das Modell lieferte die Calls aber **ohne** `tool_calls`-Wrapper
+   und **ohne** Array-Klammern, direkt am Zeilenanfang/Textanfang
+   (`{"name":"write",...}`) bzw. nach `\n`. Der Parser erkannte nur die
+   *zweiten* Objekte (nach `,`) — das erste Fragment fiel durch und wurde
+   als sichtbarer Text gestreamt.
+2. Der Upstream brach den Stream **mitten im JSON** ab (unbalancierte
+   Klammern). Beim `finalize` war der Text dann nicht mehr parsebar →
+   `parse_tool_calls_from_text` gab den Rohtext zurück.
+3. Das Echo ist ein Modell-Verhalten (Prompt-Format halluziniert), kein
+   Parser-Bug — brauchte einen eigenen Filter.
+
+### Fix
+
+- `_BARE_ARRAY_START_RE` / `_NAKED_WRITE_START_RE`: erlauben nun
+  `^` (Textanfang) und `\n` (Zeilenanfang) als Präfix → erste Fragmente
+  werden erkannt und **zurückgehalten** statt gestreamt.
+- `_split_stream_text` Schritt 0: `User:`/`Assistant:`-Zeilen mit JSON-Call
+  werden chunk-grenzenübergreifend zurückgehalten (Prefix-Holdback +
+  `_find_transcript_echo_span` mit JSON-Balance-Scan) und bei `final`
+  entfernt — legitimer Text **danach** bleibt erhalten.
+- `strip_unparseable_call_fragments()`: Final-Safety-Net für
+  Stream-abgebrochene, unparsebare Call-Fragmente (mit Log-Warnung).
+- `strip_transcript_echo()`: entfernt Echo-Zeilen im finalen Text
+  (Stream + Non-Stream), mit Log-Warnung.
+
+### Verifikation
+
+- **Reproduktion mit echten Daten**: 4903/1615/2044-Zeichen-Leak-Texte aus
+  der Session-DB in den echten `GLMEventAccumulator` gefüttert → alle drei
+  liefern jetzt **0 Zeichen** Fragment-Leak.
+- **Echte Log-Runde** (205 SSE-Events, 18:29): 8 korrekte write/todowrite-Calls,
+  **0 Bytes** sichtbarer Müll-Text (vorher ~4658 Zeichen).
+- 150/150 Tests grün (7 neue Regressionstests mit Live-Texten).
+- Chunk-Grenzen-Robustheit geprüft: 40–4096 Bytes sauber (3–17 Bytes sind
+  ein theoretischer Extremfall mit Rest-Leck, keine echte SSE-Größe).
+
+Status: **DONE — der upstream-stream bricht gelegentlich mitten im JSON ab;
+der proxy faengt das jetzt ab, statt es als antwort durchzulassen.**
+
+---
+
 ## THEMA 1 — Kontext-Management für Lang-Agent-Sessions (ERLEDIGT 2026-09-11, Beobachtung läuft)
 
 ### Umsetzung (P1) — Historien-Kompression + 10040-Auto-Retry + Leer-Turn-Auto-Retry

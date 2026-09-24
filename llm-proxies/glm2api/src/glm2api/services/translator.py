@@ -13,7 +13,7 @@ from typing import Any
 from ..config import AppConfig
 from ..logging_utils import debug_dump
 from ..model_variants import model_requests_search, model_requests_thinking, split_model_features
-from ..utils.tool_parser import CODE_FENCE_PATTERN, StreamingToolParser, detect_tool_call_names, parse_tool_calls_from_text
+from ..utils.tool_parser import CODE_FENCE_PATTERN, StreamingToolParser, detect_tool_call_names, parse_tool_calls_from_text, strip_unparseable_call_fragments
 from ..utils.tool_protocol import (
     BLOCKED_NATIVE_TOOL_NAMES,
     CANONICAL_TOOL_CALL_EXAMPLE,
@@ -447,9 +447,34 @@ _META_CHATTER_KEYWORDS = (
     "the tool(s) `execute_sandbox_code` do not exist",
 )
 
+# Das Modell halluziniert gelegentlich das eigene konversations-format:
+# "User: [{"call_id": "...", "name": "read", "content": "..."}]" — das ist die
+# interne transcript-repraesentation aus dem prompt, nie eine echte antwort.
+_TRANSCRIPT_ECHO_RE = re.compile(
+    r'^\s*(?:User|Assistant)\s*:\s*(?:\[\s*\{\s*"(?:call_id|name|content|arguments)"'
+    r'|\{\s*"(?:call_id|name|content|arguments|tool_calls)")',
+)
+
+
+def strip_transcript_echo(text: str) -> str:
+    """Entfernt halluzinierte konversations-transcript-zeilen des modells
+    ('User: [{"call_id": ...}]'). Das ist immer eine halluzination, nie eine
+    echte antwort — daher unabhaengig von vorhandenen tool-calls anwendbar."""
+    if not text:
+        return ""
+    lines = text.splitlines(keepends=True)
+    kept_lines = []
+    for line in lines:
+        if _TRANSCRIPT_ECHO_RE.search(line):
+            continue
+        kept_lines.append(line)
+    return "".join(kept_lines).strip()
+
 
 def strip_meta_chatter(text: str) -> str:
-    """Strips self-apology and meta-commentary sentences about failed/blocked tools."""
+    """Strips self-apology and meta-commentary sentences about failed/blocked tools
+    and the model's own hallucinated conversation transcript (User:/Assistant: lines
+    echoing the internal tool-result format)."""
     if not text:
         return ""
     lines = text.splitlines(keepends=True)
@@ -459,6 +484,8 @@ def strip_meta_chatter(text: str) -> str:
         if any(kw in lower for kw in _META_CHATTER_KEYWORDS):
             continue
         if lower.strip() in {"read", "read read", "read\nread", "open", "write"}:
+            continue
+        if _TRANSCRIPT_ECHO_RE.search(line):
             continue
         kept_lines.append(line)
     return "".join(kept_lines).strip()
@@ -1314,6 +1341,18 @@ class GLMEventAccumulator:
                     else:
                         self.blocked_tool_attempt_names.append(tool_name)
                 final_text = cleaned_text.strip()
+            # Safety-net (Live-Fall 2026-09-24, ses_f2bc23762ffeoOkPYHAoqhwpwm):
+            # der upstream brach mitten im call-json ab — das fragment ist
+            # unparsebar und wurde vom parser zurueckgehalten, wuerde hier
+            # aber als sichtbarer text durchgehen. Nie eine antwort.
+            final_text, fragment_count = strip_unparseable_call_fragments(final_text)
+            if fragment_count:
+                log = self.logger or _LOGGER
+                log.warning(
+                    "Stripped %s unparseable tool-call fragment(s) from final text "
+                    "(upstream stream ended mid-JSON)",
+                    fragment_count,
+                )
         if not all_tool_calls and self.allowed_tool_names is not None:
             attempted_names: list[str] = []
             for source_text in (self._cached_full_text.strip(), self._cached_full_reasoning.strip()):
@@ -1337,6 +1376,17 @@ class GLMEventAccumulator:
                 )
         if final_text:
             final_text = self._sanitize_visible_text(final_text)
+            # Halluziniertes eigenes konversations-format (User:/Assistant: mit
+            # [{"call_id":...}]) ist nie eine echte antwort — hier sind die
+            # zeilen vollstaendig, deshalb erst hier strippen.
+            stripped_echo = strip_transcript_echo(final_text)
+            if stripped_echo != final_text:
+                log = self.logger or _LOGGER
+                log.warning(
+                    "Stripped %s hallucinated transcript-echo line(s) from final text",
+                    final_text.count("\n") - stripped_echo.count("\n") or 1,
+                )
+                final_text = stripped_echo
             if all_tool_calls:
                 final_text = strip_meta_chatter(final_text)
             elif strip_meta_chatter(final_text) == "":
@@ -1470,6 +1520,13 @@ class GLMEventAccumulator:
             full_text.strip(),
             allowed_tool_names=self.allowed_tool_names,
         )
+        clean_content, fragment_count = strip_unparseable_call_fragments(clean_content)
+        if fragment_count:
+            log = self.logger or _LOGGER
+            log.warning(
+                "Stripped %s unparseable tool-call fragment(s) from non-streaming response text",
+                fragment_count,
+            )
         xml_tool_calls = sanitize_tool_calls(xml_tool_calls, fallback_url=self.fallback_tool_url)
         if not xml_tool_calls:
             xml_tool_calls = self._extract_reasoning_tool_calls(full_reasoning)
@@ -1498,6 +1555,11 @@ class GLMEventAccumulator:
         all_tool_calls = sanitize_tool_calls(all_tool_calls, fallback_url=self.fallback_tool_url)
 
         final_content = self._sanitize_visible_text(clean_content.strip())
+        stripped_echo = strip_transcript_echo(final_content)
+        if stripped_echo != final_content:
+            log = self.logger or _LOGGER
+            log.warning("Stripped hallucinated transcript-echo line(s) from non-streaming response text")
+            final_content = stripped_echo
         if not all_tool_calls and not final_content and self.blocked_tool_attempt_names:
             blocked_names = ", ".join(sorted(set(self.blocked_tool_attempt_names)))
             final_content = (
