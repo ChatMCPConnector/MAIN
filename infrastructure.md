@@ -21,7 +21,7 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau), autosave-daemon.sh (30-Min-Auto-Commit+Push), proxy-watchdog.sh |
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
-| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, nvidia-models.py), `browser/` (Playwright-Runtime 1.48.2, gepinnt), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
+| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, nvidia-models.py, validate-revision.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
 
 | `.env` `.runtime/` | GITIGNORED — Klartext-Secrets (.env), Browser-Profil, Runtime (nie committen) |
@@ -35,6 +35,7 @@ Start** — der Code liegt komplett im Repo, es gibt nichts mehr zu klonen; nur
 
 ```bash
 ./infra/scripts/save.sh status                       # Überblick (Repo, Auth, Secrets)
+./infra/scripts/validate-revision.sh                # read-only Revision.md-Check
 ```
 
 Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
@@ -63,8 +64,7 @@ Secret-Schutz-Purismus:
   `~/.local/share/opencode/auth.json` bzw. `.env`.
 - `./infra/scripts/secrets.sh lock|unlock|status` verwaltet das Bundle.
 - Codespaces-Secrets pro Account: `LANDSCAPE_PAT` (Git-Auth), `LANDSCAPE_PASSPHRASE` (optional).
-- API-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` —
-  kommen also über das Bundle in jeden neuen Codespace.
+- NVIDIA-/XinJianYa-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` und kommen über das Bundle in jeden neuen Codespace. `glm2api` nutzt lokal `local` als Platzhalter; TokenRouter und Antigravity enthalten weiterhin getrackte Literalwerte (siehe `Revision.md`, `SEC-02`).
 
 ## opencode-Konfiguration (`.opencode/`)
 
@@ -74,7 +74,7 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 |---|---|---|
 | nvidia | GLM 5.3 (1M/128K, Text, Reasoning) | nvidia-nim.key |
 | xinjianya | gpt-5.6-sol | xinjianya.key |
-| **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
+| **glm2api** | glm-5.3 | lokal, Port 8001, kein Key |
 | **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
@@ -88,11 +88,11 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 
 ## glm2api — der LLM-Haupt-Proxy (Port 8001)
 
-Chatglm.cn-Reverse (Python/FastAPI, Guest-Token-Pool: 100 Slots, Auto-Refetch
-+ 10 Retries), OpenAI-kompatibel. Gewinner des 3-Wege-Agenten-Benchmarks
-(2026-09-06): als einziger Proxy 2/2 SWE-Tasks **vollautonom in je 1 Run**
-(35+ Tool-Executions, 0 Abbrüche). hellogml (Guest-Token-Erschöpfung bei
-Lang-Runs) und chat2api (Markup-Fragilität bei Agent-Loops) wurden daraufhin
+Chatglm.cn-Reverse (Python-Standardbibliothek-HTTP, Gast-Token-Pool: 100 Slots,
+Auto-Refetch + 10 Retries), OpenAI-kompatibel. Gewinner des 3-Wege-Agenten-
+Benchmarks (2026-09-06): als einziger Proxy 2/2 SWE-Tasks **vollautonom in je
+1 Run** (35+ Tool-Executions, 0 Abbrüche). hellogml (Guest-Token-Erschöpfung
+bei Lang-Runs) und chat2api (Markup-Fragilität bei Agent-Loops) wurden daraufhin
 komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 
 **Wiederaufbau im frischen Codespace:**
@@ -111,14 +111,13 @@ komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 # Ziel: entpacken → bash scripts/install.sh → bash scripts/start.sh (Port 8001)
 ```
 
-**Bundle-Refresh (immer aktuell halten):** `build-bundle.sh` überschreibt das
-alte `dist/glm2api-bundle.zip` bei jedem Lauf vollständig mit dem aktuellen
-Source-Stand (rm + Neubau, kein Merge). Nach jeder glm2api-Code-Änderung
-einfach neu laufen lassen. Deterministisch (feste Zeitstempel, inhaltlich
-identische Stands = byte-identische ZIPs) und mit eingebauter Verifikation:
-alle tests/*.py im Zip + byte-identischer src/ gegen den Repo-Source, sonst
-exit 1. Drift ist damit strukturell ausgeschlossen — ein veraltetes Bundle
-kann nicht mehr committet werden, ohne dass der Build vorher scheitert.
+**Bundle-Refresh (immer aktuell halten):** `build-bundle.sh` baut das
+`dist/glm2api-bundle.zip` aus dem aktuellen Source neu. Der Builder kopiert
+Source und Tests und prüft die Produktionsdateien byteweise sowie die
+Testdateinamen; Testinhalte, Metadaten und ein vollständiger Commit-Fingerprint
+werden nicht geprüft. Das getrackte Bundle kann daher trotz Verifikation
+veraltet sein. Nach jeder glm2api-Code-Änderung neu bauen und die sechs
+aktuell bekannten Drift-Member separat prüfen.
 
 **100 %-Wiederherstellung:** Der Proxy-Code lebt komplett in MAIN — nach
 einem Codespace-Wechsel macht setup.sh automatisch: uv-Install (falls nötig),
@@ -156,12 +155,10 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
 - **Thinking-Budget-Overhead:** `antigravity-proxy` erzwang bei `claude-opus-4-6-thinking` standardmäßig ein `thinkingBudget: 8192`. Dadurch fielen bei jedem Zwischenschritt bis zu 8k Output-Tokens an.
 
 ### 3. Implementierte Gegenmaßnahmen für Claude/Opus
-1. **Opus- & Sonnet-Kontext in Opencode auf 75.000 Tokens gedeckelt (`limit.context`):**
-   In `.opencode/opencode.json` unter `provider.antigravity.models["claude-opus-4-6"]` und `["claude-sonnet-4-6"]`
-   wurde `limit.context` von 250.000 auf **75.000** und `output` auf **16.384** gesetzt.
-   `compaction.reserved` wurde von 83.400 auf **15.000** korrigiert. Opencode triggert
-   dadurch Auto-Compaction und Tool-Pruning bei 60.000 Tokens und verhindert Kontext-Multiplikationen.
-   Gemini behält seine vollen 1.000.000 Tokens.
+1. **Aktueller OpenCode-Kontextvertrag:** `.opencode/opencode.json` setzt
+   `claude-opus-4-6` auf 100.000 Context- und 16.384 Output-Tokens; Sonnet ist
+   nicht mehr als aktives Modell konfiguriert. Gemini behält 1.000.000 Context-
+   Tokens. Die frühere 75.000/75000er Darstellung ist historisch.
 2. **Thinking-Budget neu kalibriert (Proxy-Ebene):**
    In `llm-proxies/antigravity-proxy` wurde `ensureAntigravityThinkingDefaults` für Claude neu gestaffelt:
    - `none` / `off`: `budget = 0` (Thinking komplett aus, `ThinkingConfig: nil`)
@@ -260,6 +257,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-24: Statusdokumentation synchronisiert: entferntes `infra/browser/`, glm2api-Provider-/HTTP-/Bundle-/Context-Verträge und der Validator `infra/scripts/validate-revision.sh` entsprechen dem aktuellen Source-Stand.
 
 - 2026-09-24: **NVIDIA NIM: GLM 5.3 ergänzt, Provider bereinigt.**
   `z-ai/glm-5.3` mit 1.048.576 Tokens Gesamtkontext, 131.072 Tokens Output,
