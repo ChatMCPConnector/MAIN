@@ -1537,3 +1537,24 @@ def test_accumulator_strips_transcript_echo_from_final_text():
 
     assert "call_id" not in content
     assert content == "Assistant: erledigt, alle Phasen abgeschlossen."
+
+
+def test_native_open_mapping_rejects_tool_name_in_path():
+    """Live-Fall 2026-09-25 (ses_f2a64f037ffeqVK86xKyAQYdSp): das Modell
+    schrieb den Toolnamen selbst ins Argument
+    ({'ref_id': 'read /workspaces/benchmark.md'}). Das ist eine Anweisung,
+    kein Pfad — der Aufruf wurde zu einem Leseversuch auf einen nicht
+    existierenden Dateinamen."""
+    from glm2api.services.translator import map_native_open_tool_call
+
+    assert map_native_open_tool_call({"ref_id": "read /workspaces/benchmark.md"}, {"read"}) is None
+    assert map_native_open_tool_call({"ref_id": "bash ls -la"}, {"read"}) is None
+    # echte ziele bleiben unberuehrt
+    assert map_native_open_tool_call({"ref_id": "/workspaces/benchmark.md"}, {"read"}) == (
+        "read",
+        {"filePath": "/workspaces/benchmark.md"},
+    )
+    assert map_native_open_tool_call({"ref_id": "https://example.com"}, {"webfetch"}) == (
+        "webfetch",
+        {"url": "https://example.com"},
+    )

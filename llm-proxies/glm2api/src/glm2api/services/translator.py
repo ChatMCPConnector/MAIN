@@ -457,10 +457,36 @@ def map_native_open_tool_call(
             return "webfetch", {"url": target}
 
     if not target.startswith("turn") and ("/" in target or target.startswith(".") or "." in target):
+        if _looks_like_tool_invocable(target):
+            # Das Modell hat den Toolnamen selbst in das Argument geschrieben
+            # (live-Fall 2026-09-25: 'filePath': 'read /workspaces/…').
+            # Das ist kein Pfad — der aufruf waere sonst eine Lese-Anfrage
+            # auf einen Dateinamen, den es nicht gibt, und der Agent raeumt
+            # den Fehler nicht auf. Besser: als blockierten Versuch
+            # kennzeichnen, damit die negative Rueckmeldung greift.
+            return None
         if allowed_tool_names is None or "read" in allowed_tool_names:
             return "read", {"filePath": target}
 
     return None
+
+
+def _looks_like_tool_invocable(target: str) -> bool:
+    """Beginnt das 'argument' mit einem toolnamen und einem leerzeichen?
+
+    Erkennt die vom Modell verursachte form 'read /pfad', 'write datei',
+    'bash ls -la' — also eine Anweisung statt eines Ziels."""
+    stripped = target.strip()
+    if " " not in stripped:
+        return False
+    first_word, remainder = stripped.split(" ", 1)
+    if not remainder.strip():
+        return False
+    known = {
+        "read", "write", "edit", "bash", "glob", "grep", "webfetch",
+        "todowrite", "task", "open", "list", "search",
+    }
+    return first_word.lower().strip("`'\"():") in known
 
 
 _DUMMY_SANDBOX_PATTERNS = {
