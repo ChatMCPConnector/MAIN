@@ -1317,12 +1317,41 @@ def test_native_sandbox_maps_to_bash_when_bash_allowed():
     from glm2api.services.translator import map_native_sandbox_tool_call, GLMEventAccumulator
 
     mapped = map_native_sandbox_tool_call(
-        '{"code": "print(\'test\')"}',
+        '{"code": "import json\\ndata = json.dumps({\'a\': 1})\\nprint(data)"}',
         allowed_tool_names={"bash", "read"},
     )
     assert mapped is not None
     assert mapped[0] == "bash"
-    assert "print('test')" in mapped[1]["command"]
+    assert "json.dumps" in mapped[1]["command"]
+
+
+def test_native_sandbox_drops_side_effect_free_thinking_scratchpad():
+    """Live-Fall 2026-09-25 (ses_f2a4cdf04ffewG5KS0GHp98eN5): das Modell
+    nutzt den sandbox-kanal als denk-kratzer und sendet print("x"),
+    print("done") & co. Ohne diesen filter wurden daraus 40 echte
+    bash-aufrufe in einem turn."""
+    from glm2api.services.translator import map_native_sandbox_tool_call, is_dummy_sandbox_code
+
+    # denk-kratzer: keine wirkung
+    for scratch in (
+        'print("x")',
+        'print("done")',
+        "print('phase3-start')",
+        "print('use write tool now')",
+        "print('a')\nprint('b')\nprint('c')",
+        "assert 1 == 1",
+        "pass",
+    ):
+        assert is_dummy_sandbox_code('{"code": %s}' % __import__("json").dumps(scratch)) is True
+        assert map_native_sandbox_tool_call('{"code": %s}' % __import__("json").dumps(scratch), {"bash"}) is None
+
+    # echte aufgaben bleiben ausfuehrbar
+    for work in (
+        "import os\nos.makedirs('/tmp/x', exist_ok=True)",
+        "x = 1 + 1\nopen('/tmp/v.txt','w').write(str(x))",
+        "import subprocess\nsubprocess.run(['ls'])",
+    ):
+        assert is_dummy_sandbox_code('{"code": %s}' % __import__("json").dumps(work)) is False
 
     mapped_shell = map_native_sandbox_tool_call(
         '{"code": "pytest -v tests"}',
@@ -1558,3 +1587,34 @@ def test_native_open_mapping_rejects_tool_name_in_path():
         "webfetch",
         {"url": "https://example.com"},
     )
+
+
+def test_sandbox_mapping_is_capped_per_turn():
+    """Schutznetz: ein entarteter turn darf nicht unbegrenzt sandbox-calls
+    in echte bash-aufrufe umwandeln (live-fall: 40 calls)."""
+    from glm2api.services.translator import GLMEventAccumulator, _MAX_MAPPED_SANDBOX_CALLS
+
+    accumulator = GLMEventAccumulator(
+        model="glm-test",
+        allowed_tool_names={"bash", "read", "write"},
+        fallback_tool_url=None,
+    )
+    parts = []
+    for index in range(_MAX_MAPPED_SANDBOX_CALLS + 5):
+        parts.append({
+            "logic_id": f"p{index}",
+            "tool_calls": {
+                f"c{index}": {
+                    "name": "execute_sandbox_code",
+                    "arguments": json.dumps({"code": f"import os\nx{index} = {index}"}),
+                }
+            },
+        })
+    accumulator.consume_event({
+        "conversation_id": "conv_cap",
+        "status": "finish",
+        "parts": parts,
+    })
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    assert len(message.get("tool_calls") or []) <= _MAX_MAPPED_SANDBOX_CALLS

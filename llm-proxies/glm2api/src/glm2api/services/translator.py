@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -609,7 +610,52 @@ def is_dummy_sandbox_code(arguments: object) -> bool:
         )
         if any(kw in inner for kw in keywords) or not inner:
             return True
-    return False
+    # P1-Lauf 2026-09-25: die deny-list deckte nur feste strings ab. Das
+    # Modell nutzt den sandbox-kanal als denk-kratzer und sendet
+    # print("x"), print("done") & co. — alles, was nicht auf der liste
+    # stand, wurde zu einem ECHTEN bash-aufruf (40 aufrufe in einem turn).
+    return _is_side_effect_free_sandbox_code(code)
+
+
+# Deckelung fuer sandbox->bash pro turn (schuetzt vor modell-degeneration,
+# live-fall 2026-09-25: 40 mapped calls in einem turn).
+_MAX_MAPPED_SANDBOX_CALLS = 8
+
+# Aufrufe, die fuer sich genommen nichts bewirken.
+_SIDE_EFFECT_FREE_CALLS = {"print", "pprint", "repr", "format", "len", "str", "int", "float", "bool", "list", "dict", "set"}
+
+
+def _is_side_effect_free_sandbox_code(code: str) -> bool:
+    """True, wenn ein snippet keine wirkung erzeugt — also denk-kratzer
+    des modells ist und kein auszufuehrender auftrag.
+
+    Bewertet ueber den abstrakten syntaxbaum statt ueber stringmuster: als
+    wirkungslos gelten nur ausdruecke aus print/assert/pass sowie reine
+    literale. Zuweisungen, imports, aufrufe, schleifen, dateizugriff und
+    def/class zaehlen als wirkung."""
+    stripped = code.strip()
+    if not stripped:
+        return True
+    try:
+        tree = ast.parse(stripped)
+    except SyntaxError:
+        # nicht parsebar: nicht als selbstgespraech einstufen, das waere
+        # eine stillschweigende verweigerung echter aufgaben.
+        return False
+    if not tree.body:
+        return True
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Import, ast.ImportFrom,
+                             ast.For, ast.While, ast.With, ast.Try, ast.FunctionDef,
+                             ast.AsyncFunctionDef, ast.ClassDef, ast.Raise, ast.Delete,
+                             ast.Global, ast.Nonlocal, ast.Return)):
+            return False
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = getattr(func, "id", None) or getattr(func, "attr", None)
+            if name not in _SIDE_EFFECT_FREE_CALLS:
+                return False
+    return True
 
 
 def map_native_sandbox_tool_call(
@@ -1091,6 +1137,7 @@ class GLMEventAccumulator:
     _deferred_reasoning: str = ""
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
     blocked_tool_attempt_names: list[str] = field(default_factory=list)
+    _mapped_sandbox_calls: int = 0
     # T-13: true, wenn der turn an einem angebrochenen protokoll endete und
     # deshalb nicht als regulaerer 'stop' gelten darf.
     truncated_turn: bool = False
@@ -1219,8 +1266,22 @@ class GLMEventAccumulator:
                                 if is_dummy_sandbox_code(arguments):
                                     if self.logger:
                                         self.logger.info(
-                                            "Dropped dummy sandbox self-talk call args=%s",
+                                            "Dropped side-effect-free sandbox self-talk call args=%s",
                                             arguments,
+                                        )
+                                    continue
+                                # Schutznetz gegen modell-degeneration: der
+                                # sandbox-kanal wird als ausfuehrungsweg
+                                # genutzt, und ein entarteter turn spammte
+                                # 40 mapped calls (live-fall 2026-09-25).
+                                # Mehr als _MAX_MAPPED_SANDBOX_CALLS pro
+                                # akkumulator werden verworfen.
+                                if self._mapped_sandbox_calls >= _MAX_MAPPED_SANDBOX_CALLS:
+                                    self.blocked_tool_attempt_names.append(tool_name)
+                                    if self.logger:
+                                        self.logger.warning(
+                                            "Sandbox->bash mapping cap reached (%s), dropped further calls this turn",
+                                            _MAX_MAPPED_SANDBOX_CALLS,
                                         )
                                     continue
                                 mapped = map_native_sandbox_tool_call(arguments, self.allowed_tool_names)
@@ -1228,6 +1289,7 @@ class GLMEventAccumulator:
                                     mapped_name, mapped_args = mapped
                                     tool_name = mapped_name
                                     arguments = mapped_args
+                                    self._mapped_sandbox_calls += 1
                                     if self.logger:
                                         self.logger.info(
                                             "Mapped native sandbox tool call to %s args=%s",
