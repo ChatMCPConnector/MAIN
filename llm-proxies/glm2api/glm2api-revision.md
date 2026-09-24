@@ -1,0 +1,386 @@
+# glm2api-revision.md — vollständiges Linien-für-Linien-Audit
+
+**Stand:** 2026-09-24
+**Scope:** `llm-proxies/glm2api/` — 17 Produktionsdateien (7.742 Zeilen), 6 Testdateien (3.226 Zeilen), Benchmarks, Build- und Konfigurationsdateien
+**Methode:** 7 parallele Subagenten (eine Datei bzw. ein Bereich pro Agent), danach unabhängige Nachverifikation jedes Kernbefunds durch den Hauptagenten, ergänzt um Analyse echter Runtime-Daten (opencode-DB, glm2api-Debug-Logs)
+**Anlass:** Nutzerbefund — „glm2api funktioniert noch nicht gut: es schafft Aufgaben, aber sehr häufig wird in der Ausgabe ein Toolcall fälschlicherweise als Antwort gegeben"
+**Verhältnis zu `Revision.md`:** Dieses Dokument ist die **fachliche Fortschreibung für glm2api** und ersetzt für diesen Bereich die historischen Parts I/U der Revision. Befunde mit Vorzeichen `I-xxx`/`U-xxx` verweisen auf die dortige Erstbefundung; alle wurden am aktuellen Source erneut geprüft.
+
+---
+
+## Executive Summary
+
+Die Kernhypothese des Nutzers ist **bestätigt und quantifiziert**. In 4 von 9 glm2api-Sessions finden sich 8 Antwort-Parts mit zusammen **35.643 Zeichen** Roh-Protokoll im sichtbaren Text. Die Ursachen sind **nicht** ein einzelner Bug, sondern eine Klasse von sechs Fehlermustern, die alle in derselben Stelle zusammenlaufen: Der Tool-Parser entscheidet anhand von **Textmustern** über Call-oder-Antwort, und diese Entscheidung ist **nicht chunk-stabil**, **nicht schema-stabil** und **nicht kontextbewusst**.
+
+**Die fünf wichtigsten Befunde:**
+
+| # | Befund | Wirkung |
+|---|---|---|
+| **1** | **Call-Erkennung ist chunk-abhängig** (P-05) | Bei ungünstiger Chunk-Grenze gehen **alle** Calls verloren und das Roh-JSON landet als Antwort. Bei günstiger Grenze werden sie korrekt geparst. Gleicher Input, unterschiedliches Ergebnis. |
+| **2** | **Gültige Calls gehen bei blockierten Calls verloren** (C-11) | Der Client verwirft die fertigen Chunks, sobald ein blockierter Tool-Name im Turn war — inklusive der gültigen Calls daneben. Der Agent bekommt nie die Antwort auf seinen Call. |
+| **3** | **`None` als Wildcard** (T-02, P-01, C-09) | Ohne deklarierte Tools bedeutet `None` „alles erlaubt“ — normale JSON-Antworten mit einem `name`-Feld werden zu ausführbaren Tool-Calls. Umgekehrt: leere Tool-Liste → Wildcard. |
+| **4** | **Abgeschnittene Streams gelten als Erfolg** (C-06, S-08, T-13) | Upstream bricht mitten im JSON ab → `finalize("stop")` → der Client sieht eine fertige Antwort mit halbem Tool-Call. |
+| **5** | **Kein einziger Test deckt das Kernsymptom ab** (D-01 bis D-08) | Der Test `test_deferral…` **stellt das Fehlverhalten als erwartet fest**: er prüft, dass `{"tool` als Assistant-Content durchkommt. |
+
+**Empfohlene Reihenfolge:** erst P0 (5 Befunde, Abschnitt „Maßnahmenplan“), dann P1. Nicht P2, solange P0 offen ist.
+
+---
+
+## Teil A — Verifizierte Kernbefunde zum Kernproblem
+
+Jeder Befund hier wurde vom Hauptagenten eigenständig nachvollzogen (Reproduktionscode ausgeführt), nicht nur aus den Subagentenberichten übernommen.
+
+### V-01 — KRITISCH: Tool-Call-Erkennung ist von der Chunk-Grenze abhängig
+
+**Betroffen:** `utils/tool_parser.py` (Bare-/Wrapper-Holdback), `services/translator.py` (Delta-Zusammenbau)
+**Vorbefund:** I-009, P-05
+
+Der Parser hält angebrochene JSON-Fragmente zurück, damit sie beim nächsten Delta zu einem Call werden. Die Holdback-Erkennung ist aber **an feste, minifizierte Textpräfixe hartcodiert** (`'[{"name"'`, `'{"tool_calls":'`), während die eigentliche Erkennung **Whitespace und Pretty-Print toleriert**. Fällt die Chunk-Grenze in eine tolerierte Form, greift der Holdback nicht.
+
+**Reproduktion (verifiziert):**
+
+```python
+from glm2api.utils.tool_parser import StreamingToolParser
+text = '{\n  "tool_calls": [\n    {"name":"bash","arguments":{"command":"ls"}}\n  ]\n}[]'
+p = StreamingToolParser(allowed_tool_names={"bash"})
+sichtbar = "".join(p.consume(text[i:i+1]) for i in range(len(text)))   # zeichenweise
+tail, calls = p.flush()
+# Ergebnis: calls=0, sichtbar=76   →  KEIN Call, volles Roh-JSON als Antwort
+# Mit 40-Byte-Chunks: calls=1, sichtbar=0  →  korrekt
+```
+
+Betroffen sind alle drei Formen: `{"tool_calls": …}` (pretty), `[{ "name": … }]` (pretty) und `{"name": …}` (nackt). Der Effekt ist in allen drei Fällen identisch.
+
+**Auswirkung:** Der Agent erhält statt eines Tool-Calls eine Antwort voller JSON. Er versteht sie nicht als Call, führt sie nicht aus, und der Turn läuft ins Leere — genau das beschriebene Symptom. Die Häufigkeit hängt von der Upstream-Delta-Tiefe ab und ist damit **nicht vorhersagbar**.
+
+**Empfehlung:** Holdback und Voll-Erkennung aus **einer** Grammatik ableiten (inkrementeller Zustandsautomat statt Präfix-Schnelltests), nicht aus zwei unabhängigen Heuristiken. Zusaetzlich jeden Split-Punkt per Property-Test abdecken.
+
+---
+
+### V-02 — HOCH: Ein gültiger Call geht verloren, sobald im selben Turn ein blockierter Call auftritt
+
+**Betroffen:** `services/glm_client.py:497-524` (Stream), `:328-347` (Non-Stream)
+**Vorbefund:** C-11
+
+`glm_client` entscheidet die Follow-up-Runde allein anhand von `accumulator.blocked_tool_attempt_names`. Ist die Liste nicht leer, werden die **bereits fertigen `finalize_chunks` bzw. `result` verworfen** und stattdessen eine neue Runde mit Negativ-Feedback gestartet. Enthielt der Upstream-Turn einen erlaubten Call **und** einen blockierten, geht der erlaubte Call verloren.
+
+**Reproduktion (verifiziert):**
+
+```python
+# Turn mit read (erlaubt) + open_url (blockiert), Safety-Net-Pfad
+acc.consume_event({... "text": 'Hier mein Schritt:\n{"tool_calls":['
+                  '{"name":"read","arguments":{"filePath":"/etc/hostname"}},'
+                  '{"name":"open_url","arguments":{"url":"http://evil"}}]}[]' ...})
+acc.tool_parser.consume(text); acc._deferred_visible_text = acc.tool_parser.flush()[0]
+chunks = acc.finalize(status="finish")
+# acc.blocked_tool_attempt_names == ['open_url']     → Client startet Follow-up
+# '"read"' in "".join(chunks)              == False  → der gültige Call ist weg
+```
+
+Der Client sieht anschließend ausschließlich die Antwort der Follow-up-Runde. Der `read`-Call wird nie ausgeführt.
+
+**Zweiter, eigenständiger Defekt im selben Bereich (verifiziert):**
+
+```python
+# gleicher Turn, aber der Blocked-Scan im finalize überspringt die Prüfung
+acc = GLMEventAccumulator(allowed_tool_names={"read","write","bash"})
+acc.consume_event({... "text": '{"tool_calls":[{"name":"read",…},{"name":"open_url",…}]}[]'})
+acc.finalize(status="finish")
+# blocked_tool_attempt_names == []   ← der blockierte Name wird nie protokolliert
+```
+
+Der `if not all_tool_calls and …`-Guard im Blocked-Scan (`translator.py`, Block um Zeile 1344) verhindert die Erfassung, sobald ein gültiger Call existiert. **Der Modell-Deadlock**: Der Agent sieht keine Negativ-Rückmeldung, wiederholt den blockierten Call, das Fenster `GLM_BLOCKED_TOOL_FOLLOW_UPS` (Default 2) bleibt ungenutzt.
+
+**Auswirkung:** Verlust gültiger Tool-Ausführung **und** ausbleibende Korrektur bei blockierten Calls. Beides trifft genau den Agentenbetrieb.
+
+**Empfehlung:** Erlaubte und blockierte Calls getrennt bilanzieren. Gültige Calls **vor** jeder Negativrunde ausliefern; die blocked-Erkennung unabhängig von `all_tool_calls` immer laufen lassen.
+
+---
+
+### V-03 — HOCH: `None` bedeutet gleichzeitig „keine Tools“ und „alle Tools erlaubt“
+
+**Betroffen:** `utils/tool_parser.py` (`_is_allowed_tool_name`, Bare-Recovery), `services/translator.py` (`allowed_tool_names` durchgängig), `services/glm_client.py:_resolve_tools`
+**Vorbefund:** I-009, T-02, P-01, C-09
+
+`allowed_tool_names=None` ist an vielen Stellen gleichzeitig:
+- *keine Tools deklariert* (dann: **niemals** einen Call erzeugen),
+- *Recovery-Modus ohne Filter* (dann: alles durchlassen).
+
+**Reproduktion (verifiziert):**
+
+```python
+parse_tool_calls_from_text('Ergebnis:\n{"name":"read","value":"nur Text"}',
+                           allowed_tool_names={"read"})
+# → Call 'read' mit arguments {"value":"nur Text"}   ← Schema gehört zu gar keinem Tool
+```
+
+Weitere verifizierte Fehlklassifikationen:
+
+| Eingabe | Ergebnis | Bewertung |
+|---|---|---|
+| `Ergebnis:\n{"name":"read","value":"nur Text"}` | `read`-Call | **falsch** — Schema passt zu keinem Tool |
+| `Beispiel:\n~~json\n{"name":"bash","command":"ls"}\n~~~` | `bash`-Call | **falsch** — Doku-Beispiel, Tilde-Fence nicht maskiert |
+| `{"name":"service-a","version":"1.0"}` | kein Call | korrekt (Name nicht erlaubt) |
+| leere `tools=[]` im Request | Wildcard | **falsch** — siehe C-09 |
+
+Bei **leerer** Tool-Liste liefert `_resolve_tools` `None` zurück, was im Parser als Wildcard landet: Der Client darf dann alle Tools aufrufen, die der Server kennt — inklusive derer, die der Client gar nicht kennt.
+
+**Auswirkung:** Auf der einen Seite werden normale JSON-Antworten zu ausführbaren Calls (Datenverlust beim Client, unbeabsichtigte Tool-Ausführung). Auf der anderen Seite ist die Blockliste wirkungslos, sobald ein Runde ohne Tool-Deklaration läuft.
+
+**Empfehlung:** Drei statt zwei Zustände einführen: `no_tools` (Call-Erzeugung verboten), `allowlist` (nur diese Namen), `recovery` (nur für den internen Safety-Net-Pfad, ohne Ausführung). Tilde-Fences in die Maskierung aufnehmen. Calls gegen das deklarierte JSON-Schema validieren.
+
+---
+
+### V-04 — HOCH: Abgeschnittene Streams werden als vollständige Antwort ausgeliefert
+
+**Betroffen:** `services/glm_client.py` (`_iter_sse_events`, beide Chat-Pfade), `services/translator.py` (`finalize("stop")`), `server.py:_run_accumulated_sse_stream`
+**Vorbefund:** I-007, C-06, S-08, T-13
+
+Bricht der Upstream-Stream mitten im JSON ab (in den Live-Daten mehrfach der Fall), gilt das als Turn-Ende:
+
+- `_iter_sse_events` liefert bei `IncompleteRead` einen Warnhinweis, **keinen Fehlerzustand**.
+- Fehlt das `finish`-Event, ruft der Client `finalize(status="stop")` auf.
+- Der Adapter sendet daraufhin `message_stop` bzw. `response.completed` — der Client hält die Antwort für vollständig.
+
+Gemessene Fälle aus dem Debug-Log (18:29, Session `ses_f2bc23762ffeoOkPYHAoqhwpwm`): `finalize status=finish text_len=4658 tool_calls=8`, während der Client 4.903 Zeichen Fragment-Text erhielt. Die Fragmentmenge überstieg die finale Textmenge — der Client lief also auf **mehr** Rohdaten als der Proxy selbst als „final" kannte.
+
+**Auswirkung:** Der Agent glaubt, eine vollständige Antwort erhalten zu haben, führt sie nicht aus (unbalanciertes JSON), und startet eine neue Runde. Kombiniert mit V-01 ist das die häufigste Fehlerklasse.
+
+**Empfehlung:** EOF ohne `finish` **ohne** begonnene Tool-Übertragung ist ein `truncated_stream`-Fehler → SSE-`error`/`response.failed`, **niemals** `completed`. `IncompleteRead` als Fehlerzustand durchreichen. Der bereits begonnene JSON-Transfer ist als Grund zu melden.
+
+---
+
+### V-05 — HOCH: Die Testsuite schreibt das Fehlverhalten als erwartet fest
+
+**Betoffen:** `tests/test_translator.py`, `tests/test_tool_parser.py`
+**Vorbefund:** D-01 bis D-08
+
+Der Test `test_accumulator_defers_visible_text_when_parser_holds_protocol` prüft ausdrücklich, dass `{"tool` **als Assistant-Content** im Changelog landet. Damit ist das Kernsymptom als Soll-Verhalten im Test verankert. Weitere Lücken:
+
+| Lücke | Beleg |
+|---|---|
+| Bare-/Whitespace-JSON nur im Final-Parser getestet | D-02: echte Token-Chunks lecken (identisch zu V-01) |
+| Abgeschnittenes JSON ohne Vertrag | D-03: kein Test definiert, was bei Truncation passieren **muss** |
+| Transcript-Echo nur bei einem Chunk-Split | D-04: genau der Split, der nicht auftritt |
+| Mixed allowed/blocked | D-05: **null** Tests — V-02 wäre hier aufgefallen |
+| Stream-/Non-Stream-Parität | D-06: keine Matrix, obwohl beide Pfade sich nachweislich unterscheiden |
+| Blockierte Calls als Erfolg | D-08: Tests akzeptieren `finish_reason: "stop"` nach blockiertem Call |
+
+**Auswirkung:** Jeder Fix an V-01 bis V-04 wird von der bestehenden Suite entweder blockiert (D-01) oder nicht abgesichert (D-02 bis D-06). Ohne Test-Fix bleibt die Fehlerklasse dauerhaft ein-und-ausgangsseitig ungeschützt.
+
+**Empfehlung:** Zuerst D-01 umkehren (das war Fehlverhalten), dann eine Paritätsmatrix (Payload × {stream, non-stream} × Chunk-Split-Punkte) als Testgrundlage für die Fixes.
+
+---
+
+## Teil B — Befunde aus den Subagenten-Audits (verifiziert übernommen)
+
+Vollständige Berichte: `glm2api-revision-anhang/01-translator.md` (24 Befunde), `02-tool_parser.md` (14), `03-glm_client.md` (20), `04-server-config.md` (17), `05-adapters-auth.md` (19), `06-tests-docs.md` (13), `07-runtime-analyse.md` (8 Befundklassen).
+
+**Zählung der Schweregrade (maschinell aus den Rohberichten):** 3 kritisch, 64 hoch, 35 mittel, 5 niedrig — **107 Befunde**.
+
+### B-1 Kritisch
+
+| ID | Befund | Ort |
+|---|---|---|
+| C-01 | Queue-Ghost-Ticket: ein einziger Queue-Timeout blockiert die Queue **dauerhaft** (Timeout-Ticket wird nie freigegeben, `_serving_ticket` erreicht es und wird nie weitergeschoben) | `glm_client.py` (I-001) |
+| S-01 | Unbegrenzte Request-Bodies, unbegrenztes Thread-Wachstum, blockierende Reads → lokale DoS | `server.py` (I-002) |
+
+### B-2 Hoch — Tool-Call-Korrektheit (Thema des Nutzerbefunds)
+
+| ID | Befund | Ort |
+|---|---|---|
+| P-02 | Blockierte Native-Tools werden bei `allowed_tool_names=None` durch das `or`-Kurzschluss wieder zugelassen | `tool_parser.py` |
+| P-03 | Gefilterte Bare-Protokolle werden im Stream-Fallback verworfen und erneut als Text ausgegeben | `tool_parser.py` |
+| P-04 | `parse_tool_calls_from_text` und `_split_stream_text` liefern für Text-Funktionsaufrufe unterschiedliche Ergebnisse | `tool_parser.py` |
+| P-06 | Transcript-Echo-Holdback greift nur bei case-sensitiven Vollpräfixen; `user:` wird generell nicht erkannt | `tool_parser.py` |
+| P-07 | Generisches `<tool_call>` wird nicht erkannt; JSON-Payload als XML-Text nicht geparst; unvollständiges XML bleibt sichtbar | `tool_parser.py` |
+| P-08 | Echo-Span kann durch ein entferntes JSON-Objekt zu einem späteren `Assistant: "…"`-Satz zu einem Fehltreffer führen und löscht dann zu viel Text | `tool_parser.py` |
+| P-09 | Vollständigkeitsprüfung ignoriert abschließendes Whitespace; „valides JSON + Erklärungstext" wird als Truncation behandelt und löscht den Folgetext | `tool_parser.py` |
+| P-11 | Fenced Bare-Arrays und fenced Write-Objekte werden vollständig maskiert und dadurch nie geparst | `tool_parser.py` |
+| P-13 | Der Fence-Consume ist ein No-op (`len(rest) - len(rest)`); der Folgefence bleibt im sichtbaren Rest | `tool_parser.py` |
+| P-14 | Unbegrenztes Buffer-Wachstum: `<|` aktiviert globalen DSML-Buffer, unvollständige JSON-Objekte wachsen ohne Obergrenze | `tool_parser.py` |
+| T-01 | Text-Funktionsaufrufe (`read("…")`) werden ohne Kontext als echte Calls interpretiert | `translator.py` |
+| T-03 | Server-seitige und Text/XML-Calls werden nicht quellübergreifend dedupliziert | `translator.py` |
+| T-04 | Signatur-Deduplizierung verschluckt legitime Wiederholungen und ID-Konflikte | `translator.py` |
+| T-05 | Reasoning-Protokolle werden roh ausgeliefert und nicht vollständig extrahiert | `translator.py` |
+| T-06 | Leer-Erkennung läuft vor der endgültigen Bereinigung und kann Calls verschlucken | `translator.py` |
+| T-07 | Ein vorzeitiger Stream-Preamble kann nicht zurückgenommen werden | `translator.py` |
+| T-08 | Fenced Tool-Protokolle werden stream- und non-streamabhängig unterschiedlich behandelt | `translator.py` |
+| T-09 | Inline-/truncated Tool-Fragmente rutschen als sichtbarer Text durch | `translator.py` |
+| T-10 | Blockierte Versuche werden bei gemischten und alternativen Formen nicht erkannt | `translator.py` |
+| T-11 | Native-Metadata-, Namens- und ID-Vertrag ist verlustbehaftend | `translator.py` |
+| T-12 | Safety-Net-Calls umgehen die normale Sanitisation und Required-Argument-Prüfung | `translator.py` |
+| T-15 | Reparierte Calls verlieren gültige Ergebnisse, verwaiste Ergebnisse werden akzeptiert | `translator.py` |
+| T-24 | Ausgabe- und Sampling-Parameter werden nicht upstream durchgesetzt (I-015) | `translator.py`, `glm_client.py` |
+| C-07 | Transportfehler und JSON-Upstreamfehler umgehen den Stream-Retry | `glm_client.py` |
+| C-10 | Historische Tool-Calls werden bei leerer Allowlist nicht herausgefiltert | `glm_client.py` |
+| C-12 | Follow-up-Kontext geht bei einem Retry der Follow-up-Runde verloren | `glm_client.py` |
+| S-10 | Ein blockierter oder nicht deklarierter Tool-Call endet als normale Assistenten-Textantwort | `server.py` |
+| S-11 | Responses-Tool-Runden verlieren Auswahl und Tool-Ergebnisse | `server.py` |
+| A-01 | Gemischte Anthropic-Inhalte mit `tool_result` verlieren Text, Bilder und Tool-Blöcke | `anthropic_adapter.py` |
+| A-04 | Ungültige OpenAI-Tool-Calls werden zu leeren `tool_use`-Calls **oder normalen Textantworten** | `anthropic_adapter.py` |
+| A-13 | Tool-Blocklisten sind case-sensitiv; Native-Tool-Varianten durchdringen sie | `anthropic_adapter.py`, `tool_protocol.py` |
+| A-09 | Offizielle Responses-`tool_choice`-Form und `parallel_tool_calls` werden nicht kompatibel übersetzt | `responses_adapter.py` |
+| A-11 | Responses-Streaming meldet `length`, Filter und unvollständige Tool-Calls als `completed` | `responses_adapter.py` |
+| A-03 | Anthropic-Streaming mischt Argumentdeltas mehrerer Tool-Calls (I-011) | `anthropic_adapter.py` |
+| D-07 | Anthropic/Responses und der HTTP-Handler besitzen keinen Tool-Call-Roundtrip-Test | `tests/` |
+
+### B-3 Hoch — Betrieb, Sicherheit, Ressourcen
+
+| ID | Befund | Ort |
+|---|---|---|
+| C-02 | Attachment-/Image-URLs erlauben SSRF und lokalen Dateileser (I-003) | `glm_client.py` |
+| C-03 | Persistente Conversation ist globaler, nicht mandantenfähiger Zustand (I-004) | `glm_client.py` |
+| C-04 | Refresh-Token-Rennen können Tokens überschreiben (I-006) | `glm_client.py`, `glm_auth.py` |
+| C-05 | Failover behandelt deterministische Fehler wie Kontofehler | `glm_client.py` |
+| C-14 | Streaming-Generator hält Lease und Socket vor dem ersten `yield` | `glm_client.py` |
+| C-16 | Mehrere Upstream-Response-Pfade schließen die rohe Verbindung nicht | `glm_client.py` |
+| C-17 | Debug-Dumps legen Access-Tokens und vollständige Inhalte in Logs (I-005) | `glm_client.py`, `server.py` |
+| C-18 | `max_tokens`/`temperature` werden nicht upstream durchgesetzt (I-015) | `glm_client.py` |
+| S-02 | Authentifizierung standardmäßig aus, CORS wildcard-offen (I-012) | `server.py` |
+| S-03 | Unbeschränkte Queue und nicht abbrechbare Reader-Pipeline (I-014) | `server.py` |
+| S-04 | Debug-Dumps legen Secrets in weltlesbare Dateien ab (I-005/I-019) | `logging_utils.py` |
+| S-14 | Concurrency-, Queue- und Retry-Budgets sind nicht konsistent begrenzt | `server.py`, `config.py` |
+| S-16 | `GLM_BASE_URL` erlaubt Klartext-HTTP für Token- und Attachment-Verkehr (I-017) | `config.py` |
+| A-15 | Debug-Dumps legen Refresh-, Access- und Guest-Tokens im Klartext ab (I-005) | `glm_auth.py` |
+| A-16 | Token-Refresh-Rennen und zu breites Account-Failover (I-006) | `glm_auth.py` |
+| A-06 | Output-, Sampling- und Stop-Parameter werden angenommen, aber nicht durchgesetzt (I-015) | beide Adapter |
+| A-07 | `previous_response_id` ignoriert; Continuation-Tool-Ergebnisse verschwinden vor dem Modell | `responses_adapter.py` |
+
+### B-4 Mittel
+
+| ID | Befund |
+|---|---|
+| P-10 | `_repair_malformed_dsml` ersetzt `">>` global im Block und greift damit auch in CDATA-Argumenten |
+| P-12 | Pro `consume` werden Maskierung und Vollscan des gesamten Buffers wiederholt (Performance) |
+| T-14 | History-Kompression schützt keine vollständigen Multi-Tool-Runden (I-008) |
+| T-16 | `filePath` wird ohne Root-/URI-Kontext umgeschrieben (U-02) |
+| T-17 | Meta-Chatter-Filter ist all-or-nothing, stream-only, semantisch inkonsistent (U-01) |
+| T-18 | `tool_choice=required`/spezifische Auswahl wirkt nur promptseitig |
+| T-19 | Part-Merge verliert Status und dupliziert Non-Text-Inhalte |
+| T-20 | Vollständiges Rendern pro Event ist quadratisch; Logic-IDs werden lexikografisch sortiert |
+| T-21 | Native-Open-Mapping ist verlustbehaftend und mehrdeutig |
+| T-23 | Argument-Recovery und Content-Extraktion ändern Daten oder brechen bei Schemafehlern ab |
+| C-08 | `served_content` ist eine Byte-/Feld-Heuristik und zählt Reasoning nicht |
+| C-13 | Signatur-Dedup unterdrückt legitime wiederholte Native-Calls |
+| C-15 | Conversation-Cleanup ist weder attempt- noch accountgebunden |
+| C-19 | Attachment-Upload ist nicht mit Chat-Account und Retry-Runde verbunden |
+| C-20 | Upstream-Fehlerdetails werden unbegrenzt/ungefiltert weitergereicht (I-016) |
+| S-05 | Upstream-Timeouts gelten als Client-Disconnect (I-013) |
+| S-06 | Interne Fehlerdetails werden an Clients zurückgegeben (I-016) |
+| S-07 | Eingabevalidierung ist ad hoc und endpoint-inkonsistent (I-018) |
+| S-09 | Frühe HTTP/1.1-Fehler lassen den Request-Body auf der Keep-alive-Verbindung liegen |
+| S-12 | Anthropic `tool_choice: none` wird verworfen |
+| S-13 | Konfigurationspfad/Portdefault driften zwischen Code, Beispiel und Betrieb |
+| S-15 | Config-Parser fällt bei ungültigen Werten still auf unsichere Defaults zurück |
+| A-02 | Anthropic-Thinking-Blöcke werden ohne Signatur zu gewöhnlichem Text |
+| A-05 | `tool_choice:none` und Parallelitätssteuerung werden verworfen |
+| A-08 | Strukturierte Responses-Tool-Ergebnisse werden mit `str(...)` beschädigt |
+| A-10 | Nicht unterstützte Responses-Tooltypen werden still verworfen |
+| A-12 | Responses-Streaming dupliziert Text, gibt abgeschlossene Items in falscher Reihenfolge aus |
+| A-14 | Tool-Call-Serializer ersetzt beschädigte Argument-JSON durch erfundene `raw`-Semantik |
+| A-17 | Fest eincodierte MD5-Signatur ist kein schützenswerter Schlüssel (I-017) |
+| A-18 | Auth-Antworten und Token-Persistenz ungeprüft/nicht atomar |
+| A-19 | Vollständige Auth-Fehlerpayloads gelangen potenziell zum Client (I-016) |
+| D-10 | Bundle-Verifier prüft nur Testdateinamen, keine Selbsttests |
+| D-11 | `.env.example` driftet bei Betriebs-Port und Log-Pfad |
+| T-22 | Finalisierung nicht idempotent; deferred Text klebt unbegrenzt zusammen |
+
+### B-5 Niedrig
+
+| ID | Befund |
+|---|---|
+| S-17 | `server_version` legt zusätzlich die Python-Laufzeitversion offen |
+| D-09 | Der AuditMesh-Verifier prüft das Kernsymptom nicht |
+| D-12 | Build-Abhängigkeiten nicht vollständig gepinnt; Testconfig erzwingt keine Abdeckung |
+| D-13 | Config-Tests nicht vollständig von Prozess-/Logging-Globalzustand isoliert |
+
+---
+
+## Teil C — Runtime-Analyse (echte Daten)
+
+Methode: read-only SQLite auf `~/.local/share/opencode/opencode.db` und Auswertung von `log/glm2api_debug.log*` (6 Dateien, ~55 MB).
+
+**Ergebnis:** 8 Leak-Parts in 4 von 9 glm2api-Sessions, zusammen **35.643 Zeichen**. Keine DSML-Leaks.
+
+| Form | Häufigkeit | Charakter |
+|---|---|---|
+| Unbalancierte Bare-Objects (`{"name":"write"/"bash"` ohne Wrapper) | 22 Call-Fragmente | Stream brach mitten im JSON ab |
+| `call_id`-Records im Antworttext | 56 | Halluziniertes eigenes Transcript-Format |
+| Verkettete `{"tool_calls"`-/`[]`-Fragmente | 14 Records | Protokoll über Textgrenze zerrissen |
+| DSML/XML | 0 | dieser Pfad ist sauber |
+
+**Korrelation mit dem Debug-Log:** In den betroffenen Fenstern zeigen die `Response finalize`-Zeilen auffällig hohes `text_len` bei gleichzeitig vorhandenen `tool_calls` — das Muster „viel Text **und** Calls" ist die Signatur eines durchgesickerten Protokolls.
+
+**Empfohlene Parser-Regeln (aus den echten Daten abgeleitet):**
+
+1. **Toleranter Opener mit Chunk-Holdback:** Erkennung und Holdback müssen dieselbe Grammatik teilen (Whitespace, Pretty-Print, nackte Objekte, umgeklammerte Objekte).
+2. **Recovery fehlender Klammern:** Fehlt `}` oder `]` am Turn-Ende, ist das ein Abbruch-Fehler, kein Text.
+3. **Zustandsbehaftetes Echo-Cleanup:** `User:`/`Assistant:`-Zeilen erfordern einen Zustandsautomaten über Chunk-Grenzen, der legitimen Text danach erhält.
+4. **Fail-closed bei uneindeutigem Fragment:** Was nicht eindeutig Call ist und Call-Charakter hat, wird nicht ausgeliefert.
+
+**Teststrings für Regressionstests** (aus Live-Daten gekürzt, in Teil A referenziert): siehe `07-runtime-analyse.md`, Abschnitt „Teststrings für Regressionstests“ (5 Beispiele).
+
+---
+
+## Teil D — Maßnahmenplan
+
+### P0 — direkter Fix des Nutzerbefunds (Empfehlung: als ein Paket)
+
+| Befund | Datei(en) | Aufwand | Risiko |
+|---|---|---|---|
+| V-01 Holdback/Erkennung vereinheitlichen | `tool_parser.py` | mittel | mittel —Regressionstests nötig |
+| V-02 gültige Calls vor Follow-up ausliefern; Blocked-Scan unabhängig | `glm_client.py`, `translator.py` | klein | niedrig |
+| V-03 `None`-Wildcard auflösen (3 Zustände), Tilde-Fences maskieren | `tool_parser.py`, `glm_client.py` | mittel | mittel |
+| V-04 Truncation als Fehler statt `stop` | `glm_client.py`, `server.py` | mittel | mittel |
+| V-05 D-01 umkehren + Paritätsmatrix aufbauen | `tests/` | mittel | niedrig |
+
+**Reihenfolge:** V-05 zuerst als Testbasis, dann V-01/V-03 (gleicher Codebereich), dann V-02, dann V-04. So bleibt jeder Fix abgesichert.
+
+### P1 — Korrektheit des Agentenbetriebs
+T-01, T-03, T-05, T-06, T-09, T-10, T-12, T-15 · C-07, C-09, C-10, C-12 · S-10, S-11 · A-01, A-04, A-09, A-11, A-13
+
+### P2 — Betriebssicherheit
+C-01 (Queue-Ghost), S-01 (Ingress-Limits), C-02 (SSRF), C-03 (Session-Isolation), S-02 (Auth/CORS), C-04/A-16 (Token-Race), C-17/S-04/A-15 (Secret-Leaks in Logs), S-16 (Klartext-HTTP), S-03 (Queue-Backpressure)
+
+### P3 — Semantik und Konsistenz
+T-14, T-16, T-17, T-18 · C-18/A-06 (Parameter) · A-05, A-07, A-08, A-10, A-12, A-14 · S-05 bis S-07, S-09, S-12, S-13, S-15
+
+### P4 — Hygiene
+T-19 bis T-22 · C-08, C-13, C-15, C-19, C-20 · S-17 · D-10 bis D-13
+
+---
+
+## Teil E — Was bereits gefixt ist (Stand dieser Revision)
+
+| Befund | Status |
+|---|---|
+| Doppel-Logging (jede Zeile 2×) | **behoben** (2026-09-24, Commit `90efb48`) |
+| UTF-8-Verderb im `_raw`-Repair (`unicode_escape`) | **behoben** (`90efb48`) |
+| C0-Steuerzeichen in Args/Content (THEMA 3) | **behoben** (`90efb48`) |
+| History-Kompression Off-by-one (budget-sprengende Message) | **behoben** (`90efb48`) |
+| SSE-`\r\n` über Chunk-Grenze | **behoben** (`90efb48`) |
+| Bare-Array-Holdback Prefix-Verlust | **behoben** (`90efb48`) |
+| Leaky-Metadaten (`model_aliases`, Server-Tools) | **behoben** (`90efb48`) |
+| Roh-Tool-Calls ohne Wrapper im Stream (Live-Fall 4903 Z.) | **teilweise behoben** (`0cc006d`) — V-01 zeigt die Restlücke |
+| Transcript-Echo (Live-Fall 2044 Z.) | **teilweise behoben** (`0cc006d`) — chunk-abhängige Restlücke |
+| `usage` war 1/1/2-Platzhalter | **behoben** (`90efb48`, grobe Schätzung) |
+| PowerShell-Rewrites, `.env.example`-Drift, 1,4-GB-Totlog | **behoben** (`90efb48`) |
+
+---
+
+## Anhang — Rohberichte der Subagenten
+
+Vollständige, zeilenweise Befunddokumente (je Datei/Projekt-Bereich, mit Ort, Beschreibung, Auswirkung, Empfehlung, sowie „Geprüft und unauffällig"):
+
+| Datei | Befunde | Zeilen |
+|---|---|---|
+| `01-translator.md` | 24 (1 kritisch, 14 hoch, 8 mittel, 1 niedrig) | 249 |
+| `02-tool_parser.md` | 14 (8 hoch, 5 mittel, 1 niedrig) | 191 |
+| `03-glm_client.md` | 20 (1 kritisch, 14 hoch, 5 mittel) | 249 |
+| `04-server-config.md` | 17 (1 kritisch, 8 hoch, 7 mittel, 1 niedrig) | 230 |
+| `05-adapters-auth.md` | 19 (11 hoch, 8 mittel) | 206 |
+| `06-tests-docs.md` | 13 (9 hoch, 2 mittel, 2 niedrig) | 125 |
+| `07-runtime-analyse.md` | 8 Befundklassen | 261 |
+
+Gesamt: **107 Befunde** in 1.511 Zeilen Detailbericht, konsolidiert auf 115 Zeilen dieses Dokuments plus Verifikation in Teil A.
