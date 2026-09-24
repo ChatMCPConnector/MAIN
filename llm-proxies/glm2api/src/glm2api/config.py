@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
+import math
 import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .model_variants import expand_model_variants
 
@@ -14,6 +17,31 @@ DEFAULT_IMAGE_MODEL_NAME = "glm-image-1"
 DEFAULT_GLM_BASE_URL = "https://chatglm.cn/chatglm"
 GUEST_REFRESH_TOKEN_MARKER = "__glm_guest__"
 DEFAULT_BLOCKED_TOOL_NAMES = ()
+DEFAULT_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
+DEFAULT_REQUEST_SOCKET_TIMEOUT_SECONDS = 30.0
+DEFAULT_MAX_REQUEST_LINE_BYTES = 8192
+DEFAULT_MAX_HEADERS = 64
+DEFAULT_MAX_HEADER_BYTES = 64 * 1024
+DEFAULT_MAX_CONNECTIONS = 32
+DEFAULT_REQUEST_QUEUE_SIZE = 32
+MAX_REQUEST_BODY_BYTES_LIMIT = 128 * 1024 * 1024
+MAX_REQUEST_SOCKET_TIMEOUT_SECONDS = 300.0
+MAX_REQUEST_LINE_BYTES_LIMIT = 64 * 1024
+MAX_HEADERS_LIMIT = 100
+MAX_HEADER_BYTES_LIMIT = 1024 * 1024
+MAX_CONNECTIONS_LIMIT = 128
+MAX_REQUEST_QUEUE_SIZE_LIMIT = 128
+MAX_CONCURRENCY_LIMIT = 32
+MAX_REQUEST_TIMEOUT_SECONDS = 900
+MAX_QUEUE_WAIT_TIMEOUT_SECONDS = 900
+MAX_BUSY_RETRIES = 30
+MAX_BUSY_RETRY_INTERVAL_SECONDS = 60.0
+MAX_GUEST_RETRIES = 10
+MAX_STREAM_ERROR_RETRIES = 5
+MAX_STREAM_ERROR_RETRY_INTERVAL_SECONDS = 60.0
+MAX_BLOCKED_TOOL_FOLLOW_UPS = 5
+MAX_HISTORY_MAX_CHARS = 5_000_000
+MAX_EMPTY_RESPONSE_RETRIES = 5
 BUILTIN_EXPOSED_MODELS = (
     "cogView-4-250304",
     "glm-5.3",
@@ -72,34 +100,172 @@ def parse_dotenv(path: Path) -> dict[str, str]:
     return values
 
 
-def parse_bool(value: str | None, default: bool = False) -> bool:
+def parse_bool(
+    value: str | None,
+    default: bool = False,
+    *,
+    name: str = "value",
+    logger: logging.Logger | None = None,
+) -> bool:
     if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    if logger is not None:
+        logger.warning(
+            "Invalid boolean config value %s=%r; using safe default %s",
+            name,
+            value,
+            default,
+        )
+    return default
 
 
-def parse_int(value: str | None, default: int) -> int:
+def parse_int(
+    value: str | None,
+    default: int,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+    name: str = "value",
+    logger: logging.Logger | None = None,
+) -> int:
     if value is None or value == "":
         return default
     try:
-        return int(value)
+        parsed = int(value)
     except (TypeError, ValueError) as exc:
+        if logger is not None:
+            logger.warning(
+                "Invalid integer config value %s=%r; using safe default %s",
+                name,
+                value,
+                default,
+            )
+            return default
         raise ConfigError(f"Invalid integer config value: {value}") from exc
+    if (minimum is not None and parsed < minimum) or (maximum is not None and parsed > maximum):
+        if logger is not None:
+            logger.warning(
+                "Integer config value out of range %s=%r; using safe default %s",
+                name,
+                value,
+                default,
+            )
+            return default
+        raise ConfigError(
+            f"Integer config value out of range {name}={value}; expected {minimum}..{maximum}"
+        )
+    return parsed
 
 
-def parse_float(value: str | None, default: float) -> float:
+def parse_float(
+    value: str | None,
+    default: float,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    name: str = "value",
+    logger: logging.Logger | None = None,
+) -> float:
     if value is None or value == "":
         return default
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError) as exc:
+        if logger is not None:
+            logger.warning(
+                "Invalid float config value %s=%r; using safe default %s",
+                name,
+                value,
+                default,
+            )
+            return default
         raise ConfigError(f"Invalid float config value: {value}") from exc
+    if not math.isfinite(parsed):
+        if logger is not None:
+            logger.warning(
+                "Non-finite float config value %s=%r; using safe default %s",
+                name,
+                value,
+                default,
+            )
+            return default
+        raise ConfigError(f"Float config value must be finite: {value}")
+    if (minimum is not None and parsed < minimum) or (maximum is not None and parsed > maximum):
+        if logger is not None:
+            logger.warning(
+                "Float config value out of range %s=%r; using safe default %s",
+                name,
+                value,
+                default,
+            )
+            return default
+        raise ConfigError(
+            f"Float config value out of range {name}={value}; expected {minimum}..{maximum}"
+        )
+    return parsed
 
 
 def parse_list(value: str | None, default: tuple[str, ...] = ()) -> list[str]:
     if value is None or value.strip() == "":
         return list(default)
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def is_loopback_host(host: str) -> bool:
+    normalized = host.strip().lower().strip("[]")
+    return normalized in {"127.0.0.1", "localhost", "::1"}
+
+
+def _first_config_value(values: dict[str, str], *names: str) -> str | None:
+    for name in names:
+        if name in values:
+            return values[name]
+    return None
+
+
+def _config_int(
+    values: dict[str, str],
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+    logger: logging.Logger,
+    aliases: tuple[str, ...] = (),
+) -> int:
+    value = _first_config_value(values, name, *aliases)
+    return parse_int(
+        value,
+        default,
+        minimum=minimum,
+        maximum=maximum,
+        name=name,
+        logger=logger,
+    )
+
+
+def _config_float(
+    values: dict[str, str],
+    name: str,
+    default: float,
+    minimum: float,
+    maximum: float,
+    logger: logging.Logger,
+    aliases: tuple[str, ...] = (),
+) -> float:
+    value = _first_config_value(values, name, *aliases)
+    return parse_float(
+        value,
+        default,
+        minimum=minimum,
+        maximum=maximum,
+        name=name,
+        logger=logger,
+    )
 
 
 def load_refresh_tokens(token_file_path: Path) -> list[str]:
@@ -138,6 +304,13 @@ class AppConfig:
     log_level: str
     debug_dump_all: bool
     request_timeout: int
+    request_socket_timeout: float
+    max_request_body_bytes: int
+    max_request_line: int
+    max_headers: int
+    max_header_bytes: int
+    max_connections: int
+    request_queue_size: int
     glm_base_url: str
     glm_use_guest_refresh_token: bool
     glm_refresh_token: str
@@ -203,8 +376,6 @@ def ensure_env_file(env_path: Path) -> bool:
 
 
 def load_config(env_file: str = ".env") -> AppConfig:
-    import logging
-
     # Basis-Logging vorab konfigurieren: load_config laeuft VOR
     # Application.__init__ (setup_logging) — ohne Handler laufen die
     # INFO-Logs hier ins lastResort-Nirvana. Ein einfacher Stream-Handler
@@ -221,14 +392,26 @@ def load_config(env_file: str = ".env") -> AppConfig:
     file_values = parse_dotenv(env_path)
     values = {**file_values, **os.environ}
 
-    glm_max_concurrency = max(1, parse_int(values.get("GLM_MAX_CONCURRENCY"), 3))
+    glm_max_concurrency = _config_int(
+        values,
+        "GLM_MAX_CONCURRENCY",
+        3,
+        1,
+        MAX_CONCURRENCY_LIMIT,
+        logger,
+    )
     token_file_path = Path(values.get("GLM_TOKEN_FILE", "token.txt"))
     if not token_file_path.is_absolute():
         token_file_path = (env_path.parent / token_file_path).resolve()
 
     refresh_tokens = load_refresh_tokens(token_file_path)
     single_refresh_token = values.get("GLM_REFRESH_TOKEN", "").strip()
-    explicit_guest_mode = parse_bool(values.get("GLM_USE_GUEST_REFRESH_TOKEN"), False) or is_guest_token_value(single_refresh_token)
+    explicit_guest_mode = parse_bool(
+        values.get("GLM_USE_GUEST_REFRESH_TOKEN"),
+        False,
+        name="GLM_USE_GUEST_REFRESH_TOKEN",
+        logger=logger,
+    ) or is_guest_token_value(single_refresh_token)
 
     if explicit_guest_mode:
         refresh_tokens = [GUEST_REFRESH_TOKEN_MARKER] * glm_max_concurrency
@@ -240,7 +423,12 @@ def load_config(env_file: str = ".env") -> AppConfig:
         single_refresh_token = GUEST_REFRESH_TOKEN_MARKER
         explicit_guest_mode = True
 
-    persistent_conv = parse_bool(values.get("GLM_PERSISTENT_CONVERSATION"), False)
+    persistent_conv = parse_bool(
+        values.get("GLM_PERSISTENT_CONVERSATION"),
+        False,
+        name="GLM_PERSISTENT_CONVERSATION",
+        logger=logger,
+    )
     conversation_file = Path(values.get("GLM_CONVERSATION_FILE", "conversation.txt"))
     if not conversation_file.is_absolute():
         conversation_file = (env_path.parent / conversation_file).resolve()
@@ -261,10 +449,16 @@ def load_config(env_file: str = ".env") -> AppConfig:
         api_prefix = f"/{api_prefix}"
     api_prefix = api_prefix.rstrip("/") or "/v1"
     log_level = values.get("LOG_LEVEL", "INFO").strip().upper() or "INFO"
-    debug_dump_all = parse_bool(values.get("DEBUG_DUMP_ALL"), False)
+    debug_dump_all = parse_bool(
+        values.get("DEBUG_DUMP_ALL"),
+        False,
+        name="DEBUG_DUMP_ALL",
+        logger=logger,
+    )
     if debug_dump_all:
         log_level = "DEBUG"
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        logger.warning("Invalid LOG_LEVEL=%r; using safe default INFO", values.get("LOG_LEVEL"))
         log_level = "INFO"
     image_model_name = values.get("GLM_IMAGE_MODEL_NAME", DEFAULT_IMAGE_MODEL_NAME).strip() or DEFAULT_IMAGE_MODEL_NAME
     exposed_models = expand_model_variants(
@@ -272,17 +466,169 @@ def load_config(env_file: str = ".env") -> AppConfig:
         excluded_models=MODEL_VARIANT_EXCLUDED_MODELS,
     )
 
+    request_socket_timeout = _config_float(
+        values,
+        "REQUEST_SOCKET_TIMEOUT_SECONDS",
+        DEFAULT_REQUEST_SOCKET_TIMEOUT_SECONDS,
+        0.1,
+        MAX_REQUEST_SOCKET_TIMEOUT_SECONDS,
+        logger,
+        aliases=("HTTP_SOCKET_TIMEOUT_SECONDS", "CLIENT_SOCKET_TIMEOUT_SECONDS", "SOCKET_TIMEOUT_SECONDS"),
+    )
+    max_request_body_bytes = _config_int(
+        values,
+        "MAX_REQUEST_BODY_BYTES",
+        DEFAULT_MAX_REQUEST_BODY_BYTES,
+        1,
+        MAX_REQUEST_BODY_BYTES_LIMIT,
+        logger,
+        aliases=("MAX_BODY_BYTES", "MAX_REQUEST_BODY_SIZE_BYTES"),
+    )
+    max_request_line = _config_int(
+        values,
+        "MAX_REQUEST_LINE_BYTES",
+        DEFAULT_MAX_REQUEST_LINE_BYTES,
+        1,
+        MAX_REQUEST_LINE_BYTES_LIMIT,
+        logger,
+        aliases=("MAX_REQUEST_LINE",),
+    )
+    max_headers = _config_int(
+        values,
+        "MAX_HEADERS",
+        DEFAULT_MAX_HEADERS,
+        1,
+        MAX_HEADERS_LIMIT,
+        logger,
+    )
+    max_header_bytes = _config_int(
+        values,
+        "MAX_HEADER_BYTES",
+        DEFAULT_MAX_HEADER_BYTES,
+        1,
+        MAX_HEADER_BYTES_LIMIT,
+        logger,
+    )
+    max_connections = _config_int(
+        values,
+        "MAX_CONNECTIONS",
+        DEFAULT_MAX_CONNECTIONS,
+        1,
+        MAX_CONNECTIONS_LIMIT,
+        logger,
+        aliases=("MAX_CONCURRENT_CONNECTIONS", "MAX_HTTP_CONNECTIONS"),
+    )
+    request_queue_size = _config_int(
+        values,
+        "REQUEST_QUEUE_SIZE",
+        DEFAULT_REQUEST_QUEUE_SIZE,
+        1,
+        MAX_REQUEST_QUEUE_SIZE_LIMIT,
+        logger,
+    )
+    port = _config_int(values, "PORT", 8000, 1, 65535, logger)
+    request_timeout = _config_int(
+        values,
+        "REQUEST_TIMEOUT_SECONDS",
+        120,
+        1,
+        MAX_REQUEST_TIMEOUT_SECONDS,
+        logger,
+    )
+    glm_queue_wait_timeout = _config_int(
+        values,
+        "GLM_QUEUE_WAIT_TIMEOUT_SECONDS",
+        600,
+        1,
+        MAX_QUEUE_WAIT_TIMEOUT_SECONDS,
+        logger,
+    )
+    glm_busy_max_retries = _config_int(
+        values,
+        "GLM_BUSY_MAX_RETRIES",
+        30,
+        0,
+        MAX_BUSY_RETRIES,
+        logger,
+    )
+    glm_busy_retry_interval = _config_float(
+        values,
+        "GLM_BUSY_RETRY_INTERVAL_SECONDS",
+        2.0,
+        0.0,
+        MAX_BUSY_RETRY_INTERVAL_SECONDS,
+        logger,
+    )
+    glm_guest_max_retries = _config_int(
+        values,
+        "GLM_GUEST_MAX_RETRIES",
+        3,
+        0,
+        MAX_GUEST_RETRIES,
+        logger,
+    )
+    glm_stream_error_max_retries = _config_int(
+        values,
+        "GLM_STREAM_ERROR_MAX_RETRIES",
+        2,
+        0,
+        MAX_STREAM_ERROR_RETRIES,
+        logger,
+    )
+    glm_stream_error_retry_interval = _config_float(
+        values,
+        "GLM_STREAM_ERROR_RETRY_INTERVAL_SECONDS",
+        1.0,
+        0.0,
+        MAX_STREAM_ERROR_RETRY_INTERVAL_SECONDS,
+        logger,
+    )
+    glm_blocked_tool_follow_ups = _config_int(
+        values,
+        "GLM_BLOCKED_TOOL_FOLLOW_UPS",
+        2,
+        0,
+        MAX_BLOCKED_TOOL_FOLLOW_UPS,
+        logger,
+    )
+    glm_history_max_chars = _config_int(
+        values,
+        "GLM_HISTORY_MAX_CHARS",
+        120000,
+        0,
+        MAX_HISTORY_MAX_CHARS,
+        logger,
+    )
+    glm_empty_response_max_retries = _config_int(
+        values,
+        "GLM_EMPTY_RESPONSE_MAX_RETRIES",
+        2,
+        0,
+        MAX_EMPTY_RESPONSE_RETRIES,
+        logger,
+    )
+    server_api_keys = parse_list(values.get("SERVER_API_KEYS"))
+    cors_allow_origin = values.get("CORS_ALLOW_ORIGIN", "*").strip()
+    glm_base_url = values.get("GLM_BASE_URL", DEFAULT_GLM_BASE_URL).rstrip("/")
+
     config = AppConfig(
         env_file_path=env_path,
         env_file_created=env_file_created,
         token_file_path=token_file_path,
         host=host,
-        port=parse_int(values.get("PORT"), 8000),
+        port=port,
         api_prefix=api_prefix,
         log_level=log_level,
         debug_dump_all=debug_dump_all,
-        request_timeout=parse_int(values.get("REQUEST_TIMEOUT_SECONDS"), 120),
-        glm_base_url=values.get("GLM_BASE_URL", DEFAULT_GLM_BASE_URL).rstrip("/"),
+        request_timeout=request_timeout,
+        request_socket_timeout=request_socket_timeout,
+        max_request_body_bytes=max_request_body_bytes,
+        max_request_line=max_request_line,
+        max_headers=max_headers,
+        max_header_bytes=max_header_bytes,
+        max_connections=max_connections,
+        request_queue_size=request_queue_size,
+        glm_base_url=glm_base_url,
         glm_use_guest_refresh_token=explicit_guest_mode,
         glm_refresh_token=single_refresh_token,
         glm_refresh_tokens=refresh_tokens,
@@ -296,36 +642,81 @@ def load_config(env_file: str = ".env") -> AppConfig:
                 "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
             ),
         ).strip(),
-        glm_delete_conversation=parse_bool(values.get("GLM_DELETE_CONVERSATION"), True),
+        glm_delete_conversation=parse_bool(
+            values.get("GLM_DELETE_CONVERSATION"),
+            True,
+            name="GLM_DELETE_CONVERSATION",
+            logger=logger,
+        ),
         glm_persistent_conversation=persistent_conv,
         glm_conversation_file=conversation_file,
         glm_conversation_id=conv_id,
         glm_max_concurrency=glm_max_concurrency,
-        glm_queue_wait_timeout=parse_int(values.get("GLM_QUEUE_WAIT_TIMEOUT_SECONDS"), 600),
-        glm_busy_max_retries=parse_int(values.get("GLM_BUSY_MAX_RETRIES"), 30),
-        glm_busy_retry_interval=parse_float(values.get("GLM_BUSY_RETRY_INTERVAL_SECONDS"), 2.0),
-        glm_guest_max_retries=max(0, parse_int(values.get("GLM_GUEST_MAX_RETRIES"), 3)),
-        glm_stream_error_max_retries=max(0, parse_int(values.get("GLM_STREAM_ERROR_MAX_RETRIES"), 2)),
-        glm_stream_error_retry_interval=max(0.0, parse_float(values.get("GLM_STREAM_ERROR_RETRY_INTERVAL_SECONDS"), 1.0)),
-        glm_blocked_tool_follow_ups=max(0, parse_int(values.get("GLM_BLOCKED_TOOL_FOLLOW_UPS"), 2)),
-        glm_history_max_chars=max(0, parse_int(values.get("GLM_HISTORY_MAX_CHARS"), 120000)),
-        glm_empty_response_max_retries=max(0, parse_int(values.get("GLM_EMPTY_RESPONSE_MAX_RETRIES"), 2)),
+        glm_queue_wait_timeout=glm_queue_wait_timeout,
+        glm_busy_max_retries=glm_busy_max_retries,
+        glm_busy_retry_interval=glm_busy_retry_interval,
+        glm_guest_max_retries=glm_guest_max_retries,
+        glm_stream_error_max_retries=glm_stream_error_max_retries,
+        glm_stream_error_retry_interval=glm_stream_error_retry_interval,
+        glm_blocked_tool_follow_ups=glm_blocked_tool_follow_ups,
+        glm_history_max_chars=glm_history_max_chars,
+        glm_empty_response_max_retries=glm_empty_response_max_retries,
         blocked_tool_names=parse_list(values.get("BLOCKED_TOOL_NAMES"), DEFAULT_BLOCKED_TOOL_NAMES),
         exposed_models=exposed_models,
-        server_api_keys=parse_list(values.get("SERVER_API_KEYS")),
-        cors_allow_origin=values.get("CORS_ALLOW_ORIGIN", "*").strip() or "*",
+        server_api_keys=server_api_keys,
+        cors_allow_origin=cors_allow_origin,
     )
 
     if not (1 <= config.port <= 65535):
         raise ConfigError(f"Port config out of range: PORT={config.port}")
     if config.request_timeout <= 0:
         raise ConfigError(f"Request timeout must be greater than 0: REQUEST_TIMEOUT_SECONDS={config.request_timeout}")
+    if config.request_socket_timeout <= 0:
+        raise ConfigError(
+            "Request socket timeout must be greater than 0: "
+            f"REQUEST_SOCKET_TIMEOUT_SECONDS={config.request_socket_timeout}"
+        )
+    if config.max_request_body_bytes <= 0:
+        raise ConfigError("MAX_REQUEST_BODY_BYTES must be greater than 0")
+    if config.max_request_line <= 0 or config.max_headers <= 0 or config.max_header_bytes <= 0:
+        raise ConfigError("HTTP request line and header limits must be greater than 0")
+    if config.max_connections <= 0 or config.request_queue_size <= 0:
+        raise ConfigError("HTTP connection and queue limits must be greater than 0")
     if config.glm_queue_wait_timeout <= 0:
         raise ConfigError(f"Queue wait timeout must be greater than 0: GLM_QUEUE_WAIT_TIMEOUT_SECONDS={config.glm_queue_wait_timeout}")
     if config.glm_busy_retry_interval < 0:
         raise ConfigError(f"Busy retry interval cannot be less than 0: GLM_BUSY_RETRY_INTERVAL_SECONDS={config.glm_busy_retry_interval}")
-    if not config.glm_base_url.startswith(("http://", "https://")):
-        raise ConfigError(f"GLM_BASE_URL must start with http:// or https://: {config.glm_base_url}")
+
+    if not is_loopback_host(config.host):
+        if not config.server_api_keys:
+            raise ConfigError(
+                "SERVER_API_KEYS must be configured when HOST is not loopback "
+                f"(HOST={config.host})"
+            )
+        if config.cors_allow_origin == "*":
+            raise ConfigError(
+                "CORS_ALLOW_ORIGIN=* is only allowed for loopback bindings "
+                f"(HOST={config.host})"
+            )
+
+    try:
+        parsed_base_url = urlsplit(config.glm_base_url)
+        base_host = parsed_base_url.hostname or ""
+        parsed_base_url.port
+    except ValueError as exc:
+        raise ConfigError(f"GLM_BASE_URL is invalid: {config.glm_base_url}") from exc
+    base_scheme = parsed_base_url.scheme.lower()
+    if base_scheme not in {"http", "https"} or not base_host:
+        raise ConfigError(
+            f"GLM_BASE_URL must be an absolute http(s) URL: {config.glm_base_url}"
+        )
+    if base_scheme == "http" and not is_loopback_host(base_host):
+        raise ConfigError(
+            "GLM_BASE_URL may use http only for loopback hosts "
+            f"(configured host={base_host})"
+        )
+    if parsed_base_url.username or parsed_base_url.password:
+        raise ConfigError("GLM_BASE_URL must not contain embedded credentials")
 
     token_source = "guest mode" if explicit_guest_mode else (f"token file ({token_file_path})" if token_file_path.exists() else ".env GLM_REFRESH_TOKEN")
     logger.info(

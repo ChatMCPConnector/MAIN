@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from .tool_protocol import BLOCKED_NATIVE_TOOL_NAMES
 
-CODE_FENCE_PATTERN = re.compile(r"```[\s\S]*?```")
+CODE_FENCE_PATTERN = re.compile(r"(?:```|~~~)[\s\S]*?(?:```|~~~)")
 
 # Tolere Protokoll-Suche: {' "tool_calls" ' mit beliebigem Whitespace dazwischen
 # (Pretty-Print / Leerzeichen nach '{' — vom Modell beobachtet).
@@ -176,9 +176,16 @@ def _normalize_dsml_to_xml(block: str) -> str:
 
 
 def _is_allowed_tool_name(tool_name: str, allowed_tool_names: set[str] | None) -> bool:
+    """Tool-Namen gegen die deklarierte Allowlist pruefen.
+
+    `allowed_tool_names=None` bedeutet 'keine Tools deklariert' und damit
+    'nie einen Call erzeugen' — nicht mehr 'alles erlaubt'. Fuer die interne
+    diagnose (blockierte Versuche sammeln) gibt es `detect_all=True`."""
     if tool_name in BLOCKED_NATIVE_TOOL_NAMES:
         return False
-    return allowed_tool_names is None or tool_name in allowed_tool_names
+    if allowed_tool_names is None:
+        return False
+    return tool_name in allowed_tool_names
 
 
 def _balanced_text(value: str) -> str:
@@ -718,6 +725,29 @@ def _recover_tool_calls_json(candidate: str) -> dict[str, object] | None:
 # nicht erkannt und landeten als Roh-Fragment im sichtbaren Text.
 _BARE_ARRAY_START_RE = re.compile(r"(?:^|[\[,]|\n)\s*\{\s*\"name\"\s*:")
 _NAKED_WRITE_START_RE = re.compile(r"(?:^|[\[,]|\n)\s*\{\s*\"filePath\"\s*:\s*\"[^\"]+\"\s*,\s*\"content\"\s*:")
+_CALL_OPENER_KEYS = (
+    '"tool_calls"',
+    '"arguments"',
+    '"filePath"',
+    '"command"',
+    '"call_id"',
+    '"name"',
+)
+_TRANSCRIPT_ECHO_START_RE = re.compile(
+    r'(?:^|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
+)
+_TRANSCRIPT_ECHO_ROW_RE = re.compile(
+    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
+)
+_TRANSCRIPT_ECHO_ROW_TAIL_RE = re.compile(
+    r'[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
+)
+_CALL_OPENER_INLINE_RE = re.compile(r'\{\s*"(?:tool_calls|name)"\s*:')
+_INLINE_BARE_NAME_RE = re.compile(r'\{\s*"name"\s*:\s*"([A-Za-z_][A-Za-z0-9_\-]*)"')
+# Obergrenze fuer zurueckgehaltenen text: darueberhinweg wird die aufbewahrung
+# aufgegeben, damit ein nie geschlossener opfer keine unbegrenzte
+# speicherhaltung erzeugt.
+_MAX_HOLDBACK_CHARS = 262144
 
 # Halluziniertes eigenes konversations-format: 'User: [{"call_id": "..."}]'.
 # Erkennt den START einer Echo-Zeile; das JSON darin kann mehrzeilig sein
@@ -753,6 +783,11 @@ _TRANSCRIPT_ECHO_PARTIAL_PROBES = (
     'Assistant: [',
     'User:',
     'Assistant:',
+    # Chunk-Grenzen schneiden die rolle mitten im wort: das praefix muss
+    # auch dann noch gehalten werden, wenn bisher nur ein anfang davon
+    # angekommen ist (echte SSE-Deltas haben median 27 byte).
+    'User',
+    'Assistant',
 )
 # Laufender, noch unvollstaendiger echo-präfix: die rolle steht, das json
 # ist angebrochen ('User: [{"', 'User: [{"call_id": ...') und noch nicht
@@ -833,6 +868,96 @@ def _find_transcript_echo_span(text: str) -> tuple[int, int]:
     return start, end
 
 
+def _is_structural_opener(text: str, pos: int) -> bool:
+    """Steht die klammer am anfang einer zeile (bzw. auf position 0)?
+    Tool-calls starten immer so; eine klammer mitten in einem satz
+    ('nutze {} in CSS') ist keine call-struktur und wird nicht
+    zurueckgehalten, damit normaler text live streamen kann."""
+    prefix = text[:pos]
+    line_start = prefix.rfind("\n") + 1
+    return not prefix[line_start:].strip()
+
+
+def _looks_like_call_opener(text: str, pos: int) -> bool:
+    """Potenzieller tool-call ab pos? Zeilenposition plus JSON-beginn
+    genuegen; ein sichtbares schluesselwort im fenster ist zusaetzlich
+    ein hinweis, aber keine bedingung (beim ersten chunk ist das fenster
+    noch leer)."""
+    if not _is_structural_opener(text, pos):
+        return False
+    return text[pos:].lstrip().startswith(("{", "["))
+
+
+def _find_unterminated_call_start(text: str) -> int:
+    """Index, ab dem eine angebrochene tool-call-struktur steht und bis zum
+    textende NICHT abgeschlossen ist, sonst -1.
+
+    Damit ist der hold-back unabhaengig von der konkret ueber eine
+    chunk-grenze zerrissenen stelle: whitespace, pretty-print, nackte
+    objekte, arrays und der 'tool_calls'-wrapper werden alle erfasst.
+    Ein unterminierter string (in_str am ende) zaehlt ebenfalls als
+    angebrochen — genau der fall, an dem ein call mitten im content-string
+    abgeschnitten wurde."""
+    stack: list[tuple[str, int]] = []
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append((ch, i))
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+    if in_str and stack:
+        _ch, pos = stack[-1]
+        if _looks_like_call_opener(text, pos):
+            return pos
+    for _ch, pos in reversed(stack):
+        if _looks_like_call_opener(text, pos):
+            return pos
+    return -1
+
+
+def strip_unparseable_call_fragments(text: str) -> tuple[str, int]:
+    """Entfernt tool-call-Fragmente, die NICHT parsebar sind (typisch: der
+    upstream-stream brach mitten im JSON ab). Sie sind nie eine echte antwort
+    und duerfen nicht als sichtbarer text durchgehen.
+
+    Greift auf zwei faelle: fragment am zeilenanfang (mit filePath/command
+    auch generische opfer) und aufruf-spezifische opfer ("tool_calls",
+    "name") an beliebiger position. Vor dem fragment bleibender text bleibt
+    erhalten.
+
+    Gibt (bereinigter_text, anzahl_entfernter_fragmente) zurueck."""
+    if not text:
+        return text, 0
+    match = _UNPARSEABLE_CALL_START_RE.search(text)
+    if match is not None:
+        start = match.start() + (1 if text[match.start()] == "\n" else 0)
+    else:
+        # T-09: aufruf-spezifische opfer duerfen auch mitten in einer zeile
+        # greifen — 'sieh vorher {"tool_calls":...' ist haeufig.
+        inline = _CALL_OPENER_INLINE_RE.search(text)
+        if inline is None:
+            return text, 0
+        start = inline.start()
+    fragment = text[start:]
+    if not fragment.lstrip().startswith("{"):
+        return text, 0
+    if _balanced_json_end(fragment, 0) == len(fragment):
+        return text, 0
+    return text[:start].rstrip(), 1
+
+
 def _scan_bare_objects_span(text: str, start: int) -> int:
     """Scans contiguous {"name": ..., "arguments": ...} objects starting from start."""
     pos = start
@@ -891,6 +1016,8 @@ def _find_bare_tool_call_array(
     text: str,
     final: bool,
     allowed_tool_names: set[str] | None = None,
+    *,
+    detect_all: bool = False,
 ) -> tuple[str, str, list[dict[str, object]]] | None:
     """Leak-Variante D (Final-Run 00:27/00:33): das Modell emittiert
     Tool-Calls als NACKTES JSON-Array '[{"name": ..., "arguments": ...}]'
@@ -1004,7 +1131,7 @@ def _find_bare_tool_call_array(
         if not name:
             return None
         names.append(name)
-        if _is_allowed_tool_name(name, allowed_tool_names) or allowed_tool_names is None:
+        if detect_all or _is_allowed_tool_name(name, allowed_tool_names):
             args_str = _extract_call_arguments(item)
             tool_calls.append({
                 "index": len(tool_calls),
@@ -1028,6 +1155,8 @@ def _find_json_tool_call(
     text: str,
     final: bool,
     allowed_tool_names: set[str] | None = None,
+    *,
+    detect_all: bool = False,
 ) -> tuple[str, str, list[dict[str, object]]]:
     """Findet das JSON-Tool-Protokoll: {"tool_calls":[...]}[] (mit Terminator).
     Gibt (visible, remainder, tool_calls) zurueck.
@@ -1230,40 +1359,41 @@ def _find_json_tool_call(
 _UNPARSEABLE_CALL_START_RE = re.compile(r'(?:\A|\n)[ \t]*\{\s*"(?:tool_calls|name|filePath|command)"\s*:')
 
 
-def strip_unparseable_call_fragments(text: str) -> tuple[str, int]:
-    """Entfernt tool-call-Fragmente, die NICHT parsebar sind (typisch: der
-    upstream-stream brach mitten im JSON ab). Sie sind nie eine echte antwort
-    und duerfen nicht als sichtbarer text durchgehen.
-
-    Greift nur, wenn der text an einer zeilengrenze mit einer
-    call-struktur beginnt und von dort bis zum textende nicht parsebar ist —
-    also genau der 'fragment-ist-der-ganze-text'-fall. Proma, die echten
-    call-aufrufe enthaelt, wird nicht angefasst.
-
-    Gibt (bereinigter_text, anzahl_entfernter_fragmente) zurueck."""
-    if not text:
-        return text, 0
-    match = _UNPARSEABLE_CALL_START_RE.search(text)
-    if match is None:
-        return text, 0
-    start = match.start() + (1 if text[match.start()] == "\n" else 0)
-    fragment = text[start:]
-    if not fragment.lstrip().startswith("{"):
-        return text, 0
-    # wenn das fragment bis zum ende balanciert ist, ist es parsebar und
-    # kein unparsebares fragment (parse_tool_calls_from_text hat es dann
-    # bereits entfernt) — dann nichts tun.
-    if _balanced_json_end(fragment, 0) == len(fragment):
-        return text, 0
-    kept = text[:start].rstrip()
-    return kept, 1
-
-
 def _split_stream_text(
     text: str,
     allowed_tool_names: set[str] | None,
     final: bool,
+    *,
+    detect_all: bool = False,
 ) -> tuple[str, str, list[dict[str, object]]]:
+    # 0) Halluziniertes eigenes konversations-format (V-01/THEMA 5):
+    #    'User: [{"call_id": ...}]' ist nie eine echte antwort.
+    echo_start, echo_end = _find_transcript_echo_span(text)
+    if echo_start != -1:
+        if not final:
+            return text[:echo_start], text[echo_start:], []
+        return _split_stream_text(
+            text[:echo_start] + text[echo_end:],
+            allowed_tool_names,
+            final=True,
+            detect_all=detect_all,
+        )
+    if not final:
+        # Angebrochene call-strukturen generisch zurueckhalten: der
+        # hold-back leitet sich aus derselben JSON-struktur ab wie die
+        # vollstaendige erkennung und ist dadurch ueber jede chunk-grenze
+        # hinweg stabil (V-01).
+        open_call = _find_unterminated_call_start(text)
+        if open_call != -1:
+            return text[:open_call], text[open_call:], []
+        for probe in _TRANSCRIPT_ECHO_PARTIAL_PROBES:
+            if text.endswith(probe):
+                return text[: -len(probe)], probe, []
+        echo_row = _TRANSCRIPT_ECHO_ROW_RE.search(text)
+        if echo_row is not None:
+            row_start = echo_row.start() + (1 if text[echo_row.start()] == "\n" else 0)
+            if _balanced_json_end(text, row_start) == -1:
+                return text[:row_start], text[row_start:], []
     # 0) Halluziniertes eigenes konversations-format: das Modell schreibt
     #    'User: [{"call_id": "..."}]'-zeilen (seine eigene transcript-
     #    representation) als antwort. Nie eine echte antwort. Im stream
@@ -1296,13 +1426,13 @@ def _split_stream_text(
     # 1) JSON-Protokoll prüfen (neues Format); ohne Treffer bleibt nur der
     # Partial-Suffix-Holdback von _find_json_tool_call relevant.
     if find_tool_calls_protocol(text) != -1:
-        return _find_json_tool_call(text, final, allowed_tool_names)
-    visible, remainder, tool_calls = _find_json_tool_call(text, final, allowed_tool_names)
+        return _find_json_tool_call(text, final, allowed_tool_names, detect_all=detect_all)
+    visible, remainder, tool_calls = _find_json_tool_call(text, final, allowed_tool_names, detect_all=detect_all)
     if tool_calls or (remainder and not final):
         return visible, remainder, tool_calls
 
     # 1b) Leak-Variante D: nacktes JSON-array als tool-protokoll
-    bare = _find_bare_tool_call_array(text, final, allowed_tool_names)
+    bare = _find_bare_tool_call_array(text, final, allowed_tool_names, detect_all=detect_all)
     if bare is not None:
         bare_visible, bare_remainder, bare_calls = bare
         if bare_calls or (bare_remainder and not final):
@@ -1367,9 +1497,25 @@ def _find_text_function_call(
     return visible, [call]
 
 
-def parse_tool_calls_from_text(text: str, allowed_tool_names: set[str] | None = None) -> tuple[str, list[dict[str, object]]]:
+def parse_tool_calls_from_text(
+    text: str,
+    allowed_tool_names: set[str] | None = None,
+    *,
+    detect_all: bool = False,
+) -> tuple[str, list[dict[str, object]]]:
+    """Zerlegt Modelltext in (sichtbarer_text, tool_calls).
+
+    `allowed_tool_names` ist die vom Client deklarierte Allowlist; `None`
+    bedeutet 'keine Tools deklariert' und erzeugt dann KEINE Calls aus
+    Quelltext. `detect_all=True` schaltet den internen Recovery-Modus fuer
+    die Diagnose frei."""
     if not text:
         return "", []
+    echo_start, echo_end = _find_transcript_echo_span(text)
+    if echo_start != -1:
+        text = text[:echo_start] + text[echo_end:]
+        if not text.strip():
+            return "", []
     # Halluziniertes eigenes konversations-format zuerst entfernen — es ist
     # nie ein tool-call und darf nie als antwort durchgehen.
     echo_start, echo_end = _find_transcript_echo_span(text)
@@ -1378,17 +1524,20 @@ def parse_tool_calls_from_text(text: str, allowed_tool_names: set[str] | None = 
         if not text.strip():
             return "", []
     # zuerst neues JSON-protokoll pruefen
-    visible, remainder, tool_calls = _find_json_tool_call(text, final=True, allowed_tool_names=allowed_tool_names)
+    visible, remainder, tool_calls = _find_json_tool_call(text, final=True, allowed_tool_names=allowed_tool_names, detect_all=detect_all)
     if tool_calls:
         return visible, tool_calls
     # Leak-Variante D: nacktes JSON-array als tool-protokoll
-    bare = _find_bare_tool_call_array(text, final=True, allowed_tool_names=allowed_tool_names)
+    bare = _find_bare_tool_call_array(text, final=True, allowed_tool_names=allowed_tool_names, detect_all=detect_all)
     if bare is not None:
         bare_visible, _, bare_calls = bare
         if bare_calls:
             return bare_visible, bare_calls
         if bare_visible != text:
             return bare_visible, []
+    if allowed_tool_names is None and not detect_all:
+        # Ohne deklarierte Tools wird nie ein Call aus Quelltext erzeugt.
+        return text, []
     # Function-call syntax in text: read("...") oder bash("...")
     func_call = _find_text_function_call(text, allowed_tool_names=allowed_tool_names)
     if func_call is not None:
@@ -1454,7 +1603,32 @@ def detect_tool_call_names(text: str) -> list[str]:
             name = match.group(1).strip()
             if name:
                 names.append(name)
-    return names
+    # T-10: auch bare-arrays, nackte objekte und abgeschnittene formen
+    # erfassen — bisher wurden nur json-wrapper und xml erkannt, wodurch
+    # blockierte versuche in diesen formen unentdeckt blieben. Rein
+    # textbasiert, damit die denylist hier nichts verschluckt.
+    for pattern in (_BARE_ARRAY_START_RE, _INLINE_BARE_NAME_RE):
+        for match in pattern.finditer(masked):
+            name = ""
+            if pattern is _INLINE_BARE_NAME_RE:
+                name = match.group(1)
+            else:
+                window = masked[match.end() : match.end() + 200]
+                name_match = re.search(r'"name"\s*:\s*"([A-Za-z_][A-Za-z0-9_\-]*)"', window)
+                if name_match:
+                    name = name_match.group(1)
+            name = name.strip()
+            if name:
+                names.append(name)
+    # Reihenfolge erhalten, Duplikate entfernen: dieselbe struktur wird von
+    # mehreren formen erkannt (wrapper + bare-namensregex).
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            unique.append(name)
+    return unique
 
 
 @dataclass
@@ -1462,6 +1636,7 @@ class StreamingToolParser:
     pending_text: str = ""
     tool_calls: list[dict[str, object]] = field(default_factory=list)
     allowed_tool_names: set[str] | None = None
+    detect_all: bool = False
     buffering_dsml: bool = False
 
     def consume(self, chunk: str) -> str:
@@ -1494,6 +1669,7 @@ class StreamingToolParser:
                 self.pending_text,
                 allowed_tool_names=self.allowed_tool_names,
                 final=False,
+                detect_all=self.detect_all,
             )
             self.pending_text = remainder
             self.tool_calls.extend(parsed_calls)
@@ -1503,7 +1679,7 @@ class StreamingToolParser:
         if find_tool_calls_protocol(self.pending_text) != -1:
             emitted_vis: list[str] = []
             while find_tool_calls_protocol(self.pending_text) != -1:
-                jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False, allowed_tool_names=self.allowed_tool_names)
+                jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False, allowed_tool_names=self.allowed_tool_names, detect_all=self.detect_all)
                 if jvis:
                     emitted_vis.append(jvis)
                 self.tool_calls.extend(jcalls)
@@ -1512,8 +1688,23 @@ class StreamingToolParser:
                 self.pending_text = jrem
             return "".join(emitted_vis)
 
+        # Angebrochene call-strukturen generisch zurueckhalten, BEVOR die
+        # format-spezifischen pfade laufen (V-01). Deren eigener hold-back
+        # greift nur bei fest verdrahteten praefixen.
+        open_call = _find_unterminated_call_start(self.pending_text)
+        if open_call != -1 and len(self.pending_text) <= _MAX_HOLDBACK_CHARS:
+            visible, remainder, parsed_calls = _split_stream_text(
+                self.pending_text,
+                allowed_tool_names=self.allowed_tool_names,
+                final=False,
+                detect_all=self.detect_all,
+            )
+            self.pending_text = remainder
+            self.tool_calls.extend(parsed_calls)
+            return visible
+
         # Check partial JSON holdback
-        jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False, allowed_tool_names=self.allowed_tool_names)
+        jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False, allowed_tool_names=self.allowed_tool_names, detect_all=self.detect_all)
         if jrem:
             self.pending_text = jrem
             return jvis
@@ -1533,6 +1724,7 @@ class StreamingToolParser:
                 self.pending_text,
                 allowed_tool_names=self.allowed_tool_names,
                 final=True,
+                detect_all=self.detect_all,
             )
             if parsed_calls:
                 self.tool_calls.extend(parsed_calls)

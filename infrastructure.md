@@ -95,6 +95,13 @@ Benchmarks (2026-09-06): als einziger Proxy 2/2 SWE-Tasks **vollautonom in je
 bei Lang-Runs) und chat2api (Markup-Fragilität bei Agent-Loops) wurden daraufhin
 komplett entfernt — glm2api ist der verlässliche Agent-Proxy.
 
+**Sicherheits- und Betriebsverträge:**
+- **Bindung/Auth:** Loopback-Bindungen (`127.0.0.1`, `localhost`, `::1`) dürfen ohne API-Key laufen. Jede andere `HOST`-Bindung startet nur mit nichtleerem `SERVER_API_KEYS`; der Token-Vergleich ist constant-time. CORS `*` ist ausschließlich für Loopback erlaubt, ein leerer CORS-Wert sendet keinen Allow-Origin-Header. Sind Keys gesetzt, sind auch Health-/Models-Endpunkte geschützt.
+- **Ingress:** HTTP/1.1-POST benötigt genau einen gültigen `Content-Length`; fehlend → `411`, ungültig → `400`, über dem Limit → `413`, `Transfer-Encoding` → `501`. Der Body-Limit-Default ist 32 MiB (`MAX_REQUEST_BODY_BYTES`, hart maximal 128 MiB); frühe Fehler schließen die Keep-alive-Verbindung. Handler-Socket-Timeout: 30 s (maximal 300 s), Request-Line standardmäßig 8192 Byte (maximal 64 KiB), 64 Header (maximal 100), Header-Daten maximal 64 KiB (maximal 1 MiB), maximal 32 aktive Verbindungen (maximal 128) und Listen-Queue 32 (maximal 128).
+- **Upstream:** `GLM_BASE_URL` muss HTTPS verwenden; Klartext-HTTP ist nur für `127.0.0.1`/`localhost` (einschließlich `::1`) erlaubt. Upstream-Transportfehler werden nicht als Client-Disconnect behandelt und öffentlich nur generisch gemeldet.
+- **Logs:** `GLM2API_LOG_DIR` (Default `log`) wird mit `0700` angelegt bzw. erzwungen; Debug-Log und Rotationsdateien erhalten `0600`. `Authorization`, `x-api-key`, `Cookie` und `api-key` werden in Header-Dumps und Request-Logs redigiert.
+- **Budgets:** Request- und Queue-Timeouts, Upstream-Timeouts, Concurrency sowie Retry-/Follow-up-Zähler werden aus der Config geladen und durch harte Obergrenzen begrenzt (u.a. Concurrency 32, Queue-/Request-Timeout 900 s).
+
 **Wiederaufbau im frischen Codespace:**
 
 ```
@@ -257,6 +264,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-24: glm2api-Sicherheits-/Ingress-Verträge gehärtet: nicht-Loopback-Bindungen verlangen API-Keys, CORS-Wildcards und Klartext-Upstream werden begrenzt, Request-/Header-/Body-/Socket-/Verbindungslimits sind hart begrenzt, Upstream-Timeouts werden von Client-Disconnects getrennt, interne Fehler bleiben generisch und Debug-Logs werden mit `0700`-Verzeichnis/`0600`-Dateien sowie Header-Redaktion betrieben. Raw-HTTP-Smoke-Checks für `411`/`400`/`413`/`501`, `Connection: close`, generische `504`-Upstream-Fehler und die Version ohne Python-Laufzeit wurden ausgeführt.
 
 - 2026-09-24: Statusdokumentation synchronisiert: entferntes `infra/browser/`, glm2api-Provider-/HTTP-/Bundle-/Context-Verträge und der Validator `infra/scripts/validate-revision.sh` entsprechen dem aktuellen Source-Stand.
 

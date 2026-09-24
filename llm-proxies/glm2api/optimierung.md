@@ -129,6 +129,20 @@ erfolgreich durch, lieferte aber hässliche Antworten:
 Status: **DONE — der upstream-stream bricht gelegentlich mitten im JSON ab;
 der proxy faengt das jetzt ab, statt es als antwort durchzulassen.**
 
+### THEMA 6 — Chunk-stabile Call-Erkennung (DONE 2026-09-24, aus glm2api-revision.md)
+
+Die Call-Erkennung hing an der Chunk-Grenze: Holdback und Voll-Erkennung
+benutzten zwei verschiedene Grammatiken. Behoben durch einen JSON-Struktur-
+Scanner (`_find_unterminated_call_start`), der im `consume()` vor allen
+format-spezifischen Pfaden laeuft. Zusaetzlich: `allowed_tool_names=None`
+erzeugt keine Calls mehr (Recovery nur explizit via `detect_all=True`),
+blockierte Versuche werden auch in Bare-Formen erkannt, und ein gemischter
+Turn aus erlaubten und blockierten Calls liefert die erlaubten aus.
+
+Verifikation: Paritätsmatrix ueber 4 Payload-Formen und 6 Chunk-Groessen
+sowie die drei echten Leak-Texte der Benchmark-Session bei 1 bis 512 Byte
+— ueberall 0 Zeichen Fragment-Leak. Details in `glm2api-revision.md` Teil F.
+
 ---
 
 ## THEMA 1 — Kontext-Management für Lang-Agent-Sessions (ERLEDIGT 2026-09-11, Beobachtung läuft)

@@ -13,7 +13,14 @@ from typing import Any
 from ..config import AppConfig
 from ..logging_utils import debug_dump
 from ..model_variants import model_requests_search, model_requests_thinking, split_model_features
-from ..utils.tool_parser import CODE_FENCE_PATTERN, StreamingToolParser, detect_tool_call_names, parse_tool_calls_from_text, strip_unparseable_call_fragments
+from ..utils.tool_parser import (
+    CODE_FENCE_PATTERN,
+    StreamingToolParser,
+    _find_unterminated_call_start,
+    detect_tool_call_names,
+    parse_tool_calls_from_text,
+    strip_unparseable_call_fragments,
+)
 from ..utils.tool_protocol import (
     BLOCKED_NATIVE_TOOL_NAMES,
     CANONICAL_TOOL_CALL_EXAMPLE,
@@ -618,13 +625,31 @@ def sanitize_tool_calls(
         if tool_name == "write":
             if not isinstance(cleaned_arguments, dict) or not cleaned_arguments.get("filePath") or "content" not in cleaned_arguments:
                 continue
-        repaired = not isinstance(original_value, dict) or safe_json_dumps(cleaned_arguments) != safe_json_dumps(original_value)
+        # T-15: zwei arten von abweichung unterscheiden. Eine rein
+        # semantische normalisierung (pfad, control-zeichen, json-string)
+        # verletzt den call nicht — das ergebnis bleibt gueltig und muss dem
+        # modell zurueckgegeben werden. Nur eine ERFORDERLICHES argument,
+        # das fehlt oder nicht lesbar ist, macht den aufruf unbrauchbar.
+        normalized = not isinstance(original_value, dict) or safe_json_dumps(cleaned_arguments) != safe_json_dumps(original_value)
+        required_missing = False
+        if tool_name in {"write", "edit"}:
+            required_missing = not isinstance(cleaned_arguments, dict) or not cleaned_arguments.get("filePath")
+        elif tool_name == "read":
+            required_missing = not isinstance(cleaned_arguments, dict) or not cleaned_arguments.get("filePath")
+        elif tool_name == "bash":
+            required_missing = not isinstance(cleaned_arguments, dict) or not cleaned_arguments.get("command")
+        if required_missing:
+            # T-15: ohne das erforderliche argument ist der aufruf nicht
+            # ausfuehrbar — er darf nicht als tool-call an den client gehen,
+            # sonst scheitert die ausfuehrung mit einem kryptischen fehler.
+            continue
         sanitized.append(
             {
                 "id": str(tool_call.get("id", "")) or f"call_repaired_{index}",
                 "type": "function",
                 "index": index,
-                "_repaired": repaired,
+                "_repaired": normalized and not required_missing,
+                "_invalid": required_missing,
                 "function": {
                     "name": tool_name,
                     "arguments": safe_json_dumps(cleaned_arguments),
@@ -990,6 +1015,8 @@ class GLMEventAccumulator:
     _server_side_tool_call_ids: set[str] = field(default_factory=set)
     _server_side_tool_call_signatures: set[str] = field(default_factory=set)
     _deferred_visible_text: str = ""
+    _deferred_reasoning: str = ""
+    _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
     blocked_tool_attempt_names: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -1001,11 +1028,23 @@ class GLMEventAccumulator:
         Reasoning alone is not a usable response: OpenCode stores it as an
         internal thinking part and otherwise treats the turn as a successful
         stop, leaving an executing agent unable to continue.
+
+        T-06: geprueft wird der ERGEBNIS-ZUSTAND, nicht der rohe parser-
+        zustand — ein abgeschnittenes protokoll-fragment und ein
+        write-call ohne content gelten nicht als verwertbares ergebnis,
+        sonst greift der leer-retry nicht.
         """
         text, _ = self.render_full_output()
-        has_calls = bool(self._server_side_tool_calls or self.tool_parser.tool_calls)
+        clean_text, _fragment_count = strip_unparseable_call_fragments(text)
+        clean_text = strip_transcript_echo(clean_text)
+        has_visible_text = bool(
+            clean_text.strip()
+            and strip_meta_chatter(clean_text) != ""
+        )
+        raw_calls = list(self._server_side_tool_calls) + list(self.tool_parser.tool_calls)
+        has_calls = bool(sanitize_tool_calls(raw_calls, fallback_url=self.fallback_tool_url))
         has_blocked = bool(self.blocked_tool_attempt_names)
-        return not text.strip() and not has_calls and not has_blocked
+        return not has_visible_text and not has_calls and not has_blocked
 
     def render_full_output(self) -> tuple[str, str]:
         """Public: (volltext, reasoning) — u.a. fuer follow-up-renders."""
@@ -1181,19 +1220,38 @@ class GLMEventAccumulator:
 
         chunks: list[str] = []
         if reasoning_delta:
-            chunks.append(
-                self._chunk_json(
-                    {
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"reasoning_content": reasoning_delta},
-                                "finish_reason": None,
-                            }
-                        ]
-                    }
+            # T-05: rohe protokoll-fragmente duerfen auch im reasoning-kanal
+            # nicht an den client. Das modell versteckt tool-aufrufe dort
+            # regelmaessig; der sichtbare denktext streamt weiter, das
+            # protokoll wird entfernt und die calls fuer das finalize
+            # gesammelt.
+            reasoning_open = _find_unterminated_call_start(reasoning_delta)
+            if reasoning_open != -1:
+                # noch angebrochenes protokoll: bis zum aufbau zurueckhalten
+                self._deferred_reasoning += reasoning_delta[reasoning_open:]
+                reasoning_delta = reasoning_delta[:reasoning_open]
+            else:
+                reasoning_text, reasoning_calls = parse_tool_calls_from_text(
+                    reasoning_delta,
+                    allowed_tool_names=self.allowed_tool_names,
                 )
-            )
+                if reasoning_calls:
+                    self._deferred_reasoning_calls.extend(reasoning_calls)
+                reasoning_delta = reasoning_text
+            if reasoning_delta:
+                chunks.append(
+                    self._chunk_json(
+                        {
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"reasoning_content": reasoning_delta},
+                                    "finish_reason": None,
+                                }
+                            ]
+                        }
+                    )
+                )
 
         visible_text_delta = self.tool_parser.consume(text_delta)
         if visible_text_delta:
@@ -1276,6 +1334,25 @@ class GLMEventAccumulator:
     def finalize(self, status: str | None, last_error: dict[str, object] | None = None) -> list[str]:
         tail_text, xml_tool_calls = self.tool_parser.flush()
         xml_tool_calls = sanitize_tool_calls(xml_tool_calls, fallback_url=self.fallback_tool_url)
+        # T-05: zurueckgehaltenes reasoning (protokoll-verdacht) zuerst
+        # auswerten — der reasoning-fallback lief bisher nur, wenn der
+        # textseiten-parser nichts fand, wodurch ein call im reasoning
+        # neben einem erlaubten text-call voellig uebersehen wurde.
+        deferred_reasoning = self._deferred_reasoning
+        self._deferred_reasoning = ""
+        deferred_calls = list(self._deferred_reasoning_calls)
+        self._deferred_reasoning_calls = []
+        if deferred_reasoning:
+            deferred_calls.extend(
+                parse_tool_calls_from_text(
+                    deferred_reasoning,
+                    allowed_tool_names=self.allowed_tool_names,
+                )[1]
+            )
+        if deferred_calls:
+            xml_tool_calls = xml_tool_calls + sanitize_tool_calls(
+                deferred_calls, fallback_url=self.fallback_tool_url
+            )
         if not xml_tool_calls:
             # Streaming counterpart of build_response(): when the model emits
             # the tool-call protocol inside the REASONING channel (observed
@@ -1325,8 +1402,11 @@ class GLMEventAccumulator:
             cleaned_text, attempted_tool_calls = parse_tool_calls_from_text(
                 final_text,
                 allowed_tool_names=None,
+                detect_all=True,
             )
+            final_text = cleaned_text.strip()
             if attempted_tool_calls:
+                recovered_calls: list[dict[str, object]] = []
                 for tool_call in attempted_tool_calls:
                     function = tool_call.get("function", {})
                     if not isinstance(function, dict):
@@ -1337,9 +1417,16 @@ class GLMEventAccumulator:
                     if tool_name in self.allowed_tool_names:
                         tc_copy = dict(tool_call)
                         tc_copy["index"] = len(all_tool_calls)
-                        all_tool_calls.append(tc_copy)
+                        recovered_calls.append(tc_copy)
                     else:
                         self.blocked_tool_attempt_names.append(tool_name)
+                # T-12: safety-net-calls durch dieselbe sanitisation und
+                # required-argument-pruefung schicken wie der normale
+                # parser-pfad — sonst koennte ein write-call ohne content
+                # oder ein ungepruefter filePath durchgehen.
+                all_tool_calls.extend(
+                    sanitize_tool_calls(recovered_calls, fallback_url=self.fallback_tool_url)
+                )
                 final_text = cleaned_text.strip()
             # Safety-net (Live-Fall 2026-09-24, ses_f2bc23762ffeoOkPYHAoqhwpwm):
             # der upstream brach mitten im call-json ab — das fragment ist
@@ -1353,7 +1440,12 @@ class GLMEventAccumulator:
                     "(upstream stream ended mid-JSON)",
                     fragment_count,
                 )
-        if not all_tool_calls and self.allowed_tool_names is not None:
+        if self.allowed_tool_names is not None and not self.blocked_tool_attempt_names:
+            # Blockierte Versuche IMMER erfassen, auch wenn im selben Turn
+            # bereits gueltige Calls entstanden sind (V-02). Der alte Guard
+            # `not all_tool_calls` liess genau diese Faelle unerkannt, sodass
+            # das Modell keine negative Rueckmeldung bekam und den blockierten
+            # Call wiederholte.
             attempted_names: list[str] = []
             for source_text in (self._cached_full_text.strip(), self._cached_full_reasoning.strip()):
                 if source_text:
@@ -1369,11 +1461,15 @@ class GLMEventAccumulator:
             if unavailable_names:
                 self.blocked_tool_attempt_names.extend(unavailable_names)
                 allowed_names = ", ".join(sorted(self.allowed_tool_names)) or "(none)"
-                final_text = (
-                    "The model attempted to call an undeclared tool: "
-                    + ", ".join(f"`{name}`" for name in unavailable_names)
-                    + f". Blocked. Only these tools are allowed in this round: {allowed_names}."
-                )
+                # Die Negativ-Rueckmeldung ersetzt nur dann den sichtbaren
+                # Text, wenn es in diesem Turn keine gueltigen Calls gibt —
+                # sonst wuerde sie den Call-Content verdraengen.
+                if not all_tool_calls:
+                    final_text = (
+                        "The model attempted to call an undeclared tool: "
+                        + ", ".join(f"`{name}`" for name in unavailable_names)
+                        + f". Blocked. Only these tools are allowed in this round: {allowed_names}."
+                    )
         if final_text:
             final_text = self._sanitize_visible_text(final_text)
             # Halluziniertes eigenes konversations-format (User:/Assistant: mit

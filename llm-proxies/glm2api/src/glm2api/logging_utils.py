@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
+from collections.abc import Mapping
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -75,6 +77,71 @@ _LEVEL_STYLES: dict[str, dict[str, str]] = {
 }
 
 _DATE_FMT = "%H:%M:%S"
+_REDACTED_VALUE = "[REDACTED]"
+_SENSITIVE_FIELD_NAMES = frozenset(
+    {
+        "authorization",
+        "x-api-key",
+        "x_api_key",
+        "cookie",
+        "api-key",
+        "api_key",
+        "access_token",
+        "refresh_token",
+    }
+)
+_SENSITIVE_HEADER_RE = re.compile(
+    r"(?i)(authorization|x[-_]api[-_]key|cookie|api[-_]key|access[-_]token|refresh[-_]token)(\s*:\s*)([^\r\n]+)"
+)
+_SENSITIVE_QUOTED_RE = re.compile(
+    r"(?i)(['\"])(authorization|x[-_]api[-_]key|cookie|api[-_]key|access[-_]token|refresh[-_]token)\1(\s*:\s*)(['\"])(.*?)\4"
+)
+
+
+class _SecureRotatingFileHandler(RotatingFileHandler):
+    def doRollover(self) -> None:
+        super().doRollover()
+        base_path = Path(str(getattr(self, "baseFilename")))
+        for path in (base_path, *base_path.parent.glob(f"{base_path.name}.*")):
+            if path.is_file() and not path.is_symlink():
+                os.chmod(path, 0o600)
+
+
+def redact_sensitive_text(value: str) -> str:
+    def replace_quoted(match: re.Match[str]) -> str:
+        replacement = match.group(5) if "…" in match.group(5) else _REDACTED_VALUE
+        return (
+            f"{match.group(1)}{match.group(2)}{match.group(1)}{match.group(3)}"
+            f"{match.group(4)}{replacement}{match.group(4)}"
+        )
+
+    def replace_unquoted(match: re.Match[str]) -> str:
+        replacement = match.group(3) if "…" in match.group(3) else _REDACTED_VALUE
+        return f"{match.group(1)}{match.group(2)}{replacement}"
+
+    value = _SENSITIVE_QUOTED_RE.sub(replace_quoted, value)
+    return _SENSITIVE_HEADER_RE.sub(replace_unquoted, value)
+
+
+def redact_sensitive_data(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        redacted: dict[Any, Any] = {}
+        for key, item in value.items():
+            if str(key).strip().lower() in _SENSITIVE_FIELD_NAMES:
+                item_text = str(item)
+                redacted[key] = item if "…" in item_text or "<redacted>" in item_text else _REDACTED_VALUE
+            else:
+                redacted[key] = redact_sensitive_data(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_sensitive_data(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_sensitive_data(item) for item in value)
+    if isinstance(value, set):
+        return {redact_sensitive_data(item) for item in value}
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    return value
 
 
 class _NameColumnMixin:
@@ -186,13 +253,19 @@ def setup_logging(level: str) -> None:
     # ── File handler (plain text, only when DEBUG) ───────────────────────────
     if resolved_level <= logging.DEBUG:
         log_dir = Path(os.environ.get("GLM2API_LOG_DIR", "log"))
-        log_dir.mkdir(parents=True, exist_ok=True)
-        file_handler = RotatingFileHandler(
-            log_dir / "glm2api_debug.log",
+        log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(log_dir, 0o700)
+        for existing_log in log_dir.glob("glm2api_debug.log*"):
+            if existing_log.is_file() and not existing_log.is_symlink():
+                os.chmod(existing_log, 0o600)
+        log_path = log_dir / "glm2api_debug.log"
+        file_handler = _SecureRotatingFileHandler(
+            log_path,
             maxBytes=10 * 1024 * 1024,
             backupCount=5,
             encoding="utf-8",
         )
+        os.chmod(log_path, 0o600)
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(_PlainFormatter())
         root.addHandler(file_handler)
@@ -203,22 +276,25 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def serialize_for_debug(value: Any) -> str:
+    value = redact_sensitive_data(value)
     if isinstance(value, bytes):
         try:
-            return value.decode("utf-8")
+            return redact_sensitive_text(value.decode("utf-8"))
         except UnicodeDecodeError:
             return value.hex()
     if isinstance(value, str):
-        return value
+        return redact_sensitive_text(value)
     try:
         import json
 
-        return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+        return redact_sensitive_text(
+            json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+        )
     except Exception:
-        return repr(value)
+        return redact_sensitive_text(repr(value))
 
 
 def debug_dump(logger: logging.Logger, enabled: bool, title: str, value: Any) -> None:
     if not enabled:
         return
-    logger.debug("%s\n%s", title, serialize_for_debug(value))
+    logger.debug("%s\n%s", redact_sensitive_text(title), serialize_for_debug(value))

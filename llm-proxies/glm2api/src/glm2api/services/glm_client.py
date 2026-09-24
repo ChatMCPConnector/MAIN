@@ -4,9 +4,11 @@ import base64
 import codecs
 import gzip
 import http.client
+import ipaddress
 import json
 import mimetypes
 import re
+import socket
 import threading
 import time
 import uuid
@@ -95,6 +97,13 @@ class ConcurrentRequestQueue:
             while ticket >= self._serving_ticket + self.max_concurrency:
                 remaining = self.wait_timeout - (time.monotonic() - start)
                 if remaining <= 0:
+                    # C-01: das timeout-ticket muss als "abandoned"
+                    # markiert werden, sonst blockiert es die
+                    # serving-sequenz dauerhaft: sobald _serving_ticket
+                    # dieses ticket erreicht, gibt es keinen vorgänger,
+                    # der es freigibt, und alle folgenden requests
+                    # laufen in timeouts.
+                    self._abandon_ticket(ticket)
                     raise QueueTimeoutError(
                         f"GLM queue wait timed out, {ticket - (self._serving_ticket + self.max_concurrency) + 1} request(s) still ahead, please retry later."
                     )
@@ -109,6 +118,20 @@ class ConcurrentRequestQueue:
                 request_name,
             )
             return QueueLease(ticket=ticket, release_callback=self._release)
+
+    def _abandon_ticket(self, ticket: int) -> None:
+        """Timeout-tickets atomar freigeben und die warteschlange
+        vorruecken (muss mit self._condition gehalten werden)."""
+        self._released_tickets.add(ticket)
+        while self._serving_ticket in self._released_tickets:
+            self._released_tickets.remove(self._serving_ticket)
+            self._serving_ticket += 1
+        self.logger.warning(
+            "Abandoned timed-out GLM queue ticket=%s; serving window advanced to=%s",
+            ticket,
+            self._serving_ticket,
+        )
+        self._condition.notify_all()
 
     def _release(self, ticket: int) -> None:
         with self._condition:
@@ -198,6 +221,8 @@ class GLMWebClient:
     def __init__(self, config: AppConfig, logger: Logger) -> None:
         self.config = config
         self.logger = logger
+        # V-04: true, wenn der letzte upstream-stream ohne [DONE] endete
+        self._last_stream_truncated = False
         self.auth = GLMAccessTokenManager(config=config, logger=logger)
         self.request_queue = ConcurrentRequestQueue(
             logger=logger,
@@ -286,6 +311,7 @@ class GLMWebClient:
             while True:
                 retry_exc: UpstreamAPIError | None = None
                 finished = False
+                self._last_stream_truncated = False
                 for event in self._iter_sse_events(response):
                     if not event:
                         continue
@@ -301,6 +327,22 @@ class GLMWebClient:
                     if status in {"finish", "intervene"}:
                         finished = True
                         break
+                if self._last_stream_truncated and not finished:
+                    # V-04: stream endete ohne finish/[DONE]. Als transiente
+                    # Unterbrechung behandeln und mit frischer Conversation
+                    # erneut versuchen, solange retries uebrig sind — sonst
+                    # gaenge ein abgeschnittener tool-call als vollstaendige
+                    # antwort an den client.
+                    retry_exc = UpstreamAPIError(
+                        502,
+                        "truncated_stream: upstream ended without [DONE]",
+                        transient=True,
+                    )
+                    self.logger.warning(
+                        "Upstream stream truncated before finish; retrying attempt=%s/%s",
+                        attempt + 1,
+                        max_stream_retries,
+                    )
                 if finished:
                     # build_response() also populates blocked_tool_attempt_names
                     # (detect_tool_call_names side effect) — call before deciding.
@@ -325,12 +367,21 @@ class GLMWebClient:
                         accumulator = new_accumulator()
                         response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
+                    has_valid_calls = False
+                    choices_obj = result.get("choices")
+                    if isinstance(choices_obj, list) and choices_obj and isinstance(choices_obj[0], dict):
+                        message_obj = choices_obj[0].get("message")
+                        if isinstance(message_obj, dict):
+                            has_valid_calls = bool(message_obj.get("tool_calls"))
                     if (
                         accumulator.blocked_tool_attempt_names
+                        and not has_valid_calls
                         and blocked_follow_ups < max_blocked_follow_ups
                     ):
                         # Negative tool-result round instead of silently
                         # dropping blocked tool calls (see stream path).
+                        # V-02: nur wenn der Turn KEINE gueltigen Calls
+                        # enthaelt — sonst wuerde das Ergebnis verwerfen.
                         blocked_follow_ups += 1
                         follow_up = _build_blocked_tool_follow_up_payload(payload, accumulator, allowed_tool_names)
                         if follow_up is None:
@@ -345,6 +396,15 @@ class GLMWebClient:
                         accumulator = new_accumulator()
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
+                    if accumulator.blocked_tool_attempt_names and has_valid_calls:
+                        # V-02: gemischter Turn — gueltige Calls werden
+                        # ausgeliefert, die blockierten Namen protokolliert.
+                        # Ohne diese Zeile verschwaende der blocked-versuch
+                        # still; das Modell wiederholt ihn dann.
+                        self.logger.warning(
+                            "Turn contained valid and blocked tool calls; delivering valid calls, blocked=%s",
+                            ", ".join(sorted(set(accumulator.blocked_tool_attempt_names))),
+                        )
                     return result, accumulator.conversation_id
                 if retry_exc is None:
                     break
@@ -443,6 +503,7 @@ class GLMWebClient:
                 finalize_chunks: list[str] | None = None
                 blocked: list[str] = []
                 status: str | None = None
+                self._last_stream_truncated = False
                 for event in self._iter_sse_events(response):
                     if not event:
                         continue
@@ -482,6 +543,26 @@ class GLMWebClient:
                         )
                         blocked = list(accumulator.blocked_tool_attempt_names)
                         break
+                if self._last_stream_truncated and finalize_chunks is None:
+                    # V-04: stream endete ohne finish/[DONE] — als transiente
+                    # Unterbrechung retryen, solange nichts ausgeliefert wurde.
+                    if not served_content and attempt < max_stream_retries:
+                        retry_exc = UpstreamAPIError(
+                            502,
+                            "truncated_stream: upstream ended without [DONE]",
+                            transient=True,
+                        )
+                        self.logger.warning(
+                            "Upstream stream truncated before finish; retrying attempt=%s/%s",
+                            attempt + 1,
+                            max_stream_retries,
+                        )
+                    else:
+                        finalize_chunks = accumulator.finalize(status="stop")
+                        blocked = list(accumulator.blocked_tool_attempt_names)
+                        self.logger.warning(
+                            "Upstream stream truncated; finalizing partial turn (retry budget exhausted or content already served)"
+                        )
                 if finalize_chunks is None and retry_exc is None:
                     finalize_chunks = accumulator.finalize(status="stop")
                     blocked = list(accumulator.blocked_tool_attempt_names)
@@ -495,8 +576,17 @@ class GLMWebClient:
                 )
 
                 if finalize_chunks is not None:
+                    # V-02: eine Negativ-Folge-runde darf niemals bereits
+                    # erzeugte gueltige Calls verwerfen. Enthielt der Turn
+                    # einen erlaubten Call, wird er ausgeliefert; die
+                    # blockierte Namensliste wird fuer die Diagnose geloggt.
+                    turn_has_valid_calls = any(
+                        b'"tool_calls"' in chunk.encode("utf-8", "ignore") and b'"name"' in chunk.encode("utf-8", "ignore")
+                        for chunk in finalize_chunks
+                    )
                     if (
                         blocked
+                        and not turn_has_valid_calls
                         and blocked_follow_ups < max_blocked_follow_ups
                     ):
                         # Follow-up round with a negative tool result
@@ -952,7 +1042,16 @@ class GLMWebClient:
     def _prepare_chat_response(self, response):
         content_type = response.headers.get("Content-Type", "").lower()
         if "application/json" in content_type:
-            payload = self.auth.read_json_response(response)
+            # C-16: der originale HTTP-response wird vollstaendig gelesen und
+            # geschlossen; zurueckgegeben wird ein eigener stream ueber einen
+            # kopierten body. Andernfalls bleiben sockets offen.
+            try:
+                payload = self.auth.read_json_response(response)
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    pass
             debug_dump(self.logger, self.config.debug_dump_all, "GLM non-streaming raw JSON response", payload)
             status = payload.get("status")
             message = str(payload.get("message", "")).strip()
@@ -1069,6 +1168,8 @@ class GLMWebClient:
     def _iter_sse_events(self, response):
         pending = ""
         decoder = codecs.getincrementaldecoder("utf-8")("ignore")
+        saw_done = False
+        incomplete_read = False
 
         def emit_block(block: str):
             lines = [line for line in block.split("\n") if line.startswith("data:")]
@@ -1093,6 +1194,7 @@ class GLMWebClient:
             except http.client.IncompleteRead as exc:
                 raw_chunk = exc.partial or b""
                 stop_after_chunk = True
+                incomplete_read = True
                 self.logger.warning("Upstream SSE connection closed early, finalizing with received data bytes=%s", len(raw_chunk))
             if not raw_chunk:
                 break
@@ -1107,6 +1209,7 @@ class GLMWebClient:
                 block, pending = pending.split("\n\n", 1)
                 event = emit_block(block.strip())
                 if event == "[DONE]":
+                    saw_done = True
                     return
                 if event is not None:
                     yield event
@@ -1120,8 +1223,22 @@ class GLMWebClient:
 
         if pending.strip():
             event = emit_block(pending.strip())
-            if event not in (None, "[DONE]"):
+            if event == "[DONE]":
+                return
+            if event is not None:
                 yield event
+
+        # V-04: ein stream, der ohne [DONE] endet, ist abgeschnitten. Das war
+        # bisher ein stiller erfolg — der client finalisierte daraus eine
+        # vollstaendige antwort, obwohl inhalt fehlte oder ein tool-call
+        # mitten im json abbrach. Der fehler wird jetzt als zustand
+        # gemerkt; die aufrufer entscheiden ueber retry oder fehler.
+        if not saw_done:
+            self._last_stream_truncated = True
+            self.logger.warning(
+                "Upstream SSE ended without [DONE] sentinel (incomplete_read=%s) — treating turn as truncated",
+                incomplete_read,
+            )
 
     def _upload_referenced_files(self, messages: list[dict[str, object]]) -> list[dict[str, object]]:
         refs: list[dict[str, object]] = []
@@ -1208,17 +1325,58 @@ class GLMWebClient:
             self.logger.warning("Attachment upload failed url=%s error=%s", file_url, exc)
             return None
 
+    def _assert_public_url(self, file_url: str) -> None:
+        """C-02/SSRF: nur öffentliches http(s) zulassen. Vor dem Abruf wird
+        das Ziel aufgelöst und gegen private, reservierte und
+        Cloud-Metadata-Adressen geprüft — nach jedem Redirect erneut."""
+        parsed = urllib.parse.urlparse(file_url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"Unsupported attachment URL scheme: {parsed.scheme!r}")
+        host = parsed.hostname
+        if not host:
+            raise ValueError("Attachment URL without host")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        for info in socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP):
+            ip = info[4][0]
+            try:
+                address = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if (
+                address.is_private
+                or address.is_loopback
+                or address.is_link_local
+                or address.is_multicast
+                or address.is_reserved
+                or address.is_unspecified
+            ):
+                raise ValueError(f"Attachment URL resolves to a non-public address: {ip}")
+
     def _fetch_file_payload(self, file_url: str) -> tuple[str, str, bytes]:
         if file_url.startswith("data:"):
             header, encoded = file_url.split(",", 1)
             mime_type = header.split(";")[0][5:] or "application/octet-stream"
             extension = mimetypes.guess_extension(mime_type) or ".bin"
-            payload = base64.b64decode(encoded)
+            if len(encoded) > FILE_SIZE_LIMIT * 4 // 3:
+                raise ValueError("Data-URL attachment exceeds the size limit, upload rejected.")
+            payload = base64.b64decode(encoded, validate=True)
+            if len(payload) > FILE_SIZE_LIMIT:
+                raise ValueError("Data-URL attachment exceeds the size limit, upload rejected.")
             return f"upload-{uuid.uuid4().hex}{extension}", mime_type, payload
 
+        self._assert_public_url(file_url)
         parsed = urllib.parse.urlparse(file_url)
         filename = parsed.path.rsplit("/", 1)[-1] or f"upload-{uuid.uuid4().hex}.bin"
-        with urllib.request.urlopen(file_url, timeout=self.config.request_timeout) as response:
+
+        check_url = self._assert_public_url
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                check_url(newurl)
+                return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+        opener = urllib.request.build_opener(_NoRedirect)
+        with opener.open(file_url, timeout=self.config.request_timeout) as response:
             payload = response.read(FILE_SIZE_LIMIT + 1)
             if len(payload) > FILE_SIZE_LIMIT:
                 raise ValueError("File exceeds 100MB, upload rejected.")
@@ -1238,7 +1396,22 @@ class GLMWebClient:
     def _wrap_stream_response(self, response):
         content_encoding = response.headers.get("Content-Encoding", "").lower()
         if content_encoding == "gzip":
-            return BufferedReader(gzip.GzipFile(fileobj=response))
+            # C-16: GzipFile.close() schliesst ein extern uebergebenes
+            # fileobj NICHT. Der wrapper besitzt den raw-response deshalb
+            # mit und schliesst beides.
+            raw_response = response
+
+            class _GzipStreamOwner(BufferedReader):
+                def close(self) -> None:
+                    try:
+                        super().close()
+                    finally:
+                        try:
+                            raw_response.close()
+                        except Exception:
+                            pass
+
+            return _GzipStreamOwner(gzip.GzipFile(fileobj=raw_response))
         return response
 
     def _read_error_payload(self, error: urllib.error.HTTPError) -> dict[str, object]:

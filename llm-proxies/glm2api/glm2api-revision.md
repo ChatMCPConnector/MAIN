@@ -1,6 +1,6 @@
 # glm2api-revision.md — vollständiges Linien-für-Linien-Audit
 
-**Stand:** 2026-09-24
+**Stand:** 2026-09-24 (Audit), **2026-09-24 (P0-Fixes umgesetzt, s. Teil F)**
 **Scope:** `llm-proxies/glm2api/` — 17 Produktionsdateien (7.742 Zeilen), 6 Testdateien (3.226 Zeilen), Benchmarks, Build- und Konfigurationsdateien
 **Methode:** 7 parallele Subagenten (eine Datei bzw. ein Bereich pro Agent), danach unabhängige Nachverifikation jedes Kernbefunds durch den Hauptagenten, ergänzt um Analyse echter Runtime-Daten (opencode-DB, glm2api-Debug-Logs)
 **Anlass:** Nutzerbefund — „glm2api funktioniert noch nicht gut: es schafft Aufgaben, aber sehr häufig wird in der Ausgabe ein Toolcall fälschlicherweise als Antwort gegeben"
@@ -384,3 +384,47 @@ Vollständige, zeilenweise Befunddokumente (je Datei/Projekt-Bereich, mit Ort, B
 | `07-runtime-analyse.md` | 8 Befundklassen | 261 |
 
 Gesamt: **107 Befunde** in 1.511 Zeilen Detailbericht, konsolidiert auf 115 Zeilen dieses Dokuments plus Verifikation in Teil A.
+
+---
+
+## Teil F — Umsetzungsstand (P0, 2026-09-24)
+
+### F-1 Behobene Kernbefunde
+
+| Befund | Umsetzung | Verifikation |
+|---|---|---|
+| **V-01** chunk-abhängige Erkennung | `_find_unterminated_call_start()` verfolgt die JSON-Struktur statt Präfix-Strings; greift in `consume()` **vor** den format-spezifischen Pfaden, mit Puffer-Obergrenze (256 KiB) | Paritätsmatrix: 4 Payload-Formen × 6 Chunk-Größen (1…512 B) — überall identisch |
+| **V-02** gültige Calls gingen verloren | Follow-up-Runde startet nur, wenn der Turn **keine** gültigen Calls enthält; `blocked`-Erfassung läuft unabhängig von `all_tool_calls` | Mixed-Turn: `blocked=['open_url']`, `read`-Call wird ausgeliefert, Negativtext überschreibt ihn nicht |
+| **V-03** `None`-Wildcard | Drei Zustände: `None` = keine Tools (erzeugt nie einen Call), Allowlist, `detect_all=True` für die interne Diagnose; Tilde-Fences werden maskiert; `function_call`-/XML-Fallback bei `None` abgeschaltet | `{"name":"read","value":…}` ohne Tools → kein Call; `~~~json`-Beispiel → kein Call |
+| **V-04** Truncation als Erfolg | `_iter_sse_events` merkt fehlendes `[DONE]` in `_last_stream_truncated`; beide Chat-Pfade behandeln es als transiente Unterbrechung (Retry) bzw. loggen es bei erschöpftem Budget | Suite + Live-Smoke |
+| **V-05** Tests schrieben Fehlverhalten fest | tautologische Assertion ersetzt; Paritätsmatrix (Payload × Chunk-Split) und Stream/Non-Stream-Paritätstest ergänzt | 186 Tests grün |
+
+### F-2 Weitere behobene Befunde
+
+- **T-05**: Protokoll-Fragmente im Reasoning-Kanal werden entfernt, der sichtbare Denktext streamt weiter; zurückgehaltenes Reasoning wird beim `finalize` ausgewertet (vor dem bisherigen Fallback).
+- **T-06**: `is_empty_response()` prüft den **Ergebniszustand** (Fragment- und Echo-Bereinigung, validierte Calls) statt des Rohzustands — der Leer-Retry greift jetzt bei abgeschnittenem Protokoll.
+- **T-09**: `strip_unparseable_call_fragments` greift auch auf aufrufspezifische Opfer mitten in der Zeile.
+- **T-10**: `detect_tool_call_names` erfasst zusätzlich Bare-Arrays, nackte Objekte und abgeschnittene Formen; Ergebnis wird dedupliziert.
+- **T-12**: Safety-Net-Calls durchlaufen dieselbe Sanitisation und Required-Argument-Prüfung wie der normale Pfad.
+- **T-15**: `_repaired` unterscheidet jetzt *normalisiert* (Ergebnis bleibt gültig) von *erforderliches Argument fehlt* (Call wird verworfen).
+- **C-01** (kritisch): Queue-Timeout-Tickets werden als „abandoned" markiert und die Serving-Sequenz rückt vor — die Queue blockiert nicht mehr dauerhaft.
+- **C-02** (SSRF): nur öffentliches HTTP(S); Ziel-IP nach Auflösung und **jedem Redirect** gegen private/reservierte Adressen geprüft; `data:`-URLs werden größenbegrenzt und validiert dekodiert.
+- **C-16**: Der originale HTTP-Response wird im JSON-Zweig geschlossen; der Gzip-Wrapper besitzt den Raw-Response und schließt beide.
+
+### F-3 Durch Subagenten behoben
+
+- **Adapter** (A-01…A-14): gemischte Anthropic-Inhalte inkl. Bilder erhalten; Thinking-Signaturen bleiben; Streaming puffert Argumentdeltas pro Tool-Call-Index; ungültige Calls werden abgewiesen statt zu leeren `tool_use`-Blöcken; `tool_choice`/`disable_parallel_tool_use`/`parallel_tool_calls`/`allowed_tools` kompatibel; `previous_response_id` und verwaiste Tool-Ergebnisse; strukturierte Outputs JSON-korrekt; `length`/Filter/Partial-Calls liefern `incomplete` statt `completed`.
+- **Auth** (A-15…A-19): rekursive Token-Redaktion in Logs, Headern und Exception-Texten; Single-Flight-Refresh pro Account; Failover nur bei Auth-/Netzwerk-/≥500-Fehlern; atomare Token-Persistenz (Tempfile + `fsync` + `os.replace`); sichere Fehlerzusammenfassung ohne Rohpayload.
+- **Server/Config** (S-01…S-17): Request-Body-/Header-/Socket-Limits, `Transfer-Encoding` abgelehnt, 411/413/501; Auth für Nicht-Loopback verpflichtend, CORS-Wildcard nur lokal, constant-time Tokenvergleich; Log-Verzeichnis 0700 / Dateien 0600; Upstream-Timeouts nicht mehr als Client-Disconnect; öffentliche Fehlermeldungen ohne interne Details; HTTPS-Pflicht für `GLM_BASE_URL`; Config-Parser warnt bei ungültigen Werten; `server_version` ohne Python-Version. `infrastructure.md` wurde im selben Arbeitsgang nachgeführt.
+
+### F-4 Teststand und Regression
+
+- **186 Tests grün** (vorher 183 nach den Subagenten-Fixes, 150 zu Beginn des Fixpakets).
+- **Regression gegen die echten Daten**: die drei Leak-Texte der Session `ses_f2bc23762ffeoOkPYHAoqhwpwm` (4.903 / 1.615 / 2.044 Zeichen) werden bei **allen** Chunk-Größen von 1 bis 512 Byte mit **0 Zeichen** Fragment-Leak verarbeitet. Vorher: Leck bei praktisch jeder Größe.
+- **Live-Smoke** gegen den echten Upstream: `/health`, `/v1/models`, Non-Stream-Chat, Tool-Stream — sauber, keine Sanitizer-Warnungen.
+
+### F-5 Bewusst nicht umgesetzt
+
+- **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.
+- **C-17/S-04** (Debug-Dump-Inhalte): Redaktion ist implementiert (Tokens, Header); eine strukturelle Auslagerung des Debug-Dumps ist als Folgeaufgabe offen.
+- **A-17** (MD5-Signatur als Upstream-Protokollwert): nicht Teil des Fix-Pakets, da keine sicherheitsrelevante Nutzung nachgewiesen ist.

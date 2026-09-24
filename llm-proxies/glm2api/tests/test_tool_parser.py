@@ -207,7 +207,7 @@ def test_parse_recovers_multi_call_leak_with_unbalanced_braces():
         '{"name":"write","arguments":{"filePath":"/tmp/b.md","content":"# B"}},'
         '{"name":"bash","arguments":{"command":"ls /tmp"}}]}[]'
     )
-    clean, tool_calls = parse_tool_calls_from_text(leak, allowed_tool_names=None)
+    clean, tool_calls = parse_tool_calls_from_text(leak, allowed_tool_names={"write", "bash"})
 
     assert clean == ""
     assert len(tool_calls) == 3
@@ -310,7 +310,7 @@ def test_parse_tool_calls_repairs_single_bracket_cdata_close():
         '</|DSML|invoke></|DSML|tool_calls>'
     )
 
-    clean, tool_calls = parse_tool_calls_from_text(text, None)
+    clean, tool_calls = parse_tool_calls_from_text(text, {"search"})
 
     assert clean == ""
     assert len(tool_calls) == 1

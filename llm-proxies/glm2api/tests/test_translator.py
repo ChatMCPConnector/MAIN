@@ -364,23 +364,121 @@ def test_accumulator_defers_visible_text_when_tools_available():
 
 
 def test_accumulator_defers_text_while_tool_protocol_pending():
-    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"shell"})
-    # text gefolgt von einem unvollstaendigen tool-protokoll-anfang:
-    # der parser haelt '{"tool' zurueck -> deferral aktiv
+    """Der angebrochene tool-protokoll-Anfang wird vom Parser gehalten und
+    darf NICHT als Assistant-Content durchkommen. Die vorherige Fassung
+    dieser Assertion ('tool' in combined) war tautologisch und hat das
+    Fehlverhalten als erlaubt festgeschrieben (D-01)."""
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"bash"})
     chunks, status = accumulator.consume_event(
         {
             "conversation_id": "conv_1",
             "parts": [
                 {
                     "logic_id": "1",
-                    "content": [{"type": "text", "text": "sieh '...'} before {\"tool"}],
+                    "content": [{"type": "text", "text": 'sieh vorher {"tool_calls":[{"name":"bash"'}],
                 }
             ],
         }
     )
-    final_chunks = accumulator.finalize(status)
+    final_chunks = accumulator.finalize(status or "stop")
     combined = "".join(chunks) + "".join(final_chunks)
-    assert '{"tool' in combined or 'tool' in combined  # nichts verloren
+
+    # die sichtbare prosa darf kommen ...
+    assert "sieh vorher" in combined
+    # ... das angebrochene protokoll-fragment darf NICHT als content raus
+    assert '{"tool_calls":[{"name":"bash"' not in combined
+    # ein unvollstaendiger call ist bewusst kein call — aber auch kein text
+    assert "tool_calls" not in combined
+
+
+def test_parity_matrix_tool_call_detection_is_chunk_independent():
+    """V-01: Tool-Call-Erkennung darf nicht von der Chunk-Grenze abhaengen.
+    Dasselbe Payload muss bei jedem Split identisch erkannt werden."""
+    from glm2api.utils.tool_parser import StreamingToolParser, parse_tool_calls_from_text
+
+    payloads = {
+        "wrapper_inline": '{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}]}[]',
+        "wrapper_pretty": '{\n  "tool_calls": [\n    {"name":"bash","arguments":{"command":"ls"}}\n  ]\n}[]',
+        "bare_array_pretty": '[\n  {\n    "name": "bash",\n    "arguments": {"command": "ls"}\n  }\n]',
+        "bare_object": '{"name":"bash","arguments":{"command":"ls"}}',
+        "bare_after_text": 'Kurze Vorrede.\n{"name":"bash","arguments":{"command":"ls"}}',
+    }
+    for label, text in payloads.items():
+        _, expected_calls = parse_tool_calls_from_text(text, {"bash", "read"})
+        expected = [c["function"]["name"] for c in expected_calls]
+        assert expected, f"{label}: final-parser muss den call erkennen"
+        for size in (1, 3, 7, 13, 40, len(text)):
+            parser = StreamingToolParser(allowed_tool_names={"bash", "read"})
+            visible = "".join(
+                parser.consume(text[i : i + size]) for i in range(0, len(text), size)
+            )
+            tail, calls = parser.flush()
+            got = [c["function"]["name"] for c in calls]
+            assert got == expected, f"{label} bei chunk={size}: {got} != {expected}"
+            assert '"arguments"' not in visible + tail, f"{label} bei chunk={size}: protokoll geleakt"
+
+
+def test_parity_matrix_stream_and_non_stream_agree_on_garbage():
+    """V-05/D-06: stream- und non-stream-pfad muessen fuer dasselbe
+    payload zum selben ergebnis kommen — roh-json darf in keinem pfad
+    durchgehen."""
+    from glm2api.utils.tool_parser import parse_tool_calls_from_text, StreamingToolParser
+
+    payloads = [
+        'Vorrede.\n{"name":"bash","arguments":{"command":"ls"',
+        'Vorrede.\n{"name":"bash","arguments":{"command":"ls"}}',
+        'Hier ist JSON: {"name":"service","version":"1"}',
+        'User: [{"call_id":"c1","name":"bash","content":"ok"}]\nFertig.',
+    ]
+    for text in payloads:
+        clean_final, calls_final = parse_tool_calls_from_text(text, {"bash"})
+        parser = StreamingToolParser(allowed_tool_names={"bash"})
+        visible = "".join(parser.consume(text[i : i + 5]) for i in range(0, len(text), 5))
+        tail, calls_stream = parser.flush()
+        assert [c["function"]["name"] for c in calls_final] == [
+            c["function"]["name"] for c in calls_stream
+        ], f"stream/non-stream weichen ab bei {text[:40]!r}"
+        assert '"arguments"' not in visible + tail or not calls_final, (
+            f"protokoll geleakt bei {text[:40]!r}"
+        )
+        assert "call_id" not in (visible + tail), f"transcript-echo geleakt bei {text[:40]!r}"
+
+
+def test_mixed_valid_and_blocked_call_delivers_valid_call():
+    """V-02: ein erlaubter call neben einem blockierten muss ausgeliefert
+    werden, und der blockierte name muss trotzdem protokolliert sein."""
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"read"})
+    text = (
+        'Schritt:\n{"tool_calls":['
+        '{"name":"read","arguments":{"filePath":"/etc/hostname"}},'
+        '{"name":"open_url","arguments":{"url":"http://example.com"}}'
+        ']}[]'
+    )
+    accumulator.consume_event(
+        {
+            "conversation_id": "conv_mixed",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [{"type": "text", "text": text}],
+                }
+            ],
+        }
+    )
+    chunks = accumulator.finalize(status="finish")
+    response = accumulator.build_response()
+    message = response["choices"][0]["message"]
+
+    names = [tc["function"]["name"] for tc in (message.get("tool_calls") or [])]
+    assert "read" in names, "gueltiger call wurde verworfen"
+    assert "open_url" in accumulator.blocked_tool_attempt_names, (
+        "blockierter versuch wurde nicht protokolliert"
+    )
+    assert "undeclared tool" not in "".join(chunks), (
+        "negativ-text darf gueltige calls nicht ueberschreiben"
+    )
 
 
 def test_accumulator_reports_unavailable_dsml_tool_instead_of_empty_response():
