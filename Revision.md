@@ -1,26 +1,37 @@
 # Revision
 
-## Analyseauftrag
+## Analyseauftrag und redaktioneller Status
 
-Vollständige statische Revision des Pfads `/workspaces/MAIN`.
+Dieses Dokument ist ein statischer Audit-Trail für `/workspaces/MAIN` vom 24.09.2026. Die einzelnen Anhänge A–V sind zeitlich markierte Prüfberichte; ihre Commit-, Inventar- und Zeilenzahlen sind Momentaufnahmen und keine dauerhaften Verträge.
 
-- **Arbeitsgrenze:** ausschließlich `/workspaces/MAIN`; keine Dateien außerhalb dieses Pfads werden als Quellobjekte untersucht.
-- **Vorgehen:** Dateien werden inventarisiert, Textdateien zeilenweise gelesen, Binär-/Vendor-/Runtime-Dateien strukturell katalogisiert und ohne Wiedergabe von Secret-Werten bewertet.
-- **Schreibweise:** Jeder abgeschlossene Teilprozess wird unmittelbar als eigener Abschnitt dieses Dokuments ergänzt.
-- **Geheimnisse:** Klartext-/verschlüsselte Secret-Dateien werden nicht in dieses Dokument kopiert. Es werden nur Pfad, Größe, Typ, Schutzstatus und beobachtete Referenzen dokumentiert.
+- **Arbeitsgrenze:** ausschließlich `/workspaces/MAIN`; externe Pfade wurden nur als Verträge oder Laufzeitverweise inventarisiert, nicht als Quellobjekte gelesen.
+- **Vorgehen:** Dateien wurden inventarisiert, Textdateien zeilenweise gelesen, Binär-, Vendor- und Runtime-Dateien strukturell katalogisiert. `Revision.md` selbst war in Teil A kein Prüfobjekt.
+- **Secret-Grenze:** Klartext- und verschlüsselte Secret-Dateien wurden nicht in diesen Bericht kopiert; dokumentiert wurden nur Pfad, Typ, Größe, Schutzstatus und beobachtete Referenzen.
+- **Abgeschlossen** bezeichnet ausschließlich die Analyse-/Dokumentationsabdeckung. Technische Behebung, Build, Test, Runtime-, Port- und Remote-Verifikation wurden damit nicht behauptet.
+- **Produktstatus:** nicht abnahmefähig; die in den Anhängen dokumentierten offenen Befunde bleiben bestehen, sofern sie nicht ausdrücklich als behoben oder superseded markiert sind.
+- **Redaktionsstand:** Diese Bereinigung bearbeitet nur die Dokumentstruktur und Statusaussagen; Anwendungscode, Secrets und andere Dateien werden nicht verändert.
 
-## Startinventur
+## Executive Summary
 
-| Bereich | Dateien laut Bestandsaufnahme | Bearbeitung |
+- **Dokumentations-/Coverage-Check:** A–U sind als historische Berichte eingebettet; R, S und U werden nicht als konkurrierende aktuelle Endstände geführt.
+- **Aktueller maßgeblicher Dokumentstatus:** die redaktionelle Endkontrolle am Dokumentende; historische Reports behalten ihre eigene Provenienz.
+- **Technischer Status:** offene Befunde aus Produktivcode, Proxy-Betrieb, Bundle, Config und Benchmark bleiben bestehen; es wurde keine technische Behebung vorgenommen.
+- **Verifikationsgrenze:** keine Tests, Builds, Serverstarts, HTTP-/Remote-Aktionen oder Live-Benchmarkläufe; geschützte Secret-Inhalte blieben ungeöffnet.
+
+## Startinventur und Snapshot-Hinweise
+
+| Bereich | Dateien laut einem jeweiligen Snapshot | Bearbeitung / Geltung |
 |---|---:|---|
-| versionierte Arbeitsdateien | 178 (Endstand U) | vollständig quellenah prüfen; `Revision.md` enthalten |
-| ignorierte Runtime-/Dependency-/Log-Dateien | 5.518 (aktueller Endstand nach U) | vollständig inventarisieren; Text-/Konfigurationsdateien zeilenweise, Binärdateien strukturell |
-| Kandidaten ohne `.git`-Objektspeicher | 5.696 (aktueller Endstand nach U) | in Teilprozessen A–U abgedeckt |
-| `.git` | separat als Versionsverzeichnis katalogisiert | keine Objekt-/Blob-Inhalte als Quellcode analysieren |
+| versionierte Arbeitsdateien | 178 | quellenah geprüft; `Revision.md` ist selbst keine verlässliche Abdeckungsquelle für Teil A |
+| ignorierte Runtime-/Dependency-/Log-Dateien | 5.518–5.524 | textuelle Dateien wurden zeilenweise, Binär-/Runtime-Bestände strukturell geprüft; Zählung ist zeitabhängig |
+| Kandidaten außerhalb des Git-Objektspeichers | 5.696–5.702 | durch A–U abgedeckt; nachgelagerte `REVIEW-*.md`-Dateien sind zusätzliche, ignorierte Arbeitsbelege |
+| `.git` | separat katalogisiert | keine Objekt-/Blob-Inhalte als Quellcode analysiert |
 
-## Laufender Abdeckungsstatus
+Die Bereiche in dieser Tabelle sind Snapshots aus unterschiedlichen Prüfzeitpunkten. Maßgeblich ist jeweils nur der ausdrücklich genannte Commit und Prüfzeitpunkt des Berichts; die Spanne ersetzt keinen aktuellen Inventarvertrag.
 
-| Prozess | Bereich | Status |
+## Abdeckungsstatus der historischen Analyse
+
+| Prozess | Bereich | Status der Analyse |
 |---|---|---|
 | Initialisierung | Gesamtbestand und Methodik | abgeschlossen |
 | A | Top-Level, Dokumentation, Devcontainer, OpenCode-Direktkonfiguration | abgeschlossen |
@@ -40,21 +51,40 @@ Vollständige statische Revision des Pfads `/workspaces/MAIN`.
 | O | `.opencode/agent/glm2api.md` und `command/quota.md` | abgeschlossen |
 | P | `config/`-Secret-Artefakte | abgeschlossen, redigiert |
 | Q | getracktes glm2api-Bundle-ZIP | abgeschlossen, ZIP read-only |
-| R | historischer Gap-Check | abgeschlossen, durch S überholt |
-| S | korrigierter Gesamt-/Coverage-Check | abgeschlossen |
-| T | aktueller AuditMesh-Benchmark-Recheck | abgeschlossen |
-| U | Delta-Audit der extern übernommenen glm2api-Änderung | abgeschlossen |
+| R | historischer Gap-Check | abgeschlossen, durch S und die redaktionelle Endkontrolle überholt |
+| S | historischer Gesamt-/Coverage-Check | abgeschlossen, nicht mehr maßgeblich |
+| T | AuditMesh-Benchmark-Recheck | abgeschlossen, fachlicher Benchmark-Snapshot |
+| U | Delta-Audit der extern übernommenen glm2api-Änderung | abgeschlossen, Delta-Snapshot |
+| V | redaktionelle Konsistenzprüfung und Endkontrolle | abgeschlossen; keine technische Behebung |
 
-## Laufende Protokolle
+## Report- und Vorrangmatrix
+
+| Reports | Rolle | Vorrang / Lesart |
+|---|---|---|
+| A–Q | historische Baseline- und Scope-Berichte | fachliche Evidenz mit ihrem jeweiligen Snapshot; nicht pauschal auf aktuellen Source übertragen |
+| R | historischer Gap-Check | superseded; keine aktuelle Endstatusquelle |
+| S | historischer Gesamt-/Coverage-Check | superseded durch T, U und V |
+| T | späterer Benchmark-Vertragscheck | maßgeblich für den dort geprüften Benchmark-Snapshot, nicht für Build-/Runtime-Sicherheit |
+| U | Delta-Audit der zwei extern geänderten glm2api-Dateien | maßgeblich für dieses Delta; beseitigt die älteren Baseline-Befunde nicht |
+| V | redaktionelle Endkontrolle | einzige Quelle für den Status dieses Dokuments; keine technische Produktfreigabe |
+
+## Methodik und Protokollstand
 
 ### Initialisierung
 
-Die erste Inventur wurde aus dem tatsächlichen Dateisystem und der Git-Index-Liste erstellt. Der Bestand enthält Quellcode, Shell-/Python-/Go-/JSON-Dateien, verschlüsselte Secret-Artefakte, installierte Python-/Node-Abhängigkeiten, Browser-Runtime, Logs, PID-/Cache-Dateien sowie Binärdateien. Die eigentliche fachliche Datei-für-Datei-Bewertung läuft nun in den oben genannten unabhängigen Teilprozessen.
+Die erste Inventur wurde aus dem tatsächlichen Dateisystem und der Git-Index-Liste erstellt. Der Bestand enthält Quellcode, Shell-/Python-/Go-/JSON-Dateien, verschlüsselte Secret-Artefakte, installierte Python-/Node-Abhängigkeiten, Browser-Runtime, Logs, PID-/Cache-Dateien sowie Binärdateien. Die fachliche Datei-für-Datei-Bewertung wurde in den oben genannten unabhängigen Teilprozessen durchgeführt; Build-, Test- und Laufzeitverifikation waren ausdrücklich nicht Teil dieses Schritts.
+
+### Leseschutz und technische Grenzen
+
+- Secret-Inhalte wurden nicht wiedergegeben; Pfadnummern und Runtime-Artefakte sind keine Freigabe zum Öffnen geschützter Dateien.
+- `.runtime/revision-parts/*.md` sind nicht-kanonische, ignorierte Arbeitsbelege; die wesentlichen Aussagen dieses Dokuments stehen hier im Masterdokument.
+- Die eingebetteten A–V-Report-Inhalte bleiben als historische Berichtformate erhalten; die Reporttitel sind als H2 normalisiert, ihre lokalen Unterebenen bleiben unverändert. Maßgeblich für die aktuelle Navigation sind die Überschriften vor dem Anhang A und die Vorrangmatrix.
+
 
 ## Anhang A — Top-Level, Dokumentation, Devcontainer und OpenCode
 
 <!-- BEGIN PART A -->
-# Revision Partition A – statische Bestandsanalyse
+## Revision Partition A – statische Bestandsanalyse
 
 **Analysedatum:** 24.09.2026
 **Arbeitsgrenze:** ausschließlich der unten aufgeführte Bestand unter `/workspaces/MAIN`
@@ -87,7 +117,7 @@ Die erste Inventur wurde aus dem tatsächlichen Dateisystem und der Git-Index-Li
 
 ### 1.2 Abgrenzung
 
-- Der gesamteOrdner `.devcontainer/` umfasst genau die fünf unter Punkt 1.1 gelisteten Dateien.
+- Der gesamte Ordner `.devcontainer/` umfasst genau die fünf unter Punkt 1.1 gelisteten Dateien.
 - Unter `.opencode/` wurden nur die versionierten Dateien **direkt** im Ordner berücksichtigt: `.gitignore`, `package.json`, `package-lock.json`, `opencode.json` und `tui.json`.
 - `.opencode/node_modules/` wurde ausgeschlossen.
 - Die Unterordner `.opencode/agent/` und `.opencode/command/` waren nicht Teil der Formulierung „direkt unter `.opencode/`“ und wurden nicht in die Dateiliste aufgenommen.
@@ -280,7 +310,7 @@ Historische Changelog-Einträge wurden nicht als aktueller Sollzustand bewertet,
   - Keine Log-Rotation.
 - **Konkrete Befunde:**
   - `bash -n` erfolgreich.
-  - Die untracked-Prüfung erfasst nicht ignorierte neue Dateien (`git ls-files --others --exclude-standard`).
+  - Die untracked-Prüfung erfasst neue, nicht ignorierte Dateien (`git ls-files --others --exclude-standard`).
   - Fehlgeschlagenes `save.sh` beendet den Daemon nicht; der nächste Intervallversuch erfolgt erneut.
   - Die Automatik widerspricht `AGENTS.md:44` und sollte als explizite Ausnahme oder durch einen sicheren Dateifilter geregelt werden.
 
@@ -414,7 +444,7 @@ Historische Changelog-Einträge wurden nicht als aktueller Sollzustand bewertet,
 - **Zeilenzahl:** 310
 - **geprüft:** ja
 - **Zweck:** Zentrale opencode-Konfiguration für Remote-/lokale Provider, Modelle, Limits, Reasoning-Varianten, Standardmodell, Rechte, LSP, MCP und Compaction.
-- **Wichtige Abhängigkeiten:** opencode-Schema und -Runtime; externe NVIDIA-/XinJianYa-/TokenRouter-Provider; lokale Ports 8001 und 9878; Dateien unter `~/.config/landscape/`; lokaler MCP auf Port-/DB-nahem opencode-Sessions-Server; Node unter `/workspaces/MAIN/infra/mcp/opencode-sessions-mcp.js`.
+- **Wichtige Abhängigkeiten:** opencode-Schema und -Runtime; externe NVIDIA-/XinJianYa-/TokenRouter-Provider; lokale Ports 8001 und 9878; Dateien unter `~/.config/landscape/`; lokaler stdio-MCP-Prozess mit direktem SQLite-Zugriff; Node unter `/workspaces/MAIN/infra/mcp/opencode-sessions-mcp.js`.
 - **Konfigurations-/Betriebsrisiken:**
   - Zwei versionierte Klartext-Credentials.
   - Globales `allow` für Berechtigungen.
@@ -484,7 +514,7 @@ Partition A umfasst 16 vollständig gelesene, strukturell lesbare Textdateien. E
 ## Anhang B — Infrastruktur-Skripte und Reverse-Engineering-Dokumentation
 
 <!-- BEGIN PART B -->
-# Audit Partition B — infra/scripts/ und infra/docs/
+## Audit Partition B — infra/scripts/ und infra/docs/
 
 ## Prüfrahmen
 
@@ -510,7 +540,7 @@ Partition A umfasst 16 vollständig gelesene, strukturell lesbare Textdateien. E
 - **Befunde:**
   - **Control-Flow/Fehler/Signale:** Die Datei ist als Sourced-Skript ohne `set -e` gedacht. Die PID-Prüfungen in `autosave` und `config-watchdog` (Z. 18–23, 26–33, 36–40, 78–83, 85–92, 95–99) prüfen weder numerische PID noch Prozessidentität; stale PID-Reuse kann einen fremden Prozess als Daemon ausgeben oder beim Stoppen beenden. `pause`/`resume` (Z. 104–110) melden Erfolg auch, wenn `touch`/`rm` fehlschlägt, weil die Funktion keinen Fehlerstatus auswertet. Ein Interrupt während `start` kann einen unbestätigten Daemonzustand hinterlassen.
   - **Quoting/Pfade:** `save`, `auth`, `secrets` und `ports` verwenden relative `./infra/scripts/...`-Pfade (Z. 5–8) und funktionieren nur aus dem Repository-Root. `quota`, `gdrive`, `opencode-server` und Daemon-Starts sind dagegen auf `/workspaces/MAIN` fest verdrahtet (Z. 9, 12, 29, 70, 88). `/tmp/opencode` wird von den Wrapper-Funktionen nicht vor dem Öffnen von Log-/Pause-Dateien angelegt. Das ist inkonsistent und nicht portabel.
-  - **Ports/Lifecycle:** Port 4096 wird nur über HTTP-Erreichbarkeit akzeptiert (Z. 53–67); jeder 2xx-Dienst dort gilt als OpenCode. `setsid nohup` schützt nicht vor Prozessgruppen-Kills, und die Wrapper besitzen keine Prozessidentitäts- oder Startbestätigungsprüfung.
+  - **Ports/Lifecycle:** Port 4096 wird nur über HTTP-Erreichbarkeit akzeptiert (Z. 53–67); jeder 2xx-Dienst dort gilt als OpenCode. `setsid` trennt die Prozessgruppe, schützt aber nicht vor Container-/cgroup-weitem Cleanup; die Wrapper besitzen keine Prozessidentitäts- oder Startbestätigungsprüfung.
   - **Secrets/Doku:** `landscape-diff` gibt nur Secret-Pfade und Namen aus, keine Inhalte (Z. 118–128). Die Doku-/Alias-Namen entsprechen den übrigen B-Dateien; die festen `/workspaces/MAIN`-Annahmen bleiben ein Portabilitätsrisiko.
 - **Risikostufe:** Mittel
 - **geprüft:** ja
@@ -568,7 +598,7 @@ Partition A umfasst 16 vollständig gelesene, strukturell lesbare Textdateien. E
 - **Zeilenzahl:** 120
 - **Zweck:** Git-Bundle mit Historie erzeugen, zwei Generationen auf einem rclone-Remote rotieren, Hash vergleichen und wiederherstellen.
 - **Befunde:**
-  - **Control-Flow/Fehler/Signale:** `set -uo pipefail` (Z. 24) enthält bewusst kein `-e`; Fehler werden nur selektiv behandelt. `cd` (Z. 25) wird nicht auf Fehler geprüft, sodass ein falscher Aufrufpfad im falschen Verzeichnis weiterlaufen kann. Rotationsfehler werden teilweise nur als Hinweis behandelt (Z. 73–75). Die Upload-Prüfung leitet den Status aus `rclone | grep -v` ab (Z. 77–79). Es gibt keinen Trap zum Aufräumen lokaler Bundle-/State-Dateien bei Abbruch.
+  - **Control-Flow/Fehler/Signale:** `set -uo pipefail` (Z. 24) enthält bewusst kein `-e`; Fehler werden nur selektiv behandelt. `cd` (Z. 25) wird nicht auf Fehler geprüft, sodass ein falscher Aufrufpfad im falschen Verzeichnis weiterlaufen kann. Rotationsfehler werden teilweise nur als Hinweis behandelt (Z. 73–75). Die Upload-Prüfung wertet den tatsächlichen Pipeline-Exitcode aus; wegen `pipefail` bleibt ein fehlgeschlagener `rclone`-Schritt auch bei erfolgreichem `grep` fehlerhaft (Z. 77–79). Es gibt keinen Trap zum Aufräumen lokaler Bundle-/State-Dateien bei Abbruch.
   - **Quoting/Pfade:** Das Root-Verzeichnis wird über `dirname "$0"` statt `BASH_SOURCE` bestimmt (Z. 25); Symlink-/PATH-Aufrufe können daher das falsche Arbeitsverzeichnis wählen. Lokale Pfade sind auf `.runtime` und `/tmp/opencode` festgelegt (Z. 32–33, 104–106). Restore-Ziel und Download-Datei sind nicht gegen Existenz oder konkurrierende Restores geschützt. `require_auth` ruft in Z. 45 direkt `rclone listremotes` statt `runc`/explizitem `RCLONE_CONFIG` auf.
   - **Ports/Lifecycle:** Keine lokalen Listener-Ports. `rclone` ist ein externer Prozess; der lokale Bundle-Pfad kann bei Abbruch das komplette Repository einschließlich `config/passphrase` enthalten und wird erst nach Erfolg gelöscht (Z. 65, 92). Es gibt keine Lock-Datei, sodass `save.sh` und manuelle Backups gleichzeitig rotieren können.
   - **Secrets/Doku:** `RCLONE_CONF` (Z. 27) verweist auf OAuth-Remote-Daten; Inhalte werden nicht ausgegeben. Die Doku behauptet MD5-Verifikation (Z. 4–10, 81–91), aber ein leerer Remote-Hash (Z. 82–86) wird als Erfolg gewertet. Das steht im Widerspruch zur Zusage der Integritätsprüfung.
@@ -753,7 +783,7 @@ Partition A umfasst 16 vollständig gelesene, strukturell lesbare Textdateien. E
 ## Anhang C — MCP-Sitzungsverwaltung
 
 <!-- BEGIN PART C -->
-# Revision-Audit — Partition C: `infra/mcp/`
+## Revision-Audit — Partition C: `infra/mcp/`
 
 **Audit-Datum:** 2026-09-24
 **Scope:** ausschließlich `/workspaces/MAIN/infra/mcp/`; ergänzend nur die für die Registrierungs- und Aufrufgrenze benötigten, ausdrücklich benannten Querverweise in `.opencode/opencode.json`, `.devcontainer/setup.sh` und `.opencode/agent/glm2api.md`.
@@ -841,7 +871,7 @@ Zwischen Schritt 4 und 5 können andere opencode-Prozesse:
 - Shares anlegen oder entfernen,
 - Sessions löschen oder neu anlegen.
 
-Die Transaktion prüft keine Schutz-IDs, Ziel-IDs, Zeitstempel oder Sessionversionen erneut. Neue Inhalte einer inzwischen aktiven Zielsession werden von den `DELETE ... WHERE session_id IN (...)`-Anweisungen erfasst. Es gibt weder eine optimistische Versionsbedingung noch eine Sperre über die Vorprüfung.
+Die Transaktion prüft keine Schutz-IDs, Ziel-IDs, Zeitstempel oder Sessionversionen erneut. Abhängig vom Lockzeitpunkt können neue Inhalte einer inzwischen aktiven Zielsession noch von den `DELETE ... WHERE session_id IN (...)`-Anweisungen erfasst werden; nach dem ersten Write-Lock neu entstehende Inhalte können jedoch verwaiste Zeilen hinterlassen. Es gibt weder eine optimistische Versionsbedingung noch eine Sperre über die Vorprüfung.
 
 **Auswirkung:** TOCTOU-Rennen zwischen Preview/Schutzermittlung und Löschung. Der MCP-Server kennt keine opencode-Sitzungssperren oder App-Level-Invarianten und umgeht die opencode-API vollständig.
 
@@ -1251,7 +1281,7 @@ Die Implementierung erfüllt die dokumentierte Demo-/Alltagsfunktion, ist aber k
 ## Anhang D — Antigravity-Proxy: Betrieb, Build, Pakete und CI
 
 <!-- BEGIN PART D -->
-# Revision D — `llm-proxies/antigravity-proxy`
+## Revision D — `llm-proxies/antigravity-proxy`
 
 ## 1. Scope und Methode
 
@@ -1498,7 +1528,7 @@ Statuslegende:
 ## Anhang E — Antigravity-Proxy: Cmd, Auth, Credentials und HTTP
 
 <!-- BEGIN PART E -->
-# Revision Partition E — vollständiger Datei-Audit
+## Revision Partition E — vollständiger Datei-Audit
 
 **Audit-Scope:** ausschließlich `llm-proxies/antigravity-proxy/cmd/` sowie `internal/auth/`, `internal/credentials/`, `internal/http/`, `internal/env/`, `internal/project/` und `internal/logger/`.
 
@@ -1600,7 +1630,7 @@ Die wichtigsten Risiken sind:
 | E-CMD-W-02 | **Mittel** | `27-33`, `42-69` | Mehrere potenziell netzwerk- und credentialabhängige Operationen laufen synchron in `init()`. Bei fehlgeschlagenem Auth-Check kann der Start mit Environment-Projekt fortgesetzt werden; die tatsächliche Serverbereitschaft ist damit nicht garantiert. | Startup-Artefakte lazy beim ersten Request oder in einer expliziten, begrenzten Initialisierungsphase erzeugen; Readiness erst nach erfolgreicher notwendiger Auth/Projektinitialisierung signalisieren. |
 | E-CMD-W-03 | **Niedrig** | `34-39`, `59` | Tier- und Projektkennungen werden im Klartext geloggt. Sie sind keine Secrets, sind aber sensible Betriebsmetadaten. | Log-Redaktion oder Datensparsamkeit für Benutzer-/Projektkennungen konfigurierbar machen. |
 
-**Positive:** Build-Tag und KV-Auswahl sind klar getrennt; die Startup-Fehlerbehandlung ist im lokalen Entrypoint fail-closed, nicht fail-open.
+**Positive:** Build-Tag und KV-Auswahl sind klar getrennt; der native Entrypoint behandelt seinen Startup-Pfad fail-closed. Der Worker-Entrypoint bleibt davon getrennt und ist beim Provider-Fehler fehlertolerant.
 
 ### 5.2 `cmd/antigravity-oauth-proxy/main.go`
 
@@ -1880,11 +1910,11 @@ Daher trifft der Bericht keine Aussage darüber, ob der laufende Proxy im Gesamt
 ## Anhang F — Antigravity-Proxy: Modelle, Transformation und Streaming
 
 <!-- BEGIN PART F -->
-# Partition F – statische Tiefenanalyse
+## Partition F – statische Tiefenanalyse
 
 ## 1. Prüfrahmen und Abgrenzung
 
-- **Arbeitsstand:** Git-HEAD `5a5b7b6ddeaeee9bfc2cdc719ef1839772ccb92f`, Datum 2026-09-24.
+- **Arbeitsstand:** Git-HEAD `5a5b7b6ddeaeee9bfc2cdc719ef1839772ccb92f` als historischer Snapshot, Datum 2026-09-24; der F-Scope blieb nach diesem Commit unverändert.
 - **Analysierter Scope ausschließlich:**
   - `llm-proxies/antigravity-proxy/internal/antigravity/`
   - `llm-proxies/antigravity-proxy/internal/openai/`
@@ -1959,7 +1989,7 @@ Danach wird der Wrapper mit Top-Level-Feldern `model`, `project`, `request`, opt
 | Modellfall | Resultat |
 |---|---|
 | Exakt kodierte Level-Modelle | explizites `thinkingLevel` wird geleert (`request.go:107-140`) |
-| Gemini 3.7/3.8 mit `-low/-medium/-high` | Suffix überschreibt eingehendes Level (`thinking.go:9-45`) |
+| Gemini-Modelle mit `-low/-medium/-high` (3.7/3.8 sind Testfälle) | Suffix überschreibt eingehendes Level (`thinking.go:9-45`) |
 | Claude mit `none/off` | Budget 0, gesamte `ThinkingConfig` wird `nil` (`request.go:165-195`) |
 | Claude `minimal/low` | Budget 1024 |
 | Claude `medium` oder Default | Budget 2048 |
@@ -2140,7 +2170,7 @@ Der interne Gemini-Schema-DTO kennt ausschließlich `type`, `description`, `prop
 
 #### F-16 – Tatsächlich bedientes Fallback-Modell ist im Streaming nicht mitteilbar
 
-**Beleg:** Non-Streaming setzt `GenerateContentResponse.Model` auf das tatsächlich verwendete Modell (`internal/antigravity/client.go:267-275`). Streaming kennt nur `error` und Rohzeilen; es gibt keinen Model-Mbitanadal (`client.go:284-298`). Der OpenAI-Transformer verwendet ausschließlich den bei Konstruktion übergebenen Modellnamen (`stream_transformer.go:118-126`, `217-222`).
+**Beleg:** Non-Streaming setzt `GenerateContentResponse.Model` auf das tatsächlich verwendete Modell (`internal/antigravity/client.go:267-275`). Streaming kennt nur `error` und Rohzeilen; es gibt keine Model-Mitteilung (`client.go:284-298`). Der OpenAI-Transformer verwendet ausschließlich den bei Konstruktion übergebenen Modellnamen (`stream_transformer.go:118-126`, `217-222`).
 
 **Folge:** Nach 3.7/3.8-Fallback kann ein Stream weiter den angeforderten, nicht den tatsächlich bedienten Modellnamen melden. Non-Streaming und Streaming haben unterschiedliche Observability-Verträge.
 
@@ -2485,7 +2515,7 @@ Partition F ist in den getesteten Happy Paths strukturell gut lesbar und deckt z
 ## Anhang G — Antigravity-Proxy: Server, Middleware und HTTP-Routen
 
 <!-- BEGIN PART G -->
-# Revision G – Dateiaudit Antigravity-Proxy-Server
+## Revision G – Dateiaudit Antigravity-Proxy-Server
 
 **Auditgegenstand:** `/workspaces/MAIN/llm-proxies/antigravity-proxy/internal/server/`
 
@@ -2774,7 +2804,7 @@ Die Testquellen enthalten außerdem keine Tests für `chat_completions_handler.g
 ## Anhang H — glm2api: Betrieb, Rebuild und Bundle
 
 <!-- BEGIN PART H -->
-# Revision H — `llm-proxies/` / `glm2api` Betriebs- und Reproduzierbarkeitsprüfung
+## Revision H — `llm-proxies/` / `glm2api` Betriebs- und Reproduzierbarkeitsprüfung
 
 Datum: 2026-09-24
 Prüfmodus: ausschließlich statisch
@@ -3229,11 +3259,12 @@ Statusdefinition:
 ## Anhang I — glm2api: produktiver Python-Anwendungscode
 
 <!-- BEGIN PART I -->
-# Partition I — Statischer Audit des produktiven Python-Codes von `glm2api`
+## Partition I — Statischer Audit des produktiven Python-Codes von `glm2api`
 
 **Stand:** 2026-09-24
 **Arbeitsverzeichnis:** `/workspaces/MAIN`
 **Prüfungsart:** ausschließlich lokale statische Prüfung
+**Snapshot-Grenze:** Die nachfolgenden Source-Umfänge und Zeilenbereiche sind ein historischer I-Report vor U. Für die extern geänderten Dateien ist U der maßgebliche Delta-Report; I wird nicht als vollständiger aktueller Source-Audit gelesen.
 
 ## 1. Scope und Vollständigkeitsnachweis
 
@@ -3308,12 +3339,11 @@ Positiv: `Application.run()` besitzt ein `finally`, das `stop()` aufruft; `GLM2A
 - `llm-proxies/glm2api/src/glm2api/server.py:40-44`
 - `llm-proxies/glm2api/src/glm2api/server.py:118-128`
 - `llm-proxies/glm2api/src/glm2api/server.py:442-447`
-- `llm-proxies/glm2api/src/glm2api/server.py:499-603`
 
 Bevor die eigentliche GLM-Warteschlange greift, liest jeder Thread die via `Content-Length` angegebene Byteanzahl vollständig in den Speicher. Es gibt:
 
 - kein Request-Body-Limit,
-- keine Prüfung auf zu kurze/negative/inkonsistente Body-Länge,
+- keine Prüfung auf zu kurze/inkonsistente Body-Länge; negative Werte werden früh abgewiesen,
 - keine Ablehnung von `Transfer-Encoding: chunked`,
 - kein Socket-/Header-/Gesamtlaufzeit-Timeout,
 - keine maximale Anzahl akzeptierter Verbindungen oder Threads,
@@ -3846,7 +3876,9 @@ Für adversariale Clients, Remote-/Multi-Mandanten-Betrieb und lange Agent-Loops
 ## Anhang J — glm2api: Tests und Benchmarks
 
 <!-- BEGIN PART J -->
-# Partition J — Datei-Audit `glm2api/tests/` und `glm2api/benchmarks/`
+## Partition J — Datei-Audit `glm2api/tests/` und `glm2api/benchmarks/`
+
+**Snapshot-Grenze:** J ist die historische Test-/Benchmark-Baseline vor den späteren Änderungen an `translator.py` und `benchmark.md`. T ist der spätere Benchmark-Recheck; die fehlende Abdeckung der nach U hinzugekommenen Pfad- und Meta-Chatter-Zweige bleibt eine offene Frage.
 
 ## 1. Prüfauftrag, Umfang und Statusdefinition
 
@@ -4003,7 +4035,7 @@ Der gemischte Bestand aus Python-3.12- und Python-3.14-Caches ist kein Testinput
 ### Stärken
 
 - Der Split-SSE-Test zerlegt sogar das Sentinel über Chunks (`tests/test_protocol_adapters.py:140-154`).
-- Der HTTP-Test prüft nicht nur einen Unit-Aufruf, sondern einen laufenden FastAPI/HTTP-Pfad (`tests/test_protocol_adapters.py:198-217`).
+- Der HTTP-Test prüft nicht nur einen Unit-Aufruf, sondern einen laufenden Stdlib-HTTP-/ThreadingHTTPServer-Pfad (`tests/test_protocol_adapters.py:198-217`).
 - Der Sentinel-Pfad ohne explizites `[DONE]` wird abgedeckt (`tests/test_protocol_adapters.py:157-171`).
 
 ### Lücken und Robustheitsrisiken
@@ -4013,7 +4045,7 @@ Der gemischte Bestand aus Python-3.12- und Python-3.14-Caches ist kein Testinput
 3. **Inputadapter:** Kein Test für `input_image` mit externer URL, Function-Call-/Function-Output-Blöcke, mehrere Bild-/Textblöcke, leere oder fehlerhafte Payloads.
 4. **Anthropic:** Der Dateiname suggeriert Protokollabdeckung, getestet werden aber nur zwei `tool_choice`-Varianten. Systemprompt, Content-Blöcke, Toolresultate, Streaming, Usage und Fehlerpfade fehlen.
 5. **HTTP:** Kein Test für API-Key-Authentifizierung, CORS/Host-Validierung, Content-Type, Request-Limits, unbekannte Routen, Upstream-Ausnahmen, Client-Disconnect oder mehrere Heartbeats.
-6. Der Server wird mit `shutdown()` und `join()` beendet, aber nicht mit `server_close()` (`tests/test_protocol_adapters.py:210-214`). Das kann unter wiederholten Läufen Socket-Ressourcen offenlassen.
+6. Der HTTP-Test beendet den ThreadingHTTPServer über den Wrapper; der konkrete Cleanup-Befund ist hier nicht belegt. Weitere Server-Lifecycle- und Socket-Close-Grenzen bleiben im Test nur unzureichend abgedeckt (`tests/test_protocol_adapters.py:210-214`).
 7. Der HTTP-Test liest erst den vollständigen Body; er misst weder Reihenfolge noch Frequenz oder Form der Heartbeats jenseits eines einzelnen Substrings.
 
 **Bewertung:** Sinnvolle Adapter-Smokes und ein guter SSE-Split-Test, aber keine vollständige Protokoll- oder Serverrobustheit.
@@ -4295,7 +4327,7 @@ Das ist für die funktionale Snapshot-Absicht angemessen, sollte aber nicht als 
 | Translator/Accumulator | 44 History-, Echo-, Sanitize-, Deferral- und Native-Tool-Fälle | Event-Randfälle, exakte Callmenge, URL-/Path-Policy |
 | GLM-Client-Retry | ein transienter Code, Stream/Non-Stream, Content-Grenze | weitere transiente Codes, Netzwerkfehler, Cleanup, Cancellation |
 | Responses/Anthropic | einfache Input-/Toolchoice-/SSE-Happy-Paths | Multimodal/Tools/Streaming/Fehler, Auth und HTTP-Randfälle |
-| FastAPI-Integration | ein lokaler Responses-Stream/Heartbeat | API-Key, CORS, Requestlimits, Fehler, OpenAI-Chat |
+| Stdlib-HTTP-/ThreadingHTTPServer-Integration | ein lokaler Responses-Stream/Heartbeat | API-Key, CORS, Requestlimits, Fehler, OpenAI-Chat |
 | Upstream-Integration | keine Live-/Protokolltreue-Tests in J | reale Eventformen, Protokollversion, Timeout/429/5xx |
 | Benchmark-Fixtures | exakte Dateien und Kernmetriken | Markdown-Formen, Reportwerte, Zusatzchecks |
 | Benchmark-Mutation | Logs, Doku, Limits, Services, Gleichheitsgrenzen | Fehlerpfade, alternative Mutationen, Parser-Randfälle |
@@ -4382,7 +4414,7 @@ Das ist für die funktionale Snapshot-Absicht angemessen, sollte aber nicht als 
 ## Anhang K — Ignorierter Node-Dependency-Baum
 
 <!-- BEGIN PART K -->
-# Partition K — vollständiges Inventar `.opencode/node_modules`
+## Partition K — vollständiges Inventar `.opencode/node_modules`
 
 Der vollständige Datei-, Verzeichnis-, Hash-, Rechte- und Lockfile-Report mit **jedem einzelnen Blatt-Eintrag** steht als laufender Audit-Anhang unter `/workspaces/MAIN/.runtime/revision-parts/K.md` (4.192 Zeilen). Er wird hier zusammengefasst, damit `Revision.md` nicht durch 3.648 Third-Party-Einträge unlesbar wird; die vollständige Einzelabdeckung bleibt darin nachvollziehbar.
 
@@ -4450,7 +4482,7 @@ Die Dependency-Dateien wurden inventarisiert und kleine Textdateien zeilenweise 
 ## Anhang L — Ignorierte Firefox-Runtime und Browserprofil
 
 <!-- BEGIN PART L -->
-# Partition L — ignorierter `.runtime/`-Bestand
+## Partition L — ignorierter `.runtime/`-Bestand
 
 Der vollständige Datei-/Verzeichnis-/Signatur-/Rechte-Report mit 1.175 Einträgen steht unter `/workspaces/MAIN/.runtime/revision-parts/L.md` (1.309 Zeilen). Die folgende Zusammenfassung dokumentiert die wesentlichen Befunde und die Prüfgrenzen.
 
@@ -4501,7 +4533,7 @@ Der vollständige Datei-/Verzeichnis-/Signatur-/Rechte-Report mit 1.175 Einträg
 ## Anhang M — Ignorierte Venv-, Log-, Build- und Cache-Artefakte
 
 <!-- BEGIN PART M -->
-# Partition M — Ignorierte Dateien und Runtime-Artefakte
+## Partition M — Ignorierte Dateien und Runtime-Artefakte
 
 Der vollständige Manifest- und Loganalyse-Report mit 755 Pfaden steht unter `/workspaces/MAIN/.runtime/revision-parts/M.md` (1.049 Zeilen). Diese Zusammenfassung übernimmt die sicherheits- und betriebsrelevanten Ergebnisse ohne Secretwerte.
 
@@ -4512,6 +4544,7 @@ Der vollständige Manifest- und Loganalyse-Report mit 755 Pfaden steht unter `/w
 - **Analysierter Scope:** 755 Pfade = 751 reguläre Dateien, 4 Symlinks, 594 Textdateien, 157 Binärdateien.
 - **Textumfang:** 20.920.107 Zeilen; kleine Textdateien vollständig zeilenweise, Logs vollständig chunkweise und nur als Musterfrequenz ausgewertet.
 - **Schutzgrenze:** keine Löschung, kein Build, kein Start, kein Netzwerkzugriff; `Revision.md` wurde nicht verändert.
+- **Pfad-Einordnung:** Die Output-Log-Aussagen beziehen sich auf den manuellen Restart-Pfad `infra/scripts/glm2api.sh`; der kanonische Setup-/Watchdog-Start nutzt `llm-proxies/scripts/start-glm2api.sh`.
 
 ## Kurzurteil
 
@@ -4580,7 +4613,7 @@ Aggregierte Muster (Trefferzählungen, keine Zeilen-/Secretwerte): Raw Inbound J
 ## Anhang N — `.git`, Restbestand und Querverweise
 
 <!-- BEGIN PART N -->
-# Partition N — `.git`-Bestand, Restbestand und Querverweise
+## Partition N — `.git`-Bestand, Restbestand und Querverweise
 
 ## Snapshot und Grenzen
 
@@ -4813,7 +4846,7 @@ Erstellt wurde ausschließlich dieser redigierte Bericht unter `.runtime/revisio
 ## Anhang O — OpenCode-Agent und Quota-Command
 
 <!-- BEGIN PART O -->
-# Revision O — `.opencode`-Agent und Quota-Command
+## Revision O — `.opencode`-Agent und Quota-Command
 
 **Prüfdatum:** 2026-09-24
 **Prüfgrenze:** ausschließlich `/workspaces/MAIN`
@@ -5032,7 +5065,7 @@ Im Fallbackpfad `quota.sh:107-130` wird anhand des Reset-Strings geraten, ob ein
 ## Anhang P — Config-Secret-Artefakte (redigiert)
 
 <!-- BEGIN PART P -->
-# Redigierter Report — `config/`
+## Redigierter Report — `config/`
 
 **Beobachtungszeitpunkt:** 24.09.2026, lokale Workspace-Zeit (`+0200`)
 **Scope:** ausschließlich `/workspaces/MAIN/config/`; Querverweise nur innerhalb von `/workspaces/MAIN`.
@@ -5128,7 +5161,7 @@ Im Fallbackpfad `quota.sh:107-130` wird anhand des Reset-Strings geraten, ob ein
 ## Anhang Q — Getracktes glm2api-Bundle-ZIP
 
 <!-- BEGIN PART Q -->
-# Partition Q — ZIP-Inventar `llm-proxies/dist/glm2api-bundle.zip`
+## Partition Q — ZIP-Inventar `llm-proxies/dist/glm2api-bundle.zip`
 
 ## Prüfrahmen und Schutzgrenze
 
@@ -5222,6 +5255,8 @@ Im Fallbackpfad `quota.sh:107-130` wird anhand des Reset-Strings geraten, ob ein
 
 ## Read-only-Abgleich mit kanonischen Quellen
 
+**Snapshot-Hinweis:** Die folgenden Archiv- und Source-Größen/Hashes beziehen sich auf den Q-Prüfzeitpunkt vor U. Die Drift-Dateiliste bleibt als historischer Befund erhalten; aktuelle Source-Größen werden nicht aus dieser Tabelle abgeleitet.
+
 Alle 35 nicht-geschützten Dateien wurden vollständig aus dem ZIP gelesen, byteweise verglichen und ihre CRC32 gegen den ZIP-Header geprüft. `app/glm2api.env` wurde als Secret-Kandidat geschützt: kein `read`, keine Dekompression, kein Plaintext-Hash und keine inhaltliche Gleichheitsbehauptung.
 
 | Kanonischer Pfad | Ergebnis |
@@ -5240,17 +5275,33 @@ Alle 35 nicht-geschützten Dateien wurden vollständig aus dem ZIP gelesen, byte
 
 ## Secret-Namen und Abschlussstatus
 
-- Keine verschlüsselten ZIP-Member, kein Manifest, kein Kommentar, keine Runtime-/Secret-Dateinamen.
+- Keine verschlüsselten ZIP-Member, kein Manifest und kein Kommentar. Das explizit geschützte Env-Member `app/glm2api.env` ist die einzige in diesem Report genannte Secret-/Runtime-Datei; weitere solche Dateinamen wurden nicht behauptet.
 - Sensible Kandidaten: `app/.env.example` (Template) und `app/glm2api.env` (geschützt).
 - Hochsignante Schlüsselnamen wurden nur als Namen/Referenzen inventarisiert; keine JWT-, Bearer-, PEM- oder Provider-Key-Werte ausgegeben.
 - ZIP lesbar/Zentralverzeichnis: PASS; Pfad-/Duplikat-/Header-Sicherheit: PASS; CRC 35/36: PASS; geschützte Datei: NOT TESTED BY DESIGN; Dateimenge 36/36: PASS; Byteidentität: FAIL (6 Drift); Extraktion/Build/Start: NO.
 - Vollständiger Archivmember- und Hashreport: `/workspaces/MAIN/.runtime/revision-parts/Q.md`.
 <!-- END PART Q -->
 
-## Anhang S — Korrigierter Abschlusscheck
+## Historischer Gap-Check R (superseded)
+
+<!-- BEGIN PART R -->
+## Revision R — read-only Abdeckungscheck (historischer Zwischenstand)
+
+Der Report wurde vor dem Schreiben von Q und vor der Integration von O/P/Q erstellt. Er ist deshalb **kein aktueller Endstatus**.
+
+- Zu diesem Zeitpunkt wurden 178 tracked, 5.514 ignorierte und 14 Symlinks erkannt.
+- Als offene Coverage-Lücken wurden der damalige fehlende Q-Report, die noch nicht integrierten O/P-Berichte und die zwischenzeitlich geänderte `benchmark.md` genannt.
+- Die Debug-Logs wurden als momentaner Snapshot mit möglicher Byte-/Größenänderung markiert.
+- `R.md` behauptete außerdem, `Revision.md` ende vor O/P/Q; dieser Zwischenstand wurde durch die nachfolgenden Integrationen und S korrigiert.
+- Q, O und P liegen nun vor; der aktuelle Benchmark ist in T geprüft; S und V sind die maßgeblichen Statusquellen.
+
+**Keine Anwendungsdatei wurde durch R verändert.** Der vollständige historische Zwischenreport bleibt unter `/workspaces/MAIN/.runtime/revision-parts/R.md`.
+<!-- END PART R -->
+
+## Historischer Abschlusscheck S (superseded)
 
 <!-- BEGIN PART S -->
-# Revision S — korrigierter read-only Endstatus
+## Revision S — historischer read-only Endstatus
 
 **Prüfzeitpunkt:** 24.09.2026, 01:40:47 +0200 (Snapshot vor dem Schreiben dieser Datei)
 **Wurzel:** ausschließlich `/workspaces/MAIN`
@@ -5276,6 +5327,7 @@ Alle 35 nicht-geschützten Dateien wurden vollständig aus dem ZIP gelesen, byte
 | `llm-proxies/` | 134 | 750 | D–I, Q vollständig; Runtime M/L |
 | `.runtime/` | 0 | 1.105 | L vollständig strukturell |
 | Root-/Cache-Dateien | 7 | 1 | A/N/M vollständig |
+| `.pytest_cache`-Einträge ohne eigene Bereichszeile | 0 | 4 | N/M strukturell erfasst; in dieser historischen Matrix nachgetragen |
 
 - O deckt `.opencode/agent/glm2api.md` und `.opencode/command/quota.md` vollständig ab.
 - P deckt `config/passphrase`, `config/secrets.enc` und `config/secrets.manifest` redigiert strukturell ab.
@@ -5292,13 +5344,13 @@ Alle 35 nicht-geschützten Dateien wurden vollständig aus dem ZIP gelesen, byte
 
 ## Abschlussstatus
 
-**BESTANDEN mit offenen fachlichen Befunden und offener Build-/Laufzeitverifikation.** O, P und Q sind vorhanden; A–Q waren zu diesem Snapshot strukturell in `Revision.md` eingebettet. Ältere Snapshot-Mengen im Startblock wurden nicht automatisch umgeschrieben.
+**Historischer Snapshot: Dokumentations-/Coverage-Check bestanden; Produktstatus nicht abnahmefähig; Build-, Test- und Laufzeitverifikation offen.** O, P und Q waren zu diesem Snapshot vorhanden; diese Aussage ist keine aktuelle Produktfreigabe. Ältere Snapshot-Mengen im Startblock wurden nicht automatisch umgeschrieben.
 <!-- END PART S -->
 
-## Anhang T — Aktueller AuditMesh-Benchmark-Vertrag
+## Anhang T — AuditMesh-Benchmark-Vertrag (historischer Snapshot)
 
 <!-- BEGIN PART T -->
-# Revision T — AuditMesh-Benchmark-Vertrag
+## Revision T — AuditMesh-Benchmark-Vertrag (Snapshot)
 
 **Analysedatum:** 24.09.2026
 **Arbeitsgrenze:** ausschließlich `/workspaces/MAIN`
@@ -5310,7 +5362,7 @@ Alle 35 nicht-geschützten Dateien wurden vollständig aus dem ZIP gelesen, byte
 
 Der aktuelle Benchmark ist als fachlicher AuditMesh-Spezifikationsvertrag gut strukturiert: Struktur, Fixtures, Baseline-Metriken, eine Eingabemutation und die wichtigsten Reportmarker sind konkret beschrieben. Der neue absolute Pfadvertrag ist jedoch nicht vollständig geschlossen:
 
-1. `/workspaces/benchmark/auditmesh-current` ist als kanonischer Root an 26 Stellen fest eingetragen.
+1. `/workspaces/benchmark/auditmesh-current` ist als kanonischer Root an 28 Literalvorkommen auf 25 Zeilen fest eingetragen.
 2. Schritt 2 erlaubt weiterhin einen beliebigen frischen Laufpfad und verlangt nur eine Ersetzung im Agentenauftrag.
 3. Die Post-Run-Befehle stehen vor dem Agentenauftrag und verwenden den festen `auditmesh-current`-Pfad. Bei wörtlicher Befolgung können Agentenlauf und Post-Run-Prüfung unterschiedliche Verzeichnisse prüfen.
 4. Der Verifier akzeptiert einen beliebigen aufgelösten `root`, prüft keine erlaubte Parent-Basis, keine Canonical-Pfad-Regel und keine Symlink-/Race-Grenze.
@@ -5341,7 +5393,7 @@ Der aktuelle Benchmark ist als fachlicher AuditMesh-Spezifikationsvertrag gut st
 | `benchmark.md:180-329` | Fixture- und Metrikverträge sind relativ zum Projektroot formuliert. |
 | `benchmark.md:341-379` | Abschluss, Funktion, Toolabdeckung und Session-Export beziehen sich auf denselben Lauf, definieren den Root aber nicht erneut. |
 
-Im aktuellen `benchmark.md` gibt es kein `<BENCHMARK_ROOT>` mehr. Der kanonische Root kommt in 26 Zeilen vor; der Verifier selbst besitzt keine Root-Konstante und verwendet sein CLI-Argument.
+Im aktuellen `benchmark.md` gibt es kein `<BENCHMARK_ROOT>` mehr. Der kanonische Root kommt in 28 Literalvorkommen auf 25 Zeilen vor; der Verifier selbst besitzt keine Root-Konstante und verwendet sein CLI-Argument.
 
 ## Widersprüche und Vertragslücken
 
@@ -5435,26 +5487,12 @@ Zusätzliche statische Querverweise: aktueller `.opencode/agent/glm2api.md`, `ve
 - Vollständiger Recheck: `/workspaces/MAIN/.runtime/revision-parts/T.md`.
 <!-- END PART T -->
 
-## Anhang R — Historischer Gap-Check (superseded durch S)
-
-<!-- BEGIN PART R -->
-# Revision R — read-only Abdeckungscheck (historischer Zwischenstand)
-
-Der Report wurde vor dem Schreiben von Q und vor der Integration von O/P/Q erstellt. Er ist deshalb **kein aktueller Endstatus**.
-
-- Zu diesem Zeitpunkt wurden 178 tracked, 5.514 ignorierte und 14 Symlinks erkannt.
-- Als offene Coverage-Lücken wurden der damalige fehlende Q-Report, die noch nicht integrierten O/P-Berichte und die zwischenzeitlich geänderte `benchmark.md` genannt.
-- Die Debug-Logs wurden als momentaner Snapshot mit möglicher Byte-/Größenänderung markiert.
-- `R.md` behauptete außerdem, `Revision.md` ende vor O/P/Q; dieser Zwischenstand wurde durch die nachfolgenden Integrationen und S korrigiert.
-- Q, O und P liegen nun vor; der aktuelle Benchmark ist in T vollständig nachgeprüft; S ist der maßgebliche Abschlusscheck.
-
-**Keine Anwendungsdatei wurde durch R verändert.** Der vollständige historische Zwischenreport bleibt unter `/workspaces/MAIN/.runtime/revision-parts/R.md`.
-<!-- END PART R -->
-
 ## Anhang U — Delta-Audit der extern übernommenen glm2api-Änderung
 
 <!-- BEGIN PART U -->
-# Partition U – Statischer Delta-Audit der extern geänderten glm2api-Dateien
+## Partition U – Statischer Delta-Audit der extern geänderten glm2api-Dateien
+
+**Historischer Delta-Snapshot:** Dieses Ergebnis bleibt auf die beiden genannten Dateien und den Commit-Parent `8e483ea` begrenzt; es ist keine aktuelle Gesamtfreigabe des Projekts.
 
 **Stand:** 24.09.2026
 **Arbeitsverzeichnis:** `/workspaces/MAIN`
@@ -5468,7 +5506,7 @@ Analysiert wurden ausschließlich:
 - `llm-proxies/glm2api/src/glm2api/services/glm_client.py` – 1.346 Zeilen vollständig gelesen.
 - `llm-proxies/glm2api/src/glm2api/services/translator.py` – 1.567 Zeilen vollständig gelesen.
 
-Vorgehen: `git diff` für genau diese Pfade, vollständige zeilenweise Lektüre, Abgleich mit F/I, statisches `ast.parse` ohne Import/Ausführung, `git diff --check` und anschließende read-only Verifikation des externen Commit-Deltas. Keine Tests, Server, Clients, Netzwerkaktionen oder Installationen. Keine Secret-/Token-/Payloadwerte ausgegeben. Revision.md und Quelldateien wurden nicht verändert.
+Vorgehen: `git diff` für genau diese Pfade, vollständige zeilenweise Lektüre, Abgleich mit F/I, statisches `ast.parse` ohne Import/Ausführung, `git diff --check` und anschließende read-only Verifikation des externen Commit-Deltas. Keine Tests, Server, Clients, Netzwerkaktionen oder Installationen. Keine Secret-/Token-/Payloadwerte ausgegeben. `Revision.md` und die Quelldateien wurden durch diesen U-Auditprozess nicht verändert; nachfolgende externe Autosave-Änderungen sind davon getrennt zu betrachten.
 
 ## Beobachtetes Delta
 
@@ -5525,14 +5563,46 @@ Das externe Delta ist syntaktisch sauber, beseitigt keinen priorisierten I-Befun
 Vollständiger Recheck: `/workspaces/MAIN/.runtime/revision-parts/U.md`.
 <!-- END PART U -->
 
-## Endkontrolle nach U
+## Historische Endkontrolle nach U
 
-- **Aktueller Git-Stand:** `ac780204b00e97d89f95ea2f5a6ea08e5dcfe64a`; der externe Commit enthält die in U analysierte glm2api-Änderung.
-- **Aktueller Bestand:** 178 tracked, 5.518 ignorierte, 0 untracked-nicht-ignorierte Einträge; 14 Symlinks außerhalb `.git`.
-- **Arbeitsbaum:** Nur `Revision.md` ist als `M` sichtbar; die beiden in U genannten Quelldateien wurden inzwischen extern committed und sind sauber.
-- **Revision.md:** A–T sowie U strukturell vollständig eingebettet; ein einzelner Append-Marker bleibt als technischer Endmarker erhalten.
-- **Integrität:** `git diff --check` ist nach bereinigtem Markdown ohne Whitespace-Fehler; Secret-Mustersuche nach JWT/PEM/GitHub-/Google-Key-Formen ergibt 0 Treffer.
-- **Offen:** Keine Test-, Build-, Runtime-, Remote- oder Portverifikation; die in den Anhängen dokumentierten Befunde bleiben unverändert, sofern nicht ausdrücklich als behoben/superseded markiert.
-<!-- END FINAL CHECK -->
+Dieser Abschnitt ist ein historischer Snapshot vom Abschluss des U-Berichts und beansprucht keinen aktuellen Git- oder Inventarstand.
 
-<!-- APPEND-MARKER -->
+- **HEAD bei Abschlussprüfung:** `ac780204b00e97d89f95ea2f5a6ea08e5dcfe64a`.
+- **Inventar bei diesem Snapshot:** 178 tracked, 5.518 ignorierte, 0 untracked-nicht-ignorierte Einträge; 14 Symlinks außerhalb `.git`.
+- **Arbeitsbaum bei diesem Snapshot:** `Revision.md` war als Änderung sichtbar; die beiden in U genannten Quelldateien waren bereits extern committed.
+- **Integrität zum damaligen Zeitpunkt:** `git diff --check` und die damalige Secret-Mustersuche waren ohne Treffer; diese Aussage gilt nicht automatisch für spätere Bearbeitungen.
+- **Offen:** Keine Test-, Build-, Runtime-, Remote- oder Portverifikation; die Befunde der historischen Reports bleiben bestehen, sofern sie nicht ausdrücklich als behoben oder superseded markiert sind.
+
+## Anhang V — Redaktionelle Endkontrolle
+
+<!-- BEGIN PART V -->
+## Revision V — redaktionelle Endkontrolle
+
+**Prüfzeitpunkt:** 24.09.2026, 17:52:53 +0200
+**Basis-HEAD:** `fd8f1ca1ffa8d4af80f14de0e886913819fce1ff`
+**Arbeitsgrenze:** ausschließlich `/workspaces/MAIN`
+**Änderungsumfang:** Dokumentstruktur, Statusqualifizierung und historische Snapshot-Kennzeichnung in `Revision.md`; keine Anwendungs-, Secret- oder Infrastrukturänderung durch diese redaktionelle Kontrolle.
+
+## Kurzurteil
+
+Die redaktionelle Markdown- und Markerstruktur ist konsistent: Das Dokument besitzt eine explizite Master-H1, eine eindeutige Vorrangmatrix, 22 historische/current Parts in der Reihenfolge A–Q, R, S, T, U, V und keine ungeschützten Endmarker. Die A–U-Berichte bleiben als historische Evidenz mit ihren ursprünglichen lokalen Unterebenen erhalten; die Reporttitel wurden zur Vermeidung konkurrierender H1-Ebenen als H2 normalisiert. Ihre früheren Commit-, Inventar- und Sourcezahlen werden nicht als aktuelle Produktwerte missverstanden.
+
+**Format- und Redaktionscheck:** `Revision.md` hat 1 Master-H1, 22 vollständige Part-Marker-Paare, 6 Codefence-Zeilen (3 Blöcke) und keine ungeschützten Endmarker. `git diff --check` ist sauber; JWT-/PEM-/GitHub-/Google-Key-Muster ergeben 0 Treffer.
+
+Die technische Produktlage bleibt unverändert offen: Build, Tests, Serverstart, Runtime, Port- und Remote-Verifikation wurden nicht ausgeführt. Die im Audit dokumentierten Bundle-, Config-, Security-, Benchmark- und glm2api-Befunde sind nicht als behoben zu verstehen.
+
+## Verifizierte aktuelle Querverweise dieses Reviews
+
+- `benchmark.md` enthält den Root `/workspaces/benchmark/auditmesh-current` in 28 Literalvorkommen auf 25 Zeilen; der qualitative Root-/Post-Run-Mismatch bleibt offen.
+- `glm_client.py` umfasst 1.346 Zeilen; `translator.py` umfasst 1.567 Zeilen. Q/I-Metadaten bleiben als Prä-U-Snapshots markiert.
+- Die vier OAuth-Skripte, die Reverse-Engineering-Ausgabepfade sowie die Verweise auf `glm-api-audit.md` und `io_utils.py` bleiben als offene Pfad-/Dokumentationsbefunde bestehen.
+- Die in `infrastructure.md` genannten Layout-/Provider-/Rebuild-Abweichungen wurden nicht als Teil dieser Dokumentbereinigung geändert.
+
+## Statusgrenzen
+
+- Die technische Revision ist **nicht abnahmefähig**; die offenen Befunde bleiben im jeweiligen historischen Report nachvollziehbar.
+- Ignorierte `.runtime/revision-parts/REVIEW-*.md` sind Arbeitsbelege und keine kanonischen Repository-Dateien.
+- Commit- und Inventarzahlen sind Momentaufnahmen; für einen neuen Vergleich muss ein neuer Prüfzeitpunkt mit eigenem HEAD und Scope festgehalten werden.
+- Secretwerte wurden nicht wiedergegeben. Checksummen und Commit-IDs in den historischen Reports sind Integritäts- bzw. Provenienzangaben, keine Credential-Werte.
+- Diese Endkontrolle behauptet keine technische Behebung und keine Produktfreigabe.
+<!-- END PART V -->

@@ -638,3 +638,16 @@ def test_parse_recovers_naked_write_object_without_name():
     assert "audit_security.txt" in args["filePath"]
     assert "AUTH_FAIL" in args["content"]
 
+
+def test_parse_recovers_text_function_call():
+    """Live-Fall aus ses_f2bcdbfb8ffeSSbsFc2TSP2R1f:
+    Modell emittiert read('/workspaces/benchmark.md') als Text-Funktionsaufruf.
+    Muss als strukturierter read-Tool-Call geparst werden!"""
+    text = 'read("/workspaces/benchmark.md")'
+    clean, tool_calls = parse_tool_calls_from_text(text, allowed_tool_names={"read"})
+    assert clean == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "read"
+    args = json.loads(tool_calls[0]["function"]["arguments"])
+    assert args["filePath"] == "/workspaces/benchmark.md"
+

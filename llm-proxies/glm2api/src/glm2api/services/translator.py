@@ -244,6 +244,8 @@ def sanitize_tool_call_payload(
             fp = "/" + fp
         elif fp.startswith("benchmark/"):
             fp = "/workspaces/" + fp
+        elif fp == "benchmark.md":
+            fp = "/workspaces/benchmark.md"
         cleaned["filePath"] = fp
 
     # Repair: stringified JSON arrays or objects inside parameters (e.g. questions: "[{...}]")
@@ -350,7 +352,7 @@ def map_native_open_tool_call(
         if allowed_tool_names is None or "webfetch" in allowed_tool_names:
             return "webfetch", {"url": target}
 
-    if not target.startswith("turn") and ("/" in target or target.startswith(".")):
+    if not target.startswith("turn") and ("/" in target or target.startswith(".") or "." in target):
         if allowed_tool_names is None or "read" in allowed_tool_names:
             return "read", {"filePath": target}
 

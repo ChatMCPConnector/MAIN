@@ -1227,6 +1227,40 @@ def _split_stream_text(
     return visible, remainder, tool_calls
 
 
+_TEXT_FUNC_CALL_RE = re.compile(
+    r'^\s*(read|write|edit|bash|webfetch|todowrite|glob|grep)\s*\(\s*(?:filePath\s*=\s*)?["\']([^"\']+)["\']\s*\)\s*$',
+    re.MULTILINE,
+)
+
+
+def _find_text_function_call(
+    text: str,
+    allowed_tool_names: set[str] | None = None,
+) -> tuple[str, list[dict[str, object]]] | None:
+    match = _TEXT_FUNC_CALL_RE.search(text)
+    if not match:
+        return None
+    tool_name, arg = match.groups()
+    if not _is_allowed_tool_name(tool_name, allowed_tool_names):
+        return None
+    if tool_name == "read":
+        args = {"filePath": arg}
+    elif tool_name == "bash":
+        args = {"command": arg}
+    elif tool_name == "webfetch":
+        args = {"url": arg}
+    else:
+        return None
+    call = {
+        "index": 0,
+        "id": f"call_{uuid.uuid4().hex[:24]}",
+        "type": "function",
+        "function": {"name": tool_name, "arguments": json.dumps(args)},
+    }
+    visible = (text[:match.start()] + text[match.end():]).strip()
+    return visible, [call]
+
+
 def parse_tool_calls_from_text(text: str, allowed_tool_names: set[str] | None = None) -> tuple[str, list[dict[str, object]]]:
     if not text:
         return "", []
@@ -1242,6 +1276,12 @@ def parse_tool_calls_from_text(text: str, allowed_tool_names: set[str] | None = 
             return bare_visible, bare_calls
         if bare_visible != text:
             return bare_visible, []
+    # Function-call syntax in text: read("...") oder bash("...")
+    func_call = _find_text_function_call(text, allowed_tool_names=allowed_tool_names)
+    if func_call is not None:
+        f_vis, f_calls = func_call
+        if f_calls:
+            return f_vis, f_calls
     spans, tool_calls = _extract_tool_blocks(text, allowed_tool_names, allow_trailing_close=True)
     return _remove_spans(text, spans), tool_calls
 
