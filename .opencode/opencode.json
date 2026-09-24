@@ -21,18 +21,42 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "NVIDIA NIM",
       "whitelist": [
-        "nvidia/nemotron-3-ultra-550b-a55b"
+        "z-ai/glm-5.3"
       ],
       "options": {
         "baseURL": "https://integrate.api.nvidia.com/v1",
         "apiKey": "{file:~/.config/landscape/nvidia-nim.key}"
       },
       "models": {
-        "nvidia/nemotron-3-ultra-550b-a55b": {
-          "name": "Nemotron 3 Ultra 550B",
+        "z-ai/glm-5.3": {
+          "name": "GLM-5.3",
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "options": {
+            "reasoningEffort": "max"
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "max": {
+              "reasoningEffort": "max"
+            }
+          },
           "limit": {
-            "context": 1000000,
-            "output": 8192
+            "context": 1048576,
+            "output": 131072
           }
         }
       }

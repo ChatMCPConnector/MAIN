@@ -72,7 +72,7 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 
 | Provider | Modelle | Auth |
 |---|---|---|
-| nvidia | nemotron-3-ultra | nvidia-nim.key |
+| nvidia | GLM 5.3 (1M/128K, Text, Reasoning) | nvidia-nim.key |
 | xinjianya | gpt-5.6-sol | xinjianya.key |
 | **glm2api** | glm-5.3, glm-5.3-think | lokal, Port 8001, kein Key |
 | **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
@@ -261,6 +261,13 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-24: **NVIDIA NIM: GLM 5.3 ergänzt, Provider bereinigt.**
+  `z-ai/glm-5.3` mit 1.048.576 Tokens Gesamtkontext, 131.072 Tokens Output,
+  Text-Ein-/Ausgabe, Tool-Calling und den Reasoning-Varianten `low`, `high` und
+  `max` (Default) konfiguriert; Modell-ID und Inferenz per Live-Smoke-Test
+  verifiziert. `deepseek-ai/deepseek-v4.1-flash` wurde nach fehlender Antwort
+  des NVIDIA-Endpunkts nicht übernommen, `nvidia/nemotron-3-ultra-550b-a55b`
+  entfernt.
 - 2026-09-23: **Freebuff2API-Provider entfernt.**
   Freebuff2API samt `z-ai/glm-5.3-flash` und `deepseek/deepseek-v4.1-flash` aus
   `.opencode/opencode.json` entfernt; JSON- und OpenCode-Config-Validierung erfolgreich.
