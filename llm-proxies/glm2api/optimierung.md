@@ -143,6 +143,15 @@ Verifikation: Paritätsmatrix ueber 4 Payload-Formen und 6 Chunk-Groessen
 sowie die drei echten Leak-Texte der Benchmark-Session bei 1 bis 512 Byte
 — ueberall 0 Zeichen Fragment-Leak. Details in `glm2api-revision.md` Teil F.
 
+### THEMA 7 — P1-Gruppe aus dem Voll-Audit (DONE 2026-09-24)
+
+Die zweite Welle des Audits (P1) ist umgesetzt: 18 Befunde aus Parser,
+Translator, Client und Server. Schwerpunkte: quelluebergreifende
+Call-Deduplizierung, generische `<tool_call>`- und Fence-Erkennung,
+echte `None`-Semantik fuer leere Tool-Listen, Follow-up-Kontext in
+Retries, sowie `finish_reason: error` statt Schein-Erfolg bei blockiertem
+Protokoll. 188 Tests gruen. Vollstaendige Liste: `glm2api-revision.md` Teil F-5.
+
 ---
 
 ## THEMA 1 — Kontext-Management für Lang-Agent-Sessions (ERLEDIGT 2026-09-11, Beobachtung läuft)

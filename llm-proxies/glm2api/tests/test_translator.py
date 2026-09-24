@@ -116,7 +116,9 @@ def test_streaming_empty_response_after_blocked_tool_has_visible_fallback():
 
     assert "unavailable tool" in output
     assert "open_url" in output
-    assert '"finish_reason":"stop"' in output
+    # T-13: ein turn, der nur an einem blockierten protokoll endet, darf
+    # nicht als regulaerer 'stop' ausgewiesen werden.
+    assert '"finish_reason":"error"' in output
 
 
 def test_non_streaming_empty_response_after_blocked_tool_has_visible_fallback():
@@ -508,7 +510,8 @@ def test_accumulator_reports_unavailable_dsml_tool_instead_of_empty_response():
     assert chunks == []
     assert "undeclared tool" in final_chunks[0]
     assert "`search`" in final_chunks[0]
-    assert '"finish_reason":"stop"' in final_chunks[1]
+    # T-13: blockiertes protokoll ohne ergebnis -> finish_reason "error"
+    assert '"finish_reason":"error"' in final_chunks[1]
 
 
 def test_convert_messages_respects_tool_choice_none_and_specific():

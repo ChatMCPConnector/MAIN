@@ -271,7 +271,13 @@ class GLMWebClient:
                     blocked_names.append(tool_name)
             if blocked_names:
                 self.logger.info("Filtered unsupported tools: %s", ", ".join(blocked_names))
-        return filtered_tools, {tool["function"]["name"] for tool in filtered_tools} if filtered_tools else None # type: ignore[index]
+        # C-09: eine leere tool-liste ist NICHT 'keine allowlist'. Vorher
+        # lieferte `else None` zurueck, was downstream als Wildcard
+        # gelesen wurde — native calls wurden dann ungeprueft gemappt.
+        # Leer heisst jetzt: keine tools erlaubt.
+        if not filtered_tools:
+            return filtered_tools, set()
+        return filtered_tools, {tool["function"]["name"] for tool in filtered_tools} # type: ignore[index]
 
     def chat_completion(self, payload: dict[str, object]) -> tuple[dict[str, object], str | None]:
         payload = dict(payload)  # lokal kopierbar fuer retry-mutationen (10040-budget)
@@ -304,6 +310,10 @@ class GLMWebClient:
             )
 
         accumulator = new_accumulator()
+        # C-12: retries der non-stream-runde verwenden das payload der
+        # aktuellen runde; nach einer follow-up-runde ist das deren payload
+        # mit der negativen tool-rueckmeldung.
+        active_payload = payload
 
         try:
             attempt = 0
@@ -365,7 +375,7 @@ class GLMWebClient:
                         )
                         time.sleep(self.config.glm_stream_error_retry_interval)
                         accumulator = new_accumulator()
-                        response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
                     has_valid_calls = False
                     choices_obj = result.get("choices")
@@ -383,7 +393,7 @@ class GLMWebClient:
                         # V-02: nur wenn der Turn KEINE gueltigen Calls
                         # enthaelt — sonst wuerde das Ergebnis verwerfen.
                         blocked_follow_ups += 1
-                        follow_up = _build_blocked_tool_follow_up_payload(payload, accumulator, allowed_tool_names)
+                        follow_up = _build_blocked_tool_follow_up_payload(active_payload, accumulator, allowed_tool_names)
                         if follow_up is None:
                             return result, accumulator.conversation_id
                         self.logger.warning(
@@ -395,6 +405,8 @@ class GLMWebClient:
                         response.close() # type: ignore
                         accumulator = new_accumulator()
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        # C-12: follow-up-runde wird zur aktiven runde
+                        active_payload = follow_up
                         continue
                     if accumulator.blocked_tool_attempt_names and has_valid_calls:
                         # V-02: gemischter Turn — gueltige Calls werden
@@ -423,7 +435,7 @@ class GLMWebClient:
                     history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 accumulator = new_accumulator()
-                response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
         finally:
             response.close() # type: ignore
             if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
@@ -495,6 +507,12 @@ class GLMWebClient:
 
         def generate():
             nonlocal response, assistant_id, accumulator, empty_retries, history_budget
+            # C-12: retries muessen das payload der AKTUELLEN runde
+            # verwenden. Vorher griffen leer- und transient-retry auf das
+            # urspruengliche payload zurueck und warfen damit die negative
+            # tool-rueckmeldung der follow-up-runde weg — der retry loeste
+            # denselben blockierten call erneut aus.
+            active_payload = payload
             attempt = 0
             blocked_follow_ups = 0
             while True:
@@ -593,7 +611,7 @@ class GLMWebClient:
                         # instead of forwarding the blocked-call notice
                         # as final assistant text.
                         blocked_follow_ups += 1
-                        follow_up = _build_blocked_tool_follow_up_payload(payload, accumulator, allowed_tool_names)
+                        follow_up = _build_blocked_tool_follow_up_payload(active_payload, accumulator, allowed_tool_names)
                         if follow_up is None:
                             self.logger.warning("blocked_tool_follow_up_payload returned None; blocked=%s", blocked)
                             for chunk in finalize_chunks:
@@ -611,6 +629,9 @@ class GLMWebClient:
                         if served_content:
                             accumulator.emitted_role = True
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        # C-12: ab jetzt ist die follow-up-runde die aktive —
+                        # ein retry darunter muss deren kontext behalten.
+                        active_payload = follow_up
                         continue
                     # Leer-Turn-Autonomie-Fix (THEMA 1, optimierung.md): komplett
                     # leere Upstream-runden (kein text, keine reasoning, keine
@@ -633,7 +654,7 @@ class GLMWebClient:
                         )
                         time.sleep(self.config.glm_stream_error_retry_interval)
                         accumulator = new_accumulator()
-                        response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
                     for chunk in finalize_chunks:
                         yield chunk.encode("utf-8")
@@ -656,7 +677,7 @@ class GLMWebClient:
                     history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 accumulator = new_accumulator()
-                response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
 
         def wrapped():
             try:

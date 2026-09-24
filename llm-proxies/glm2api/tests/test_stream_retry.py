@@ -338,9 +338,11 @@ def test_blocked_tool_triggers_follow_up_round_stream_with_served_content():
 
     assert calls["count"] == 2
     text = "".join(chunks)
-    assert "Ich fange an:" in text
     assert "Alles erledigt." in text
     assert "open_url" not in text
+    # T-07: der vorlauf-text wird nicht unumkehrbar gestreamt, sondern in
+    # die follow-up-runde uebernommen. Dort muss er fuer das modell
+    # sichtbar sein — das ist der entscheidende Teil.
     follow_up_assistant = calls["payloads"][1]["messages"][-2]
     assert "Ich fange an:" in str(follow_up_assistant.get("content", ""))
 

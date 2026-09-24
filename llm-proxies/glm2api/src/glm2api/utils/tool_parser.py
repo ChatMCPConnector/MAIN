@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 import xml.etree.ElementTree as ET
@@ -27,7 +28,9 @@ TOOL_RESULT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 START_TAG_PATTERN = re.compile(
-    r"<(?P<tag>\|DSML\|tool_calls|DStool_calls|tool_calls|ml_tool_calls|ml_tool_call|DSMLtool_calls|dsmltool_calls|dstool_calls|dstoolcall|DSML_tool_calls|DSMLtoolcalls|invoke|ml_invoke|parameter|ml_parameter)(?=\b|\|)[^>]*>",
+    # P-07: 'tool_call' (singular) fehlte — das generische <tool_call> wurde
+    # weder als start erkannt noch extrahiert und blieb als text stehen.
+    r"<(?P<tag>\|DSML\|tool_calls|DStool_calls|tool_calls|tool_call|ml_tool_calls|ml_tool_call|DSMLtool_calls|dsmltool_calls|dstool_calls|dstoolcall|DSML_tool_calls|DSMLtoolcalls|invoke|ml_invoke|parameter|ml_parameter)(?=\b|\|)[^>]*>",
     re.IGNORECASE,
 )
 DSML_TAG_PATTERN = re.compile(r"</?\|DSML\|(?P<name>tool_calls|invoke|parameter|tool_result)\b", re.IGNORECASE)
@@ -90,6 +93,12 @@ TAG_NAME_HINTS = [
     "</invoke",
     "<parameter",
     "</parameter",
+    # P-07: generisches <tool_call> (auch mit zero-width-space, vom Modell
+    # beobachtet) bisher nicht erkannt — der aufruf landete als text.
+    "<tool_call",
+    "</tool_call",
+    "<tool_call",
+    "</tool_call",
 ]
 
 
@@ -310,6 +319,12 @@ def _parse_tool_call_element(
 
     tool_name = _extract_tool_name(element)
     if not tool_name:
+        # P-07: der generic <tool_call> trägt den aufruf als JSON-Payload
+        # im elementtext statt als attribute — ohne diesen zweitweg bleibt
+        # der komplette block als sichtbarer text stehen.
+        payload_call = _call_from_json_payload(element)
+        if payload_call is not None:
+            return payload_call
         return None
     if not _is_allowed_tool_name(tool_name, allowed_tool_names):
         return None
@@ -319,6 +334,44 @@ def _parse_tool_call_element(
         return None
 
     return _build_tool_call(tool_name, arguments, index)
+
+
+def _call_from_json_payload(element: ET.Element) -> dict[str, object] | None:
+    """Tool-Call aus einem JSON-Payload im elementtext (P-07).
+
+    Deckt die formen ab, die das Modell bei einem generischen
+    <tool_call> liefert: reines JSON, JSON in CDATA und JSON mit
+    vorangestelltem praefix-text."""
+    raw = (element.text or "").strip()
+    if not raw:
+        return None
+    candidates = [raw]
+    if raw.startswith("<![CDATA[") and raw.endswith("]]>"):
+        candidates.append(raw[9:-3].strip())
+    brace = raw.find("{")
+    if brace != -1:
+        candidates.append(raw[brace:])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        name = str(parsed.get("name", "")).strip()
+        if not name:
+            continue
+        arguments = parsed.get("arguments")
+        if arguments is None:
+            arguments = parsed.get("parameters", {})
+        args_str = _extract_call_arguments({"name": name, "arguments": arguments})
+        return {
+            "index": 0,
+            "id": f"call_{uuid.uuid4().hex[:24]}",
+            "type": "function",
+            "function": {"name": name, "arguments": args_str or "{}"},
+        }
+    return None
 
 
 def _extract_malformed_tool_call_from_root(
@@ -766,29 +819,36 @@ _TRANSCRIPT_ECHO_ROW_TAIL_RE = re.compile(
 )
 # Maximale praefixe, die am chunkende noch gehalten werden muessen, damit
 # ein ueber chunk-grenzen verteilter echo-beginn nicht leakt.
-_TRANSCRIPT_ECHO_PARTIAL_PROBES = (
-    'User: [{"call_id": "',
-    'Assistant: [{"call_id": "',
-    'User: [{"name": "',
-    'Assistant: [{"name": "',
-    'User: [{"call_id":',
-    'Assistant: [{"call_id":',
-    'User: [{"name":',
-    'Assistant: [{"name":',
-    'User: [{"',
-    'Assistant: [{"',
-    'User: [{',
-    'Assistant: [{',
-    'User: [',
-    'Assistant: [',
-    'User:',
-    'Assistant:',
-    # Chunk-Grenzen schneiden die rolle mitten im wort: das praefix muss
-    # auch dann noch gehalten werden, wenn bisher nur ein anfang davon
-    # angekommen ist (echte SSE-Deltas haben median 27 byte).
-    'User',
-    'Assistant',
-)
+_ECHO_ROLE_NAMES = ("user", "assistant")
+# moegliche praefixlaengen des echo-beginns: 'U', 'Us', ..., 'User', 'User:',
+# 'User: ', 'User: [' — jeweils nur, solange es sich um den anfang einer
+# zeile handelt.
+_ECHO_PREFIX_FORMS = {
+    role: [role[:n] for n in range(1, len(role) + 1)] + [role + s for s in (":", ": ", ": [", ": [{")]
+    for role in _ECHO_ROLE_NAMES
+}
+
+
+def _echo_role_prefix_len(text: str) -> int:
+    """Laenge des am textende beginnenden, noch unvollstaendigen echo-
+    rollen-praefixes, sonst 0 (P-06).
+
+    Erkennt 'U', 'Us', 'User', 'user:', 'User: [', 'ASSISTANT: [{"' usw. —
+    unabhaengig von gross/klein-schreibung und davon, an welcher stelle eine
+    chunk-grenze den praefix zerschneidet. Erkannt wird nur an einer
+    zeilengrenze; mitten im satz bleibt es normaler text."""
+    lowered = text.lower()
+    best = 0
+    for forms in _ECHO_PREFIX_FORMS.values():
+        for form in forms:
+            if not lowered.endswith(form):
+                continue
+            pos = len(text) - len(form)
+            prefix = text[:pos]
+            line_start = prefix.rfind("\n") + 1
+            if not prefix[line_start:].strip() and len(form) > best:
+                best = len(form)
+    return best
 # Laufender, noch unvollstaendiger echo-präfix: die rolle steht, das json
 # ist angebrochen ('User: [{"', 'User: [{"call_id": ...') und noch nicht
 # balanciert — dann muss der rest des fragments zurueckgehalten werden.
@@ -1012,6 +1072,19 @@ def _scan_bare_objects_span(text: str, start: int) -> int:
     return end
 
 
+def _has_usable_arguments(tool_name: str, args_str: str | None) -> bool:
+    """Trägt ein call die für sein tool erforderlichen argumente (P-03)?"""
+    if not args_str or args_str in {"{}", "null"}:
+        return tool_name in {"todowrite", "task", "done", "stop", "list"}
+    try:
+        parsed = json.loads(args_str)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return True
+    if not isinstance(parsed, dict) or parsed:
+        return True
+    return tool_name in {"todowrite", "task", "done", "stop", "list"}
+
+
 def _find_bare_tool_call_array(
     text: str,
     final: bool,
@@ -1081,8 +1154,16 @@ def _find_bare_tool_call_array(
     if rest_stripped.startswith("[]"):
         consumed += 2
         rest_stripped = rest_stripped[2:]
-    if rest_stripped.lstrip().startswith("```"):
-        consumed += len(rest) - len(rest)
+    if rest_stripped.startswith(("```", "~~~")):
+        # P-13: `len(rest) - len(rest)` war immer 0 — der abschliessende
+        # fence blieb im sichtbaren rest stehen (P-13). Jetzt wird die
+        # zeile des abschliessenden fences korrekt uebersprungen.
+        newline = rest_stripped.find("\n")
+        if newline == -1:
+            consumed += len(rest_stripped)
+        else:
+            consumed += newline + 1
+        rest_stripped = rest_stripped[newline + 1 :] if newline != -1 else ""
     rest = rest[consumed:]
     try:
         parsed = json.loads(candidate)
@@ -1131,8 +1212,19 @@ def _find_bare_tool_call_array(
         if not name:
             return None
         names.append(name)
-        if detect_all or _is_allowed_tool_name(name, allowed_tool_names):
+        # P-02: auch im Recovery-Modus bleibt die native Denylist bindend —
+        # vorher liess das `or allowed_tool_names is None` jedes blockierte
+        # native tool wieder durch.
+        if name not in BLOCKED_NATIVE_TOOL_NAMES and (
+            detect_all or _is_allowed_tool_name(name, allowed_tool_names)
+        ):
             args_str = _extract_call_arguments(item)
+            # P-03: ein call ohne verwertbare argumente (z.B. arguments:{} bei
+            # einem tool mit pflichtfeldern) ist kein ausfuehrbarer aufruf.
+            # Er wird nicht geliefert — das protokoll wird trotzdem entfernt,
+            # damit kein roh-json in der antwort steht.
+            if not _has_usable_arguments(name, args_str):
+                continue
             tool_calls.append({
                 "index": len(tool_calls),
                 "id": f"call_{uuid.uuid4().hex[:24]}",
@@ -1140,7 +1232,9 @@ def _find_bare_tool_call_array(
                 "function": {"name": name, "arguments": args_str or "{}"},
             })
     if not tool_calls:
-        # nur gefilterte calls: array strippen, kein leak des rohen protokolls
+        # nur gefilterte oder nicht ausfuehrbare calls: array strippen, kein
+        # leak des rohen protokolls. Auch eine durch die argument-pruefung
+        # (P-03) geleerte liste muss das protokoll entfernen.
         visible = text[:start].strip()
         if not final or find_tool_calls_protocol(rest) != -1 or _BARE_ARRAY_START_RE.search(rest):
             return visible, rest, []
@@ -1333,7 +1427,7 @@ def _find_json_tool_call(
             continue
         name = str(call.get("name", "")).strip()
         args_str = _extract_call_arguments(call)
-        if name and _is_allowed_tool_name(name, allowed_tool_names):
+        if name and _is_allowed_tool_name(name, allowed_tool_names) and _has_usable_arguments(name, args_str):
             tool_calls.append({
                 "index": len(tool_calls),
                 "id": f"call_{uuid.uuid4().hex[:24]}",
@@ -1386,9 +1480,9 @@ def _split_stream_text(
         open_call = _find_unterminated_call_start(text)
         if open_call != -1:
             return text[:open_call], text[open_call:], []
-        for probe in _TRANSCRIPT_ECHO_PARTIAL_PROBES:
-            if text.endswith(probe):
-                return text[: -len(probe)], probe, []
+        echo_prefix = _echo_role_prefix_len(text)
+        if echo_prefix:
+            return text[:-echo_prefix], text[-echo_prefix:], []
         echo_row = _TRANSCRIPT_ECHO_ROW_RE.search(text)
         if echo_row is not None:
             row_start = echo_row.start() + (1 if text[echo_row.start()] == "\n" else 0)
@@ -1409,15 +1503,14 @@ def _split_stream_text(
             final=True,
         )
     if not final:
-        # Exakte echo-praefixe am textende zurueckhalten — sonst leakt der
-        # zeilenanfang, wenn er ueber eine chunk-grenze verteilt ist. Geprueft
-        # wird das komplette pending, nicht nur ein chunk, weil consume() den
-        # rest bereits angehaengt hat.
-        for probe in _TRANSCRIPT_ECHO_PARTIAL_PROBES:
-            if text.endswith(probe):
-                return text[: -len(probe)], probe, []
-        # laufender echo-präfix: text endet auf 'User: [{"' o.ae. und ist
-        # noch unvollstaendig (kein balanciertes objekt) → zurueckhalten.
+        # P-06: die echo-rolle darf nicht emittiert werden, sobald sie
+        # angefangen wurde — unabhaengig von gross/klein-schreibung und
+        # davon, wo eine chunk-grenze den praefix zerschneidet. Ein ganzes
+        # wort wird nur an einer zeilengrenze gehalten; mitten im satz
+        # bleibt es normaler text.
+        echo_prefix = _echo_role_prefix_len(text)
+        if echo_prefix:
+            return text[:-echo_prefix], text[-echo_prefix:], []
         if _TRANSCRIPT_ECHO_OPEN_RE.search(text):
             echo_start, echo_end = _find_transcript_echo_span(text)
             if echo_start == -1:
@@ -1426,7 +1519,16 @@ def _split_stream_text(
     # 1) JSON-Protokoll prüfen (neues Format); ohne Treffer bleibt nur der
     # Partial-Suffix-Holdback von _find_json_tool_call relevant.
     if find_tool_calls_protocol(text) != -1:
-        return _find_json_tool_call(text, final, allowed_tool_names, detect_all=detect_all)
+        visible, remainder, tool_calls = _find_json_tool_call(
+            text, final, allowed_tool_names, detect_all=detect_all
+        )
+        if tool_calls:
+            return visible, remainder, tool_calls
+        # P-03: protokoll erkannt, aber jeder call wurde gefiltert oder
+        # war nicht ausfuehrbar. Der bereinigte text muss uebernommen
+        # werden, sonst bleibt das roh-protokoll als antwort stehen.
+        if visible != text:
+            return visible, remainder, []
     visible, remainder, tool_calls = _find_json_tool_call(text, final, allowed_tool_names, detect_all=detect_all)
     if tool_calls or (remainder and not final):
         return visible, remainder, tool_calls
@@ -1437,7 +1539,16 @@ def _split_stream_text(
         bare_visible, bare_remainder, bare_calls = bare
         if bare_calls or (bare_remainder and not final):
             return bare_visible, bare_remainder, bare_calls
+        # P-03: der bare-finder hat ein vollstaendig gefiltertes protokoll
+        # korrekt aus dem sichtbaren text entfernt und liefert leere
+        # calls. Im final-fall wurde dieses bereinigte ergebnis verworfen
+        # und der unbereinigte text erneut ausgegeben — das protokoll
+        # leakte. Wir uebernehmen die bereinigung auch ohne calls.
+        if not bare_calls and bare_visible != text:
+            return bare_visible, "", []
 
+    # nur konkrete positionen verwenden — die helfer geben None zurueck,
+    # wenn sie nichts finden
     hold_from_candidates = [
         index
         for index in (_find_unmatched_fence_start(text), _find_incomplete_block_start(text, allow_trailing_close=final))
@@ -1448,6 +1559,14 @@ def _split_stream_text(
         partial_start = _find_partial_tag_start(text)
         if partial_start is not None:
             hold_from_candidates.append(partial_start)
+        # P-04: angebrochene text-funktionsaufrufe (read("…", bash("…))
+        # zurueckhalten. Sonst wird jeder teil sofort emittiert und der
+        # streampfad erkennt den aufruf nie, waehrend der finalpfad ihn
+        # noch als call repararieren wuerde — die beiden pfade liefeu
+        # auseinander.
+        func_partial = _find_partial_text_function_start(text)
+        if func_partial is not None:
+            hold_from_candidates.append(func_partial)
 
     if final:
         safe_end = min(hold_from_candidates) if hold_from_candidates else len(text)
@@ -1459,6 +1578,17 @@ def _split_stream_text(
     processable = text[:safe_end]
     remainder = text[safe_end:]
     spans, tool_calls = _extract_tool_blocks(processable, allowed_tool_names, allow_trailing_close=final)
+    if not tool_calls:
+        # P-04: gleicher recovery-fallback wie im final-parser, damit
+        # stream- und finalpfad fuer dieselbe eingabe zum selben ergebnis
+        # kommen. Nur auf bereits geschlossenen text angewandt (kein
+        # fragment), sonst wuerde ein halber aufruf als call gelten.
+        func_call = _find_text_function_call(
+            processable, allowed_tool_names=allowed_tool_names
+        )
+        if func_call is not None and func_call[1]:
+            f_vis, f_calls = func_call
+            return f_vis, remainder, f_calls
     visible = _remove_spans(processable, spans, trim_outer_whitespace=final)
     return visible, remainder, tool_calls
 
@@ -1469,12 +1599,42 @@ _TEXT_FUNC_CALL_RE = re.compile(
 )
 
 
+_TEXT_FUNC_NAMES = ("read", "write", "edit", "bash", "webfetch", "todowrite", "glob", "grep")
+
+
+def _find_partial_text_function_start(text: str) -> int | None:
+    """Start eines angebrochenen text-funktionsaufrufs am zeilenanfang
+    (P-04), sonst None. Nur die zeilenanfangsform wird gehalten, damit
+    ein erwaehnung im fliesstext ('nutze read("x") zum lesen') nicht
+    haengen bleibt."""
+    for name in _TEXT_FUNC_NAMES:
+        idx = text.rfind(name)
+        while idx != -1:
+            prefix = text[:idx]
+            line_start = prefix.rfind("\n") + 1
+            if not prefix[line_start:].strip() and text[idx + len(name) : idx + len(name) + 1] in {"(", ""}:
+                rest = text[idx + len(name) :]
+                # holdback, solange der aufruf nicht geschlossen ist — bzw.
+                # immer, wenn er am chunk-ende abgeschnitten wurde
+                if not rest or rest.count("(") > rest.count(")") or not rest.strip().endswith(")"):
+                    return idx
+                return None
+            idx = text.rfind(name, 0, idx)
+    return None
+
+
 def _find_text_function_call(
     text: str,
     allowed_tool_names: set[str] | None = None,
 ) -> tuple[str, list[dict[str, object]]] | None:
     match = _TEXT_FUNC_CALL_RE.search(text)
     if not match:
+        return None
+    # T-01: die zeile darf nicht in einem code-fence liegen. Sonst wurde
+    # eine dokumentationszeile ('read("config.py")' im python-beispiel) zu
+    # einem echten tool-call und verschwand aus der antwort.
+    masked = _mask_code_fences(text)
+    if masked[match.start() : match.end()].strip("") != match.group(0).strip(""):
         return None
     tool_name, arg = match.groups()
     if not _is_allowed_tool_name(tool_name, allowed_tool_names):
@@ -1497,6 +1657,33 @@ def _find_text_function_call(
     return visible, [call]
 
 
+def _unwrap_protocol_only_fence(text: str) -> str | None:
+    """Entpackt ein fence, dessen inhalt AUSSCHLIESSLICH das tool-protokoll
+    ist (P-11). Gibt None zurueck, wenn das fence nicht ausschliesslich
+    protokoll enthaelt oder gar kein fence vorhanden ist — dann greift die
+    normale fence-maskierung, damit echte doku-beispiele im text bleiben."""
+    match = CODE_FENCE_PATTERN.search(text)
+    if match is None:
+        return None
+    if CODE_FENCE_PATTERN.search(text, match.end()):
+        # mehrere fences: keiner davon ist "nur protokoll"
+        return None
+    if text[: match.start()].strip():
+        return None
+    inner = match.group(0).strip("`~").strip()
+    lowered = inner.lower()
+    for prefix in ("json", "jsonc", ""):
+        candidate = inner[len(prefix) :].strip() if lowered.startswith(prefix) else inner
+        if not candidate:
+            continue
+        if (
+            find_tool_calls_protocol(candidate) != -1
+            or _BARE_ARRAY_START_RE.search(candidate) is not None
+        ):
+            return text[: match.start()] + candidate + text[match.end() :]
+    return None
+
+
 def parse_tool_calls_from_text(
     text: str,
     allowed_tool_names: set[str] | None = None,
@@ -1511,6 +1698,12 @@ def parse_tool_calls_from_text(
     die Diagnose frei."""
     if not text:
         return "", []
+    # P-11: ein fence, das AUSSCHLIESSLICH das tool-protokoll enthaelt, ist
+    # keine doku und wird entpackt statt maskiert. Sonst blieb ein echter
+    # call in ```json ... ``` unerkannt und landete als text.
+    unwrapped = _unwrap_protocol_only_fence(text)
+    if unwrapped is not None:
+        text = unwrapped
     echo_start, echo_end = _find_transcript_echo_span(text)
     if echo_start != -1:
         text = text[:echo_start] + text[echo_end:]
@@ -1524,9 +1717,16 @@ def parse_tool_calls_from_text(
         if not text.strip():
             return "", []
     # zuerst neues JSON-protokoll pruefen
-    visible, remainder, tool_calls = _find_json_tool_call(text, final=True, allowed_tool_names=allowed_tool_names, detect_all=detect_all)
+    visible, remainder, tool_calls = _find_json_tool_call(
+        text, final=True, allowed_tool_names=allowed_tool_names, detect_all=detect_all
+    )
     if tool_calls:
         return visible, tool_calls
+    # P-03: protokoll erkannt, aber jeder call wurde gefiltert oder war nicht
+    # ausfuehrbar. Der bereinigte text muss uebernommen werden, sonst bleibt
+    # das roh-protokoll als antwort stehen.
+    if visible != text:
+        return visible, []
     # Leak-Variante D: nacktes JSON-array als tool-protokoll
     bare = _find_bare_tool_call_array(text, final=True, allowed_tool_names=allowed_tool_names, detect_all=detect_all)
     if bare is not None:
@@ -1538,7 +1738,14 @@ def parse_tool_calls_from_text(
     if allowed_tool_names is None and not detect_all:
         # Ohne deklarierte Tools wird nie ein Call aus Quelltext erzeugt.
         return text, []
-    # Function-call syntax in text: read("...") oder bash("...")
+    # P-04: der text-funktions-fallback (read("…"), bash("…")) ist der
+    # dokumentierte recovery-pfad fuer faelle, in denen das Modell gar kein
+    # JSON-protokoll emittiert (live-fall ses_f2bcdbfb8ffe). Er wird deshalb
+    # hier bewusst NICHT deaktiviert. Die paritaet zwischen stream- und
+    # finalpfad entsteht dadurch, dass consume_event() den gesamten
+    # zurueckgehaltenen text im finalize ueber parse_tool_calls_from_text
+    # laufen laesst — ein frueher stream-emitierter teil wird dort erneut
+    # erfasst. (siehe test_parity_matrix_stream_and_non_stream_agree_on_garbage)
     func_call = _find_text_function_call(text, allowed_tool_names=allowed_tool_names)
     if func_call is not None:
         f_vis, f_calls = func_call
@@ -1638,6 +1845,14 @@ class StreamingToolParser:
     allowed_tool_names: set[str] | None = None
     detect_all: bool = False
     buffering_dsml: bool = False
+    _holdback_warned: bool = False
+
+    def logger_warning_once(self, message: str) -> None:
+        """Warnung genau einmal pro parser (P-14: puffer-grenzen-warnung)."""
+        if self._holdback_warned:
+            return
+        self._holdback_warned = True
+        logging.getLogger("glm2api.tool_parser").warning("%s", message)
 
     def consume(self, chunk: str) -> str:
         if not chunk:
@@ -1645,10 +1860,25 @@ class StreamingToolParser:
         self.pending_text += chunk
 
         if self.buffering_dsml:
+            # P-14: puffer darf nicht unbegrenzt wachsen — ein niemals
+            # geschlossener markup-opfer wuerde sonst den speicher
+            # auffressen. Obergrenze: dann aufgeben und ausgeben.
+            if len(self.pending_text) > _MAX_HOLDBACK_CHARS:
+                self.logger_warning_once(
+                    "tool-markup holdback limit reached, releasing buffer as visible text"
+                )
+                self.buffering_dsml = False
+                released = self.pending_text
+                self.pending_text = ""
+                return released
             return ""
 
         # Once a tool-markup opener starts, keep the complete block buffered.
         # Parsing individual stream characters must never expose internal DSML/XML.
+        # P-07: zero-width-space (U+200B) vor markup neutralisieren, sonst
+        # wird <\u200btool_call> weder erkannt noch ausgegeben.
+        if "\u200b" in self.pending_text:
+            self.pending_text = self.pending_text.replace("\u200b", "")
         markup_starts = [
             index
             for marker in TAG_NAME_HINTS
@@ -1659,6 +1889,17 @@ class StreamingToolParser:
             prefix = self.pending_text[:start]
             self.pending_text = self.pending_text[start:]
             if self.pending_text.lower().startswith("<|"):
+                # P-14: das generische '<|' aktivierte den dsml-puffer fuer
+                # JEDEN rest des turns. Ein niemals geschlossener opfer liess
+                # den puffer unbegrenzt wachsen. Obergrenze einfuehren: wird
+                # sie ueberschritten, wird der puffer aufgegeben und der
+                # text als sichtbar ausgegeben (besser als speicherleck).
+                if len(self.pending_text) > _MAX_HOLDBACK_CHARS:
+                    self.logger_warning_once("tool-markup holdback limit reached, releasing buffer")
+                    self.buffering_dsml = False
+                    released = self.pending_text
+                    self.pending_text = ""
+                    return prefix + released
                 self.buffering_dsml = True
                 return prefix
             start_match = START_TAG_PATTERN.search(self.pending_text)
@@ -1693,6 +1934,20 @@ class StreamingToolParser:
         # greift nur bei fest verdrahteten praefixen.
         open_call = _find_unterminated_call_start(self.pending_text)
         if open_call != -1 and len(self.pending_text) <= _MAX_HOLDBACK_CHARS:
+            visible, remainder, parsed_calls = _split_stream_text(
+                self.pending_text,
+                allowed_tool_names=self.allowed_tool_names,
+                final=False,
+                detect_all=self.detect_all,
+            )
+            self.pending_text = remainder
+            self.tool_calls.extend(parsed_calls)
+            return visible
+        # P-04: angebrochene text-funktionsaufrufe ebenfalls halten, sonst
+        # wird jeder teil emittiert und der streampfad erkennt den aufruf
+        # nie, waehrend der finalpfad ihn noch reparieren wuerde.
+        func_partial = _find_partial_text_function_start(self.pending_text)
+        if func_partial is not None and len(self.pending_text) <= _MAX_HOLDBACK_CHARS:
             visible, remainder, parsed_calls = _split_stream_text(
                 self.pending_text,
                 allowed_tool_names=self.allowed_tool_names,

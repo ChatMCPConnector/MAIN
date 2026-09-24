@@ -892,3 +892,179 @@ def test_responses_stream_output_text_is_not_duplicated_and_items_keep_index_ord
     assert [item["type"] for item in output] == ["message", "function_call", "message"]
     assert [part["text"] for part in output[0]["content"]] == ["first"]
     assert [part["text"] for part in output[2]["content"]] == ["second"]
+
+
+def test_blocked_tool_fallback_is_an_error_but_related_prose_stays_normal():
+    blocked_text = (
+        "The model attempted to call an undeclared tool: `open_url`. Blocked. "
+        "Only these tools are allowed in this round: bash."
+    )
+    legitimate_text = blocked_text + " I can inspect the workspace with the available bash tool instead."
+
+    class FakeGLM:
+        def chat_completion(self, payload):
+            prompt = payload["messages"][-1]["content"]
+            content = legitimate_text if prompt == "legitimate prose" else blocked_text
+            return {
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }, None
+
+    config = SimpleNamespace(
+        host="127.0.0.1",
+        port=0,
+        api_prefix="/v1",
+        cors_allow_origin="*",
+        server_api_keys=[],
+        debug_dump_all=False,
+        exposed_models=["glm-4"],
+    )
+    server = server_module.GLM2APIServer(config, FakeGLM(), DummyLogger())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server._server.server_address[1]
+
+    def post(prompt: str):
+        body = json.dumps(
+            {
+                "model": "glm-4",
+                "messages": [{"role": "user", "content": prompt}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "bash", "parameters": {"type": "object"}},
+                    }
+                ],
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        return urllib.request.urlopen(request, timeout=5)
+
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            post("blocked call")
+        error_response = exc_info.value
+        error_payload = json.loads(error_response.read())
+
+        assert error_response.code == 502
+        assert error_payload["error"]["code"] == "tool_protocol_error"
+        assert error_payload["error"]["type"] == "tool_protocol_error"
+        assert error_payload["error"]["blocked_tool_names"] == ["open_url"]
+        assert "choices" not in error_payload
+
+        with post("legitimate prose") as response:
+            response_payload = json.loads(response.read())
+        assert response.status == 200
+        assert response_payload["choices"][0]["message"]["content"] == legitimate_text
+    finally:
+        server.shutdown()
+        thread.join(timeout=1)
+
+
+def test_responses_http_tool_round_replays_call_result_and_selection():
+    class FakeGLM:
+        def __init__(self):
+            self.payloads = []
+
+        def chat_completion(self, payload):
+            self.payloads.append(json.loads(json.dumps(payload)))
+            if len(self.payloads) == 1:
+                message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": '{"city":"Berlin"}'},
+                        }
+                    ],
+                }
+                finish_reason = "tool_calls"
+            else:
+                message = {"role": "assistant", "content": "done"}
+                finish_reason = "stop"
+            return {
+                "choices": [{"message": message, "finish_reason": finish_reason}]
+            }, None
+
+    fake_glm = FakeGLM()
+    config = SimpleNamespace(
+        host="127.0.0.1",
+        port=0,
+        api_prefix="/v1",
+        cors_allow_origin="*",
+        server_api_keys=[],
+        debug_dump_all=False,
+        exposed_models=["glm-4"],
+    )
+    server = server_module.GLM2APIServer(config, fake_glm, DummyLogger())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server._server.server_address[1]
+
+    def post(payload: dict[str, object]):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/responses",
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return json.loads(response.read())
+
+    try:
+        first_response = post(
+            {
+                "model": "glm-4",
+                "input": "look up Berlin",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object"},
+                    }
+                ],
+                "tool_choice": {"type": "function", "name": "lookup"},
+                "parallel_tool_calls": False,
+            }
+        )
+        second_response = post(
+            {
+                "model": "glm-4",
+                "previous_response_id": first_response["id"],
+                "input": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": {"temperature": 21},
+                    }
+                ],
+            }
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=1)
+
+    continued_payload = fake_glm.payloads[1]
+    assistant_message = next(message for message in continued_payload["messages"] if message["role"] == "assistant")
+    tool_message = next(message for message in continued_payload["messages"] if message["role"] == "tool")
+
+    assert continued_payload["tool_choice"] == {"type": "function", "function": {"name": "lookup"}}
+    assert continued_payload["parallel_tool_calls"] is False
+    assert continued_payload["tools"][0]["function"]["name"] == "lookup"
+    assert assistant_message["tool_calls"][0]["id"] == "call-1"
+    assert tool_message["tool_call_id"] == "call-1"
+    assert tool_message["name"] == "lookup"
+    assert tool_message["content"] == '{"temperature":21}'
+    assert second_response["previous_response_id"] == first_response["id"]
+    assert second_response["output_text"] == "done"

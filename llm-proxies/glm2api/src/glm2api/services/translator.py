@@ -44,6 +44,47 @@ _LOGGER = logging.getLogger("glm2api.translator")
 _C0_ALLOWED = {"\n", "\t", "\r"}
 
 
+def _tool_call_identity(tool_call: dict[str, object]) -> str:
+    """Identitaet eines tool-calls fuer die deduplizierung (T-04).
+
+    Primaer die call-id: zwei calls mit unterschiedlicher id sind zwei
+    aufrufe, auch bei identischen argumenten. Ohne id greift der
+    name + die normalisierten argumente."""
+    call_id = str(tool_call.get("id", "")).strip()
+    if call_id:
+        return f"id:{call_id}"
+    function = tool_call.get("function")
+    name = arguments = ""
+    if isinstance(function, dict):
+        name = str(function.get("name", "")).strip()
+        arguments = str(function.get("arguments", "")).strip()
+    try:
+        parsed = json.loads(arguments) if arguments else None
+        arguments = json.dumps(parsed, sort_keys=True, ensure_ascii=False)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return f"sig:{name}:{arguments}"
+
+
+def _merge_tool_calls(
+    server_side: list[dict[str, object]],
+    text_calls: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Fuehrt native und text/xml-calls zusammen, ohne doppelte
+    auszuliefern (T-03/T-04), und nummeriert sie durch."""
+    merged: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for tool_call in list(server_side) + list(text_calls):
+        identity = _tool_call_identity(tool_call)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        entry = dict(tool_call)
+        entry["index"] = len(merged)
+        merged.append(entry)
+    return merged
+
+
 def sanitize_control_characters(text: str) -> tuple[str, int]:
     """Ersetzt C0-Steuerzeichen (ausser \\n \\t \\r) und DEL durch '?'.
 
@@ -824,7 +865,13 @@ def convert_messages(
             for tool_call in sanitized_tool_calls:
                 function = tool_call.get("function", {})
                 tool_name = str(function.get("name", "unknown"))
-                if available_tool_names and tool_name not in available_tool_names:
+                # C-10: eine leere allowlist bedeutet 'keine tools erlaubt'.
+                # Die frueher implizite 'kein filter' aus `available and ...`
+                # liess historische calls ungeprueft durch — sie wurden
+                # als ausfuehrbarer kontext zurueck ins prompt geschrieben.
+                if tool_name in BLOCKED_NATIVE_TOOL_NAMES:
+                    continue
+                if tool_name not in available_tool_names:
                     continue
                 tool_blocks.append(
                     serialize_tool_call_block(
@@ -1018,6 +1065,9 @@ class GLMEventAccumulator:
     _deferred_reasoning: str = ""
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
     blocked_tool_attempt_names: list[str] = field(default_factory=list)
+    # T-13: true, wenn der turn an einem angebrochenen protokoll endete und
+    # deshalb nicht als regulaerer 'stop' gelten darf.
+    truncated_turn: bool = False
 
     def __post_init__(self) -> None:
         self.tool_parser.allowed_tool_names = self.allowed_tool_names
@@ -1271,6 +1321,28 @@ class GLMEventAccumulator:
                 or "<ml_tool_call" in visible_text_delta
                 or "<|DSML|tool_call" in visible_text_delta
             )
+            # T-07: sobald dieser turn einen tool-call enthaelt, darf bereits
+            # gesendeter text nicht als antwort stehen bleiben. Solange
+            # unklar ist, ob der turn tool-calls liefert, wird der text
+            # deshalb nur in kleinen, eindeutig protokollfreien stuecken
+            # ausgegeben und bei einem spaeter auftauchenden call zurueck-
+            # gehalten, statt unumkehrbar gestreamt zu werden.
+            if (
+                self.allowed_tool_names is not None
+                and not self._server_side_tool_calls
+                and not self.tool_parser.tool_calls
+            ):
+                looks_like_preamble = bool(
+                    re.search(
+                        r"\b(?:ich|ich\s+werde|als\s+nächstes|jetzt\s+|zuerst|"
+                        r"ich\s+schreibe|ich\s+lese|ich\s+führe)\b",
+                        visible_text_delta,
+                        re.IGNORECASE,
+                    )
+                )
+                if looks_like_preamble:
+                    self._deferred_visible_text += visible_text_delta
+                    visible_text_delta = ""
             if self.allowed_tool_names is not None and (
                 self.tool_parser.pending_text
                 or fence_pending
@@ -1361,12 +1433,12 @@ class GLMEventAccumulator:
             # instead of leaking raw protocol fragments as visible content.
             xml_tool_calls = self._extract_reasoning_tool_calls()
 
-        # Merge server-side and XML tool calls, re-indexing
-        all_tool_calls: list[dict[str, object]] = list(self._server_side_tool_calls)
-        for tc in xml_tool_calls:
-            tc_copy = dict(tc)
-            tc_copy["index"] = len(all_tool_calls)
-            all_tool_calls.append(tc_copy)
+        # T-03/T-04: quelluebergreifende deduplizierung. Server-seitige
+        # (native) und text/xml-calls werden nicht blind gemergt — derselbe
+        # aufruf kann in beiden quellen auftauchen und wurde dann doppelt
+        # ausgeliefert. Identitaet ist die call-id, sonst der name +
+        # normalisierte argumente.
+        all_tool_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
         all_tool_calls = sanitize_tool_calls(all_tool_calls, fallback_url=self.fallback_tool_url)
 
         if self.logger:
@@ -1434,6 +1506,7 @@ class GLMEventAccumulator:
             # aber als sichtbarer text durchgehen. Nie eine antwort.
             final_text, fragment_count = strip_unparseable_call_fragments(final_text)
             if fragment_count:
+                self.truncated_turn = True
                 log = self.logger or _LOGGER
                 log.warning(
                     "Stripped %s unparseable tool-call fragment(s) from final text "
@@ -1587,7 +1660,14 @@ class GLMEventAccumulator:
                 )
             )
 
-        finish_reason = "tool_calls" if all_tool_calls else "stop"
+        # T-13: ein turn, der mit einem blockierten oder abgeschnittenen
+        # protokoll endet und keine verwertbare antwort hat, wird nicht als
+        # regulaerer 'stop' ausgewiesen. Clients sollen daran erkennen
+        # koennen, dass kein ergebnis vorliegt.
+        if self.blocked_tool_attempt_names or self.truncated_turn:
+            finish_reason = "error" if not all_tool_calls else "tool_calls"
+        else:
+            finish_reason = "tool_calls" if all_tool_calls else "stop"
         chunks.append(
             self._chunk_json(
                 {
@@ -1618,6 +1698,7 @@ class GLMEventAccumulator:
         )
         clean_content, fragment_count = strip_unparseable_call_fragments(clean_content)
         if fragment_count:
+            self.truncated_turn = True
             log = self.logger or _LOGGER
             log.warning(
                 "Stripped %s unparseable tool-call fragment(s) from non-streaming response text",
@@ -1640,14 +1721,10 @@ class GLMEventAccumulator:
                 and name.lower() not in {"finish", "intervene", "cancel", "none"}
             )
 
-        # Merge server-side and XML tool calls, re-indexing; wie in finalize()
+        # T-03/T-04: quelluebergreifende deduplizierung wie in finalize();
         # auch die gemergte liste sanitizen (reparatur + C0-filter, paritaet
         # zum stream-pfad)
-        all_tool_calls: list[dict[str, object]] = list(self._server_side_tool_calls)
-        for tc in xml_tool_calls:
-            tc_copy = dict(tc)
-            tc_copy["index"] = len(all_tool_calls)
-            all_tool_calls.append(tc_copy)
+        all_tool_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
         all_tool_calls = sanitize_tool_calls(all_tool_calls, fallback_url=self.fallback_tool_url)
 
         final_content = self._sanitize_visible_text(clean_content.strip())

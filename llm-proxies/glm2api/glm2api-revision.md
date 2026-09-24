@@ -423,7 +423,34 @@ Gesamt: **107 Befunde** in 1.511 Zeilen Detailbericht, konsolidiert auf 115 Zeil
 - **Regression gegen die echten Daten**: die drei Leak-Texte der Session `ses_f2bc23762ffeoOkPYHAoqhwpwm` (4.903 / 1.615 / 2.044 Zeichen) werden bei **allen** Chunk-Größen von 1 bis 512 Byte mit **0 Zeichen** Fragment-Leak verarbeitet. Vorher: Leck bei praktisch jeder Größe.
 - **Live-Smoke** gegen den echten Upstream: `/health`, `/v1/models`, Non-Stream-Chat, Tool-Stream — sauber, keine Sanitizer-Warnungen.
 
-### F-5 Bewusst nicht umgesetzt
+### F-5 Umgesetzte P1-Gruppe (2026-09-24, Commit siehe Git-Historie)
+
+| Befund | Umsetzung |
+|---|---|
+| **P-02** | Die native Denylist ist auch im Recovery-Modus (`detect_all=True`) bindend; vorher lief sie über den `or`-Kurzschluss wieder durch. |
+| **P-03** | Erkanntes Protokoll, dessen Calls alle gefiltert oder nicht ausführbar sind, wird jetzt entfernt statt erneut ausgegeben. Zusätzlich `_has_usable_arguments()`: ein Call ohne die für sein Tool erforderlichen Argumente (`arguments:{}`) wird nicht geliefert. |
+| **P-04** | Stream- und Finalpfad liefern für Text-Funktionsaufrufe dasselbe Ergebnis: der Streampfad hält angebrochene `read("…")`/`bash("…")` zurück und wertet denselben Fallback aus. |
+| **P-06** | `_echo_role_prefix_len()` erkennt angebrochene Echo-Rollen bruchstückhaft und case-insensitiv (`U`, `Us`, `User`, `user: [`), aber nur an einer Zeilengrenze. |
+| **P-07** | Generisches `<tool_call>` (auch mit U+200B) wird als Start-Tag erkannt; JSON-Payload im Elementtext wird über `_call_from_json_payload()` ausgewertet. |
+| **P-11** | Ein Fence, das ausschließlich das Tool-Protokoll enthält, wird entpackt statt maskiert; Doku-Fences bleiben unangetastet. |
+| **P-13** | Der No-op `consumed += len(rest) - len(rest)` ist durch die korrekte Zeilensprung-Berechnung ersetzt. |
+| **P-14** | Der DSML-Holdback hat eine Obergrenze (256 KiB) und gibt den Puffer danach frei, statt unbegrenzt zu wachsen. |
+| **T-01** | Text-Funktionsaufrufe innerhalb eines Code-Fences werden nicht mehr zu Calls (eine Dokuzeile `read("config.py")` verschwand此前 als Ausführung). |
+| **T-03/T-04** | `_merge_tool_calls()` dedupliziert quellübergreifend; Identität ist die Call-ID, sonst Name + normalisierte Argumente. |
+| **T-07** | Preamble-Text wird nicht unumkehrbar gestreamt, sondern wandert in den Follow-up-Kontext. |
+| **T-08** | Fenced Protokolle werden in beiden Pfaden entpackt (über den Parser zentral gelöst). |
+| **T-13** | Ein Turn, der nur an einem blockierten oder abgeschnittenen Protokoll endet, wird als `finish_reason: "error"` ausgewiesen, nicht als regulärer `stop`. Zwei Tests wurden entsprechend angepasst. |
+| **C-09** | Eine leere Tool-Liste ergibt eine **leere Allowlist**, nicht `None` (Wildcard). |
+| **C-10** | Historische Tool-Calls werden auch bei leerer Allowlist gefiltert; `BLOCKED_NATIVE_TOOL_NAMES` gilt im History-Pfad ebenfalls. |
+| **C-12** | Retries verwenden das Payload der **aktuellen** Runde (`active_payload`); nach einer Follow-up-Runde behält ein Retry deren negativen Tool-Kontext. |
+| **S-10** | Ein blockiertes Protokoll endet nicht mehr als HTTP-200-Textantwort: HTTP `502` mit `error.code="tool_protocol_error"`, im SSE ein terminales Error-Event. Erkannt werden nur die kanonischen Accumulator-Fallbacks; normale Prosa bleibt 200. |
+| **S-11** | Responses-Runden geben Call-Metadaten, Auswahl, `tools`, `parallel_tool_calls` und Tool-Ergebnisse an die Folgerunde weiter. |
+
+**Verifikation:** 188 Tests grün; 17 P1-Prüfungen einzeln bestätigt; Live-Smoke gegen den Upstream sauber.
+
+**Restnotiz (kosmetisch):** Beginnt ein Turn mit dem Terminator-Rest eines zuvor abgeschnittenen Protokolls (`] []`), kann diese kurze Zeile vor dem Call im Text erscheinen. Der Call selbst wird korrekt geliefert; die Zeile ist nutzlos, aber nicht funktional störend.
+
+### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.
 - **C-17/S-04** (Debug-Dump-Inhalte): Redaktion ist implementiert (Tokens, Header); eine strukturelle Auslagerung des Debug-Dumps ist als Folgeaufgabe offen.

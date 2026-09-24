@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import copy
 import hmac
 import json
 import queue
+import re
 import socket
 import threading
 import traceback
+from collections import OrderedDict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging import Logger
@@ -49,6 +52,121 @@ _CLIENT_DISCONNECTED = (BrokenPipeError, ConnectionResetError, ConnectionAborted
 _DOWNSTREAM_DISCONNECTED = (*_CLIENT_DISCONNECTED, TimeoutError)
 _UPSTREAM_TRANSPORT_ERRORS = (socket.timeout, TimeoutError, ConnectionError, OSError)
 STREAM_HEARTBEAT_SECONDS = 5.0
+_TOOL_PROTOCOL_ERROR_CODE = "tool_protocol_error"
+_TOOL_PROTOCOL_ERROR_MESSAGE = "Model tool protocol failure."
+_RESPONSES_CONTINUATION_LIMIT = 128
+_BLOCKED_TOOL_FALLBACKS = (
+    re.compile(
+        r"The model attempted to call an undeclared tool: "
+        r"(?P<names>`[^`\r\n]+`(?:, `[^`\r\n]+`)*)\. Blocked\. "
+        r"Only these tools are allowed in this round: "
+        r"(?:\(none\)|[^,.\r\n]+(?:, [^,.\r\n]+)*)\."
+    ),
+    re.compile(
+        r"The model attempted to call an unavailable tool "
+        r"\((?P<names>[^)\r\n]+)\) and returned no final response\."
+    ),
+)
+
+
+class _ToolProtocolError(Exception):
+    def __init__(self, blocked_tool_names: tuple[str, ...]) -> None:
+        super().__init__(_TOOL_PROTOCOL_ERROR_MESSAGE)
+        self.blocked_tool_names = blocked_tool_names
+
+
+def _blocked_tool_names_from_text(content: object) -> tuple[str, ...] | None:
+    """Erkennt nur die vollstaendigen, kanonischen Accumulator-Fallbacks.
+
+    Das ist bewusst kein Substring- oder Stichwortfilter: Eine normale Antwort
+    darf ueber ein fehlendes Tool sprechen. Nur der exakte interne Fallback
+    ohne weitere Nutzerausgabe gilt als Tool-Protokollfehler.
+    """
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    for pattern in _BLOCKED_TOOL_FALLBACKS:
+        match = pattern.fullmatch(text)
+        if match is None:
+            continue
+        names = match.group("names")
+        if names.startswith("`"):
+            return tuple(re.findall(r"`([^`\r\n]+)`", names))
+        return tuple(name.strip() for name in names.split(",") if name.strip())
+    return None
+
+
+def _blocked_tool_names_from_response(response: object) -> tuple[str, ...] | None:
+    if not isinstance(response, dict):
+        return None
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return None
+    choice = choices[0]
+    if choice.get("finish_reason") != "stop":
+        return None
+    message = choice.get("message")
+    if not isinstance(message, dict) or message.get("tool_calls"):
+        return None
+    names = _blocked_tool_names_from_text(message.get("content"))
+    if names is not None:
+        return names
+    explicit_names = response.get("blocked_tool_attempt_names")
+    if (
+        isinstance(explicit_names, list)
+        and explicit_names
+        and not str(message.get("content") or "").strip()
+    ):
+        return tuple(str(name) for name in explicit_names)
+    return None
+
+
+def _blocked_tool_names_from_chunk(chunk: bytes) -> tuple[str, ...] | None:
+    text = chunk.decode("utf-8", errors="ignore")
+    for line in text.splitlines():
+        if not line.startswith("data: ") or line == "data: [DONE]":
+            continue
+        try:
+            payload = json.loads(line[6:])
+        except json.JSONDecodeError:
+            continue
+        choices = payload.get("choices") if isinstance(payload, dict) else None
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            continue
+        delta = choices[0].get("delta")
+        if not isinstance(delta, dict) or delta.get("tool_calls"):
+            continue
+        names = _blocked_tool_names_from_text(delta.get("content"))
+        if names is not None:
+            return names
+    return None
+
+
+def _tool_protocol_error_payload(blocked_tool_names: tuple[str, ...]) -> dict[str, object]:
+    """Stables S-10-Fehlerschema.
+
+    Nicht-gestreamt antwortet der Server mit HTTP 502 und
+    ``error.code=error.type="tool_protocol_error"``; ``blocked_tool_names`` ist
+    eine dokumentierte Erweiterung. Bei SSE bleibt der HTTP-Status 200 gemaess
+    SSE-Protokoll, aber der Stream endet mit einem terminalen Error-Event
+    dieses Codes und ohne Erfolgs-/DONE-Event. So ist der Fehler fuer Agenten
+    maschinenlesbar und niemals eine normale Assistant-Textantwort.
+    """
+    return {
+        "error": {
+            "code": _TOOL_PROTOCOL_ERROR_CODE,
+            "message": _TOOL_PROTOCOL_ERROR_MESSAGE,
+            "type": _TOOL_PROTOCOL_ERROR_CODE,
+            "param": "tools",
+            "blocked_tool_names": list(blocked_tool_names),
+        }
+    }
+
+
+def _raise_for_tool_protocol_failure(response: object) -> None:
+    blocked_tool_names = _blocked_tool_names_from_response(response)
+    if blocked_tool_names is not None:
+        raise _ToolProtocolError(blocked_tool_names)
 
 
 def _config_limit(
@@ -132,6 +250,82 @@ class GLM2APIServer:
                 config, "request_queue_size", DEFAULT_REQUEST_QUEUE_SIZE, MAX_REQUEST_QUEUE_SIZE_LIMIT
             ),
         )
+        self._responses_continuations: OrderedDict[str, dict[str, object]] = OrderedDict()
+        self._responses_continuations_lock = threading.Lock()
+
+    def _prepare_responses_request(self, payload: dict[str, object]) -> dict[str, object]:
+        prepared = copy.deepcopy(payload)
+        previous_response_id = prepared.get("previous_response_id")
+        if not isinstance(previous_response_id, str) or not previous_response_id:
+            return prepared
+
+        with self._responses_continuations_lock:
+            state = self._responses_continuations.get(previous_response_id)
+            if state is not None:
+                self._responses_continuations.move_to_end(previous_response_id)
+                state = copy.deepcopy(state)
+
+        input_data = prepared.get("input")
+        has_tool_output = isinstance(input_data, list) and any(
+            isinstance(item, dict) and item.get("type") == "function_call_output"
+            for item in input_data
+        )
+        if state is None:
+            if has_tool_output:
+                raise ValueError("Unknown or expired previous_response_id; replay the function_call")
+            return prepared
+
+        # Die Adapterfunktion kennt nur den aktuellen Request. Deshalb werden
+        # Call-Metadaten und Auswahl der vorigen Responses-Runde hier explizit
+        # in die naechste Conversion-Eingabe zurueckgespielt.
+        for field in ("tools", "tool_choice", "parallel_tool_calls"):
+            if field not in prepared and field in state:
+                prepared[field] = copy.deepcopy(state[field])
+
+        if isinstance(input_data, list) and has_tool_output:
+            existing_call_ids = {
+                str(item.get("call_id", "")).strip()
+                for item in input_data
+                if isinstance(item, dict) and item.get("type") == "function_call"
+            }
+            stored_calls = state.get("function_calls")
+            prior_calls = [
+                copy.deepcopy(item)
+                for item in (stored_calls if isinstance(stored_calls, list) else [])
+                if isinstance(item, dict)
+                and str(item.get("call_id", "")).strip() not in existing_call_ids
+            ]
+            if prior_calls:
+                prepared["input"] = prior_calls + copy.deepcopy(input_data)
+        return prepared
+
+    def _remember_responses_response(
+        self,
+        response_id: object,
+        output: object,
+        responses_payload: dict[str, object],
+    ) -> None:
+        if not isinstance(response_id, str) or not response_id or not isinstance(output, list):
+            return
+        function_calls = [
+            copy.deepcopy(item)
+            for item in output
+            if isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and item.get("call_id")
+            and item.get("name")
+        ]
+        if not function_calls:
+            return
+        state: dict[str, object] = {"function_calls": function_calls}
+        for field in ("tools", "tool_choice", "parallel_tool_calls"):
+            if field in responses_payload:
+                state[field] = copy.deepcopy(responses_payload[field])
+        with self._responses_continuations_lock:
+            self._responses_continuations[response_id] = state
+            self._responses_continuations.move_to_end(response_id)
+            while len(self._responses_continuations) > _RESPONSES_CONTINUATION_LIMIT:
+                self._responses_continuations.popitem(last=False)
 
     def serve_forever(self) -> None:
         self._server.serve_forever()
@@ -144,6 +338,8 @@ class GLM2APIServer:
         config = self.config
         glm_client = self.glm_client
         logger = self.logger
+        prepare_responses_request = self._prepare_responses_request
+        remember_responses_response = self._remember_responses_response
 
         class RequestHandler(BaseHTTPRequestHandler):
             server_version = f"glm2api/{__version__}"
@@ -434,7 +630,18 @@ class GLM2APIServer:
 
                     logger.info("Received chat request model=%s", payload.get("model"))
                     result, _ = self._call_upstream(glm_client.chat_completion, payload)
+                    _raise_for_tool_protocol_failure(result)
                     self._write_json(HTTPStatus.OK, result)
+                except _ToolProtocolError as exc:
+                    logger.warning(
+                        "Blocked-tool protocol failure path=%s tools=%s",
+                        self.path,
+                        ", ".join(exc.blocked_tool_names),
+                    )
+                    self._safe_write_json(
+                        HTTPStatus.BAD_GATEWAY,
+                        _tool_protocol_error_payload(exc.blocked_tool_names),
+                    )
                 except QueueTimeoutError as exc:
                     logger.warning("GLM queue wait timeout error=%s", exc)
                     self._safe_write_json(
@@ -485,6 +692,7 @@ class GLM2APIServer:
                     return
 
                 result, _ = self._call_upstream(glm_client.chat_completion, openai_payload)
+                _raise_for_tool_protocol_failure(result)
                 response = openai_to_anthropic_response(result, model)
                 self._write_json(HTTPStatus.OK, response)
 
@@ -507,20 +715,59 @@ class GLM2APIServer:
 
             def _handle_responses(self, payload: dict[str, object]) -> None:
                 model = str(payload.get("model", "glm-4"))
-                openai_payload = responses_to_openai(payload)
+                prepared_payload = prepare_responses_request(payload)
+                openai_payload = responses_to_openai(prepared_payload)
+                previous_response_id = openai_payload.get("previous_response_id")
+                if not isinstance(previous_response_id, str):
+                    previous_response_id = None
+                raw_parallel_tool_calls = openai_payload.get("parallel_tool_calls")
+                parallel_tool_calls = (
+                    raw_parallel_tool_calls if isinstance(raw_parallel_tool_calls, bool) else True
+                )
+                tool_choice = openai_payload.get("tool_choice", "auto")
 
                 if payload.get("stream"):
-                    self._stream_responses(openai_payload, model)
+                    stream_result = self._stream_responses(
+                        openai_payload,
+                        model,
+                        parallel_tool_calls=parallel_tool_calls,
+                        tool_choice=tool_choice,
+                        previous_response_id=previous_response_id,
+                    )
+                    if stream_result is not None:
+                        remember_responses_response(stream_result[0], stream_result[1], prepared_payload)
                     return
 
                 result, _ = self._call_upstream(glm_client.chat_completion, openai_payload)
-                response = openai_to_responses(result, model)
+                _raise_for_tool_protocol_failure(result)
+                response = openai_to_responses(
+                    result,
+                    model,
+                    parallel_tool_calls=parallel_tool_calls,
+                    tool_choice=tool_choice,
+                    previous_response_id=previous_response_id,
+                )
+                if response.get("status") == "completed":
+                    remember_responses_response(response.get("id"), response.get("output"), prepared_payload)
                 self._write_json(HTTPStatus.OK, response)
 
-            def _stream_responses(self, openai_payload: dict[str, object], model: str) -> None:
+            def _stream_responses(
+                self,
+                openai_payload: dict[str, object],
+                model: str,
+                *,
+                parallel_tool_calls: bool,
+                tool_choice: object,
+                previous_response_id: str | None,
+            ) -> tuple[str, list[dict[str, object]]] | None:
                 openai_payload["stream"] = True
                 stream_iter = self._open_upstream_stream(openai_payload)
-                accumulator = ResponsesStreamAccumulator(model=model)
+                accumulator = ResponsesStreamAccumulator(
+                    model=model,
+                    parallel_tool_calls=parallel_tool_calls,
+                    tool_choice=tool_choice,
+                    previous_response_id=previous_response_id,
+                )
 
                 self._run_accumulated_sse_stream(
                     stream_iter=stream_iter,
@@ -531,6 +778,11 @@ class GLM2APIServer:
                     model=model,
                     label="Responses",
                 )
+                if accumulator._terminal_status != "completed":
+                    return None
+                # Der Adapter hat keinen Abschluss-Callback; nach dem terminalen
+                # Event ist sein interner Output die Quelle fuer die Folgerunde.
+                return accumulator.response_id, accumulator._completed_output
 
             def _run_accumulated_sse_stream(
                 self,
@@ -606,9 +858,27 @@ class GLM2APIServer:
                             for event in start():
                                 self.wfile.write(event.encode("utf-8"))
                             self.wfile.flush()
+                        blocked_tool_names = _blocked_tool_names_from_chunk(chunk)  # type: ignore[arg-type]
+                        if blocked_tool_names is not None:
+                            raise _ToolProtocolError(blocked_tool_names)
                         for event in accumulator.feed_chunk(chunk):  # type: ignore[arg-type]
                             self.wfile.write(event.encode("utf-8"))
                         self.wfile.flush()
+                except _ToolProtocolError as exc:
+                    failed = exc
+                    logger.warning(
+                        "%s blocked-tool protocol failure model=%s tools=%s",
+                        label,
+                        model,
+                        ", ".join(exc.blocked_tool_names),
+                    )
+                    try:
+                        self.wfile.write(
+                            error_event(_TOOL_PROTOCOL_ERROR_MESSAGE, _TOOL_PROTOCOL_ERROR_CODE).encode("utf-8")
+                        )
+                        self.wfile.flush()
+                    except _DOWNSTREAM_DISCONNECTED:
+                        client_disconnected = True
                 except UpstreamAPIError as exc:
                     failed = exc
                     logger.warning(
@@ -688,11 +958,22 @@ class GLM2APIServer:
                         except ValueError as exc:
                             raise UpstreamAPIError(502, "Upstream service error") from exc
                         if chunk:
+                            blocked_tool_names = _blocked_tool_names_from_chunk(chunk)  # type: ignore[arg-type]
+                            if blocked_tool_names is not None:
+                                raise _ToolProtocolError(blocked_tool_names)
                             debug_dump(logger, config.debug_dump_all, f"HTTP outbound streaming chunk model={model}", chunk)
                             self.wfile.write(chunk)
                             self.wfile.flush()
                             if b"data: [DONE]\n\n" in chunk:
                                 sent_done = True
+                except _ToolProtocolError as exc:
+                    failed = True
+                    logger.warning(
+                        "Streaming blocked-tool protocol failure model=%s tools=%s",
+                        model,
+                        ", ".join(exc.blocked_tool_names),
+                    )
+                    self._write_sse_error(_TOOL_PROTOCOL_ERROR_MESSAGE, _TOOL_PROTOCOL_ERROR_CODE)
                 except UpstreamAPIError as exc:
                     failed = True
                     logger.warning("Upstream error received mid-stream status=%s error=%s", exc.status_code, exc)
@@ -833,6 +1114,7 @@ class GLM2APIServer:
             def _write_sse_error(self, message: str, error_type: str) -> None:
                 event = {
                     "error": {
+                        "code": error_type,
                         "message": message,
                         "type": error_type,
                     }
