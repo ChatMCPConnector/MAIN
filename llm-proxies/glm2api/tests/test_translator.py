@@ -2,8 +2,11 @@ import json
 from glm2api.services.translator import (
     BLOCKED_NATIVE_TOOL_NAMES,
     GLMEventAccumulator,
+    compress_history_messages,
     convert_messages,
     extract_history_tool_call_signatures,
+    repair_raw_tool_args,
+    sanitize_control_characters,
     sanitize_tool_call_payload,
 )
 
@@ -249,7 +252,9 @@ def test_sanitize_shell_command_argument_from_json_string():
     }
 
 
-def test_sanitize_shell_command_argument_from_quoted_sequence():
+def test_sanitize_shell_command_argument_keeps_quoted_sequence_untouched():
+    # Kein Windows/PowerShell-Rewrite mehr: der proxy laeuft unter Linux,
+    # ein shell-command wird 1:1 durchgereicht.
     cleaned = sanitize_tool_call_payload(
         "shell",
         {
@@ -258,11 +263,11 @@ def test_sanitize_shell_command_argument_from_quoted_sequence():
     )
 
     assert cleaned == {
-        "command": ["powershell.exe", "-Command", "Get-ChildItem -Force"],
+        "command": '"powershell.exe", "-Command", "Get-ChildItem -Force"',
     }
 
 
-def test_sanitize_shell_command_argument_from_plain_string():
+def test_sanitize_shell_command_argument_keeps_plain_string_untouched():
     cleaned = sanitize_tool_call_payload(
         "shell",
         {
@@ -271,11 +276,11 @@ def test_sanitize_shell_command_argument_from_plain_string():
     )
 
     assert cleaned == {
-        "command": ["powershell.exe", "-Command", "Get-ChildItem"],
+        "command": "Get-ChildItem",
     }
 
 
-def test_sanitize_shell_command_argument_wraps_powershell_cmdlet_array():
+def test_sanitize_shell_command_argument_keeps_cmdlet_array_untouched():
     cleaned = sanitize_tool_call_payload(
         "shell",
         {
@@ -284,7 +289,7 @@ def test_sanitize_shell_command_argument_wraps_powershell_cmdlet_array():
     )
 
     assert cleaned == {
-        "command": ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.txt"],
+        "command": ["Get-ChildItem", "-Recurse", "-Filter", "*.txt"],
     }
 
 
@@ -965,28 +970,195 @@ def test_sanitize_tool_call_payload_unpacks_stringified_json_array_and_dict():
     assert payload_plain["filePath"] == "/path/to/file"
 
 
-def test_conversation_has_tool_round_detects_preamble_and_tool_call():
-    from glm2api.services.translator import _conversation_has_tool_round
-
-    # Tool call with preceding preamble
-    processed_with_preamble = [
-        {"role": "user", "content": "analysiere den ordner"},
-        {"role": "assistant", "content": 'Hier ist die Analyse:\n{"tool_calls":[{"name":"question","arguments":{}}]}[]'},
+def test_conversation_history_compression_respects_budget():
+    """Die Nachricht, die das Budget sprengt, wird summarisiert statt
+    unveraendert weitergereicht (frueher: off-by-one behielt sie vollstaendig
+    und das Budget riess um ein Vielfaches)."""
+    messages = [
+        {"role": "user", "content": "alte runde"},
+        {"role": "user", "content": "B" * 5000},
+        {"role": "user", "content": "neueste frage"},
     ]
-    assert _conversation_has_tool_round(processed_with_preamble) is True
 
-    # Tool result turn
-    processed_with_tool_result = [
-        {"role": "user", "content": '[{"call_id":"c1","name":"question","content":"ok"}]'},
-    ]
-    assert _conversation_has_tool_round(processed_with_tool_result) is True
+    compressed = compress_history_messages(messages, 100)
 
-    # Plain conversational turn without tools
-    processed_plain = [
-        {"role": "user", "content": "Hallo"},
-        {"role": "assistant", "content": "Hallo, wie kann ich helfen?"},
+    assert len(compressed) == 2
+    assert "compacted" in str(compressed[0]["content"])
+    assert compressed[-1]["content"] == "neueste frage"
+    # die budget-sprengende message darf nicht mehr roh im output stehen
+    assert all("B" * 5000 not in str(entry.get("content", "")) for entry in compressed)
+
+
+def test_conversation_history_compression_always_keeps_newest_message():
+    messages = [
+        {"role": "user", "content": "a" * 1000},
+        {"role": "user", "content": "b" * 1000},
     ]
-    assert _conversation_has_tool_round(processed_plain) is False
+
+    compressed = compress_history_messages(messages, 100)
+
+    assert compressed[-1]["content"] == "b" * 1000
+
+
+def test_conversation_history_compression_never_splits_assistant_tool_pair():
+    assistant = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "1", "function": {"name": "read", "arguments": "{}"}}],
+    }
+    tool_result = {"role": "tool", "tool_call_id": "1", "content": "R" * 100}
+    newest = {"role": "user", "content": "x" * 100}
+
+    compressed = compress_history_messages([assistant, tool_result, newest], 150)
+
+    # paar entweder komplett roh oder komplett in der summary — nie einzeln
+    assert [entry["role"] for entry in compressed] == ["user", "user"]
+    assert compressed[-1]["content"] == "x" * 100
+
+
+def test_compress_history_disabled_returns_messages_unchanged():
+    messages = [{"role": "user", "content": "hallo"}]
+
+    assert compress_history_messages(messages, 0) is messages
+
+
+def test_repair_raw_tool_args_preserves_utf8_umlauts():
+    """Regression: der _raw-repairpfad nutzte .decode('unicode_escape')
+    (latin-1-semantik) und machte aus 'hübsch' -> 'hÃ¼bsch'."""
+    raw = '"filePath": "/tmp/x.py", "content": "wort = \\"hübsch\\"\\nprint(wort)"'
+
+    repaired = repair_raw_tool_args("write", raw)
+
+    assert repaired is not None
+    assert repaired["content"] == 'wort = "hübsch"\nprint(wort)'
+
+
+def test_repair_raw_tool_args_decodes_literal_control_char_escape():
+    """Modell emittiert \\u0014 statt 'ü' (THEMA 3). Der repairpfad darf das
+    escape nicht zu einem echten steuerzeichen materialisieren — der
+    C0-sanitizer ersetzt es anschliessend durch '?'."""
+    raw = '"filePath": "/tmp/x.py", "content": "zur\\u0014ck"'
+
+    repaired = repair_raw_tool_args("write", raw)
+    assert repaired is not None
+    assert "\x14" in str(repaired["content"])
+
+    sanitized = sanitize_tool_call_payload("write", repaired)
+    assert sanitized is not None
+    assert sanitized["content"] == "zur?ck"
+
+
+def test_repair_raw_tool_args_bash_command_preserves_umlauts():
+    raw = '"command": "echo \\"grüße\\" && ls"'
+
+    repaired = repair_raw_tool_args("bash", raw)
+
+    assert repaired is not None
+    assert repaired["command"] == 'echo "grüße" && ls'
+
+
+def test_sanitize_control_characters_replaces_c0_but_keeps_whitespace():
+    cleaned, count = sanitize_control_characters("a\x00b\x14c\nd\te\rf\x7f")
+
+    assert cleaned == "a?b?c\nd\te\rf?"
+    assert count == 3
+
+
+def test_sanitize_control_characters_keeps_valid_utf8():
+    text = "schöne Grüße — 日本語 ✅"
+
+    cleaned, count = sanitize_control_characters(text)
+
+    assert cleaned == text
+    assert count == 0
+
+
+def test_sanitize_tool_call_payload_replaces_control_chars_in_nested_arguments():
+    cleaned = sanitize_tool_call_payload(
+        "bash",
+        {"command": "echo \x05 ok", "notes": ["a\x00b", {"deep": "c\x14d"}]},
+    )
+
+    assert cleaned is not None
+    assert cleaned["command"] == "echo ? ok"
+    assert cleaned["notes"] == ["a?b", {"deep": "c?d"}]
+
+
+def test_sanitize_tool_call_payload_keeps_valid_utf8_content():
+    cleaned = sanitize_tool_call_payload(
+        "write",
+        {"filePath": "/tmp/übung.md", "content": "Grüße aus München — 日本語"},
+    )
+
+    assert cleaned is not None
+    assert cleaned["content"] == "Grüße aus München — 日本語"
+
+
+def test_accumulator_sanitizes_control_chars_in_visible_text():
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names=None)
+    accumulator.consume_event(
+        {
+            "conversation_id": "conv_cc",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [{"type": "text", "text": "zur\x14ck bitte"}],
+                }
+            ],
+        }
+    )
+
+    response = accumulator.build_response()
+    content = response["choices"][0]["message"]["content"]
+
+    assert content == "zur?ck bitte"
+
+
+def test_usage_is_estimated_instead_of_placeholder():
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names=None, prompt_chars=4000)
+    accumulator.consume_event(
+        {
+            "conversation_id": "conv_usage",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [{"type": "text", "text": "h" * 800}],
+                }
+            ],
+        }
+    )
+
+    usage = accumulator.build_response()["usage"]
+
+    assert usage["prompt_tokens"] == 1000
+    assert usage["completion_tokens"] >= 200
+    assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
+
+
+def test_finalize_reports_estimated_usage():
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names=None, prompt_chars=1200)
+    accumulator.consume_event(
+        {
+            "conversation_id": "conv_usage2",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [{"type": "text", "text": "antwort"}],
+                }
+            ],
+        }
+    )
+
+    chunks = accumulator.finalize(status="finish")
+
+    assert '"prompt_tokens":300' in chunks[-2]
+    assert '"total_tokens"' in chunks[-2]
 
 
 def test_build_tool_call_instructions_includes_language_lock_and_no_preamble():

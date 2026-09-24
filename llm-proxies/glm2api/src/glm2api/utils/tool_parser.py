@@ -22,17 +22,6 @@ def find_tool_calls_protocol(text: str) -> int:
     return match.start() if match else -1
 
 
-def _is_partial_protocol_suffix(text: str) -> int | None:
-    """Wie viele Zeichen am Textende koennen der Anfang von
-    '{ "tool_calls" ...' sein? Gibt die Laenge zurueck (0 = nichts),
-    toleriert whitespace zwischen '{' und 'tool_calls' NICHT (fuer
-    hold-back zu aggressiv) — nur kompakte Praefixe."""
-    protocol = '{"tool_calls'
-    max_hold = min(len(text), len(protocol))
-    for length in range(max_hold, 1, -1):
-        if text.endswith(protocol[:length]):
-            return length
-    return None
 TOOL_RESULT_PATTERN = re.compile(
     r"<(?:(?:\|DSML\|)|ml_)?tool_result\b[\s\S]*?</(?:(?:\|DSML\|)|ml_)?tool_result>",
     re.IGNORECASE,
@@ -795,12 +784,13 @@ def _find_bare_tool_call_array(
     if match is None:
         match = _NAKED_WRITE_START_RE.search(masked)
     if match is None:
-        # hold-back: partielle array-anfaenge am textende
+        # hold-back: partielle array-anfaenge am textende — prefix bleibt
+        # sichtbar, nur der partielle array-rest wird zurueckgehalten
         if not final:
             probe = '[{"name"'
-            for length in range(min(len(text), 8), 1, -1):
-                if text.endswith(probe[:length] if length <= len(probe) else probe):
-                    return "", text[len(text) - 0 :], []  # unreachable fallback
+            for length in range(min(len(text), len(probe)), 1, -1):
+                if text.endswith(probe[:length]):
+                    return text[:-length], text[-length:], []
         return None
     start = match.start()
     matched_prefix = masked[start:].lstrip()
@@ -832,7 +822,7 @@ def _find_bare_tool_call_array(
                     break
         if end == -1:
             if not final:
-                return "", text[start:], []
+                return text[:start], text[start:], []
             end = len(text)
     else:
         end = _scan_bare_objects_span(text, start)
@@ -872,7 +862,7 @@ def _find_bare_tool_call_array(
                 ]
         if not isinstance(parsed, list) or not parsed:
             if not final:
-                return "", text[start:], []
+                return text[:start], text[start:], []
             return None
     tool_calls: list[dict[str, object]] = []
     names: list[str] = []
@@ -1123,15 +1113,13 @@ def _split_stream_text(
     allowed_tool_names: set[str] | None,
     final: bool,
 ) -> tuple[str, str, list[dict[str, object]]]:
-    # 1) JSON-Protokoll prüfen (neues format)
+    # 1) JSON-Protokoll prüfen (neues Format); ohne Treffer bleibt nur der
+    # Partial-Suffix-Holdback von _find_json_tool_call relevant.
     if find_tool_calls_protocol(text) != -1:
-        visible, remainder, tool_calls = _find_json_tool_call(text, final, allowed_tool_names)
-        return visible, remainder, tool_calls
+        return _find_json_tool_call(text, final, allowed_tool_names)
     visible, remainder, tool_calls = _find_json_tool_call(text, final, allowed_tool_names)
-    if tool_calls or (remainder and not final and remainder.lstrip().startswith('{"tool_call')):
-        if tool_calls:
-            return visible, remainder, tool_calls
-        return visible, remainder, []
+    if tool_calls or (remainder and not final):
+        return visible, remainder, tool_calls
 
     # 1b) Leak-Variante D: nacktes JSON-array als tool-protokoll
     bare = _find_bare_tool_call_array(text, final, allowed_tool_names)
@@ -1140,68 +1128,6 @@ def _split_stream_text(
         if bare_calls or (bare_remainder and not final):
             return bare_visible, bare_remainder, bare_calls
 
-    # 2) Tool-Calls im think-Feld suchen (Fallback für glm-5.3-think).
-    #    Gleichfalls fence-maskiert — sonst wuerde ein Tool-Call-Beispiel in
-    #    einer Code-Fence hier als echter Aufruf durchrutschen.
-    #    allowed-Filter gilt AUCH hier: wenn Schritt 1 alle Calls gefiltert
-    #    hat, darf Schritt 2 sie nicht ungefiltert durchlassen.
-    jstart = find_tool_calls_protocol(text)
-    if jstart != -1:
-        depth = 0
-        in_str = False
-        esc = False
-        end = -1
-        for i in range(jstart, len(text)):
-            ch = text[i]
-            if in_str:
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-                continue
-            if ch == '"':
-                in_str = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-        if end != -1:
-            candidate = text[jstart:end]
-            try:
-                parsed = json.loads(candidate)
-            except json.JSONDecodeError:
-                return text, "", []
-            calls_raw = parsed.get("tool_calls") if isinstance(parsed, dict) else None
-            if isinstance(calls_raw, list):
-                tool_calls = []
-                for idx, call in enumerate(calls_raw):
-                    if not isinstance(call, dict):
-                        continue
-                    name = str(call.get("name", "")).strip()
-                    args_str = _extract_call_arguments(call)
-                    if name and _is_allowed_tool_name(name, allowed_tool_names):
-                        tool_calls.append({
-                            "index": len(tool_calls),
-                            "id": f"call_{uuid.uuid4().hex[:24]}",
-                            "type": "function",
-                            "function": {"name": name, "arguments": args_str or "{}"},
-                        })
-                if tool_calls:
-                    visible = (text[:jstart] + text[end:]).strip()
-                    return visible, "", tool_calls
-                if allowed_tool_names is not None:
-                    # Only filtered calls in the block: strip it from the
-                    # visible text (never leak raw protocol); the caller
-                    # detects the blocked attempt via detect_tool_call_names.
-                    visible = (text[:jstart] + text[end:]).strip()
-                    return visible, "", []
-
-    # dann der Rest des Codes (der aktuelle)
     hold_from_candidates = [
         index
         for index in (_find_unmatched_fence_start(text), _find_incomplete_block_start(text, allow_trailing_close=final))

@@ -1,4 +1,7 @@
+import logging
+
 from glm2api.config import GUEST_REFRESH_TOKEN_MARKER, load_config
+from glm2api.logging_utils import setup_logging
 
 
 def test_single_refresh_token_adds_guest_fallback(tmp_path, monkeypatch):
@@ -31,4 +34,20 @@ def test_persistent_conversation_flag(tmp_path):
     config = load_config(env_path)
     assert config.glm_persistent_conversation is True
     assert config.glm_delete_conversation is False
+
+
+def test_setup_logging_removes_load_config_bootstrap_handler(tmp_path):
+    """Regression: load_config() legt einen Handler auf den 'glm2api'-Logger,
+    den setup_logging() nicht entfernte — dadurch wurde jede logzeile doppelt
+    ausgegeben (einmal plain via glm2api-handler, einmal via root-handler)."""
+    glm_logger = logging.getLogger("glm2api")
+    env_path = tmp_path / ".env"
+    env_path.write_text("GLM_USE_GUEST_REFRESH_TOKEN=true\n", encoding="utf-8")
+
+    config = load_config(env_path)
+    assert glm_logger.handlers, "load_config sollte den bootstrap-handler setzen"
+
+    setup_logging("INFO")
+    assert glm_logger.handlers == []
+    assert len(logging.getLogger().handlers) == 1
 

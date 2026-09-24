@@ -651,3 +651,41 @@ def test_parse_recovers_text_function_call():
     args = json.loads(tool_calls[0]["function"]["arguments"])
     assert args["filePath"] == "/workspaces/benchmark.md"
 
+
+def test_stream_parser_holds_partial_bare_array_suffix_without_leaking_prefix():
+    """Regression: der hold-back fuer partielle bare-array-anfaenge gab
+    ('', '', []) zurueck — der prefix wurde als sichtbarer text verworfen
+    bzw. der partielle array-rest leakte."""
+    parser = StreamingToolParser(allowed_tool_names={"read"})
+
+    visible = parser.consume('Vorrede. [{"na')
+
+    assert visible == "Vorrede. "
+    assert parser.pending_text == '[{"na'
+
+    visible2 = parser.consume('me": "read", "arguments": {"filePath": "/a.py"}}]')
+    tail, calls = parser.flush()
+
+    assert visible2 + tail == ""
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "read"
+    assert json.loads(calls[0]["function"]["arguments"])["filePath"] == "/a.py"
+
+
+def test_stream_parser_keeps_prefix_before_incomplete_bare_array_midstream():
+    """Regression: bei unvollstaendigem bare-array wurde der sichtbare
+    prefix (text vor dem array) verworfen (return '', text[start:]...)."""
+    parser = StreamingToolParser(allowed_tool_names={"read"})
+
+    visible = parser.consume('Hier kommt das Ergebnis: [{"name": "read", "arguments": {"filePa')
+
+    assert visible == "Hier kommt das Ergebnis: "
+    assert parser.pending_text.startswith('[{"name": "read"')
+
+    visible2 = parser.consume('th": "/b.py"}}]')
+    tail, calls = parser.flush()
+
+    assert visible2 + tail == ""
+    assert len(calls) == 1
+    assert json.loads(calls[0]["function"]["arguments"])["filePath"] == "/b.py"
+

@@ -77,20 +77,11 @@ _LEVEL_STYLES: dict[str, dict[str, str]] = {
 _DATE_FMT = "%H:%M:%S"
 
 
-class _TUIFormatter(logging.Formatter):
-    """Terminal-UI inspired formatter with icons, colours and aligned columns."""
+class _NameColumnMixin:
+    """Gemeinsame Name-Spaltenlogik (breite wächst lazy bis Cap)."""
 
-    def __init__(self, use_colour: bool = True) -> None:
-        super().__init__()
-        self.use_colour = use_colour
-        # Name column width — adjusts lazily up to a cap
-        self._name_width = 16
-        self._name_max = 22
-
-    def _colorize(self, text: str, codes: str) -> str:
-        if not self.use_colour:
-            return text
-        return f"{codes}{text}{_RESET}"
+    _name_width = 16
+    _name_max = 22
 
     def _pad_name(self, name: str) -> str:
         # Shorten common prefixes to keep output compact
@@ -98,6 +89,19 @@ class _TUIFormatter(logging.Formatter):
         if len(name) > self._name_width:
             self._name_width = min(len(name), self._name_max)
         return name.ljust(self._name_width)
+
+
+class _TUIFormatter(_NameColumnMixin, logging.Formatter):
+    """Terminal-UI inspired formatter with icons, colours and aligned columns."""
+
+    def __init__(self, use_colour: bool = True) -> None:
+        super().__init__()
+        self.use_colour = use_colour
+
+    def _colorize(self, text: str, codes: str) -> str:
+        if not self.use_colour:
+            return text
+        return f"{codes}{text}{_RESET}"
 
     def format(self, record: logging.LogRecord) -> str:
         style = _LEVEL_STYLES.get(record.levelname, _LEVEL_STYLES["INFO"])
@@ -128,19 +132,8 @@ class _TUIFormatter(logging.Formatter):
         return "\n".join(formatted_lines)
 
 
-class _PlainFormatter(logging.Formatter):
+class _PlainFormatter(_NameColumnMixin, logging.Formatter):
     """Plain-text formatter for file logs (no colour, no icons)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._name_width = 16
-        self._name_max = 22
-
-    def _pad_name(self, name: str) -> str:
-        name = name.replace("glm2api.", "")
-        if len(name) > self._name_width:
-            self._name_width = min(len(name), self._name_max)
-        return name.ljust(self._name_width)
 
     def format(self, record: logging.LogRecord) -> str:
         time_str = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
@@ -176,6 +169,11 @@ def setup_logging(level: str) -> None:
 
     root = logging.getLogger()
     root.handlers.clear()
+    # Der Bootstrap-Handler aus load_config() (fängt fruehe Config-Logs vor
+    # dem vollen Setup ab) muss hier weg — sonst dupliziert sich JEDE
+    # glm2api-Zeile: einmal via Propagation zum glm2api-Logger-Handler,
+    # einmal via root-Console-Handler.
+    logging.getLogger("glm2api").handlers.clear()
     resolved_level = getattr(logging, str(level).upper(), logging.INFO)
     root.setLevel(resolved_level)
     logging.getLogger("glm2api").setLevel(resolved_level)

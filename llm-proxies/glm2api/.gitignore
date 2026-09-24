@@ -12,9 +12,6 @@ wheels/
 # Config
 .env
 
-log
-docs
-
-main.spec
-tokenizer.json
+# Runtime artifacts
+log/
 glm2api.pid

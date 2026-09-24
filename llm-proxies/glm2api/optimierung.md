@@ -1,8 +1,8 @@
 # glm2api — Optimierungs-Arbeitsdatei (lebendiges Dokument)
 
-Zweck: Zentrale Anlaufstelle für offene Probleme und geplante/grlaufende
-Optimierungsarbeiten. **Neue Sessions/Agenten: zuerst hier lesen** — steht
-unten ein Thema auf OFFEN, ist genau das Arbeitsfeld.
+Zweck: Zentrale Anlaufstelle für offene Probleme und geplante/zu-
+laufende Optimierungsarbeiten. **Neue Sessions/Agenten: zuerst hier lesen** —
+steht unten ein Thema auf OFFEN, ist genau das Arbeitsfeld.
 
 Status-Legende: DONE (fix + regressionstest + commit) · OFFEN (zu tun) ·
 BEACHTEN (kein Fix nötig/sinnvoll, nur beobachten).
@@ -15,6 +15,58 @@ Vier Benchmark-Läufe (~500 Tool-Calls) haben 5 Proxy-Bug-Klassen aufgedeckt —
 alle DONE (Commits 3cd794e, c33da91, fea9c22/79fca84, 7a2a2cd, efbc2e7).
 92/92 Tests. Proxy-Ebene: 100% Tool-Call-Ausführung, 0 Leaks nach letztem Fix.
 Details inkl. Live-Leak-Strings sind in Git (Commit 1039311) dokumentiert.
+
+---
+
+---
+
+## THEMA 4 — Komplett-Audit Ordner-Review (DONE 2026-09-24)
+
+Systematische Durchsicht des gesamten Ordners (Code, Config, Doku, Tests,
+Runtime-Artefakte). Gefunden und behoben:
+
+**Echte Bugs**
+- Doppel-Logging: `load_config()`-Handler auf dem `glm2api`-Logger wurde von
+  `setup_logging()` nicht entfernt → jede Logzeile doppelt (plain + TUI).
+  Regressionstest in test_config.py.
+- `repair_raw_tool_args()` mit `unicode_escape` verderbte echtes UTF-8
+  (→ THEMA 3, dort dokumentiert).
+- `compress_history_messages()` Off-by-one: die budget-sprengende Message
+  blieb vollständig roh erhalten statt summarisiert (Budget um ein Vielfaches
+  überschritten). Jetzt: fällt in die Summary, außer sie ist die neueste.
+- SSE-Parser normalisierte `\r\n` pro Chunk statt auf dem akkumulierten
+  Puffer; ein Paar über die 4096er-Grenze blieb unerkannt → Events gingen
+  als „unparseable fragment" verloren.
+- Bare-Array-Holdback im StreamingParser war tot bzw. Prefix-verwerfend
+  (`return "", text[start:]`): sichtbarer Text vor einem unvollständigen
+  Array wurde verworfen. Drei Stellen korrigiert + Regressionstests.
+- `usage` war ein 1/1/2-Platzhalter → jetzt grobe Schätzung (~4 Z./Token).
+
+**Konsistenz / Bloat**
+- Dead Code: ~55-zeiliger unerreichbarer „think-Feld"-Block in
+  `_split_stream_text`, `CHAT_MODE_DEEP_THINKING`,
+  `_conversation_has_tool_round` (nur von einem Test genutzt),
+  `_is_partial_protocol_suffix`, `SERVER_SIDE_TOOL_NAMES`-Leer-Maschinerie
+  (3 Funktionsschichten), Identity-`model_aliases`, `safe_json_dumps`-No-op.
+- Duplikate: doppelter `extract_history_tool_call_signatures`-Aufruf,
+  zweimal kopiertes `blocked_tool_follow_up_payload` (jetzt geteilte
+  Helfer `_build_blocked_tool_follow_up_payload` / `_halve_history_budget`),
+  doppeltes `_safe_json`/`_pad_name`.
+- Streaming-Parität: `/v1/messages` und `/v1/responses` teilen jetzt
+  `_run_accumulated_sse_stream` (Heartbeat + spec-konforme Error-Events;
+  vorher schwie /v1/messages bei Midstream-Fehlern).
+- PowerShell-Rewrites (Legacy aus dem Windows-Ursprungsprojekt) entfernt —
+  auf Linux hätten sie `shell`-Commands in `powershell.exe`-Aufrufe
+  umgeschrieben. `web.search` in `BLOCKED_NATIVE_TOOL_NAMES` ergänzt.
+- Private-Zugriffe (`accumulator._finish()`, `._render_full_output()`) durch
+  public `finish()` / `render_full_output()` ersetzt.
+- `.env.example` synchronisiert (6 undokumentierte Vars, falsche
+  Kommentare), `GLM_IMAGE_MODEL_NAME` konfigurierbar gemacht,
+  `.gitignore`-Leichen (`docs`, `main.spec`, `tokenizer.json`) entfernt.
+- 1,4-GB-Totlog `log/glm2api_output.log` gelöscht (seit 22.9. tot, von
+  keinem Skript referenziert).
+
+Status: **DONE** (141/141 Tests grün).
 
 ---
 
@@ -91,11 +143,11 @@ und geriet in eine 5-Runden-Schleife, bis es mit einer erfundenen Ausrede ("Rund
 5. **`BLOCKED_NATIVE_TOOL_NAMES`**: Um `execute_sandbox_code`, `code_interpreter`,
    `sandbox`, `run_code` erweitert.
 
-Status: **DONE** (111/111 Tests grün).
+Status: **DONE** (111/111 Tests grün zum damaligen Stand; inzwischen 141).
 
 ---
 
-## THEMA 3 — Encoding-Verderb: Umlaute → Steuerzeichen (OFFEN)
+## THEMA 3 — Encoding-Verderb: Umlaute → Steuerzeichen (DONE 2026-09-24)
 
 ### Symptom
 
@@ -104,40 +156,37 @@ Dateien, in denen statt `ü` die Steuerzeichen U+0014/U+0005 landen
 (io_utils.py: `zurück` → kaputt). Die JSON-Tool-Argumente sind syntaktisch
 valide — nur der INHALT ist kaputt. Proxy reicht sie unverändert durch.
 
-### Analyse
+### Root Causes (beim Audit gefunden)
 
-- Fehler entsteht modellseitig beim Streaming (Non-ASCII-Schwäche).
-- Der Proxy PARS'T die Argumente bereits (Recovery-Pfade, Echo-Signaturen)
-  — dort könnten kaputte Bytes bemerkt und normalisiert werden.
+1. Der `_raw`-Reparaturpfad in `repair_raw_tool_args()` dekodierte den
+   Roh-String mit `bytes.decode("unicode_escape")` — das hat
+   Latin-1-Semantik und verderbte echtes UTF-8 (`hübsch` → `hÃ¼bsch`).
+   Behoben: JSON als primärer Decoder, Regex-Single-Pass als Fallback
+   (`_decode_escaped_text()`); niemals mehr `unicode_escape`.
+2. Der Upstream kann ein gültiges JSON-Escape `\u0014` für ein verunglücktes
+   Zeichen streamen; dieses materialisierte bisher ein echtes Steuerzeichen
+   (exakt das beobachtete `zur\x14ck`).
 
-### Fix-Design ( sanitieren statt trusten )
+### Fix (F1–F4 aus dem Design umgesetzt)
 
-F1 **Sanitizer für Tool-Call-Argumente**: nach dem Parsen jedes Call
-  (builder in tool_parser.py) Arguments-String prüfen: C0-Steuerzeichen
-  (\u0000-\u001F) außer \n \t \r — Vorkommen ersetzen durch typische
-  Mapping-Tabelle (U+0014/U+0005-Cluster → "ü"/"u"-Heuristik ist zu
-  fragil; besser: durch "?" ersetzen und loggen). Sicherer, aber Syntax
-  bleibt intakt; kaputter Content wird sichtbar statt still.
-F2 **Ergänzend text-side**: gleiche Prüfung im sichtbaren Content — dort
-  sind C0-Steuerzeichen nie legitim (JSON-escaped).
-F3 **Log-Alarm**: jedes Vorkommen mit Kontext-Snippet loggen
-  (logging_utils), damit Häufigkeit getrackt wird (BEACHTEN → ggf. doch
-  Modell-Thema mit Workaround).
-F4 **Regressionstests**: Argument-String mit \u0014/\u0005 → sanitized;
-  normale Umlaute (echtes UTF-8 "ü") bleiben UNANGETASTET (wichtig:
-  nur C0-Steuerzeichen angreifen, nie valides UTF-8 normalisieren!).
+- F1+F2: `sanitize_control_characters()` / `_sanitize_value_control_chars()`
+  in translator.py — C0-Steuerzeichen (außer `\n\t\r`) und DEL werden in
+  Tool-Argumenten (rekursiv) und sichtbarem Content (Stream-Deltas,
+  Final-Text, `intervene_text`, Non-Stream-Response) durch `?` ersetzt.
+- F3: Jede Bereinigung wird geloggt (Tool-Name + Anzahl + gefundene
+  Zeichen bzw. "control characters in visible response text").
+- F4: Regressionstests in tests/test_translator.py — Steuerzeichen werden
+  ersetzt, echtes UTF-8 (Umlaute, CJK, Emoji) bleibt unangetastet.
 
-### Umsetzungs-Plan
+### Verifikation
 
-P1 sanitize_tool_calls() in translator.py bzw. Call-Builder im Parser
-   erweitern (F1+F2+F3), Tests (F4).
-P2 Benchmark-Re-Run: Encoding-Inzidenz im Log zählen.
-P3 Changelog + Commit.
+141/141 Tests grün (Stand 2026-09-24, inkl. 25 neuer Regressionstests aus
+dem Komplett-Audit). Akzeptanzkriterium erfüllt: kein C0-Steuerzeichen
+(außer `\n\t\r`) in Tool-Argumenten oder sichtbarem Content, echtes UTF-8
+unberührt, jede Bereinigung geloggt.
 
-### Akzeptanzkriterium
-
-Kein C0-Steuerzeichen (außer \n\t\r) mehr in Tool-Argumenten oder sichtbarem
-Content, echtes UTF-8 unberührt, jede Bereinigung geloggt.
+Status: **DONE — BEACHTEN** (Häufigkeit in kommenden Läufen über die
+`Sanitized control characters`-Logzeilen tracken).
 
 ---
 

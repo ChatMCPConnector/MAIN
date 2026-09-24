@@ -25,7 +25,6 @@ from .glm_auth import GLMAccessTokenManager, build_sign
 from .translator import (
     BLOCKED_NATIVE_TOOL_NAMES,
     GLMEventAccumulator,
-    SERVER_SIDE_TOOL_NAMES,
     compress_history_messages,
     convert_messages,
     extract_history_tool_call_signatures,
@@ -121,6 +120,80 @@ class ConcurrentRequestQueue:
             self._condition.notify_all()
 
 
+def _estimate_prompt_chars(payload: dict[str, object]) -> int:
+    """Grober prompt-groessen-massstab fuer die usage-schaetzung (~4 zeichen/token)."""
+    try:
+        return len(json.dumps(payload, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _build_blocked_tool_follow_up_payload(
+    payload: dict[str, object],
+    accumulator: GLMEventAccumulator,
+    allowed_tool_names: set[str] | None,
+) -> dict[str, object] | None:
+    """Negative tool-result round: the model tried to call a blocked/
+    undeclared tool (e.g. open_url). Instead of silently dropping
+    the call (which makes the model repeat until its client-side
+    round limit is burnt), inject an explicit "tool not available"
+    turn into the conversation and let it answer properly."""
+    if not accumulator.blocked_tool_attempt_names:
+        return None
+    blocked = sorted(set(accumulator.blocked_tool_attempt_names))
+    allowed = sorted(allowed_tool_names or [])
+    follow_up = dict(payload)
+    messages = list(payload.get("messages", [])) # type: ignore[arg-type]
+    rendered_text, _ = accumulator.render_full_output()
+    assistant_content = rendered_text.strip()
+    if assistant_content:
+        assistant_text = assistant_content + "\n\nTool call attempt: " + ", ".join(blocked)
+    else:
+        assistant_text = "Tool call attempt: " + ", ".join(blocked)
+    messages = messages + [
+        {
+            "role": "assistant",
+            "content": assistant_text,
+        },
+        {
+            "role": "user",
+            "content": (
+                "The tool(s) "
+                + ", ".join(f"`{name}`" for name in blocked)
+                + " do NOT exist in this environment and were NOT executed. Do not call them again."
+                + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
+                + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
+                + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
+                + " Continue the task now with the available tools. Output ONLY the structured tool call for the next step. Do NOT output any apologies, conversational text, or meta-explanations."
+            ),
+        },
+    ]
+    follow_up["messages"] = messages
+    return follow_up
+
+
+def _halve_history_budget(
+    payload: dict[str, object],
+    history_budget: int,
+    retry_exc: Exception,
+    logger: Logger,
+) -> int:
+    """Bei upstream 10040 ("context exceeded"): kompressions-budget halbieren
+    und im payload vermerken — der retry schrumpft die historie so lange,
+    bis der upstream mitmacht (min 20k)."""
+    if "code=10040" not in str(retry_exc):
+        return history_budget
+    halved = max(20000, history_budget // 2)
+    if halved < history_budget:
+        payload["_glm_history_budget"] = halved
+        logger.info(
+            "Upstream 10040 (context exceeded) — halved history budget to %s chars",
+            halved,
+        )
+        return halved
+    return history_budget
+
+
 class GLMWebClient:
     def __init__(self, config: AppConfig, logger: Logger) -> None:
         self.config = config
@@ -183,9 +256,7 @@ class GLMWebClient:
         max_empty_response_retries = self.config.glm_empty_response_max_retries
         empty_retries = 0
         history_budget = self.config.glm_history_max_chars
-        history_tool_call_signatures = extract_history_tool_call_signatures(
-            list(payload.get("messages", [])) # type: ignore[arg-type]
-        )
+        prompt_chars = _estimate_prompt_chars(payload)
         history_tool_call_signatures = extract_history_tool_call_signatures(
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
@@ -204,43 +275,10 @@ class GLMWebClient:
                 debug_enabled=self.config.debug_dump_all,
                 logger=self.logger,
                 history_tool_call_signatures=history_tool_call_signatures,
+                prompt_chars=prompt_chars,
             )
 
         accumulator = new_accumulator()
-
-        def blocked_tool_follow_up_payload() -> dict[str, object] | None:
-            if not accumulator.blocked_tool_attempt_names:
-                return None
-            blocked = sorted(set(accumulator.blocked_tool_attempt_names))
-            allowed = sorted(allowed_tool_names or [])
-            follow_up = dict(payload)
-            messages = list(payload.get("messages", [])) # type: ignore[arg-type]
-            rendered_text, _ = accumulator._render_full_output()
-            assistant_content = rendered_text.strip()
-            if assistant_content:
-                assistant_text = assistant_content + "\n\nTool call attempt: " + ", ".join(blocked)
-            else:
-                assistant_text = "Tool call attempt: " + ", ".join(blocked)
-            messages = messages + [
-                {
-                    "role": "assistant",
-                    "content": assistant_text,
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "The tool(s) "
-                        + ", ".join(f"`{name}`" for name in blocked)
-                        + " do NOT exist in this environment and were NOT executed. Do not call them again."
-                        + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
-                        + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
-                        + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
-                        + " Continue the task now with the available tools. Output ONLY the structured tool call for the next step. Do NOT output any apologies, conversational text, or meta-explanations."
-                    ),
-                },
-            ]
-            follow_up["messages"] = messages
-            return follow_up
 
         try:
             attempt = 0
@@ -294,7 +332,7 @@ class GLMWebClient:
                         # Negative tool-result round instead of silently
                         # dropping blocked tool calls (see stream path).
                         blocked_follow_ups += 1
-                        follow_up = blocked_tool_follow_up_payload()
+                        follow_up = _build_blocked_tool_follow_up_payload(payload, accumulator, allowed_tool_names)
                         if follow_up is None:
                             return result, accumulator.conversation_id
                         self.logger.warning(
@@ -321,15 +359,8 @@ class GLMWebClient:
                     max_stream_retries,
                     retry_exc,
                 )
-                if retry_exc is not None and "code=10040" in str(retry_exc):
-                    halved = max(20000, history_budget // 2)
-                    if halved < history_budget:
-                        history_budget = halved
-                        payload["_glm_history_budget"] = halved
-                        self.logger.info(
-                            "Upstream 10040 (context exceeded) — halved history budget to %s chars",
-                            halved,
-                        )
+                if retry_exc is not None:
+                    history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 accumulator = new_accumulator()
                 response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
@@ -380,6 +411,7 @@ class GLMWebClient:
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
         history_budget = self.config.glm_history_max_chars
+        prompt_chars = _estimate_prompt_chars(payload)
 
         def new_accumulator() -> GLMEventAccumulator:
             return GLMEventAccumulator(
@@ -389,6 +421,7 @@ class GLMWebClient:
                 debug_enabled=self.config.debug_dump_all,
                 logger=self.logger,
                 history_tool_call_signatures=history_tool_call_signatures,
+                prompt_chars=prompt_chars,
             )
 
         lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")
@@ -399,45 +432,6 @@ class GLMWebClient:
             raise
 
         accumulator = new_accumulator()
-
-        def blocked_tool_follow_up_payload() -> dict[str, object] | None:
-            # Negative tool-result round: the model tried to call a blocked/
-            # undeclared tool (e.g. open_url). Instead of silently dropping
-            # the call (which makes the model repeat until its client-side
-            # round limit is burnt), inject an explicit "tool not available"
-            # turn into the conversation and let it answer properly.
-            if not accumulator.blocked_tool_attempt_names:
-                return None
-            blocked = sorted(set(accumulator.blocked_tool_attempt_names))
-            allowed = sorted(allowed_tool_names or [])
-            follow_up = dict(payload)
-            messages = list(payload.get("messages", [])) # type: ignore[arg-type]
-            rendered_text, _ = accumulator._render_full_output()
-            assistant_content = rendered_text.strip()
-            if assistant_content:
-                assistant_text = assistant_content + "\n\nTool call attempt: " + ", ".join(blocked)
-            else:
-                assistant_text = "Tool call attempt: " + ", ".join(blocked)
-            messages = messages + [
-                {
-                    "role": "assistant",
-                    "content": assistant_text,
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "The tool(s) "
-                        + ", ".join(f"`{name}`" for name in blocked)
-                        + " do NOT exist in this environment and were NOT executed. Do not call them again."
-                        + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
-                        + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
-                        + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
-                        + " Continue the task now with the available tools. Output ONLY the structured tool call for the next step. Do NOT output any apologies, conversational text, or meta-explanations."
-                    ),
-                },
-            ]
-            follow_up["messages"] = messages
-            return follow_up
 
         def generate():
             nonlocal response, assistant_id, accumulator, empty_retries, history_budget
@@ -509,7 +503,7 @@ class GLMWebClient:
                         # instead of forwarding the blocked-call notice
                         # as final assistant text.
                         blocked_follow_ups += 1
-                        follow_up = blocked_tool_follow_up_payload()
+                        follow_up = _build_blocked_tool_follow_up_payload(payload, accumulator, allowed_tool_names)
                         if follow_up is None:
                             self.logger.warning("blocked_tool_follow_up_payload returned None; blocked=%s", blocked)
                             for chunk in finalize_chunks:
@@ -568,15 +562,8 @@ class GLMWebClient:
                     max_stream_retries,
                     retry_exc,
                 )
-                if retry_exc is not None and "code=10040" in str(retry_exc):
-                    halved = max(20000, history_budget // 2)
-                    if halved < history_budget:
-                        history_budget = halved
-                        payload["_glm_history_budget"] = halved
-                        self.logger.info(
-                            "Upstream 10040 (context exceeded) — halved history budget to %s chars",
-                            halved,
-                        )
+                if retry_exc is not None:
+                    history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 accumulator = new_accumulator()
                 response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
@@ -758,7 +745,6 @@ class GLMWebClient:
             tools=filtered_tools,
             blocked_tool_names={name.strip() for name in self.config.blocked_tool_names if name.strip()},
             tool_choice=openai_payload.get("tool_choice"),
-            server_side_tool_names=SERVER_SIDE_TOOL_NAMES,
         )
         debug_dump(self.logger, self.config.debug_dump_all, "OpenAI raw chat request payload", openai_payload)
         debug_dump(self.logger, self.config.debug_dump_all, "Converted GLM messages", converted_messages)
@@ -1111,7 +1097,11 @@ class GLMWebClient:
             if not raw_chunk:
                 break
 
-            pending += decoder.decode(raw_chunk, False).replace("\r\n", "\n")
+            # \r\n-Normalisierung auf dem AKKUMULIERTEN pending: ein Paar,
+            # das ueber eine 4096er chunk-grenze split ('\r' | '\n'), wird
+            # sonst nie ersetzt — die block-separatoren bleiben unerkannt
+            # und events gehen als 'unparseable fragment' verloren.
+            pending = (pending + decoder.decode(raw_chunk, False)).replace("\r\n", "\n")
 
             while "\n\n" in pending:
                 block, pending = pending.split("\n\n", 1)
@@ -1126,7 +1116,7 @@ class GLMWebClient:
 
         remaining = decoder.decode(b"", True)
         if remaining:
-            pending += remaining
+            pending = (pending + remaining).replace("\r\n", "\n")
 
         if pending.strip():
             event = emit_block(pending.strip())

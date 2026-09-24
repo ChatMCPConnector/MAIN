@@ -17,7 +17,7 @@ class _RetryConfig:
     glm_delete_conversation = False
     glm_queue_wait_timeout = 5
     glm_max_concurrency = 1
-    glm_base_url = "https:/​/chatglm.cn/chatglm"
+    glm_base_url = "https://chatglm.cn/chatglm"
 
 
 def _error_event(code=10025, message="stream request error"):
@@ -445,3 +445,53 @@ def test_empty_response_gives_up_after_max_retries():
     chunks = list(client.stream_chat_completion({"model": "glm-test", "messages": [{"role": "user", "content": "hi"}]}))
     assert calls["count"] == 1 + _RetryConfig.glm_empty_response_max_retries  # versuch + 2 retries
     assert any(b"data: [DONE]" == c.strip() for c in chunks)
+
+
+class _ChunkedRawResponse:
+    """Simuliert http.client.HTTPResponse mit Chunk-Grenze mitten in \r\n."""
+
+    def __init__(self, data: bytes, chunk_size: int = 4096):
+        self._data = data
+        self._chunk_size = chunk_size
+
+    def read(self, size=-1):
+        if not self._data:
+            return b""
+        chunk, self._data = self._data[: self._chunk_size], self._data[self._chunk_size :]
+        return chunk
+
+    def close(self):
+        pass
+
+
+def _sse_client():
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = _RetryConfig()
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None,
+        info=lambda *a, **k: None,
+        debug=lambda *a, **k: None,
+    )
+    return client
+
+
+def test_sse_parser_splits_blocks_with_crlf_across_chunk_boundary():
+    """Regression: \r\n wurde pro chunk normalisiert, nicht auf dem
+    akkumulierten puffer — ein Paar ueber die 4096er chunk-grenze blieb
+    unerkannt, die events gingen als 'unparseable fragment' verloren."""
+    client = _sse_client()
+    prefix = b"x" * 4095 + b"\r"  # chunk 1 endet mit \r
+    response = _ChunkedRawResponse(prefix + b"\ndata: {\"a\":1}\r\n\r\ndata: {\"b\":2}\r\n\r\n")
+
+    events = list(client._iter_sse_events(response))
+
+    assert events == [{"a": 1}, {"b": 2}]
+
+
+def test_sse_parser_handles_crlf_events_without_chunk_split():
+    client = _sse_client()
+    response = _ChunkedRawResponse(b'data: {"a":1}\r\n\r\ndata: [DONE]\r\n\r\n')
+
+    events = list(client._iter_sse_events(response))
+
+    assert events == [{"a": 1}]

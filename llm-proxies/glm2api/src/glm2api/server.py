@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging import Logger
 from urllib.parse import urlparse
 
+from . import __version__
 from .config import AppConfig
 from .logging_utils import debug_dump
 from .services.anthropic_adapter import (
@@ -26,7 +27,7 @@ from .services.responses_adapter import (
 
 
 _CLIENT_DISCONNECTED = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.timeout)
-RESPONSES_STREAM_HEARTBEAT_SECONDS = 5.0
+STREAM_HEARTBEAT_SECONDS = 5.0
 
 
 class GLM2APIServer:
@@ -56,7 +57,7 @@ class GLM2APIServer:
         logger = self.logger
 
         class RequestHandler(BaseHTTPRequestHandler):
-            server_version = "glm2api/0.1.0"
+            server_version = f"glm2api/{__version__}"
             protocol_version = "HTTP/1.1"
 
             def do_OPTIONS(self) -> None:
@@ -190,7 +191,7 @@ class GLM2APIServer:
                         return
 
                     logger.info("Received chat request model=%s", payload.get("model"))
-                    result, conversation_id = glm_client.chat_completion(payload)
+                    result, _ = glm_client.chat_completion(payload)
                     self._write_json(HTTPStatus.OK, result)
                 except QueueTimeoutError as exc:
                     logger.warning("GLM queue wait timeout error=%s", exc)
@@ -239,41 +240,15 @@ class GLM2APIServer:
                 stream_iter = glm_client.stream_chat_completion(openai_payload)
                 accumulator = AnthropicStreamAccumulator(model=model)
 
-                self.send_response(HTTPStatus.OK)
-                self._send_common_headers()
-                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "close")
-                self.end_headers()
-
-                try:
-                    for chunk in stream_iter:
-                        if not chunk:
-                            continue
-                        if not accumulator.started:
-                            start_event = accumulator.start_message()
-                            self.wfile.write(start_event.encode("utf-8"))
-                            self.wfile.flush()
-                        events = accumulator.feed_chunk(chunk)
-                        for event in events:
-                            self.wfile.write(event.encode("utf-8"))
-                            self.wfile.flush()
-                except _CLIENT_DISCONNECTED as exc:
-                    logger.warning("Client disconnected during Anthropic streaming response model=%s error=%s", model, exc)
-                    return
-                except Exception as exc:
-                    logger.error("Anthropic streaming request failed model=%s error=%s\n%s", model, exc, traceback.format_exc())
-
-                # Ensure message_stop is always sent (idempotent via _finished flag)
-                if accumulator.started:
-                    try:
-                        for event in accumulator._finish():
-                            self.wfile.write(event.encode("utf-8"))
-                            self.wfile.flush()
-                    except _CLIENT_DISCONNECTED:
-                        pass
-
-                logger.info("Anthropic streaming request completed model=%s", model)
+                self._run_accumulated_sse_stream(
+                    stream_iter=stream_iter,
+                    accumulator=accumulator,
+                    start=lambda: [accumulator.start_message()],
+                    heartbeat=AnthropicStreamAccumulator.ping_event().encode("utf-8"),
+                    error_event=lambda exc: accumulator.error_event(str(exc), exc.__class__.__name__),
+                    model=model,
+                    label="Anthropic",
+                )
 
             # ---- OpenAI Responses API ----
 
@@ -293,6 +268,31 @@ class GLM2APIServer:
                 openai_payload["stream"] = True
                 stream_iter = glm_client.stream_chat_completion(openai_payload)
                 accumulator = ResponsesStreamAccumulator(model=model)
+
+                self._run_accumulated_sse_stream(
+                    stream_iter=stream_iter,
+                    accumulator=accumulator,
+                    start=accumulator.start_response,
+                    heartbeat=b": keep-alive\n\n",
+                    error_event=lambda exc: accumulator.error_event(str(exc), exc.__class__.__name__),
+                    model=model,
+                    label="Responses",
+                )
+
+            def _run_accumulated_sse_stream(
+                self,
+                stream_iter,
+                accumulator,
+                start,
+                heartbeat: bytes,
+                error_event,
+                model: str,
+                label: str,
+            ) -> None:
+                """Gemeinsamer SSE-Loop fuer /v1/messages und /v1/responses:
+                heartbeat bei upstream-stille, spec-konforme error-events bei
+                mid-stream-fehlern (statt stillem abbruch) und idempotente
+                finish-events am ende."""
 
                 self.send_response(HTTPStatus.OK)
                 self._send_common_headers()
@@ -315,12 +315,13 @@ class GLM2APIServer:
 
                 threading.Thread(target=read_upstream, daemon=True).start()
 
+                failed: Exception | None = None
                 try:
                     while True:
                         try:
-                            queued = chunk_queue.get(timeout=RESPONSES_STREAM_HEARTBEAT_SECONDS)
+                            queued = chunk_queue.get(timeout=STREAM_HEARTBEAT_SECONDS)
                         except queue.Empty:
-                            self.wfile.write(b": keep-alive\n\n")
+                            self.wfile.write(heartbeat)
                             self.wfile.flush()
                             continue
 
@@ -332,30 +333,35 @@ class GLM2APIServer:
                         if not chunk:
                             continue
                         if not accumulator.started:
-                            start_events = accumulator.start_response()
-                            for event in start_events:
+                            for event in start():
                                 self.wfile.write(event.encode("utf-8"))
                             self.wfile.flush()
-                        events = accumulator.feed_chunk(chunk)  # type: ignore[arg-type]
-                        for event in events:
+                        for event in accumulator.feed_chunk(chunk):  # type: ignore[arg-type]
                             self.wfile.write(event.encode("utf-8"))
-                            self.wfile.flush()
+                        self.wfile.flush()
                 except _CLIENT_DISCONNECTED as exc:
-                    logger.warning("Client disconnected during Responses streaming response model=%s error=%s", model, exc)
+                    logger.warning("Client disconnected during %s streaming response model=%s error=%s", label, model, exc)
                     return
                 except Exception as exc:
-                    logger.error("Responses streaming request failed model=%s error=%s\n%s", model, exc, traceback.format_exc())
-
-                # Ensure response.completed is always sent (idempotent via _finished flag)
-                if accumulator.started:
+                    failed = exc
+                    logger.error("%s streaming request failed model=%s error=%s\n%s", label, model, exc, traceback.format_exc())
                     try:
-                        for event in accumulator._finish():
-                            self.wfile.write(event.encode("utf-8"))
-                            self.wfile.flush()
+                        self.wfile.write(error_event(exc).encode("utf-8"))
+                        self.wfile.flush()
                     except _CLIENT_DISCONNECTED:
                         pass
 
-                logger.info("Responses streaming request completed model=%s", model)
+                # Terminale finish-events nur im erfolggsfall — nach einem
+                # error-event waere message_stop/response.completed semantisch falsch.
+                if accumulator.started and failed is None:
+                    try:
+                        for event in accumulator.finish():
+                            self.wfile.write(event.encode("utf-8"))
+                        self.wfile.flush()
+                    except _CLIENT_DISCONNECTED:
+                        pass
+
+                logger.info("%s streaming request completed model=%s failed=%s", label, model, bool(failed))
 
             # ---- Chat completions (original) ----
 

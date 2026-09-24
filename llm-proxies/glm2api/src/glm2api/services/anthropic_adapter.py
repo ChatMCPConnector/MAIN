@@ -10,9 +10,7 @@ import json
 import time
 import uuid
 
-
-def _safe_json(obj: object) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+from ..utils.tool_protocol import safe_json_dumps as _safe_json
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +184,9 @@ def anthropic_to_openai(payload: dict[str, object]) -> dict[str, object]:
     # --- thinking ---
     thinking = payload.get("thinking")
     if isinstance(thinking, dict) and thinking.get("type") == "enabled":
-        result["reasoning_effort"] = thinking.get("budget_tokens", "medium")
+        # budget_tokens ist ein INT — keine Stufen-Angabe. Auf "medium"
+        # normalisieren (denken aktiviert), statt die Zahl durchzureichen.
+        result["reasoning_effort"] = "medium"
 
     return result
 
@@ -443,6 +443,23 @@ class AnthropicStreamAccumulator:
         }))
         events.append(self._sse("message_stop", {"type": "message_stop"}))
         return events
+
+    def finish(self) -> list[str]:
+        """Public: terminale events (idempotent) — server ruft das nach dem stream."""
+        return self._finish()
+
+    def error_event(self, message: str, error_type: str = "api_error") -> str:
+        """Anthropic SSE error event (spezifikationskonform) fuer mid-stream fehler."""
+        self._finished = True  # kein message_stop mehr nach einem error
+        return self._sse("error", {
+            "type": "error",
+            "error": {"type": error_type, "message": message},
+        })
+
+    @staticmethod
+    def ping_event() -> str:
+        """Heartbeat: ping event, damit clients/proxies bei langem thinking nicht timeouten."""
+        return 'event: ping\ndata: {"type": "ping"}\n\n'
 
     def _content_block_start(self, block_type: str, initial: dict[str, object]) -> str:
         block: dict[str, object] = {"type": block_type}

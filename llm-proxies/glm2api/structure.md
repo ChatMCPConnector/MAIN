@@ -42,11 +42,16 @@ Implementiert OpenAI-kompatible Endpunkte:
 
 ### **Anthropic-Adapter** (`anthropic_adapter.py`)
 - Anthropic → OpenAI Chat/Completions
-- Streaming-Umsetzung (SSE → Anthropic Events)
+- Streaming-Umsetzung (SSE → Anthropic Events) mit Ping-Heartbeat
+  und spec-konformem `error`-Event bei Midstream-Fehlern
 
 ### **Responses-Adapter** (`responses_adapter.py`)
 - OpenAI Responses → OpenAI Chat/Completions
-- Streaming mit Heartbeat (alle 5s)
+- Streaming mit Heartbeat (alle 5s) und `response.failed`-Event
+  bei Midstream-Fehlern
+
+> Beide Streaming-Pfade teilen sich denselben Server-Loop
+> (`_run_accumulated_sse_stream`) in `server.py`.
 
 ---
 
@@ -61,14 +66,20 @@ Implementiert OpenAI-kompatible Endpunkte:
 ### **Tool-Protokoll** (`tool_protocol.py`)
 - Serialisiert Tool-Calls in JSON-Format
 - Generiert Tool-Instructions für das Modell
-- Filtert blockierte Tools (`open_url`, `web.search`, etc.)
+- Filtert blockierte Tools (`open_url`, `web.search`, etc.) —
+  `BLOCKED_NATIVE_TOOL_NAMES` wird immer durchgesetzt, `BLOCKED_TOOL_NAMES`
+  aus der Config kommt zusätzlich dazu
 
 ### **Translator** (`translator.py`)
 - OpenAI Messages → GLM Transcript
 - Tool-Definitionen in Prompt injizieren
 - **Reasoning-Mapping**: `low/medium/high/max` → GLM `chat_mode`
 - Tool-Sanitization und Argument-Repair
-- **GLMEventAccumulator**: Akkumuliert Upstream-SSE-Events
+- **C0-Sanitizer** (THEMA 3): Steuerzeichen in Argumenten und
+  sichtbarem Content werden durch `?` ersetzt und geloggt; echtes UTF-8
+  bleibt unangetastet
+- **GLMEventAccumulator**: Akkumuliert Upstream-SSE-Events; schätzt
+  `usage` (~4 Zeichen/Token), da der Upstream keine Tokenzahlen liefert
 
 ---
 

@@ -14,12 +14,12 @@ BLOCKED_NATIVE_TOOL_NAMES = {
     "browse",
     "open_link",
     "web_search",
+    "web.search",
     "execute_sandbox_code",
     "code_interpreter",
     "sandbox",
     "run_code",
 }
-SERVER_SIDE_TOOL_NAMES: set[str] = set()
 
 CANONICAL_TOOL_CALL_EXAMPLE = (
     '{"tool_calls":[{"name":"TOOL_NAME","arguments":{"actual_parameter_name":"value"}}]}[]'
@@ -27,8 +27,7 @@ CANONICAL_TOOL_CALL_EXAMPLE = (
 
 
 def safe_json_dumps(payload: object) -> str:
-    json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return json_str.replace("\n", "\\n").replace("\r", "\\r")
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def normalize_tool_name(name: object) -> str:
@@ -71,15 +70,9 @@ def serialize_tool_result_block(tool_call_id: object, tool_name: str, content: s
 
 def build_tool_call_instructions(
     tool_names: list[str],
-    server_side_tool_names: set[str] | None = None,
     tool_choice_policy: dict[str, object] | None = None,
 ) -> str:
-    server_side_tool_names = server_side_tool_names or set()
-    xml_tools = [name for name in tool_names if name not in server_side_tool_names]
-    server_tools = [name for name in tool_names if name in server_side_tool_names]
-
-    available_xml_names = ", ".join(f"`{name}`" for name in xml_tools) or "`(none)`"
-    available_server_names = ", ".join(f"`{name}`" for name in server_tools) or "`(none)`"
+    available_names = ", ".join(f"`{name}`" for name in tool_names) or "`(none)`"
 
     policy = tool_choice_policy or {"mode": "auto", "tool_name": None}
     mode = str(policy.get("mode", "auto"))
@@ -91,7 +84,7 @@ def build_tool_call_instructions(
         "# TOOL USE PROTOCOL",
         "",
         "## Allowed tools (EXHAUSTIVE list — no others exist)",
-        f"Available tools: {available_xml_names}. No other tools exist — no browser, no open_url, no web.search, no execute_sandbox_code.",
+        f"Available tools: {available_names}. No other tools exist — no browser, no open_url, no web.search, no execute_sandbox_code.",
         "Only the tools listed above exist in this environment. Do not attempt to call any other tools.",
         "Before emitting any tool call, verify the tool name appears in the allowed list above. When a task requires tools (e.g. inspecting directories, creating files, running commands), you MUST call the appropriate allowed tool (e.g. bash, write). Never describe actions in prose instead of calling the tool.",
         "",
@@ -156,7 +149,6 @@ def tools_to_prompt(
     tools: list[dict[str, object]],
     blocked_tool_names: set[str] | None = None,
     tool_choice_policy: dict[str, object] | None = None,
-    server_side_tool_names: set[str] | None = None,
 ) -> str:
     tool_names: list[str] = []
     tool_schemas: list[str] = []
@@ -187,7 +179,6 @@ def tools_to_prompt(
         "",
         build_tool_call_instructions(
             tool_names,
-            server_side_tool_names=server_side_tool_names,
             tool_choice_policy=tool_choice_policy,
         ),
     ]

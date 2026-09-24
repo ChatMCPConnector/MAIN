@@ -10,9 +10,7 @@ import json
 import time
 import uuid
 
-
-def _safe_json(obj: object) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+from ..utils.tool_protocol import safe_json_dumps as _safe_json
 
 
 def _response_part_to_openai(part: dict[str, object]) -> dict[str, object] | None:
@@ -306,7 +304,7 @@ class ResponsesStreamAccumulator:
         self._full_text = ""  # accumulated full text for message done event
         self._current_msg_id: str | None = None
         self._current_fc_id: str | None = None
-        self._pending_tool_calls: dict[int, dict[str, str]] = {}
+        self._pending_tool_calls: dict[int, dict[str, object]] = {}
         self._message_started = False
         self._content_part_started = False
         self._completed_output: list[dict[str, object]] = []
@@ -463,7 +461,7 @@ class ResponsesStreamAccumulator:
                 args_delta = fn.get("arguments", "")
                 if args_delta:
                     tc_data = self._pending_tool_calls[tc_index]
-                    tc_data["arguments"] += str(args_delta)
+                    tc_data["arguments"] = str(tc_data["arguments"]) + str(args_delta)
                     events.append(self._sse("response.function_call_arguments.delta", {
                         "type": "response.function_call_arguments.delta",
                         "item_id": tc_data["id"],
@@ -613,6 +611,19 @@ class ResponsesStreamAccumulator:
         events.append(self._sse("response.completed", self._base_response("completed")))
         events.append("data: [DONE]\n\n")
         return events
+
+    def finish(self) -> list[str]:
+        """Public: terminale events (idempotent) — server ruft das nach dem stream."""
+        return self._finish()
+
+    def error_event(self, message: str, error_type: str = "api_error") -> str:
+        """Responses-SSE response.failed event fuer mid-stream fehler."""
+        self._finished = True  # kein response.completed mehr nach einem fail
+        failed_response = {
+            **self._base_response("failed"),
+            "error": {"code": error_type, "message": message},
+        }
+        return self._sse("response.failed", failed_response)
 
     def _sse(self, event_type: str, data: dict[str, object]) -> str:
         if data.get("object") == "response":

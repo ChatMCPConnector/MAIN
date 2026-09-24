@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from bisect import insort
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import Logger
 from typing import Any
@@ -17,21 +18,76 @@ from ..utils.tool_protocol import (
     BLOCKED_NATIVE_TOOL_NAMES,
     CANONICAL_TOOL_CALL_EXAMPLE,
     TOOL_FORMAT_REMINDER,
-    SERVER_SIDE_TOOL_NAMES,
     build_tool_call_instructions as _protocol_build_tool_call_instructions,
     filter_tools,
-    normalize_tool_name,
     safe_json_dumps,
     serialize_tool_call_block as _protocol_serialize_tool_call_block,
     serialize_tool_result_block as _protocol_serialize_tool_result_block,
     tools_to_prompt as _protocol_tools_to_prompt,
 )
 
-
 ASSISTANT_ID_PATTERN = re.compile(r"^[a-z0-9]{24,}$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()\"']+")
-POWERSHELL_CMDLET_PATTERN = re.compile(r"^[A-Z][A-Za-z]+-[A-Z][A-Za-z]+$")
-POWERSHELL_ALIASES = {"cat", "cd", "copy", "del", "dir", "echo", "erase", "ls", "md", "move", "pwd", "rd", "ren", "rm", "sc", "type"}
+
+_LOGGER = logging.getLogger("glm2api.translator")
+
+# THEMA 3 (optimierung.md): C0-Steuerzeichen ausser \n \t \r (plus DEL) sind
+# in Tool-Argumenten und sichtbarem Content nie legitim — das Modell streamt
+# sie gelegentlich alsEncoding-Verderb (z.B. 'zur\u0014ck' statt 'zurück').
+_C0_ALLOWED = {"\n", "\t", "\r"}
+
+
+def sanitize_control_characters(text: str) -> tuple[str, int]:
+    """Ersetzt C0-Steuerzeichen (ausser \\n \\t \\r) und DEL durch '?'.
+
+    Returns (bereinigter_text, anzahl_ersetzungen). Valides UTF-8 (echte
+    Umlaute etc.) bleibt unangetastet."""
+    if not text:
+        return text, 0
+    cleaned: list[str] = []
+    replaced = 0
+    for ch in text:
+        code = ord(ch)
+        if (code < 32 and ch not in _C0_ALLOWED) or code == 127:
+            cleaned.append("?")
+            replaced += 1
+        else:
+            cleaned.append(ch)
+    if not replaced:
+        return text, 0
+    return "".join(cleaned), replaced
+
+
+def _sanitize_value_control_chars(value: object) -> tuple[object, int, set[str]]:
+    """Rekursiver C0-Sanitizer fuer geparste Tool-Argumente.
+    Returns (bereinigter_wert, anzahl, gefundene_steuerzeichen)."""
+    if isinstance(value, str):
+        cleaned, count = sanitize_control_characters(value)
+        if not count:
+            return value, 0, set()
+        chars = {ch for ch in value if (ord(ch) < 32 and ch not in _C0_ALLOWED) or ord(ch) == 127}
+        return cleaned, count, chars
+    if isinstance(value, list):
+        cleaned_items: list[object] = []
+        total = 0
+        found: set[str] = set()
+        for item in value:
+            cleaned_item, count, chars = _sanitize_value_control_chars(item)
+            cleaned_items.append(cleaned_item)
+            total += count
+            found |= chars
+        return cleaned_items, total, found
+    if isinstance(value, dict):
+        cleaned_dict: dict[str, object] = {}
+        total = 0
+        found: set[str] = set()
+        for key, item in value.items():
+            cleaned_item, count, chars = _sanitize_value_control_chars(item)
+            cleaned_dict[key] = cleaned_item
+            total += count
+            found |= chars
+        return cleaned_dict, total, found
+    return value, 0, set()
 
 
 
@@ -141,6 +197,34 @@ def extract_recent_user_url(messages: list[dict[str, object]]) -> str | None:
 _BROKEN_DICT_ACCESS = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)'([A-Za-z_][A-Za-z0-9_]*)'")
 _PYTHON_CMD_INNER = re.compile(r"""^(python3?|pypy3?)\s+-c\s+(?:"([^"]*)"|'([^']*)')\s*$""", re.DOTALL)
 
+# JSON-Ersatzzeichen fuer den _raw-Repair-Pfad: single-pass, UTF-8-sicher.
+# unicode_escape hat latin-1-semantik und macht aus 'ü' ein 'Ã¼' — deshalb
+# hier JSON als primaeren Decoder und nur fuer harte Faelle einen
+# regex-fallback fuer die haeufigsten escapes.
+_ESCAPE_SEQ_RE = re.compile(r"\\(u[0-9a-fA-F]{4}|.)", re.DOTALL)
+_JSON_UNESCAPES = {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f"}
+
+
+def _decode_escaped_text(raw: str) -> str:
+    """Dekodiert JSON-Style-Escapes in einem Roh-String OHNE UTF-8 zu verderben."""
+    try:
+        decoded = json.loads(f'"{raw}"')
+        if isinstance(decoded, str):
+            return decoded
+    except json.JSONDecodeError:
+        pass
+
+    def _sub(match: re.Match[str]) -> str:
+        seq = match.group(1)
+        if len(seq) == 5 and seq[0] == "u":
+            try:
+                return chr(int(seq[1:], 16))
+            except ValueError:
+                return match.group(0)
+        return _JSON_UNESCAPES.get(seq, match.group(0))
+
+    return _ESCAPE_SEQ_RE.sub(_sub, raw)
+
 
 def _python_compiles(code: str) -> bool:
     """Der Compile-Oracle: true wenn der code syntaktisch gueltiges python ist."""
@@ -180,12 +264,7 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
             content_start = c_match.end()
             content_end = raw_str.rfind('"')
             if content_end > content_start:
-                content_raw = raw_str[content_start:content_end]
-                try:
-                    content_decoded = content_raw.encode("utf-8").decode("unicode_escape")
-                except Exception:
-                    content_decoded = content_raw
-                return {"filePath": file_path, "content": content_decoded}
+                return {"filePath": file_path, "content": _decode_escaped_text(raw_str[content_start:content_end])}
     elif tool_name in {"read"}:
         fp_match = re.search(r"\"filePath\"\s*:\s*\"([^\"]+)\"", raw_str)
         if fp_match:
@@ -196,12 +275,7 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
             cmd_start = cmd_match.end()
             cmd_end = raw_str.rfind('"')
             if cmd_end > cmd_start:
-                cmd_raw = raw_str[cmd_start:cmd_end]
-                try:
-                    cmd_decoded = cmd_raw.encode("utf-8").decode("unicode_escape")
-                except Exception:
-                    cmd_decoded = cmd_raw
-                return {"command": cmd_decoded}
+                return {"command": _decode_escaped_text(raw_str[cmd_start:cmd_end])}
     return None
 
 
@@ -280,34 +354,16 @@ def sanitize_tool_call_payload(
             if re.match(r"^(python3?|pypy3?)\s", stripped):
                 cleaned["command"] = repair_python_command_quotes(command)
 
-    if tool_name == "shell":
-        command = cleaned.get("command")
-        if isinstance(command, str):
-            stripped_command = command.strip()
-            if stripped_command.startswith("["):
-                try:
-                    parsed_command = json.loads(stripped_command)
-                except json.JSONDecodeError:
-                    parsed_command = None
-                if isinstance(parsed_command, list):
-                    cleaned["command"] = [str(part) for part in parsed_command]
-            elif stripped_command.startswith('"'):
-                try:
-                    parsed_command = json.loads(f"[{stripped_command}]")
-                except json.JSONDecodeError:
-                    parsed_command = None
-                if isinstance(parsed_command, list):
-                    cleaned["command"] = [str(part) for part in parsed_command]
-            else:
-                cleaned["command"] = ["powershell.exe", "-Command", stripped_command]
-        elif isinstance(command, list) and command:
-            command_parts = [str(part) for part in command]
-            command_name = command_parts[0].strip()
-            lower_name = command_name.lower()
-            is_shell_host = lower_name in {"powershell", "powershell.exe", "pwsh", "pwsh.exe", "cmd", "cmd.exe"}
-            is_powershell_command = bool(POWERSHELL_CMDLET_PATTERN.fullmatch(command_name)) or lower_name in POWERSHELL_ALIASES
-            if is_powershell_command and not is_shell_host:
-                cleaned["command"] = ["powershell.exe", "-Command", " ".join(command_parts)]
+    # THEMA 3 (F1): C0-Steuerzeichen in den Argumenten ersetzen + loggen.
+    sanitized_value, control_count, control_chars = _sanitize_value_control_chars(cleaned)
+    if control_count:
+        cleaned = sanitized_value  # type: ignore[assignment]
+        _LOGGER.warning(
+            "Sanitized control characters in tool call arguments tool=%s count=%s chars=%s",
+            tool_name,
+            control_count,
+            sorted(repr(ch) for ch in control_chars),
+        )
 
     return cleaned
 
@@ -408,6 +464,16 @@ def strip_meta_chatter(text: str) -> str:
     return "".join(kept_lines).strip()
 
 
+def _extract_code_like(parsed: Mapping[str, object]) -> str:
+    return str(
+        parsed.get("code", "")
+        or parsed.get("command", "")
+        or parsed.get("script", "")
+        or parsed.get("input", "")
+        or ""
+    ).strip()
+
+
 def is_dummy_sandbox_code(arguments: object) -> bool:
     """Detects self-chastising or dummy no-op code snippets emitted by GLM."""
     parsed = arguments
@@ -418,13 +484,7 @@ def is_dummy_sandbox_code(arguments: object) -> bool:
             parsed = {"code": arguments}
     if not isinstance(parsed, dict):
         return False
-    code = str(
-        parsed.get("code", "")
-        or parsed.get("command", "")
-        or parsed.get("script", "")
-        or parsed.get("input", "")
-        or ""
-    ).strip().lower()
+    code = _extract_code_like(parsed).lower()
     if not code:
         return True
     if code in _DUMMY_SANDBOX_PATTERNS:
@@ -472,13 +532,7 @@ def map_native_sandbox_tool_call(
     if not isinstance(parsed, dict):
         return None
 
-    code = str(
-        parsed.get("code", "")
-        or parsed.get("command", "")
-        or parsed.get("script", "")
-        or parsed.get("input", "")
-        or ""
-    ).strip()
+    code = _extract_code_like(parsed)
 
     if not code:
         return None
@@ -616,10 +670,14 @@ def compress_history_messages(
     if total <= max_total_chars:
         return messages
 
-    # von hinten (neueste) sammeln, paare intakt lassen
+    # von hinten (neueste) sammeln, paare intakt lassen. first_kept ist der
+    # index der ersten roh erhaltenen message; die message, die das budget
+    # sprengt, faellt in die summary — ausnahme: ist sie die neueste
+    # ueberhaupt (kept leer), bleibt sie roh (sonst wuerde die aktuelle
+    # frage wegsummarisiert).
     kept: list[dict[str, object]] = []
     running = 0
-    boundary = len(messages)
+    first_kept = len(messages)
     i = len(messages) - 1
     while i >= 0:
         message = messages[i]
@@ -633,7 +691,7 @@ def compress_history_messages(
             if prev_role == "assistant" and prev.get("tool_calls"):
                 size += _msg_size(prev)
                 if running + size > max_total_chars:
-                    boundary = i + 1
+                    first_kept = i + 1
                     break
                 kept.insert(0, prev)
                 kept.insert(1, message)
@@ -641,15 +699,15 @@ def compress_history_messages(
                 i -= 2
                 continue
         if running + size > max_total_chars:
-            boundary = i + 1
+            first_kept = i if not kept else i + 1
             break
         kept.insert(0, message)
         running += size
         i -= 1
 
-    if boundary <= 0 or boundary > len(messages):
+    if first_kept <= 0 or first_kept >= len(messages):
         return messages
-    dropped = messages[: boundary - 1]
+    dropped = messages[:first_kept]
     # summary-budget: die snippets duerfen das gesamt-budget nicht sprengen —
     # jede gedroppte message maximal budget/8 zeichen, gesamt gedeckelt.
     per_snippet = max(120, max_total_chars // 8)
@@ -674,7 +732,7 @@ def compress_history_messages(
         + " | ".join(summary_parts)
     )
     summary_entry: dict[str, object] = {"role": "user", "content": summary}
-    return [summary_entry] + list(messages[boundary - 1 :])
+    return [summary_entry] + list(messages[first_kept:])
 
 
 def convert_messages(
@@ -682,7 +740,6 @@ def convert_messages(
     tools: list[dict[str, object]] | None,
     blocked_tool_names: set[str] | None = None,
     tool_choice: object | None = None,
-    server_side_tool_names: set[str] | None = None,
 ) -> list[dict[str, object]]:
     tools = filter_tools(tools, blocked_tool_names or set())
     available_tool_names = {
@@ -691,7 +748,6 @@ def convert_messages(
         if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
     }
     available_tool_names.discard("")
-    server_side_tool_names = server_side_tool_names or SERVER_SIDE_TOOL_NAMES
     tool_choice_policy = parse_tool_choice_policy(tool_choice, available_tool_names)
     processed: list[dict[str, str]] = []
     latest_user_url: str | None = extract_recent_user_url(messages)
@@ -768,7 +824,6 @@ def convert_messages(
                 tools,
                 blocked_tool_names=blocked_tool_names,
                 tool_choice_policy=tool_choice_policy,
-                server_side_tool_names=server_side_tool_names,
             )
         )
         transcript_parts.append("# CONVERSATION")
@@ -792,22 +847,13 @@ def convert_messages(
     return [{"role": "user", "content": [{"type": "text", "text": prompt + "\n\nAssistant: "}]}]
 
 
-def _conversation_has_tool_round(processed: list[dict[str, str]]) -> bool:
-    for item in processed:
-        content = item.get("content", "")
-        role = item.get("role", "")
-        if role == "assistant" and '{"tool_calls"' in content:
-            return True
-        if role == "user" and '[{"call_id"' in content:
-            return True
-    return False
-
-
 def resolve_upstream_model(requested_model: str, config: AppConfig) -> tuple[str, str]:
+    """Base-Modell (ohne think/search-Suffixe) + assistant_id (falls das
+    Modell selbst eine 24-stellige hex-id ist, wird sie als assistant_id
+    interpretiert)."""
     base_model, _ = split_model_features(requested_model)
-    upstream_model = config.model_aliases.get(base_model, base_model)
-    assistant_id = upstream_model if ASSISTANT_ID_PATTERN.fullmatch(upstream_model) else config.glm_assistant_id
-    return upstream_model, assistant_id
+    assistant_id = base_model if ASSISTANT_ID_PATTERN.fullmatch(base_model) else config.glm_assistant_id
+    return base_model, assistant_id
 
 
 # Reasoning levels: real chat_mode values of the chatglm.cn web UI (verified
@@ -820,7 +866,6 @@ def resolve_upstream_model(requested_model: str, config: AppConfig) -> tuple[str
 # Hinweis: "deep_thinking" ist der ChatGLM-Web-Research-Modus (verursacht Latenzen
 # und Fails durch interne Web-Scraper-Schleifen). Daher mappt "max" direkt auf "thinking".
 CHAT_MODE_THINKING = "thinking"
-CHAT_MODE_DEEP_THINKING = "thinking"
 
 _EFFORT_TO_CHAT_MODE = {
     # low    = quick (no thinking)
@@ -908,6 +953,7 @@ class GLMEventAccumulator:
     _known_logic_ids_for_reasoning: list[str] = field(default_factory=list)
     tool_parser: StreamingToolParser = field(default_factory=StreamingToolParser)
     emitted_role: bool = False
+    prompt_chars: int = 0
     _render_cache_dirty: bool = True
     _cached_full_text: str = ""
     _cached_full_reasoning: str = ""
@@ -929,10 +975,42 @@ class GLMEventAccumulator:
         internal thinking part and otherwise treats the turn as a successful
         stop, leaving an executing agent unable to continue.
         """
-        text, _ = self._render_full_output()
+        text, _ = self.render_full_output()
         has_calls = bool(self._server_side_tool_calls or self.tool_parser.tool_calls)
         has_blocked = bool(self.blocked_tool_attempt_names)
         return not text.strip() and not has_calls and not has_blocked
+
+    def render_full_output(self) -> tuple[str, str]:
+        """Public: (volltext, reasoning) — u.a. fuer follow-up-renders."""
+        return self._render_full_output()
+
+    def _estimated_usage(self, completion_chars: int) -> dict[str, int]:
+        """Grobe Token-Schaetzung (~4 Zeichen/Token): der Upstream liefert
+        keine echten Usage-Zahlen, aber 1/1/2-Platzhalter verwirren jedes
+        Kosten-Tracking im Client."""
+        prompt_tokens = max(1, self.prompt_chars // 4)
+        completion_tokens = max(1, completion_chars // 4)
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+
+    def _completion_chars(self, final_text: str, all_tool_calls: list[dict[str, object]]) -> int:
+        chars = len(final_text) + len(self._cached_full_reasoning)
+        for tool_call in all_tool_calls:
+            function = tool_call.get("function", {})
+            if isinstance(function, dict):
+                chars += len(str(function.get("name", ""))) + len(str(function.get("arguments", "")))
+        return chars
+
+    def _sanitize_visible_text(self, final_text: str) -> str:
+        """THEMA 3 (F2): C0-Steuerzeichen im sichtbaren Content ersetzen."""
+        cleaned, count = sanitize_control_characters(final_text)
+        if count:
+            log = self.logger or _LOGGER
+            log.warning("Sanitized %s control character(s) in visible response text", count)
+        return cleaned
 
     def consume_event(self, payload: dict[str, object]) -> tuple[list[str], str | None]:
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE parsed event", payload)
@@ -1092,6 +1170,8 @@ class GLMEventAccumulator:
 
         visible_text_delta = self.tool_parser.consume(text_delta)
         if visible_text_delta:
+            # THEMA 3 (F2): C0-Steuerzeichen im gestreamten Content ersetzen
+            visible_text_delta = self._sanitize_visible_text(visible_text_delta)
             fence_pending = self._deferred_visible_text.count("```") % 2 == 1
             fence_opens = "```" in visible_text_delta
             # Midstream-Guard (Re-Befund C): ein delta, das Protokoll-
@@ -1159,12 +1239,9 @@ class GLMEventAccumulator:
             inner = stripped
             if not inner.lstrip().startswith('{"tool_calls"'):
                 continue
-            # Fences, die das Protokoll umschliessen: nur ungefaehr nothing else
-            # erlauben (trailing []-terminator + whitespace ist ok)
-            remainder = inner.strip()
-            if remainder.startswith('{"tool_calls"'):
-                # nur wenn das GESAMTE fence dem protokoll entspricht
-                result = result[: match.start()] + inner + result[match.end():]
+            # nur wenn das GESAMTE fence dem protokoll entspricht
+            # (trailing []-terminator + whitespace ist ok)
+            result = result[: match.start()] + inner + result[match.end():]
         if result != text:
             return result
         return None
@@ -1259,6 +1336,7 @@ class GLMEventAccumulator:
                     + f". Blocked. Only these tools are allowed in this round: {allowed_names}."
                 )
         if final_text:
+            final_text = self._sanitize_visible_text(final_text)
             if all_tool_calls:
                 final_text = strip_meta_chatter(final_text)
             elif strip_meta_chatter(final_text) == "":
@@ -1283,13 +1361,14 @@ class GLMEventAccumulator:
             )
 
         if status == "intervene" and last_error and last_error.get("intervene_text"):
+            intervene_text = self._sanitize_visible_text(str(last_error["intervene_text"]))
             chunks.append(
                 self._chunk_json(
                     {
                         "choices": [
                             {
                                 "index": 0,
-                                "delta": {"content": "\n\n" + str(last_error["intervene_text"])},
+                                "delta": {"content": "\n\n" + intervene_text},
                                 "finish_reason": None,
                             }
                         ]
@@ -1373,7 +1452,7 @@ class GLMEventAccumulator:
                             "finish_reason": finish_reason,
                         }
                     ],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    "usage": self._estimated_usage(self._completion_chars(final_text, all_tool_calls)),
                 }
             )
         )
@@ -1408,14 +1487,17 @@ class GLMEventAccumulator:
                 and name.lower() not in {"finish", "intervene", "cancel", "none"}
             )
 
-        # Merge server-side and XML tool calls, re-indexing
+        # Merge server-side and XML tool calls, re-indexing; wie in finalize()
+        # auch die gemergte liste sanitizen (reparatur + C0-filter, paritaet
+        # zum stream-pfad)
         all_tool_calls: list[dict[str, object]] = list(self._server_side_tool_calls)
         for tc in xml_tool_calls:
             tc_copy = dict(tc)
             tc_copy["index"] = len(all_tool_calls)
             all_tool_calls.append(tc_copy)
+        all_tool_calls = sanitize_tool_calls(all_tool_calls, fallback_url=self.fallback_tool_url)
 
-        final_content = clean_content.strip()
+        final_content = self._sanitize_visible_text(clean_content.strip())
         if not all_tool_calls and not final_content and self.blocked_tool_attempt_names:
             blocked_names = ", ".join(sorted(set(self.blocked_tool_attempt_names)))
             final_content = (
@@ -1449,7 +1531,7 @@ class GLMEventAccumulator:
                     "finish_reason": "tool_calls" if all_tool_calls else "stop",
                 }
             ],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            "usage": self._estimated_usage(self._completion_chars(final_content or "", all_tool_calls)),
         }
         if self.logger:
             self.logger.info(

@@ -1,11 +1,10 @@
-from glm2api.config import BUILTIN_MODEL_ALIASES, BUILTIN_EXPOSED_MODELS
+from glm2api.config import BUILTIN_EXPOSED_MODELS
 from glm2api.model_variants import expand_model_variants, split_model_features
 from glm2api.services.translator import resolve_chat_mode, resolve_networking, resolve_upstream_model
 
 
 class _Config:
     glm_assistant_id = "65940acff94777010aa6b796"
-    model_aliases = {"glm-4": "glm-4", "custom": "65940acff94777010aa6b797"}
 
 
 def test_expand_model_variants_adds_think_search_and_combined_suffixes():
@@ -28,12 +27,18 @@ def test_split_model_features_accepts_think_search_in_either_order():
 
 def test_variant_model_resolves_to_base_upstream_model():
     upstream_model, assistant_id = resolve_upstream_model("glm-4-think-search", _Config())
-    custom_upstream, custom_assistant_id = resolve_upstream_model("custom-search", _Config())
 
     assert upstream_model == "glm-4"
     assert assistant_id == _Config.glm_assistant_id
-    assert custom_upstream == "65940acff94777010aa6b797"
-    assert custom_assistant_id == "65940acff94777010aa6b797"
+
+
+def test_assistant_id_model_name_is_used_as_assistant_id():
+    # Ein modellname, der selbst eine 24-stellige hex-id ist, wird als
+    # assistant_id interpretiert.
+    upstream_model, assistant_id = resolve_upstream_model("65940acff94777010aa6b797", _Config())
+
+    assert upstream_model == "65940acff94777010aa6b797"
+    assert assistant_id == "65940acff94777010aa6b797"
 
 
 def test_model_suffixes_resolve_chat_mode_and_networking_matrix():
@@ -54,11 +59,9 @@ def test_existing_thinking_model_name_still_enables_chat_mode():
     assert resolve_chat_mode("glm-4.1v-thinking-flashx", None, None) == "thinking"
 
 
-def test_glm_5_2_is_exposed_and_passed_through():
+def test_glm_5_2_is_exposed():
     assert "glm-5.2" in BUILTIN_EXPOSED_MODELS
-    assert BUILTIN_MODEL_ALIASES["glm-5.2"] == "glm-5.2"
 
 
-def test_glm_5_3_is_exposed_and_passed_through():
+def test_glm_5_3_is_exposed():
     assert "glm-5.3" in BUILTIN_EXPOSED_MODELS
-    assert BUILTIN_MODEL_ALIASES["glm-5.3"] == "glm-5.3"

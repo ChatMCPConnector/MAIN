@@ -5,7 +5,7 @@ import urllib.request
 from types import SimpleNamespace
 
 from glm2api import server as server_module
-from glm2api.services.anthropic_adapter import anthropic_to_openai
+from glm2api.services.anthropic_adapter import AnthropicStreamAccumulator, anthropic_to_openai
 from glm2api.services.glm_auth import GLMAccessTokenManager
 from glm2api.services.glm_client import GLMWebClient, UpstreamAPIError
 
@@ -172,7 +172,7 @@ def test_responses_stream_completes_on_finish_reason_without_done_sentinel():
 
 
 def test_responses_http_stream_sends_keepalive_while_upstream_is_idle(monkeypatch):
-    monkeypatch.setattr(server_module, "RESPONSES_STREAM_HEARTBEAT_SECONDS", 0.01)
+    monkeypatch.setattr(server_module, "STREAM_HEARTBEAT_SECONDS", 0.01)
 
     class FakeGLM:
         def stream_chat_completion(self, payload):
@@ -217,6 +217,54 @@ def test_responses_http_stream_sends_keepalive_while_upstream_is_idle(monkeypatc
     assert "response.completed" in stream_text
 
 
+def test_anthropic_http_stream_sends_ping_while_upstream_is_idle(monkeypatch):
+    monkeypatch.setattr(server_module, "STREAM_HEARTBEAT_SECONDS", 0.01)
+
+    class FakeGLM:
+        def stream_chat_completion(self, payload):
+            yield b'data: {"choices":[{"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n'
+            time.sleep(0.05)
+            yield b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+
+    class FakeLogger:
+        def debug(self, *args, **kwargs): pass
+        def info(self, *args, **kwargs): pass
+        def warning(self, *args, **kwargs): pass
+        def error(self, *args, **kwargs): pass
+
+    config = SimpleNamespace(
+        host="127.0.0.1",
+        port=0,
+        api_prefix="/v1",
+        cors_allow_origin="*",
+        server_api_keys=[],
+        debug_dump_all=False,
+        exposed_models=["glm-4"],
+    )
+    server = server_module.GLM2APIServer(config, FakeGLM(), FakeLogger())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server._server.server_address[1]
+    try:
+        body = json.dumps(
+            {"model": "glm-4", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/messages",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            stream_text = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        thread.join(timeout=1)
+
+    assert "event: ping" in stream_text
+    assert "message_stop" in stream_text
+
+
 def test_anthropic_to_openai_maps_tool_choice_variants():
     any_payload = {
         "model": "glm-4",
@@ -254,3 +302,77 @@ def test_glm_client_raises_for_sse_error_event():
         assert "stream request error" in str(exc)
     else:
         raise AssertionError("expected UpstreamAPIError")
+
+
+def test_anthropic_stream_error_event_shape():
+    accumulator = AnthropicStreamAccumulator(model="glm-4")
+    accumulator.start_message()
+    accumulator.feed_chunk(
+        b'data: {"choices":[{"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n'
+    )
+
+    event = accumulator.error_event("upstream kaputt", "UpstreamAPIError")
+    payload = json.loads(event.split("data: ", 1)[1])
+
+    assert event.startswith("event: error")
+    assert payload["type"] == "error"
+    assert payload["error"]["type"] == "UpstreamAPIError"
+    assert "upstream kaputt" in payload["error"]["message"]
+    # nach einem error darf kein message_stop mehr kommen
+    assert accumulator.finish() == []
+
+
+def test_anthropic_stream_ping_event_shape():
+    event = AnthropicStreamAccumulator.ping_event()
+    payload = json.loads(event.split("data: ", 1)[1])
+
+    assert event.startswith("event: ping")
+    assert payload["type"] == "ping"
+
+
+def test_anthropic_stream_finish_is_idempotent():
+    accumulator = AnthropicStreamAccumulator(model="glm-4")
+    accumulator.start_message()
+    accumulator.feed_chunk(
+        b'data: {"choices":[{"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n'
+    )
+
+    first = accumulator.finish()
+    second = accumulator.finish()
+
+    assert any("message_stop" in event for event in first)
+    assert second == []
+
+
+def test_responses_stream_error_event_shape():
+    accumulator = ResponsesStreamAccumulator(model="glm-4")
+    accumulator.start_response()
+    accumulator.feed_chunk(
+        b'data: {"choices":[{"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n'
+    )
+
+    event = accumulator.error_event("upstream kaputt", "UpstreamAPIError")
+    payload = json.loads(event.split("data: ", 1)[1])
+
+    assert event.startswith("event: response.failed")
+    assert payload["type"] == "response.failed"
+    assert payload["response"]["status"] == "failed"
+    assert payload["response"]["error"]["message"] == "upstream kaputt"
+    assert payload["response"]["error"]["code"] == "UpstreamAPIError"
+    # nach response.failed darf kein response.completed mehr kommen
+    assert accumulator.finish() == []
+
+
+def test_thinking_budget_tokens_normalizes_reasoning_effort():
+    # budget_tokens ist ein int — darf nicht ungeprueft als reasoning_effort
+    # durchgereicht werden (faellt sonst durchs mapping).
+    result = anthropic_to_openai(
+        {
+            "model": "glm-4",
+            "max_tokens": 1000,
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "enabled", "budget_tokens": 8000},
+        }
+    )
+
+    assert result["reasoning_effort"] == "medium"
