@@ -117,7 +117,7 @@
           "reasoning": true,
           "limit": {
             "context": 128000,
-            "output": 8192
+            "output": 32768
           },
           "options": {
             "reasoningEffort": "max"

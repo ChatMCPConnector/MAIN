@@ -722,7 +722,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
     glm_max_output_tokens = _config_int(
         values,
         "GLM_MAX_OUTPUT_TOKENS",
-        16384,
+        32768,
         1024,
         131072,
         logger,

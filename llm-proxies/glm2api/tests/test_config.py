@@ -461,3 +461,23 @@ def test_env_files_do_not_reintroduce_the_cors_wildcard():
             assert value != "*", "die beispielkonfiguration darf CORS nicht auf '*' setzen"
             return
     pytest.fail("CORS_ALLOW_ORIGIN fehlt in .env.example")
+
+
+def test_output_token_budget_allows_deep_reasoning_runs():
+    """Der standard muss gross genug sein, damit ein agentenlauf mit
+    `reasoning_effort: max` sein kontingent nicht durch das eigene
+    nachdenken verbraucht. Gemessen an einer echten session
+    (2026-09-25): 61 820 zeichen reasoning — bei 16 384 token standard
+    lief das nachdenken in die ausgabegrenze und der turn endete mit
+    `length` OHNE text und OHNE tool-call.
+
+    32 768 gibt dem denkkanal 22 937 token (70 %) und der lieferung
+    9 830 — beides reicht fuer einen arbeitsauftrag. Die
+    konfigurationsgrenze erlaubt bis 131 072, es ist also kein
+    grenzenfall."""
+    from glm2api.config import _config_int
+    import logging as _logging
+
+    logger = _logging.getLogger("glm2api.config.test_budget")
+    assert _config_int({}, "GLM_MAX_OUTPUT_TOKENS", 32768, 1024, 131072, logger) == 32768
+    assert _config_int({"GLM_MAX_OUTPUT_TOKENS": "32768"}, "GLM_MAX_OUTPUT_TOKENS", 32768, 1024, 131072, logger) == 32768

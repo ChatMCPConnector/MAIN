@@ -1161,6 +1161,44 @@ Stellen ist eine Fehlerquelle. Die Aufgabengrenze gehört in *eine*
 Komponente; alles andere darf sie nur noch **beobachten** (und
 darf stoppen, wenn die beobachtete Komponente selbst gestoppt hat).
 
+### F-5z AUTONOMIE: Der Agentenlauf muss zu Ende laufen (2026-09-25)
+
+Das Ziel aus dem Nutzerauftrag war ausdrücklich: **eine Aufgabe soll
+komplett autonom fertiggestellt werden — nicht mittendrin aufhören.**
+
+Der T-Output doppelte die F-5w1/F-5w2-Fehler und war die eigentliche
+Ursache: opencode forderte `max_tokens: 8192`, der Proxy erlaubte 16 384
+— und `min(client, global)` ergab **8 192**. Ein Run mit
+`reasoning_effort: max` braucht fürs Denken allein ~15 500 Token. Das
+Kontingent war also zu klein für die Aufgabe, bevor überhaupt etwas
+getan wurde.
+
+| Größe | vorher | jetzt |
+|---|---|---|
+| opencode `limit.output` | 8 192 | **32 768** |
+| Proxy-Standard `GLM_MAX_OUTPUT_TOKENS` | 16 384 | **32 768** |
+| wirksames Kontingent | 8 192 | **32 768** |
+| davon Denkkanal (70 %) | — | 22 937 Token |
+| davon Lieferung (30 %) | 0 bei langem Denken | 9 830 Token |
+
+Die Konfigurationsgrenze erlaubt bis 131 072 — 32 768 ist kein
+Grenzfall, sondern der kleinste Wert, der einen ernsthaften
+Arbeitsauftrag mit Deep-Thinking trägt.
+
+**Live gegengeprüft** mit zwei agentenartigen Läufen (echtes Volumen,
+`reasoning_effort: max`, Tools, Stream):
+- Verzeichnisanalyse mit `ls`/`wc` → `finish_reason: tool_calls`, Aufruf `bash`, Antwort in 4,2 s
+- Datei schreiben mit Planungsschritt → `finish_reason: tool_calls`, Aufruf `read`, **Argumente vollständig** (endet auf `}`)
+
+Beide: kein Abbruch, kein leerer Turn, Tool-Aufrufe ausführbar.
+
+**Was das nicht löst** (ehrlich benannt): die Garantie „läuft zu Ende"
+gibt opencode, nicht der Proxy. Der Proxy kann nur sicherstellen, dass
+ein Turn **nie leer** endet und ein Tool-Aufruf **nie halb** ankommt.
+Ob der Agent danach weiterarbeitet, entscheidet opencode. Mit 32 768
+statt 8 192 hat er dafür aber den Raum, den er für einen mehrstufigen
+Auftrag braucht.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.
