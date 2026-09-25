@@ -2055,6 +2055,9 @@ class StreamingToolParser:
     detect_all: bool = False
     buffering_dsml: bool = False
     _holdback_warned: bool = False
+    # T-06: anzahl der konsumierten, aber NICHT ausfuehrbaren
+    # call-protokolle (fehlendes pflichtargument beim aufruf).
+    dropped_call_count: int = 0
 
     def logger_warning_once(self, message: str) -> None:
         """Warnung genau einmal pro parser (P-14: puffer-grenzen-warnung)."""
@@ -2067,6 +2070,14 @@ class StreamingToolParser:
         if not chunk:
             return ""
         self.pending_text += chunk
+        # T-06: merken, ob ein vollstaendiges call-protokoll im puffer lag.
+        # Wird es danach konsumiert, ohne dass ein ausfuehrbarer call
+        # entsteht (`read` ohne filePath, `bash` ohne command), hat das
+        # modell einen aufruf gewollt, den es nicht ausfuehren kann. Das
+        # muss der accumulator erfahren — sonst gilt der turn als leerer
+        # ERFOLG und der agent bleibt stehen.
+        calls_before = len(self.tool_calls)
+        protocol_before = find_tool_calls_protocol(self.pending_text)
 
         if self.buffering_dsml:
             # P-14: puffer darf nicht unbegrenzt wachsen — ein niemals
@@ -2132,6 +2143,11 @@ class StreamingToolParser:
                 jvis, jrem, jcalls = _find_json_tool_call(self.pending_text, final=False, allowed_tool_names=self.allowed_tool_names, detect_all=self.detect_all)
                 if jvis:
                     emitted_vis.append(jvis)
+                # T-06: protokoll erkannt, aber kein ausfuehrbarer call
+                # entstanden (fehlendes pflichtargument) — das modell wollte
+                # einen aufruf, den es nicht ausfuehren kann.
+                if not jcalls:
+                    self.dropped_call_count += 1
                 self.tool_calls.extend(jcalls)
                 if jrem == self.pending_text:
                     break

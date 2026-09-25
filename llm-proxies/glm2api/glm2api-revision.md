@@ -766,6 +766,22 @@ sichert deshalb die gemessene Verbesserung ab, statt Linearität zu behaupten.
 | **D-05** (Reihenfolge) | Ein gesperrter nativer Call brach mit `return` den **gesamten** Parts-Durchlauf ab. Ein gültiger Call, der im selben Event **später** kam, ging verloren — reihenfolgeabhängig (blocked zuerst → 0 Calls, gültig zuerst → 1 Call). | Der Durchlauf läuft weiter; der gesperrte Call wird gemerkt und `intervene` wird einmalig am Ende gemeldet. |
 | **T-17** | Zwei Fehler: (a) der Meta-Chatter-Filter lief **nur** im Stream-Pfad — der Non-Stream-Client bekam `open ist nicht verfügbar` als Antwort, während der Stream `''` lieferte; (b) ein Schlüsselwort **irgendwo** in einer Zeile löschte die ganze Zeile — aus `Die Datei ist da, aber open ist nicht dasselbe wie read.` wurde `''`. | (a) Der Filter läuft jetzt unter derselben Bedingung in beiden Pfaden (nur wenn der Turn tatsächlich Calls ausliefert — ohne Call ist der Meta-Text die Antwort und bleibt stehen). (b) Das Schlüsselwort muss am **Zeilenanfang** stehen (evtl. nach einem Aufzählungspunkt). |
 
+### F-5m T-03, T-04, T-05, T-06 (2026-09-25)
+
+| Befund | Fehlverhalten (gemessen) | Umsetzung |
+|---|---|---|
+| **T-06** | Ein Turn, dessen Call wegen fehlendem Pflichtargument verworfen wurde (`write` ohne content, `read` ohne filePath, `bash` ohne command), galt danach als leerer **Erfolg**: `finish_reason=stop`, `content=None`, und der Leer-Retry feuerte nicht. Der Client bekam eine leere, erfolgreiche Antwort und blieb stehen. | Der Parser zählt konsumierte, aber nicht ausführbare Protokolle (`dropped_call_count`); der Accumulator behandelt „Call vorhanden, keiner ausführbar" als fehlerhaften Turn. Alle drei Fälle enden jetzt als `error` — der Client erkennt den Fehlschlag und kann neu ansetzen. |
+| **T-03** | Derselbe Aufruf aus nativem Pfad **und** Text-Pfad kam doppelt an: die Identität ist die Call-ID, ein Text-Call bekommt aber bei jedem Parse eine frische UUID. | Quellübergreifender Abgleich über Name + normalisierte Argumente. Innerhalb einer Quelle bleibt die ID maßgeblich. |
+| **T-04** | Drei Anforderungen kollidierten: (a) zwei bewusst gleiche Calls sind zwei Aufrufe, (b) eine Degenerationsschleife mit 36 identischen Calls darf nicht 36 Ausführungen ergeben, (c) ein Echo aus der Historie bleibt draußen. Vorher blieb bei (a) nur der erste. | Pro Signatur sind **bis zu zwei** Aufrufe pro Turn erlaubt: ein Wiederholungsversuch ist plausibel, die Schleife wird gebrochen. (c) bleibt über den Historienabgleich erhalten. Der bestehende Test, der 36 identische Calls auf 1 reduzierte, wurde bewusst auf 2 angehoben. |
+| **T-05** | Ein Call im Reasoning-Kanal lag doppelt vor — einmal aus den Deltas, einmal aus der Auswertung im `finalize`. Im Stream kamen zwei Chunks mit verschiedenen IDs an. | Die Überlappung wird entfernt statt die Liste nachträglich dedupliziert: bereits erfasste Signaturen (aus den Deltas **und** aus dem Parser) werden bei der zweiten Auswertung übersprungen. |
+
+**Zwischenerkenntnis beim Umsetzen:** Der Filter für T-05 las zunächst die
+leere Liste, weil `self._deferred_reasoning_calls` zwei Zeilen vorher
+geleert wird. Ein solcher Fehler ist beim Lesen des Codes nicht sichtbar —
+erst der Messwert (2 IDs statt 1) hat ihn gezeigt. Das ist der Grund,
+warum hier jede Änderung gegen eine Messung geprüft wird und nicht gegen
+eine Vermutung.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

@@ -777,7 +777,11 @@ def test_accumulator_signature_dedup_for_repeated_native_parts():
         )
     response = accumulator.build_response()
     tool_calls = response["choices"][0]["message"].get("tool_calls", [])
-    assert len(tool_calls) == 1
+    # T-04: die schleife wird gebrochen, aber NICHT auf einen einzigen
+    # aufruf reduziert — bis zu zwei identische aufrufe pro turn sind
+    # zulaessig (ein wiederholungsversuch ist plausibel, 36 gleiche
+    # aufrufe sind es nicht). Vorher ueberlebte hier nur der erste.
+    assert len(tool_calls) == 2
 
 
 def test_accumulator_ignores_unallowed_native_tool_call_blocks():
@@ -2695,3 +2699,201 @@ def test_meta_chatter_filter_runs_in_both_paths():
     assert "open ist nicht verfügbar" in (
         without_call_response["choices"][0]["message"]["content"]
     )
+
+
+# --- T-03, T-04, T-05, T-06: Dedup und Leer-Erkennung -------------------
+
+
+def test_turn_with_only_unusable_calls_is_a_failure_not_an_empty_success():
+    """T-06: `write` ohne content, `read` ohne filePath, `bash` ohne
+    command — der Call wurde verworfen und der Turn galt danach als leerer
+    ERFOLG: `finish_reason=stop`, `content=None`, und der Leer-Retry feuerte
+    nicht. Der Client bekam eine leere, erfolgreiche Antwort und blieb
+    stehen."""
+    for payload in (
+        '{"tool_calls":[{"name":"write","arguments":{"filePath":"/a.py"}}]}[]',
+        '{"tool_calls":[{"name":"read","arguments":{}}]}[]',
+        '{"tool_calls":[{"name":"bash","arguments":{}}]}[]',
+    ):
+        accumulator = GLMEventAccumulator(
+            model="m", allowed_tool_names={"write", "read", "bash"}
+        )
+        accumulator.consume_event(_event("c", "p1", text=payload, status="finish"))
+        accumulator.finalize("finish")
+        response = accumulator.build_response()
+
+        assert response["choices"][0]["finish_reason"] == "error", payload
+        assert accumulator.truncated_turn is True, payload
+
+
+def test_valid_call_still_works_after_the_unusable_check():
+    """Gegenprobe: ein gültiger Call darf nicht als 'unbrauchbar' gelten."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event(
+            "c",
+            "p1",
+            text='{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}[]',
+            status="finish",
+        )
+    )
+    accumulator.finalize("finish")
+    response = accumulator.build_response()
+
+    assert response["choices"][0]["finish_reason"] == "tool_calls"
+    assert accumulator.truncated_turn is False
+
+
+def test_same_call_from_two_sources_is_delivered_once():
+    """T-03: derselbe Aufruf aus nativem Pfad UND Text-Pfad wurde doppelt
+    ausgeliefert — die Identität ist die Call-ID, ein Text-Call bekommt aber
+    bei jedem Parse eine frische UUID."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event(
+            "c",
+            "p1",
+            status="finish",
+        )
+    )
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        {
+            "conversation_id": "c",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {
+                                "name": "read",
+                                "id": "n1",
+                                "arguments": {"filePath": "/a.txt"},
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    accumulator.consume_event(
+        _event(
+            "c",
+            "p2",
+            text='{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.txt"}}]}[]',
+            status="finish",
+        )
+    )
+    accumulator.finalize("finish")
+    calls = accumulator.build_response()["choices"][0]["message"].get("tool_calls") or []
+
+    assert [call["function"]["name"] for call in calls] == ["read"], "doppelter call"
+
+
+def test_two_deliberate_identical_native_calls_both_survive():
+    """T-04: zwei Calls mit eigener ID und gleichen Argumenten sind ZWEI
+    Aufrufe. Vorher blieb nur der erste."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        {
+            "conversation_id": "c",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {"name": "read", "id": "A", "arguments": {"filePath": "/x"}},
+                        },
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {"name": "read", "id": "B", "arguments": {"filePath": "/x"}},
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    accumulator.finalize("finish")
+    calls = accumulator.build_response()["choices"][0]["message"].get("tool_calls") or []
+
+    assert sorted(call["id"] for call in calls) == ["A", "B"]
+
+
+def test_identical_call_loop_is_broken_at_two():
+    """T-04: die Degenerationsschleife (live: 36 identische Sandbox-Calls)
+    darf nicht 36 Ausführungen erzeugen. Zwei identische Aufrufe bleiben
+    zulässig — ein Wiederholungsversuch ist plausibel."""
+    accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"read"})
+    for index in range(36):
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {
+                        "logic_id": "1",
+                        "content": [
+                            {
+                                "type": "tool_calls",
+                                "tool_calls": {
+                                    "id": f"call_dup_{index}",
+                                    "name": "read",
+                                    "arguments": '{"filePath":"/a"}',
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    calls = accumulator.build_response()["choices"][0]["message"].get("tool_calls", [])
+
+    assert len(calls) == 2
+
+
+def test_reasoning_call_is_delivered_once_in_the_stream():
+    """T-05: ein Call im Reasoning-Kanal lag doppelt vor — einmal aus den
+    Deltas und einmal aus der Auswertung im finalize. Im Stream kamen zwei
+    Chunks mit unterschiedlichen IDs an."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event(
+            "c",
+            "p1",
+            status="finish",
+        )
+    )
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        {
+            "conversation_id": "c",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "think",
+                            "think": 'Ich lese: {"tool_calls":[{"name":"read","arguments":{"filePath":"/r.txt"}}]}',
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    chunks = accumulator.finalize("finish")
+    ids = []
+    for chunk in chunks:
+        if '"tool_calls"' in chunk:
+            ids.extend(
+                call.get("id")
+                for call in json.loads(chunk[6:].strip())["choices"][0]["delta"].get("tool_calls") or []
+            )
+
+    assert len(ids) == 1, f"doppelte calls im stream: {ids}"

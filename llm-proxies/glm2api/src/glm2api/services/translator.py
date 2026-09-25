@@ -77,6 +77,47 @@ def _call_is_executable(tool_call: dict[str, object]) -> bool:
     return name in {"todowrite", "task", "done", "stop", "list"}
 
 
+def _tool_call_signature(tool_call: dict[str, object]) -> str:
+    """Name + normalisierte argumente — unabhaengig von der call-id (T-03)."""
+    function = tool_call.get("function")
+    name = ""
+    arguments = "{}"
+    if isinstance(function, dict):
+        name = str(function.get("name", "")).strip()
+        arguments = str(function.get("arguments", "{}"))
+    try:
+        parsed = json.loads(arguments)
+    except (json.JSONDecodeError, TypeError):
+        parsed = arguments
+    rendered = arguments if isinstance(parsed, str) else safe_json_dumps(parsed)
+    return f"{name}:{rendered}"
+
+
+def _dedupe_tool_call_list(tool_calls: list[dict[str, object]]) -> list[dict[str, object]]:
+    """T-05: entfernt doppelte calls innerhalb einer liste.
+
+    Maßgeblich ist die call-id. Nur wenn eine der beiden **keine** id hat,
+    entscheidet die signatur — sonst wuerden zwei bewusst gleiche aufrufe
+    mit eigener id kollabieren (T-04)."""
+    seen_ids: set[str] = set()
+    seen_signatures_without_id: set[str] = set()
+    unique: list[dict[str, object]] = []
+    for tool_call in tool_calls:
+        call_id = _coerce_call_id(tool_call.get("id"))
+        if call_id:
+            if call_id in seen_ids:
+                continue
+            seen_ids.add(call_id)
+            unique.append(tool_call)
+            continue
+        signature = _tool_call_signature(tool_call)
+        if signature in seen_signatures_without_id or signature in seen_ids:
+            continue
+        seen_signatures_without_id.add(signature)
+        unique.append(tool_call)
+    return unique
+
+
 def _tool_call_identity(tool_call: dict[str, object]) -> str:
     """Identitaet eines tool-calls fuer die deduplizierung (T-04).
 
@@ -110,12 +151,31 @@ def _merge_tool_calls(
     auszuliefern (T-03/T-04), und nummeriert sie durch."""
     merged: list[dict[str, object]] = []
     seen: set[str] = set()
-    for tool_call in list(server_side) + list(text_calls):
-        identity = _tool_call_identity(tool_call)
+    # T-03: derselbe aufruf kann in BEIDEN quellen auftauchen (nativ und
+    # text/xml). Die identitaet ist die call-id — ein text-call bekommt aber
+    # bei jedem parse eine frische uuid und gleicht damit nie. Also
+    # zusaetzlich ueber name + normalisierte argumente abgleichen, aber nur
+    # QUELLUEBERGREIFEND: der text-call ist dann das echo des nativen.
+    # Zwei bewusst gleiche calls in derselben quelle (mit eigener id)
+    # bleiben erhalten (T-04).
+    server_side_signatures = {_tool_call_signature(call) for call in server_side}
+    for source_call in server_side:
+        identity = _tool_call_identity(source_call)
         if identity in seen:
             continue
         seen.add(identity)
-        entry = dict(tool_call)
+        entry = dict(source_call)
+        entry["index"] = len(merged)
+        merged.append(entry)
+    for text_call in text_calls:
+        identity = _tool_call_identity(text_call)
+        if identity in seen:
+            continue
+        if server_side and _tool_call_signature(text_call) in server_side_signatures:
+            # echo eines nativen calls aus der text-quelle
+            continue
+        seen.add(identity)
+        entry = dict(text_call)
         entry["index"] = len(merged)
         merged.append(entry)
     return merged
@@ -473,6 +533,8 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
 
 # Kein ':' und kein ';': damit endet auch ein rollen-praefix (`user:`),
 # und die part-verkettung haette mitten im echo-präfix umgebrochen.
+# T-04: maximale anzahl identischer nativer calls pro turn
+_MAX_IDENTICAL_NATIVE_CALLS = 2
 _SENTENCE_END_CHARS = ".!?\u2026\u3002\"')\u00bb"
 # Eine part, die mit einem dieser zeichen beginnt, eroeffnet einen neuen
 # block (markdown-tabelle, liste, ueberschrift, zitat) und ist damit KEINE
@@ -1516,6 +1578,8 @@ class GLMEventAccumulator:
     _server_side_tool_calls: list[dict[str, object]] = field(default_factory=list)
     _server_side_tool_call_ids: set[str] = field(default_factory=set)
     _server_side_tool_call_signatures: set[str] = field(default_factory=set)
+    # T-04: wie oft dieselbe signatur in diesem turn schon vorkam
+    _server_side_signature_counts: dict[str, int] = field(default_factory=dict)
     # T-20: laufender zustand des bereits gesendeten texts. Aus einem
     # wachsenden praefix-STRING wurde das: der originalansatz pruefte und
     # kopierte den GESAMTEN text bei jedem part (O(n) je part, also
@@ -1538,6 +1602,7 @@ class GLMEventAccumulator:
     # wird erhoeht, wenn eine BEREITS zusammengefuegte part geaendert wird;
     # der inkrementelle aufbau wird dann verworfen und neu gebaut.
     _parts_epoch: int = 0
+
     _deferred_visible_text: str = ""
     _deferred_reasoning: str = ""
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
@@ -1862,13 +1927,37 @@ class GLMEventAccumulator:
                                             tool_name,
                                         )
                                     continue
-                                if signature in self._server_side_tool_call_signatures:
+                                # T-04: die innerhalb-TURN-signatur-dedup
+                                # ist entfernt. Zwei calls mit eigener id
+                                # sind ZWEI aufrufe, auch bei identischen
+                                # argumenten — der zweite ging verloren
+                                # (empirisch: A und B mit gleichem
+                                # `filePath` -> nur A). Die echo-pruefung
+                                # gegen die HISTORIE oben bleibt: genau das
+                                # ist der fall, den sie abdecken soll.
+                                # T-04: DREI Anforderungen kollidieren hier.
+                                #   (a) Zwei bewusst gleiche calls (gleiche
+                                #       argumente, eigene id) sind ZWEI
+                                #       aufrufe und muessen beide ankommen.
+                                #   (b) Eine degenerationsschleife mit 36
+                                #       identischen calls (live beobachtet)
+                                #       darf nicht 36 ausfuehrungen ergeben.
+                                #   (c) Ein echo aus der historie bleibt
+                                #       draussen (pruefung oben).
+                                # Loesung: pro signatur sind BIS ZU 2
+                                # aufrufe erlaubt — das deckt einen
+                                # plausiblen wiederholungsversuch ab und
+                                # bricht die schleife.
+                                repeat = self._server_side_signature_counts.get(signature, 0)
+                                if repeat >= _MAX_IDENTICAL_NATIVE_CALLS:
                                     if self.logger:
                                         self.logger.info(
-                                            "Dropped duplicate native tool_call (signature dedup) tool=%s",
+                                            "Dropped identical native tool_call (loop guard) tool=%s repeats=%s",
                                             tool_name,
+                                            repeat,
                                         )
                                     continue
+                                self._server_side_signature_counts[signature] = repeat + 1
                                 self._server_side_tool_call_signatures.add(signature)
                                 self._server_side_tool_call_ids.add(tool_id)
                                 self._server_side_tool_calls.append(
@@ -2140,7 +2229,29 @@ class GLMEventAccumulator:
         # entstanden war (beobachtet: read im text, write im reasoning
         # -> nur read kam an). Beide kanaele werden unabhaengig
         # ausgewertet und anschliessend dedupliziert zusammengefuehrt.
-        reasoning_calls = self._extract_reasoning_tool_calls()
+        # T-05: der reasoning-call lag doppelt vor — einmal aus
+        # `_deferred_reasoning_calls` (die deltas) und einmal aus dieser
+        # auswertung (dieselbe tatsache im zusammengefuehrten volltext).
+        # Beide listen werden zusammengefuehrt, aber nur was NICHT bereits
+        # aus den deltas stammt. Innerhalb der extrahierten liste bleibt die
+        # deduplizierung bei der call-id (T-04: zwei bewusst gleiche
+        # aufrufe sind zwei aufrufe).
+        # `deferred_calls` (nicht `self._deferred_reasoning_calls`): die
+        # listen wurde oben geleert, bevor die zusammenfuehrung passiert.
+        already_deferred_signatures = {
+            _tool_call_signature(call) for call in deferred_calls
+        }
+        # der parser kann denselben reasoning-call ebenfalls gefunden haben
+        # (denktext laeuft durch denselben stream-parser) — der gehoert
+        # ebenfalls zur "schon vorhanden"-menge
+        already_deferred_signatures.update(
+            _tool_call_signature(call) for call in self.tool_parser.tool_calls
+        )
+        reasoning_calls = [
+            call
+            for call in self._extract_reasoning_tool_calls()
+            if _tool_call_signature(call) not in already_deferred_signatures
+        ]
         if reasoning_calls:
             xml_tool_calls = xml_tool_calls + sanitize_tool_calls(
                 reasoning_calls, fallback_url=self.fallback_tool_url
@@ -2151,8 +2262,31 @@ class GLMEventAccumulator:
         # aufruf kann in beiden quellen auftauchen und wurde dann doppelt
         # ausgeliefert. Identitaet ist die call-id, sonst der name +
         # normalisierte argumente.
-        all_tool_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
-        all_tool_calls = sanitize_tool_calls(all_tool_calls, fallback_url=self.fallback_tool_url)
+        # T-05: derselbe reasoning-call lag doppelt vor — einmal aus
+        # `consume_event` (deferred) und einmal aus der auswertung hier.
+        # `_merge_tool_calls` dedupliziert nur ZWISCHEN den quellen, nicht
+        # innerhalb von `xml_tool_calls`.
+        xml_tool_calls = _dedupe_tool_call_list(xml_tool_calls)
+        merged_raw_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
+        all_tool_calls = sanitize_tool_calls(merged_raw_calls, fallback_url=self.fallback_tool_url)
+        # T-06: das modell WOLLTE einen aufruf, der wegen fehlendem
+        # pflichtargument nicht ausfuehrbar ist (`write` ohne content,
+        # `read` ohne filePath). Vorher galt der turn danach als leerer
+        # ERFOLG — `finish_reason=stop`, `content=None`, und der leer-retry
+        # feuerte nicht: der client bekam eine leere, erfolgreiche antwort
+        # und blieb stehen.
+        collected_raw_calls = list(self.tool_parser.tool_calls) + list(
+            self._server_side_tool_calls
+        )
+        if (collected_raw_calls or self.tool_parser.dropped_call_count) and not all_tool_calls:
+            self.truncated_turn = True
+            log = self.logger or _LOGGER
+            log.warning(
+                "Tool call(s) present but not executable (missing required argument): "
+                "parsed=%s unusable=%s — treating the turn as failed",
+                len(collected_raw_calls),
+                self.tool_parser.dropped_call_count,
+            )
 
         if self.output_limit_reached and all_tool_calls:
             # Die ausgabegrenze hat den turn abgeschnitten. sanitize_
@@ -2616,8 +2750,18 @@ class GLMEventAccumulator:
         # T-03/T-04: quelluebergreifende deduplizierung wie in finalize();
         # auch die gemergte liste sanitizen (reparatur + C0-filter, paritaet
         # zum stream-pfad)
-        all_tool_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
-        all_tool_calls = sanitize_tool_calls(all_tool_calls, fallback_url=self.fallback_tool_url)
+        xml_tool_calls = _dedupe_tool_call_list(xml_tool_calls)
+        merged_raw_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
+        all_tool_calls = sanitize_tool_calls(merged_raw_calls, fallback_url=self.fallback_tool_url)
+        if (
+            list(self.tool_parser.tool_calls)
+            or self._server_side_tool_calls
+            or self.tool_parser.dropped_call_count
+        ) and not all_tool_calls:
+            # T-06: siehe finalize() — ein turn, dessen einziger call
+            # unbrauchbar war (fehlendes pflichtargument), ist kein leerer
+            # erfolg, sondern ein fehlerhafter turn.
+            self.truncated_turn = True
 
         final_content = self._sanitize_visible_text(clean_content.strip())
         stripped_echo = strip_transcript_echo(final_content)
