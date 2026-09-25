@@ -836,6 +836,13 @@ das war der blinde Fleck, den die unabhängige Prüfrunde aufgedeckt hat.
 | **D-13** | **Bereits behoben.** Der Autouse-Fixture in `tests/conftest.py` sichert `os.environ` und die `GLM*`-Keys. Empirisch gegengeprüft: jede Testdatei einzeln, Standard- und umgekehrte Reihenfolge → 393 grün, keine Reihenfolgeabhängigkeit. | Keine Änderung nötig. |
 | **S-04** | **Bereits behoben.** `logging_utils` erzwingt `0o700` fürs Verzeichnis und `0o600` für Logdateien inkl. Rotation; auf der Platte verifiziert. | Keine Änderung nötig. |
 
+### F-5s C-17, S-07 (2026-09-25)
+
+| Befund | Status | Umsetzung |
+|---|---|---|
+| **S-07** | **Tatsächlich offen.** Die Eingabevalidierung war pro Endpoint ad hoc. Live gemessen: `max_tokens: "viel"` → **200** (still verworfen, die globale Grenze galt — der Client glaubte, sein Limit sei aktiv), `tools: "keine"` → 200, `messages` ohne `role` → 200. | `validate_openai_request()` an der Request-Grenze: Integer-/Number-/Listenfelder und Nachrichtenobjekte werden geprüft. `null` bleibt gültig (heißt „nicht gesetzt"). Live nach Restart: ungültige Typen → **400**, gültige Requests unverändert **200**. |
+| **C-17** | **Teilweise offen.** `Authorization` und Query-Secrets waren redigiert — aber `X-Sign` (die HMAC-Signatur der Anfrage, mit dem geheimen Schlüssel gebildet) und `set-cookie` (Upstream-Session) lagen im Klartext im Debug-Log. | Beide in die Redaktionsliste aufgenommen. `x-nonce`/`X-Timestamp` bleiben bewichtlich lesbar (keine Zugangsdaten). Der Inhalt bleibt unverändert 1:1 — das ist die bewusste Debug-Entscheidung. |
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

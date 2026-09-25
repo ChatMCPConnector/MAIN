@@ -1206,3 +1206,44 @@ def test_host_check_is_skipped_for_lan_bindings():
     from glm2api.server import _host_header_is_allowed
 
     assert _host_header_is_allowed("10.0.0.5:8001", "0.0.0.0") is True
+
+
+# --- S-07: eingabevalidierung -------------------------------------------
+
+
+@pytest.mark.parametrize("payload,fragment", [
+    ({"model": "m", "messages": [{"role": "user", "content": "x"}], "max_tokens": "viel"}, "max_tokens"),
+    ({"model": "m", "messages": [{"role": "user", "content": "x"}], "temperature": "heiss"}, "temperature"),
+    ({"model": "m", "messages": [{"role": "user", "content": "x"}], "tools": "keine"}, "tools"),
+    ({"model": "m", "messages": [{"content": "x"}]}, "role"),
+    ({"model": "m", "messages": ["kein-objekt"]}, "messages"),
+])
+def test_malformed_openai_requests_are_rejected(payload, fragment):
+    """S-07: typfalsche felder wurden still umgedeutet — `max_tokens:
+    "viel"` wurde verworfen (die globale grenze galt), ein nicht-listiges
+    `content` in text umgedeutet. Beides ist eine semantikaenderung, die
+    der client nicht bemerkt. Lieber ein klares 400."""
+    from glm2api.server import validate_openai_request
+
+    error = validate_openai_request(payload)
+    assert error, f"erwartet: ablehnung fuer {payload}"
+    assert fragment in error
+
+
+@pytest.mark.parametrize("payload", [
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100},
+    # `null` heisst "nicht gesetzt" und bleibt gueltig
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "max_tokens": None},
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "temperature": 0.7},
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "top_p": 0.9},
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "seed": 42},
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "tools": []},
+    {"model": "m", "messages": [{"role": "user", "content": 123}]},
+    {"model": "m", "messages": [{"role": "user", "content": [{"type": "text", "text": "x"}]}]},
+])
+def test_valid_openai_requests_pass_validation(payload):
+    """Gegenprobe: normale OpenAI-clients duerfen nicht gebrochen werden —
+    opencode und aider senden `temperature` und `max_tokens: null`."""
+    from glm2api.server import validate_openai_request
+
+    assert validate_openai_request(payload) == ""

@@ -88,13 +88,26 @@ _SENSITIVE_FIELD_NAMES = frozenset(
         "api_key",
         "access_token",
         "refresh_token",
+        # C-17: beides sind echte zugangsdaten-Artefakte und lagen im
+        # debug-log im klartext. `X-Sign` ist die HMAC-signatur ueber die
+        # anfrage (mit dem geheimen schluessel gebildet), `set-cookie`
+        # traegt die upstream-session.
+        "set-cookie",
+        "set_cookie",
+        "x-sign",
+        "x_sign",
+        "cookie",
     }
 )
+_SENSITIVE_FIELD_RE = (
+    r"(authorization|x[-_]api[-_]key|cookie|set[-_]cookie|api[-_]key|"
+    r"access[-_]token|refresh[-_]token|x[-_]sign)"
+)
 _SENSITIVE_HEADER_RE = re.compile(
-    r"(?i)(authorization|x[-_]api[-_]key|cookie|api[-_]key|access[-_]token|refresh[-_]token)(\s*:\s*)([^\r\n]+)"
+    r"(?i)(" + _SENSITIVE_FIELD_RE + r")(\s*:\s*)([^\r\n]+)"
 )
 _SENSITIVE_QUOTED_RE = re.compile(
-    r"(?i)(['\"])(authorization|x[-_]api[-_]key|cookie|api[-_]key|access[-_]token|refresh[-_]token)\1(\s*:\s*)(['\"])(.*?)\4"
+    r"(?i)(['\"])(" + _SENSITIVE_FIELD_RE + r")\1(\s*:\s*)(['\"])(.*?)\4"
 )
 # C-17: signierte URLs tragen ihre berechtigung im QUERY-STRING
 # (`?signature=…&expires=…&X-Amz-Signature=…`). Die feld-basierte Redaktion

@@ -257,6 +257,47 @@ def _host_header_is_allowed(host_header: object, bound_host: str) -> bool:
     return is_loopback_host(hostname)
 
 
+# S-07: die eingabevalidierung war pro endpoint unterschiedlich und
+# unvollstaendig. Ein typfalscher `max_tokens` wurde stillschweigend
+# verworfen (die globale grenze galt) — der client glaubte, sein limit
+# sei aktiv. Ein nicht-listiges `content` wurde in text umgedeutet. Beides
+# ist eine SEMANTIKAENDERUNG, die der client nicht bemerkt: lieber ein
+# klares 400 als ein still akzeptiertes, anderes verhalten.
+_INT_FIELDS = ("max_tokens", "max_completion_tokens", "n", "seed")
+_NUMBER_FIELDS = ("temperature", "top_p", "frequency_penalty", "presence_penalty")
+_LIST_FIELDS = ("messages", "tools")
+
+
+def validate_openai_request(payload: dict[str, object]) -> str:
+    """Gibt eine Fehlermeldung zurueck, sonst einen leeren String."""
+    for field in _INT_FIELDS:
+        value = payload.get(field)
+        # `null` heisst "nicht gesetzt" und ist gueltig; ein falscher TYP
+        # nicht — dann waere das gewuenschte limit eine unbekannte Groesse.
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            return f"'{field}' must be an integer, got {type(value).__name__}"
+    for field in _NUMBER_FIELDS:
+        value = payload.get(field)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"'{field}' must be a number, got {type(value).__name__}"
+    for field in _LIST_FIELDS:
+        value = payload.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            return f"'{field}' must be a list, got {type(value).__name__}"
+    for message in payload.get("messages") or []:
+        if not isinstance(message, dict):
+            return f"each entry in 'messages' must be an object, got {type(message).__name__}"
+        if "role" not in message:
+            return "each message must have a 'role'"
+    return ""
+
+
 class GLM2APIServer:
     def __init__(self, config: AppConfig, glm_client: GLMWebClient, logger: Logger) -> None:
         self.config = config
@@ -721,6 +762,18 @@ class GLM2APIServer:
                         self._write_json(
                             HTTPStatus.BAD_REQUEST,
                             {"error": {"message": "Request body must include model and messages fields."}},
+                        )
+                        return
+
+                    # S-07: typfalsche felder wurden still umgedeutet.
+                    validation_error = validate_openai_request(payload)
+                    if validation_error:
+                        logger.warning(
+                            "Rejecting malformed request path=%s reason=%s", self.path, validation_error
+                        )
+                        self._write_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"error": {"message": f"Invalid request: {validation_error}", "type": "invalid_request"}},
                         )
                         return
 
