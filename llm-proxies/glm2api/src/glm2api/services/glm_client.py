@@ -926,10 +926,15 @@ class GLMWebClient:
                             max_stream_retries,
                         )
                     else:
-                        finalize_chunks = accumulator.finalize(status="stop")
+                        # T-13/S-08: der turn wurde ABGESCHNITTEN. Er wird
+                        # nicht als `stop` abgeschlossen — der client las
+                        # die unvollstaendige antwort sonst als erfolg
+                        # (und der anthropic-adapter uebersetzte sie in
+                        # `stop_reason: end_turn` + `message_stop`).
+                        finalize_chunks = accumulator.finalize(status="truncated")
                         blocked = list(accumulator.blocked_tool_attempt_names)
                         self.logger.warning(
-                            "Upstream stream truncated; finalizing partial turn (retry budget exhausted or content already served)"
+                            "Upstream stream truncated; finalizing partial turn as error (retry budget exhausted or content already served)"
                         )
                 if finalize_chunks is None and retry_exc is None:
                     finalize_chunks = accumulator.finalize(status="stop")

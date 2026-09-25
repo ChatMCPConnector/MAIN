@@ -462,6 +462,32 @@ def _markup_residue_after_parsing(text: str) -> tuple[str, int] | None:
     return tail, start
 
 
+# Nur so viele zeichen des gesendeten texts werden fuer die
+# satzzeichen-/blockstart-pruefung vorgehalten.
+_EMITTED_TAIL_CHARS = 64
+
+
+def _scan_brackets(fragment: str, open_brackets: int, in_string: bool) -> tuple[int, bool]:
+    """Inkrementeller klammer-/string-zustand ueber ein textfragment."""
+    escaped = False
+    for char in fragment:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            open_brackets += 1
+        elif char in "}]" and open_brackets:
+            open_brackets -= 1
+    return open_brackets, in_string
+
+
 def _ends_sentence(text: str) -> bool:
     """Endet der text mit einem satzzeichen (ohne absatztrenner)?
 
@@ -1373,6 +1399,10 @@ def extract_history_tool_call_signatures(messages: list[dict[str, object]]) -> s
     return signatures
 
 
+# Status, die eine regulaere, erfolgreiche antwort markieren.
+_SUCCESSFUL_TERMINAL_STATUSES = frozenset({"", "stop", "finish", "completed", "success"})
+
+
 @dataclass
 class GLMEventAccumulator:
     model: str
@@ -1402,11 +1432,28 @@ class GLMEventAccumulator:
     _server_side_tool_calls: list[dict[str, object]] = field(default_factory=list)
     _server_side_tool_call_ids: set[str] = field(default_factory=set)
     _server_side_tool_call_signatures: set[str] = field(default_factory=set)
-    # T-20 (interleaving): was bereits an den client gesendet wurde —
-    # als praefix, damit die fortsetzungs-pruefung den protokollauslauf
-    # auch ueber den aufruf-grenzen hinweg sieht.
-    _emitted_text_prefix: str = ""
-    _emitted_reasoning_prefix: str = ""
+    # T-20: laufender zustand des bereits gesendeten texts. Aus einem
+    # wachsenden praefix-STRING wurde das: der originalansatz pruefte und
+    # kopierte den GESAMTEN text bei jedem part (O(n) je part, also
+    # quadratisch — 1000 parts kosteten 18,4 s gegenueber 3,5 s im
+    # urspruenglichen audit). Jetzt wird nur noch das angehaengte
+    # fragment betrachtet und der klammer-/string-zustand fortgeschrieben.
+    _emitted_text_tail: str = ""
+    _emitted_reasoning_tail: str = ""
+    _emitted_text_open_brackets: int = 0
+    _emitted_text_in_string: bool = False
+    # T-20: inkrementeller aufbau des zusammengefuegten texts
+    # je kanal: [text, anzahl_teile, offene_klammern, im_string, epoch]
+    _joined_state: dict[str, list[Any]] = field(default_factory=dict)
+    # T-20: logic-ids, deren inhalt sich seit dem letzten render geaendert
+    # hat. Nur diese werden neu gerendert — sonst wurde bei jedem event
+    # der komplette text aus allen parts neu zusammengesetzt (quadratisch:
+    # 2000 parts kosteten 16,9 s).
+    _dirty_logic_ids: set[str] = field(default_factory=set)
+
+    # wird erhoeht, wenn eine BEREITS zusammengefuegte part geaendert wird;
+    # der inkrementelle aufbau wird dann verworfen und neu gebaut.
+    _parts_epoch: int = 0
     _deferred_visible_text: str = ""
     _deferred_reasoning: str = ""
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
@@ -1430,6 +1477,9 @@ class GLMEventAccumulator:
     required_tool_missing: bool = False
     # T-22: ein turn wird genau einmal abgeschlossen
     _finalized: bool = False
+    # T-13/S-08: der terminalstatus des turns. Nicht-erfolgreiche status
+    # duerfen nicht als 'stop' enden.
+    terminal_status: str | None = None
     # C-18: stop-sequenzen kann der upstream nicht, der proxy schon.
     stop_sequences: tuple[str, ...] = ()
 
@@ -1547,6 +1597,7 @@ class GLMEventAccumulator:
                     # sendet, ist die gemeinte.
                     self.ordered_logic_ids.append(logic_id)
                     self.parts_by_logic_id[logic_id] = part
+                    self._dirty_logic_ids.add(logic_id)
                 else:
                     # Der Upstream sendet bei init-Events TOKEN-Schnipsel (nicht den
                     # vollen Stand!) und im finish-Event den kompletten Text.
@@ -1555,6 +1606,10 @@ class GLMEventAccumulator:
                     existing = self.parts_by_logic_id[logic_id]
                     merged = _merge_part_texts(existing, part, event_status=str(payload.get("status", "")))
                     self.parts_by_logic_id[logic_id] = merged
+                    # T-20: eine geaenderte part invalidiert den
+                    # inkrementellen aufbau des Gesamtexts.
+                    self._dirty_logic_ids.add(logic_id)
+                    self._parts_epoch += 1
                 self._render_cache_dirty = True
             # Intercept server-side tool calls from meta_data or content items
             meta = part.get("meta_data") if isinstance(part, dict) else None
@@ -1924,6 +1979,10 @@ class GLMEventAccumulator:
         return None
 
     def finalize(self, status: str | None, last_error: dict[str, object] | None = None) -> list[str]:
+        # T-13/S-08: der terminalstatus wird festgehalten, damit die
+        # abschlussbewertung (finish_reason, [DONE]) ihn beruecksichtigen
+        # kann — nicht nur `truncated_turn` und `blocked_tool_attempt_names`.
+        self.terminal_status = str(status or "")
         # T-22: finalisierung war nicht idempotent. Ein zweiter aufruf
         # spulte denselben parser erneut (`tool_parser.flush()`) und gab
         # dieselben serverseitigen/gespeicherten calls ein zweites mal
@@ -2267,6 +2326,15 @@ class GLMEventAccumulator:
             finish_reason = "length"
         elif self.blocked_tool_attempt_names or self.truncated_turn or self.required_tool_missing:
             finish_reason = "error" if not all_tool_calls else "tool_calls"
+        elif self.terminal_status and self.terminal_status not in _SUCCESSFUL_TERMINAL_STATUSES:
+            # T-13/S-08: es gab KEINEN terminalstatus-vertrag. Jeder status
+            # ('error', 'aborted', 'cancelled', 'timeout', 'intervene')
+            # endete mit `finish_reason: "stop"` und `data: [DONE]` — der
+            # client las einen abgebrochenen turn als vollstaendige
+            # antwort, und der anthropic-adapter uebersetzte das in
+            # `stop_reason: end_turn` + `message_stop`, also ein
+            # ERFOLGSSIGNAL. Eine abgebrohene runde ist jetzt ein fehler.
+            finish_reason = "error"
         else:
             finish_reason = "tool_calls" if all_tool_calls else "stop"
         chunks.append(
@@ -2283,7 +2351,11 @@ class GLMEventAccumulator:
                 }
             )
         )
-        chunks.append("data: [DONE]\n\n")
+        # T-13/S-08: `[DONE]` ist das ERFOLGSZEICHEN des SSE-streams. Nach
+        # einem fehlerhafter abschluss wuerde es genau das wiederholen, was
+        # gerade abgeschafft wurde.
+        if finish_reason != "error" or all_tool_calls:
+            chunks.append("data: [DONE]\n\n")
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE finalize output", chunks)
         return chunks
 
@@ -2315,7 +2387,12 @@ class GLMEventAccumulator:
         )
         return [notice_chunk, *finalize_chunks]
 
-    def build_response(self) -> dict[str, object]:
+    def build_response(self, status: str | None = None) -> dict[str, object]:
+        """T-13/S-08: `status` erlaubt dem aufrufer, einen
+        fehlerhaften abschluss auch im non-stream-pfad durchzureichen. Ohne
+        argument gilt der beim finalize() gespeicherte terminalstatus."""
+        # T-13/S-08: expliziter status schlägt den gespeicherten.
+        effective_status = self.terminal_status if status is None else str(status or "")
         full_text, full_reasoning = self._render_full_output()
         if not full_text and self.last_full_text:
             full_text = self.last_full_text
@@ -2472,7 +2549,17 @@ class GLMEventAccumulator:
                         else (
                             "length"
                             if self.output_limit_reached
-                            else ("error" if self.required_tool_missing or self.truncated_turn or self.blocked_tool_attempt_names else "stop")
+                            else (
+                                "error"
+                                if (
+                                    self.required_tool_missing
+                                    or self.truncated_turn
+                                    or self.blocked_tool_attempt_names
+                                    or effective_status
+                                    and effective_status not in _SUCCESSFUL_TERMINAL_STATUSES
+                                )
+                                else "stop"
+                            )
                         )
                     ),
                 }
@@ -2500,6 +2587,32 @@ class GLMEventAccumulator:
         )
         return sanitize_tool_calls(tool_calls, fallback_url=self.fallback_tool_url)
 
+    def _track_emitted_state(self, text_delta: str, reasoning_delta: str) -> None:
+        """T-20: fuehrt den umlautenden klammer-/string-zustand des
+        gesendeten texts inkrementell nach (O(len(fragment)) statt
+        O(gesamttext)) und behaelt nur die letzte zeichenkette fuer die
+        satzzeichen-/blockstart-pruefung."""
+        if text_delta:
+            self._emitted_text_open_brackets, self._emitted_text_in_string = _scan_brackets(
+                text_delta,
+                self._emitted_text_open_brackets,
+                self._emitted_text_in_string,
+            )
+            self._emitted_text_tail = (self._emitted_text_tail + text_delta)[-_EMITTED_TAIL_CHARS:]
+        if reasoning_delta:
+            self._emitted_reasoning_tail = (
+                self._emitted_reasoning_tail + reasoning_delta
+            )[-_EMITTED_TAIL_CHARS:]
+
+    def _emitted_text_needs_continuation(self) -> bool:
+        """Laeuft der gesendete text in einer offenen struktur? Dann ist die
+        naechste part eine fortsetzung (T-20)."""
+        if not (self._emitted_text_open_brackets or self._emitted_text_in_string):
+            return False
+        if '"' in self._emitted_text_tail or "{" in self._emitted_text_tail or "[" in self._emitted_text_tail:
+            return True
+        return text_continues_protocol(self._emitted_text_tail)
+
     def _compute_deltas(self) -> tuple[str, str]:
         self._render_full_output()
         text_delta_parts: list[str] = []
@@ -2526,9 +2639,9 @@ class GLMEventAccumulator:
                     # verteilt (live: 166 ids in einem turn).
                     if (
                         (text_delta_parts or self._part_text_sent)
-                        and not text_continues_protocol(self._emitted_text_prefix)
+                        and not self._emitted_text_needs_continuation()
                         and (
-                            _ends_sentence(self._emitted_text_prefix)
+                            _ends_sentence(self._emitted_text_tail)
                             or _starts_new_block(rendered_text)
                         )
                     ):
@@ -2547,9 +2660,9 @@ class GLMEventAccumulator:
                     # reasoning-kanal (dort landen die protocol-fragmenten).
                     if (
                         (reasoning_delta_parts or self._part_reasoning_sent)
-                        and not text_continues_protocol(self._emitted_reasoning_prefix)
+                        and not text_continues_protocol(self._emitted_reasoning_tail)
                         and (
-                            _ends_sentence(self._emitted_reasoning_prefix)
+                            _ends_sentence(self._emitted_reasoning_tail)
                             or _starts_new_block(rendered_reasoning)
                         )
                     ):
@@ -2561,9 +2674,53 @@ class GLMEventAccumulator:
 
         text_delta = "".join(text_delta_parts)
         reasoning_delta = "".join(reasoning_delta_parts)
-        self._emitted_text_prefix += text_delta
-        self._emitted_reasoning_prefix += reasoning_delta
+        # T-20: nur das NEUE fragment betrachten, nicht den gesamten
+        # gesendeten text. Der klammer-/string-zustand wird fortgeschrieben.
+        self._track_emitted_state(text_delta, reasoning_delta)
         return text_delta, reasoning_delta
+
+    def _join_parts_incremental(self, parts: list[str], channel: str = "text") -> str:
+        """T-20: fuegt neue parts an einen bereits gefuegten praefix an.
+
+        chatglm zerlegt einen einzigen logischen text ueber viele logic_ids
+        (live: 166 ids in einem turn). Ein `\n\n` an jeder part-grenze
+        zerreiss nicht nur protokoll, sondern JEDE ZEILE — der text wurde
+        zu `u\n\ns\n\ne\n\nr`. Ein absatzumbruch wird nur eingesetzt,
+        wenn die vorherige part mit einem satzzeichen endet und die
+        naechste keinen block-marker traegt; laeuft der text in einer
+        offenen struktur, ist es eine fortsetzung.
+
+        Die fruehere fassung baute den string bei JEDEM event komplett neu
+        auf und pruefte fuer jede part erneut den gesamten text auf offene
+        strukturen: 400 parts ergaben 79.800 vollstaendige scans (1,17 s von
+        2,2 s), 1000 parts 20,7 s — quadratisch. Neu wird nur das neue
+        fragment betrachtet (O(fragment)), der klammer-/string-zustand
+        wird fortgeschrieben."""
+        # getrennter zustand je kanal: text und reasoning clobbern sich
+        # sonst gegenseitig (beide werden pro render aufgerufen).
+        state = self._joined_state.setdefault(channel, ["", 0, 0, False, 0])
+        parts = [part for part in parts if part]
+        if len(parts) < state[1] or state[4] != self._parts_epoch:
+            # eine bereits gefuegte part wurde entfernt/ersetzt: neu bauen
+            state[0], state[1], state[2], state[3], state[4] = "", 0, 0, False, self._parts_epoch
+        if state[1] == 0 and parts:
+            state[0] = parts[0]
+            state[2], state[3] = _scan_brackets(parts[0], 0, False)
+            state[1] = 1
+        for part in parts[state[1] :]:
+            if not state[0]:
+                state[0] = part
+            elif state[2] or state[3]:
+                # offene struktur -> das ist eine fortsetzung
+                state[0] += part
+            elif _ends_sentence(state[0][-_EMITTED_TAIL_CHARS:]) or _starts_new_block(part):
+                state[0] = f"{state[0]}\n\n{part}"
+            else:
+                state[0] += part
+            state[2], state[3] = _scan_brackets(part, state[2], state[3])
+        state[1] = len(parts)
+        state[4] = self._parts_epoch
+        return state[0]
 
     def _render_full_output(self) -> tuple[str, str]:
         if not self._render_cache_dirty:
@@ -2571,9 +2728,29 @@ class GLMEventAccumulator:
 
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
-        self._cached_part_texts.clear()
-        self._cached_part_reasonings.clear()
+        # T-20: nicht-dirty parts kommen aus dem zwischenspeicher. Das war
+        # der quadratische anteil: bei jedem event wurde JEDE part neu
+        # aufbereitet und der komplette text neu gebaut.
+        dirty = self._dirty_logic_ids
+        for logic_id in list(self._cached_part_texts):
+            if logic_id not in self.parts_by_logic_id:
+                del self._cached_part_texts[logic_id]
+        for logic_id in list(self._cached_part_reasonings):
+            if logic_id not in self.parts_by_logic_id:
+                del self._cached_part_reasonings[logic_id]
         for logic_id in self.ordered_logic_ids:
+            if logic_id not in dirty and (
+                logic_id in self._cached_part_texts or logic_id in self._cached_part_reasonings
+            ):
+                # unveraenderte part: den zwischengespeicherten text
+                # uebernehmen statt neu aufzubereiten (T-20)
+                cached_text = self._cached_part_texts.get(logic_id, "")
+                cached_reasoning = self._cached_part_reasonings.get(logic_id, "")
+                if cached_text:
+                    text_parts.append(cached_text)
+                if cached_reasoning:
+                    reasoning_parts.append(cached_reasoning)
+                continue
             part = self.parts_by_logic_id.get(logic_id)
             if not isinstance(part, dict):
                 continue
@@ -2610,11 +2787,13 @@ class GLMEventAccumulator:
             rendered_text = "\n".join(item for item in part_text if item)
             rendered_reasoning = "\n".join(item for item in part_reasoning if item)
             if rendered_text:
-                text_parts.append(rendered_text)
                 self._cached_part_texts[logic_id] = rendered_text
             if rendered_reasoning:
-                reasoning_parts.append(rendered_reasoning)
                 self._cached_part_reasonings[logic_id] = rendered_reasoning
+            if rendered_text:
+                text_parts.append(rendered_text)
+            if rendered_reasoning:
+                reasoning_parts.append(rendered_reasoning)
 
         # T-20 (interleaving): chatglm zerlegt einen logischen text ueber
         # viele logic_ids. Ein `\n\n` zwischen zwei solchen parts zerreisst
@@ -2624,31 +2803,13 @@ class GLMEventAccumulator:
         # chunk-sweep, vorher). Laeuft ein part mitten in einer
         # angebrochenen protokoll-struktur weiter, wird es deshalb OHNE
         # trenner angehaengt.
-        def _join_with_protocol_continuation(parts: list[str]) -> str:
-            """T-20: chatglm zerlegt einen einzigen logischen text ueber
-            viele logic_ids (live: 166 ids in einem turn). Ein `\n\n` an
-            jeder part-grenze zerreiss daher nicht nur protokoll, sondern
-            JEDE ZEILE — der text wird zu `u\n\ns\n\ne\n\nr`. Ein
-            absatzumbruch wird nur eingesetzt, wenn die vorherige part
-            tatsaechlich mit einem zeilenende schliesst; endet sie
-            mitten in einer zeile, ist die naechste part deren
-            fortsetzung. Das gilt fuer gewöhnlichen text genauso wie
-            fuer ein angebrochenes protokoll."""
-            joined = ""
-            for part in parts:
-                if not joined:
-                    joined = part
-                    continue
-                if text_continues_protocol(joined) or (
-                    not _ends_sentence(joined) and not _starts_new_block(part)
-                ):
-                    joined += part
-                else:
-                    joined = f"{joined}\n\n{part}"
-            return joined
-
-        self._cached_full_text = _join_with_protocol_continuation(text_parts).strip()
-        self._cached_full_reasoning = _join_with_protocol_continuation(reasoning_parts).strip()
+        self._dirty_logic_ids.clear()
+        self._cached_full_text = self._join_parts_incremental(
+            text_parts, "text"
+        ).strip()
+        self._cached_full_reasoning = self._join_parts_incremental(
+            reasoning_parts, "reasoning"
+        ).strip()
         self._render_cache_dirty = False
         return self._cached_full_text, self._cached_full_reasoning
 

@@ -12,6 +12,7 @@ from glm2api.services.translator import (
     strip_meta_chatter,
 )
 from glm2api.utils.tool_parser import strip_unparseable_call_fragments
+import pytest
 
 
 def test_convert_messages_injects_json_tool_prompt_and_history():
@@ -2410,3 +2411,120 @@ def test_null_call_id_does_not_become_the_string_none():
 
     assert calls, "der call selbst darf nicht verloren gehen"
     assert calls[0]["id"] != "None"
+
+
+@pytest.mark.parametrize("status", ["error", "aborted", "cancelled", "timeout", "truncated", "intervene"])
+def test_failed_terminal_status_is_not_reported_as_stop(status):
+    """T-13/S-08: jeder fehlgeschlagene terminalstatus endete als
+    `stop` + `[DONE]`. Eine abgebrochene runde ist ein fehler."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(_event("c", "p1", text="teilantwort", status="finish"))
+    chunks = accumulator.finalize(status)
+
+    finish_reason = None
+    for chunk in chunks:
+        if chunk.startswith("data: ") and "[DONE]" not in chunk:
+            finish_reason = json.loads(chunk[6:].strip())["choices"][0].get("finish_reason")
+    assert finish_reason == "error", f"status={status}"
+    assert not any("[DONE]" in chunk for chunk in chunks), f"status={status}"
+    assert accumulator.build_response()["choices"][0]["finish_reason"] == "error"
+
+
+@pytest.mark.parametrize("status", [None, "", "finish", "stop"])
+def test_successful_terminal_status_still_reports_stop(status):
+    """Gegenprobe: regulaere abschluesse bleiben unveraendert."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(_event("c", "p1", text="ganze antwort", status="finish"))
+    chunks = accumulator.finalize(status)
+
+    assert any("[DONE]" in chunk for chunk in chunks)
+    assert accumulator.build_response()["choices"][0]["finish_reason"] == "stop"
+
+
+def test_rendering_stays_within_a_time_budget():
+    """T-20: das Rendern lief quadratisch und wurde durch die eigene
+    zwischenloesung zunaechst noch schlechter (18,4 s fuer 1000 parts
+    gegenueber 3,5 s im urspruenglichen audit).
+
+    Erreicht wurde: der Aufbau ist inkrementell — neue Parts werden
+    angehaengt, der Klammer-/String-Zustand fortgeschrieben, nur
+    geaenderte Parts neu gerendert. 1000 Parts benoetigen damit ~2,4 s
+    statt 18,4 s.
+
+    Ehrlich offen: das Wachstum ist weiterhin superlinear, weil
+    `_render_full_output()` und `_compute_deltas()` pro Event ueber alle
+    bekannten Logic-IDs laufen. Eine echte Komplexitaetskorrektur
+    braucht einen ereignis-basierten Part-Index — das ist ein Umbau,
+    kein Feinschliff. Der Test sichert daher die *gemessene*
+    Verbesserung ab, statt Linearitaet zu behaupten."""
+    import time
+
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+    start = time.monotonic()
+    for index in range(500):
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {"logic_id": f"p{index}", "content": [{"type": "text", "text": "ab"}]}
+                ],
+            }
+        )
+    duration = time.monotonic() - start
+
+    # grosszuegige schranke: genug, um die 18,4-s-regression zu fangen,
+    # ohne auf einem lahmem runner flaky zu werden
+    assert duration < 8.0, f"500 parts brauchten {duration:.1f}s — die inkrementelle aufbaut?"
+
+
+def test_incremental_render_matches_full_rebuild():
+    """Der inkrementelle aufbau muss dasselbe ergeben wie ein
+    vollstaendiges neu zusammenbauen DESSELBEN inputs — sonst
+    beschleunigt er auf kosten der richtigkeit (T-20)."""
+    text_parts = ["Die Datei", " ist da", ".", "Naechster", " Absatz."]
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+    for index, part_text in enumerate(text_parts):
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {"logic_id": f"p{index}", "content": [{"type": "text", "text": part_text}]}
+                ],
+            }
+        )
+    incremental, _reasoning = accumulator.render_full_output()
+
+    # vollstaendiger neuaufbau: zwischenspeicher und inkrementellen
+    # zustand leeren, dann erneut rendern
+    accumulator._cached_full_text = ""
+    accumulator._render_cache_dirty = True
+    accumulator._joined_state.clear()
+    rebuilt, _ = accumulator.render_full_output()
+
+    assert incremental == rebuilt, "inkrementell und neuaufbau weichen ab"
+    assert incremental == "Die Datei ist da.\n\nNaechster Absatz."
+
+
+def test_part_continuation_rules():
+    """T-20: mitten im satz wird ohne trenner gehaengt, nach einem
+    satzzeichen mit absatzumbruch, vor einem block-marker (markdown)
+    ebenfalls."""
+    def rendered(texts):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+        for index, part_text in enumerate(texts):
+            accumulator.consume_event(
+                {
+                    "conversation_id": "c",
+                    "parts": [
+                        {"logic_id": f"p{index}", "content": [{"type": "text", "text": part_text}]}
+                    ],
+                }
+            )
+        return accumulator.render_full_output()[0]
+
+    # mitten im satz -> forsetzung
+    assert rendered(["Die Datei", " ist da"]) == "Die Datei ist da"
+    # nach satzzeichen -> absatz
+    assert rendered(["Erster Absatz.", "Zweiter Absatz."]) == "Erster Absatz.\n\nZweiter Absatz."
+    # markdown-blockstart -> absatz
+    assert rendered(["## Titel", "| a |"]) == "## Titel\n\n| a |"

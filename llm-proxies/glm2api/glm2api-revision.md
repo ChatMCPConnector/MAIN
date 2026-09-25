@@ -719,6 +719,44 @@ reparierten Call verwerfen statt ihn zu liefern. Das ist eine bewusste
 Entscheidung, keine nachgelagerte Parser-Korrektur, und deshalb hier
 ausdrücklich offen gelassen statt stillschweigend „gefast".
 
+### F-5k Terminalstatus und Rendern (2026-09-25)
+
+**T-13/S-08 — Terminalstatus.** Es gab **keinen** Vertrag: jeder Status
+(`error`, `aborted`, `cancelled`, `timeout`, `intervene`, `truncated`) endete
+mit `finish_reason: "stop"` und `data: [DONE]`. Gemessen: alle sechs Status
+lieferten `stop` + `[DONE]`. Der Client las einen abgebrochenen Turn als
+vollständige Antwort, und der Anthropic-Adapter übersetzte das in
+`stop_reason: end_turn` + `message_stop` — ein **Erfolgssignal**. Jetzt:
+fehlgeschlagene Status enden mit `finish_reason: "error"` **ohne** `[DONE]`
+(das ist das Erfolgszeichen des SSE-Streams), im Stream- **und** im
+Non-Stream-Pfad. Der Client reicht den Trunkierungsstatus tatsächlich
+durch (`finalize(status="truncated")`). Live verifiziert: ein Stream ohne
+`[DONE]`, der bereits sichtbaren Inhalt geliefert hat, endet jetzt als
+`error` — der Anteil geht nicht verloren, wird aber als Fehler markiert.
+
+**T-20 (Quadratik).** Das Rendern war quadratisch — und die eigene
+Zwischenlösung hatte es zwischenzeitlich **verschlechtert**: 1000 Parts
+kosteten 18,4 s gegenüber 3,5 s im ursprünglichen Audit. Ursache: der
+zusammengesetzte Text wurde bei *jedem* Event neu gebaut und für *jede*
+Part der Gesamttext erneut auf offene Strukturen geprüft (400 Parts =
+79.800 vollständige Scans, 1,17 s von 2,2 s).
+
+Drei Korrekturen:
+1. Der Prüfzustand (offene Klammern / laufender String) wird **inkrementell
+   fortgeschrieben** statt der Gesamttext gescannt.
+2. Nur **geänderte** Parts werden neu gerendert; unveränderte kommen aus
+   dem Zwischenspeicher.
+3. Der Zusammenbau ist **inkrementell**: neue Parts werden angehängt,
+   Absatzumbruch nur nach Satzzeichen oder vor Markdown-Blockmarkern,
+   Fortsetzung bei offener Struktur.
+
+**Ergebnis:** 1000 Parts 18,4 s → **2,4 s**, damit unter dem Audit-Wert.
+**Ehrlich offen:** das Wachstum bleibt superlinear, weil
+`_render_full_output()` und `_compute_deltas()` pro Event über alle
+bekannten Logic-IDs laufen. Eine echte Komplexitätskorrektur braucht einen
+ereignisbasierten Part-Index — ein Umbau, kein Feinschliff. Der Test
+sichert deshalb die gemessene Verbesserung ab, statt Linearität zu behaupten.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

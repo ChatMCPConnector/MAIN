@@ -981,3 +981,80 @@ def test_upload_cache_does_not_grow_unbounded():
         client._cached_upload_reference(f"https://x/{index}.bin", is_image=False)
 
     assert len(client._upload_reference_cache) <= _UPLOAD_CACHE_MAX_ENTRIES
+
+
+def test_truncated_stream_is_not_reported_as_success():
+    """T-13/S-08: es gab keinen Terminalstatus-Vertrag. Jeder Status
+    ('error', 'aborted', 'cancelled', 'timeout', 'truncated') endete mit
+    `finish_reason: "stop"` und `data: [DONE]` — der Client las einen
+    abgeschnittenen Turn als vollstaendige Antwort, und der
+    Anthropic-Adapter uebersetzte das in `stop_reason: end_turn` +
+    `message_stop`, also ein Erfolgssignal."""
+    import json as json_module
+    import logging
+    import re
+    from types import SimpleNamespace
+
+    from glm2api.services.glm_client import GLMWebClient, ConcurrentRequestQueue
+
+    class _Resp:
+        """Upstream OHNE [DONE] und MIT sichtbarem content."""
+
+        def __init__(self, body):
+            self._body = body
+
+        def close(self):
+            pass
+
+        def read(self, size=-1):
+            data, self._body = self._body, b""
+            return data
+
+        def getheader(self, *args, **kwargs):
+            return None
+
+        def info(self):
+            namespace = SimpleNamespace()
+            namespace.get = lambda *a, **k: None
+            namespace.get_content_charset = lambda *a, **k: "utf-8"
+            return namespace
+
+    body = (
+        b'data: {"status":"process","parts":[{"logic_id":"p1","status":"process",'
+        b'"content":[{"type":"text","text":"TEIL-1"}]}]}\n\n'
+    )
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = SimpleNamespace(
+        glm_max_concurrency=2, glm_queue_wait_timeout=2, glm_stream_error_max_retries=0,
+        glm_empty_response_max_retries=0, glm_blocked_tool_follow_ups=0,
+        glm_history_max_chars=100000, glm_request_deadline_seconds=10.0,
+        glm_stream_error_retry_interval=0.0, glm_max_output_tokens=16384,
+        glm_persistent_conversation=False, glm_conversation_id="", glm_conversation_file=None,
+        glm_delete_conversation=True, blocked_tool_names=[], debug_dump_all=False,
+    )
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None
+    )
+    client.request_queue = ConcurrentRequestQueue(client.logger, wait_timeout=1, max_concurrency=2)
+    client.auth = SimpleNamespace(
+        get_access_token_for_account=lambda i: "tok", get_account_count=lambda: 1
+    )
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (_Resp(body), "a1")
+    client.delete_conversation = lambda cid, assistant_id=None: None
+
+    text = "".join(
+        chunk.decode("utf-8")
+        for chunk in client.stream_chat_completion(
+            {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+        )
+    )
+
+    assert "TEIL-1" in text, "der bereits gesendete anteil geht nicht verloren"
+    assert "[DONE]" not in text, "[DONE] ist das erfolgszeichen des streams"
+    # das LETZTE finish_reason ist das abschliessende; die davorigen sind
+    # die `null` der content-deltas.
+    matches = re.findall(r'"finish_reason":\s*"?(\w+)"?', text)
+    assert matches and matches[-1] == "error", (
+        f"trunkierung muss ein fehler sein, gefunden: {matches}"
+    )
+    json_module.loads("{}")  # import ist fuer leser der absicht hier
