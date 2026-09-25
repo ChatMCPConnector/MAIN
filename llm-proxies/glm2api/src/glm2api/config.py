@@ -330,6 +330,7 @@ class AppConfig:
     glm_guest_max_retries: int
     glm_stream_error_max_retries: int
     glm_stream_error_retry_interval: float
+    glm_max_output_tokens: int
     glm_blocked_tool_follow_ups: int
     glm_history_max_chars: int
     glm_empty_response_max_retries: int
@@ -583,6 +584,17 @@ def load_config(env_file: str = ".env") -> AppConfig:
         MAX_STREAM_ERROR_RETRY_INTERVAL_SECONDS,
         logger,
     )
+    # Obergrenze fuer die erzeugte Antwort. Der upsteam (chatglm.cn)
+    # kennt keine ausgabegrenze — ohne durchsetzung laeuft ein entarteter
+    # turn endlos weiter (live-beobachtet: 30k zeichen / 24 calls).
+    glm_max_output_tokens = _config_int(
+        values,
+        "GLM_MAX_OUTPUT_TOKENS",
+        16384,
+        1024,
+        131072,
+        logger,
+    )
     glm_blocked_tool_follow_ups = _config_int(
         values,
         "GLM_BLOCKED_TOOL_FOLLOW_UPS",
@@ -658,6 +670,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
         glm_guest_max_retries=glm_guest_max_retries,
         glm_stream_error_max_retries=glm_stream_error_max_retries,
         glm_stream_error_retry_interval=glm_stream_error_retry_interval,
+        glm_max_output_tokens=glm_max_output_tokens,
         glm_blocked_tool_follow_ups=glm_blocked_tool_follow_ups,
         glm_history_max_chars=glm_history_max_chars,
         glm_empty_response_max_retries=glm_empty_response_max_retries,

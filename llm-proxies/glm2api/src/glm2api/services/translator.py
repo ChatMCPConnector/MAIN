@@ -34,6 +34,11 @@ from ..utils.tool_protocol import (
     tools_to_prompt as _protocol_tools_to_prompt,
 )
 
+# Grobe Zeichen-pro-Token-Schaetzung fuer die Ausgabegrenze: der
+# upstream liefert keine Tokenzahl, ~4 Zeichen/Token ist die uebliche
+# Naeherung fuer gemischten Text.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+
 ASSISTANT_ID_PATTERN = re.compile(r"^[a-z0-9]{24,}$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()\"']+")
 
@@ -1141,6 +1146,12 @@ class GLMEventAccumulator:
     # T-13: true, wenn der turn an einem angebrochenen protokoll endete und
     # deshalb nicht als regulaerer 'stop' gelten darf.
     truncated_turn: bool = False
+    # Ausgabegrenze (tokens). Der upstream kennt keine, deshalb setzt der
+    # proxy sie durch: mitgezaehlt wird, was den client wirklich erreicht
+    # (reasoning, sichtbarer text, tool-call-argumente).
+    max_output_tokens: int | None = None
+    output_limit_reached: bool = False
+    _output_chars: int = 0
 
     def __post_init__(self) -> None:
         self.tool_parser.allowed_tool_names = self.allowed_tool_names
@@ -1355,6 +1366,33 @@ class GLMEventAccumulator:
         text_delta, reasoning_delta = self._compute_deltas()
         self.last_full_text = self._cached_full_text
         self.last_full_reasoning = self._cached_full_reasoning
+
+        # Ausgabegrenze durchsetzen. Der upstream kennt keine, ein
+        # entarteter turn laeuft sonst endlos (live: 30k zeichen / 24 calls
+        # in einer runde). Geschnitten wird an der TOKEN-Grenze, und ein
+        # dadurch unvollstaendiger tool-call wird verworfen statt als
+        # kaputtes json ausgeliefert.
+        if self.max_output_tokens is not None:
+            if self.output_limit_reached:
+                # Grenze bereits erreicht: nichts mehr nachliefern
+                reasoning_delta = ""
+                text_delta = ""
+            else:
+                budget_chars = self.max_output_tokens * _CHARS_PER_TOKEN_ESTIMATE
+                room = budget_chars - self._output_chars
+                if room <= 0:
+                    reasoning_delta = ""
+                    text_delta = ""
+                    self.output_limit_reached = True
+                else:
+                    if len(reasoning_delta) > room:
+                        reasoning_delta = reasoning_delta[:room]
+                        text_delta = ""
+                        self.output_limit_reached = True
+                    elif len(reasoning_delta) + len(text_delta) > room:
+                        text_delta = text_delta[: max(0, room - len(reasoning_delta))]
+                        self.output_limit_reached = True
+                    self._output_chars += len(reasoning_delta) + len(text_delta)
 
         chunks: list[str] = []
         if reasoning_delta:
