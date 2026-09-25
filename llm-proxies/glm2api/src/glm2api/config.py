@@ -542,7 +542,11 @@ def load_config(env_file: str = ".env") -> AppConfig:
         MAX_REQUEST_QUEUE_SIZE_LIMIT,
         logger,
     )
-    port = _config_int(values, "PORT", 8000, 1, 65535, logger)
+    # S-13: der betrieb laeuft auf 8001 (infrastructure.md, infra/scripts/glm2api.sh,
+    # openode-provider). Der default 8000 trieb code, .env.example und
+    # betrieb auseinander — ein frischer clone haette auf 8000 gehoert und
+    # damit jeden client und jedes script gebrochen.
+    port = _config_int(values, "PORT", 8001, 1, 65535, logger)
     request_timeout = _config_int(
         values,
         "REQUEST_TIMEOUT_SECONDS",

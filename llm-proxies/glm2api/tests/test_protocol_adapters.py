@@ -1068,3 +1068,36 @@ def test_responses_http_tool_round_replays_call_result_and_selection():
     assert tool_message["content"] == '{"temperature":21}'
     assert second_response["previous_response_id"] == first_response["id"]
     assert second_response["output_text"] == "done"
+
+
+# --- P3: C-18/A-06 — sampling-parameter und stop werden weitergereicht ----
+
+
+def test_stop_sequences_are_carried_into_internal_payload():
+    from glm2api.services.anthropic_adapter import anthropic_to_openai
+
+    payload = anthropic_to_openai(
+        {
+            "messages": [{"role": "user", "content": "x"}],
+            "stop_sequences": ["ENDE", "STOP"],
+        }
+    )
+    assert payload.get("stop") == ["ENDE", "STOP"]
+
+
+def test_client_extracts_tool_choice_policy_and_stop():
+    """C-18/T-18: policy und stop werden aus dem request gezogen und
+    durchgesetzt — nicht nur in den prompt geschrieben."""
+    from glm2api.services.glm_client import GLMWebClient
+
+    policy, stops = GLMWebClient._extract_tool_choice_and_stop(
+        {"tool_choice": "required", "stop": "ENDE", "stop_sequences": ["X", "ENDE"]}
+    )
+    assert policy["mode"] == "required"
+    assert stops == ("ENDE", "X"), "reihenfolge bleibt stabil, duplikate raus"
+
+    policy_specific, _ = GLMWebClient._extract_tool_choice_and_stop(
+        {"tool_choice": {"type": "function", "function": {"name": "read"}}}
+    )
+    assert policy_specific["mode"] == "specific"
+    assert policy_specific["tool_name"] == "read"

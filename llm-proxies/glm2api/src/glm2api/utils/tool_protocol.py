@@ -85,13 +85,22 @@ def filter_tools(tools: list[dict[str, object]] | None, blocked_tool_names: set[
 
 
 def serialize_tool_call_block(name: str, arguments: object) -> str:
-    """Serialisiert einen Tool-Call im JSON-Protokoll (mit []-Terminator)."""
+    """Serialisiert einen Tool-Call im JSON-Protokoll (mit []-Terminator).
+
+    A-14: bei kaputtem argument-json wurde `{"raw": arguments}` erfunden. Beim
+    History-Roundtrip sieht das Modell daraus einen Call mit einem *echten*
+    parameter `raw` — der Aufruf wird mit anderen Argumenten erneut
+    ausgeführt, und das Modell hält `raw` für eine Fähigkeit des Tools.
+    Stattdessen wird ein nicht darstellbares Argument-Objekt als
+    `_unusable_args`-markiert: das Modell erkennt den defekten Zustand und
+    kann den Call korrigieren, statt ihn mit erfundener Semantik zu spiegeln.
+    """
     parsed_arguments = arguments
     if isinstance(arguments, str):
         try:
             parsed_arguments = json.loads(arguments)
         except json.JSONDecodeError:
-            parsed_arguments = {"raw": arguments}
+            parsed_arguments = {"_unusable_args": arguments}
     if not isinstance(parsed_arguments, dict):
         parsed_arguments = {"value": parsed_arguments}
     return safe_json_dumps({"tool_calls": [{"name": name, "arguments": parsed_arguments}]}) + "[]"

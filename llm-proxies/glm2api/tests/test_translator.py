@@ -8,6 +8,7 @@ from glm2api.services.translator import (
     repair_raw_tool_args,
     sanitize_control_characters,
     sanitize_tool_call_payload,
+    normalize_file_path,
     strip_meta_chatter,
 )
 from glm2api.utils.tool_parser import strip_unparseable_call_fragments
@@ -143,7 +144,9 @@ def test_non_streaming_empty_response_after_blocked_tool_has_visible_fallback():
 
     assert "unavailable tool" in message["content"]
     assert "open_url" in message["content"]
-    assert response["choices"][0]["finish_reason"] == "stop"
+    # T-18/C-18: leerer turn nach blockiertem aufruf ist kein erfolgreicher
+    # 'stop' (parität zum stream-pfad seit diesem fix).
+    assert response["choices"][0]["finish_reason"] == "error"
 
 
 def test_accumulator_streaming_tool_call_emits_assistant_role_before_tool_delta():
@@ -802,7 +805,11 @@ def test_accumulator_ignores_unallowed_native_tool_call_blocks():
     response = accumulator.build_response()
     message = response["choices"][0]["message"]
 
-    assert response["choices"][0]["finish_reason"] == "stop"
+    # T-18/C-18: der non-stream-pfad weist einen blockierten native-call
+    # jetzt genauso aus wie der stream-pfad — 'error', nicht 'stop'. Vorher
+    # gab es hier eine stream/non-stream-paritaetsabweichung, die die tests
+    # festgeschrieben hatten.
+    assert response["choices"][0]["finish_reason"] == "error"
     assert "tool_calls" not in message
 
 
@@ -1913,3 +1920,156 @@ def test_inline_truncated_call_after_prose_is_stripped():
     assert fragments == 1
     assert "tool_calls" not in cleaned
     assert "Ich mache das." in cleaned
+
+
+# --- P3: T-16, T-17, T-18, C-18, A-14 -------------------------------------
+
+
+def test_file_uri_path_is_not_degraded_to_relative():
+    """T-16: `file:/tmp/x` wurde durch `fp[6:]` zu `tmp/x` — ein relativer
+    pfad, der im aktuellen arbeitsverzeichnis landete. `file:///tmp/x` war
+    korrekt. Beide muessen absolut sein."""
+    assert normalize_file_path("file:/tmp/x") == "/tmp/x"
+    assert normalize_file_path("file:///tmp/x") == "/tmp/x"
+
+
+def test_dot_segments_are_resolved_and_cannot_escape_a_root():
+    """T-16: `.`/`..` blieben unaufgeloest, `workspaces/../x` zeigte auf einen
+    anderen root."""
+    assert normalize_file_path("/a//b/./c") == "/a/b/c"
+    assert normalize_file_path("workspaces/deep/../a.py") == "/workspaces/a.py"
+    # `..` darf den absoluten root nicht verlassen
+    assert not normalize_file_path("/../../etc/passwd").startswith("/../")
+
+
+def test_file_path_workspaces_and_benchmark_mapping_survives_normalization():
+    assert normalize_file_path("workspaces/a.py") == "/workspaces/a.py"
+    assert normalize_file_path("benchmark/b.py") == "/workspaces/benchmark/b.py"
+    assert normalize_file_path("benchmark.md") == "/workspaces/benchmark.md"
+
+
+def test_meta_chatter_is_removed_per_sentence_not_per_line():
+    """T-17: der filter war zeilenbasiert und kannte die live beobachteten
+    englischen formulierungen nicht. Nur der verdaechtige satz faellt —
+    die eigentliche antwort auf derselben zeile bleibt."""
+    stripped = strip_meta_chatter(
+        "I'm sorry, I cannot use that tool. Die Antwort ist 42."
+    )
+    assert "42" in stripped
+    assert "cannot use that tool" not in stripped
+
+    assert strip_meta_chatter("I cannot access that URL. Ergebnis: 7.").strip() == "Ergebnis: 7."
+    assert strip_meta_chatter("Es tut mir leid, ich kann das nicht. Ergebnis: 3.").strip() == "Ergebnis: 3."
+
+
+def test_meta_chatter_filter_keeps_ordinary_answers():
+    for text in (
+        "Hier ist die Datei gelesen und der Inhalt stimmt.",
+        "Das Ergebnis ist 42.",
+        "The answer is 42.",
+    ):
+        assert strip_meta_chatter(text) == text
+
+
+def test_tool_choice_required_is_enforced_streaming():
+    """T-18: `tool_choice=required` stand nur im prompt. Ein turn mit prosa
+    galt als regulaerer 'stop' — der client hatte einen tool-vertrag
+    verlangt und bekam eine antwort."""
+    accumulator = GLMEventAccumulator(
+        model="m", allowed_tool_names={"read"}, tool_choice_mode="required"
+    )
+    accumulator.consume_event(
+        _event("c", "p1", text="Hier ist die Antwort, aber kein Tool.", status="finish")
+    )
+    accumulator.finalize("finish")
+    response = accumulator.build_response()
+
+    assert response["choices"][0]["finish_reason"] == "error"
+    assert "[tool_choice_violation]" in (response["choices"][0]["message"]["content"] or "")
+
+
+def test_tool_choice_required_is_satisfied_by_a_call():
+    accumulator = GLMEventAccumulator(
+        model="m", allowed_tool_names={"read"}, tool_choice_mode="required"
+    )
+    accumulator.consume_event(
+        _event(
+            "c",
+            "p1",
+            text='{"tool_calls":[{"name":"read","arguments":{"filePath":"/a"}}]}',
+            status="finish",
+        )
+    )
+    accumulator.finalize("finish")
+    response = accumulator.build_response()
+
+    assert response["choices"][0]["finish_reason"] == "tool_calls"
+    assert "tool_choice_violation" not in str(response)
+
+
+def test_tool_choice_auto_is_not_penalised():
+    """Gegenprobe: ohne vertrag bleibt ein prosa-turn ein ganz normaler stop."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(_event("c", "p1", text="Eine normale Antwort.", status="finish"))
+    accumulator.finalize("finish")
+
+    assert accumulator.build_response()["choices"][0]["finish_reason"] == "stop"
+
+
+def test_stop_sequence_truncates_visible_text():
+    """C-18: `stop` konnte der upstream nicht durchsetzen, der proxy schon."""
+    accumulator = GLMEventAccumulator(
+        model="m", allowed_tool_names=None, stop_sequences=("ENDE",)
+    )
+    accumulator.consume_event(_event("c", "p1", text="Vorher. ENDE Nachher.", status="finish"))
+    accumulator.finalize("finish")
+
+    assert accumulator.build_response()["choices"][0]["message"]["content"] == "Vorher."
+
+
+def test_serializer_does_not_invent_raw_argument_semantics():
+    """A-14: bei kaputtem argument-json erfand der serializer `{"raw": …}`.
+    Beim history-roundtrip spiegelte das Modell den call mit anderen
+    argumenten und glaubte, `raw` sei ein echter parameter."""
+    from glm2api.utils.tool_protocol import serialize_tool_call_block
+
+    serialized = serialize_tool_call_block("read", "{kaputt")
+
+    assert '"raw"' not in serialized
+    assert "_unusable_args" in serialized
+
+
+def test_history_compression_keeps_multi_tool_round_atomic():
+    """T-14: bei `assistant(c1,c2) + tool(c1) + tool(c2)` erkannte der
+    paar-schutz nur das erste result als partner. `tool(c2)` blieb als
+    eigenstaendige message im prompt — ein result ohne seinen call. Das
+    erzeugt beim modell fehlende rueckmeldung und wiederholte calls."""
+    messages = [
+        {"role": "user", "content": "aufgabe " * 40},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "read", "arguments": '{"filePath":"/a"}'}},
+                {"id": "c2", "type": "function", "function": {"name": "read", "arguments": '{"filePath":"/b"}'}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "A" * 100},
+        {"role": "tool", "tool_call_id": "c2", "content": "B" * 100},
+        {"role": "user", "content": "weitere aufgabe " * 40},
+    ]
+
+    for budget in (1000, 700, 400, 200, 100):
+        body = compress_history_messages(messages, budget)
+        result_ids = [m.get("tool_call_id") for m in body if m.get("role") == "tool"]
+        call_ids = [
+            call.get("id")
+            for message in body
+            if message.get("role") == "assistant"
+            for call in (message.get("tool_calls") or [])
+        ]
+        # jedes result hat seinen call — und umgekehrt kein call ohne result
+        for result_id in result_ids:
+            assert result_id in call_ids, f"verwaistes result {result_id} bei budget={budget}"
+        if call_ids:
+            assert sorted(result_ids) == sorted(call_ids), f"call ohne result bei budget={budget}"

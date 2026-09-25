@@ -206,3 +206,29 @@ def test_debug_log_directory_and_file_are_private(tmp_path, monkeypatch):
                 close()
         setup_logging("INFO")
 
+
+
+def test_default_port_matches_the_documented_operational_port(tmp_path, monkeypatch):
+    """S-13: code-default und `.env.example` sagten 8000, der Betrieb läuft
+    auf 8001 (infrastructure.md, infra/scripts/glm2api.sh, opencode). Ein
+    frischer Clone haette den proxy auf 8000 gestartet und damit jeden
+    client und jedes betriebsscript gebrochen."""
+    _clear_security_environment(monkeypatch)
+    env_path = tmp_path / ".env"
+    env_path.write_text("GLM_REFRESH_TOKEN=acct-token\n", encoding="utf-8")
+
+    assert load_config(env_path).port == 8001
+
+
+def test_env_example_port_matches_code_default():
+    """Der Beispiel-koern darf nicht vom code-default abweichen."""
+    from pathlib import Path
+
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    port_lines = [
+        line.strip()
+        for line in example.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("PORT=")
+    ]
+
+    assert port_lines == ["PORT=8001"]

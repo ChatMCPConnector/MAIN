@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import Logger
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..config import AppConfig
 from ..logging_utils import debug_dump
@@ -358,6 +359,52 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
     return None
 
 
+def normalize_file_path(raw_path: str) -> str:
+    """T-16: `filePath` ohne URI-/Root-Kontext umzuschreiben war fehlerhaft.
+
+    Zwei konkrete Fehler:
+      * `file:/tmp/x` wurde durch `fp[6:]` zu `tmp/x` — ein RELATIVER Pfad,
+        der im aktuellen Arbeitsverzeichnis landete. `file:///tmp/x` war
+        korrekt. Jetzt wird das Schema ueber `urlsplit` gelesen, nicht
+        ueber Abschneiden.
+      * `.`/`..`-Segmente blieben unaufgeloest, sodass `workspaces/../x`
+        auf einen anderen Root zeigen konnte. Sie werden jetzt aufgeloest
+        — nach dem Aufloesung kann `..` den Pfad nicht mehr verlassen."""
+    path = raw_path.strip()
+    if not path:
+        return path
+    if path.lower().startswith("file:"):
+        parsed = urlsplit(path)
+        # netloc nur bei file://host/… beruecksichtigen
+        path = parsed.path or (f"/{parsed.netloc}{parsed.query}" if parsed.netloc else "")
+    # doppelte slashes und `.` aufloesen, `..` aufloesen ohne root-ausbruch
+    absolute = path.startswith("/")
+    resolved: list[str] = []
+    for segment in path.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            if resolved and resolved[-1] != "..":
+                resolved.pop()
+            elif not absolute:
+                resolved.append("..")
+            # absolut: `..` am anfang bleibt `/` (kann nicht ausbrechen)
+            continue
+        resolved.append(segment)
+    normalized = "/".join(resolved)
+    if absolute:
+        normalized = "/" + normalized
+    if not normalized:
+        return path
+    if normalized.startswith("workspaces/"):
+        return "/" + normalized
+    if normalized.startswith("benchmark/"):
+        return "/workspaces/" + normalized
+    if normalized == "benchmark.md":
+        return "/workspaces/benchmark.md"
+    return normalized
+
+
 def sanitize_tool_call_payload(
     tool_name: str,
     arguments: object,
@@ -388,18 +435,7 @@ def sanitize_tool_call_payload(
         cleaned = {}
 
     if "filePath" in cleaned and isinstance(cleaned["filePath"], str):
-        fp = cleaned["filePath"].strip()
-        while fp.startswith("file://"):
-            fp = fp[7:]
-        while fp.startswith("file:/"):
-            fp = fp[6:]
-        if fp.startswith("workspaces/"):
-            fp = "/" + fp
-        elif fp.startswith("benchmark/"):
-            fp = "/workspaces/" + fp
-        elif fp == "benchmark.md":
-            fp = "/workspaces/benchmark.md"
-        cleaned["filePath"] = fp
+        cleaned["filePath"] = normalize_file_path(cleaned["filePath"])
 
     # Repair: stringified JSON arrays or objects inside parameters (e.g. questions: "[{...}]")
     # Ausgenommen write/edit: deren Textinhalte (content, newString, oldString) MÜSSEN Strings bleiben.
@@ -576,13 +612,35 @@ def strip_transcript_echo(text: str) -> str:
     return "".join(kept_lines).strip()
 
 
+_META_CHATTER_SENTENCE_RE = re.compile(
+    r"(?i)(?:^|(?<=[.!?…])\s)"
+    r"(?:\W*)(?:"
+    r"i(?:'m| am)\s+(?:so |very )?sorry\b"
+    r"|i\s+(?:cannot|can't|can not|am\s+unable\s+to|don't\s+have\s+(?:access|the\s+ability)\s+to|do\s+not\s+have\s+access\s+to)\b"
+    r"|as\s+an\s+ai\b"
+    r"|es\s+tut\s+mir\s+leid"
+    r"|ich\s+kann\s+(?:das\s+)?(?:nicht|leider\s+nicht)\b"
+    r"|mir\s+steht\s+(?:das\s+|dieses\s+)?(?:tool|werkzeug)\s+(?:nicht|leider\s+nicht)\s+zur\s+verfügung"
+    r")[^.!?\n]*[.!?…]?"
+)
+
+
 def strip_meta_chatter(text: str) -> str:
-    """Strips self-apology and meta-commentary sentences about failed/blocked tools
-    and the model's own hallucinated conversation transcript (User:/Assistant: lines
-    echoing the internal tool-result format)."""
+    """Strips self-apology and meta-commentary about failed/blocked tools and
+    the model's own hallucinated conversation transcript.
+
+    T-17: der filter war rein zeilenbasiert — eine Zeile mit meta-chatter
+    UND der eigentlichen Antwort wurde entweder ganz verworfen (auch die
+    Antwort) oder gar nicht erkannt. Die live beobachteten Formulierungen
+    ("I'm sorry, I cannot use that tool", "I cannot access that URL")
+    standen ueberhaupt nicht in der liste. Deshalb zusaetzlich satzweise:
+    nur der verdaechtige Satz faellt, der Rest der Antwort bleibt.
+    """
     if not text:
         return ""
-    lines = text.splitlines(keepends=True)
+    # T-17: erst satzweise die fähigkeits-verleugnungen entfernen …
+    without_meta_sentences = _META_CHATTER_SENTENCE_RE.sub(" ", text)
+    lines = without_meta_sentences.splitlines(keepends=True)
     kept_lines = []
     for line in lines:
         lower = line.lower()
@@ -879,20 +937,30 @@ def compress_history_messages(
         size = _msg_size(message)
         role = str(message.get("role", ""))
         if role == "tool" and kept and i > 0:
-            # tool-result gehört zum vorherigen assistant-call: nur zusammen
-            # behalten oder zusammen verwerfen (assistant davor prüfen)
-            prev = messages[i - 1]
-            prev_role = str(prev.get("role", ""))
-            if prev_role == "assistant" and prev.get("tool_calls"):
-                size += _msg_size(prev)
-                if running + size > max_total_chars:
-                    first_kept = i + 1
-                    break
-                kept.insert(0, prev)
-                kept.insert(1, message)
-                running += size
-                i -= 2
-                continue
+            # T-14: der paar-schutz griff nur fuer EIN result direkt nach
+            # dem assistant. Bei einer multi-call-runde
+            # (assistant(c1,c2) + tool(c1) + tool(c2)) wurde `tool c1` als
+            # partner erkannt, `tool c2` aber als eigenstaendige message
+            # behalten — im prompt stand danach ein result ohne seinen
+            # call. Die gesamte runde wird als EIN atomarer block
+            # behandelt: call + alle seine resultate, sonst nichts.
+            run_start = i
+            while run_start - 1 >= 0 and str(messages[run_start - 1].get("role", "")) == "tool":
+                run_start -= 1
+            owner_index = run_start - 1
+            if owner_index >= 0:
+                owner = messages[owner_index]
+                if str(owner.get("role", "")) == "assistant" and owner.get("tool_calls"):
+                    block = [owner, *messages[run_start : i + 1]]
+                    block_size = sum(_msg_size(item) for item in block)
+                    if running + block_size > max_total_chars:
+                        first_kept = i + 1
+                        break
+                    for item in reversed(block):
+                        kept.insert(0, item)
+                    running += block_size
+                    i = owner_index - 1
+                    continue
         if running + size > max_total_chars:
             first_kept = i if not kept else i + 1
             break
@@ -1178,6 +1246,15 @@ class GLMEventAccumulator:
     max_output_tokens: int | None = None
     output_limit_reached: bool = False
     _output_chars: int = 0
+    # T-18: `tool_choice=required`/<namenswahl> stand bisher nur als text im
+    # system-prompt. Ein turn, der stattdessen prosa lieferte, galt als
+    # regulaerer 'stop' — der client hatte einen tool-vertrag verlangt und
+    # bekam eine antwort. Das wird hier durchgesetzt.
+    tool_choice_mode: str = "auto"
+    tool_choice_name: str | None = None
+    required_tool_missing: bool = False
+    # C-18: stop-sequenzen kann der upstream nicht, der proxy schon.
+    stop_sequences: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self.tool_parser.allowed_tool_names = self.allowed_tool_names
@@ -1675,6 +1752,15 @@ class GLMEventAccumulator:
         # Ausgabegrenze auch auf dem ZUSAMMENGESETZTEN endtext durchsetzen
         # (die delta-kappung in consume_event greift fuer den cache nicht).
         final_text = self._cap_final_output(final_text)
+        # C-18: `stop` kann der upstream nicht durchsetzen, der proxy schon.
+        # Der text endet am ersten stop-folge; der rest wird abgeschnitten,
+        # damit der client keine anteile sieht, die er nie bestellt hat.
+        if self.stop_sequences and final_text:
+            for stop_sequence in self.stop_sequences:
+                stop_index = final_text.find(stop_sequence)
+                if stop_index != -1:
+                    final_text = final_text[:stop_index]
+                    break
         self._deferred_visible_text = ""
         if final_text and self.allowed_tool_names is not None:
             # Fence-unwrap: models sometimes wrap the tool-call protocol in
@@ -1785,6 +1871,27 @@ class GLMEventAccumulator:
                 final_text = strip_meta_chatter(final_text)
             elif strip_meta_chatter(final_text) == "":
                 final_text = ""
+        # T-18: der client hat einen tool-vertrag verlangt (`required` oder
+        # eine konkrete auswahl) und der turn liefert prosa. Das ist kein
+        # ergebnis — die antwort wird als vertragsverletzung markiert, damit
+        # der client sie nicht als abschluss liest, und der aufrufer kann
+        # eine erneute runde starten.
+        if not all_tool_calls and final_text.strip() and self.tool_choice_mode in {"required", "specific"}:
+            self.required_tool_missing = True
+            contract = (
+                f"exactly `{self.tool_choice_name}`" if self.tool_choice_mode == "specific" and self.tool_choice_name
+                else "at least one tool"
+            )
+            final_text = (
+                f"[tool_choice_violation] The client required {contract} in this round, "
+                "but the model answered with text only. No tool was executed.\n\n" + final_text
+            )
+            log = self.logger or _LOGGER
+            log.warning(
+                "tool_choice=%s not satisfied: model answered with text instead of a tool call",
+                self.tool_choice_mode,
+            )
+
         if final_text and not all_tool_calls:
             delta_payload: dict[str, object] = {"content": final_text}
             if not self.emitted_role:
@@ -1894,7 +2001,7 @@ class GLMEventAccumulator:
             # Fehler — der client kann daraus ableiten, dass es weiter
             # arbeiten muss.
             finish_reason = "length"
-        elif self.blocked_tool_attempt_names or self.truncated_turn:
+        elif self.blocked_tool_attempt_names or self.truncated_turn or self.required_tool_missing:
             finish_reason = "error" if not all_tool_calls else "tool_calls"
         else:
             finish_reason = "tool_calls" if all_tool_calls else "stop"
@@ -1951,6 +2058,13 @@ class GLMEventAccumulator:
         if not full_reasoning and self.last_full_reasoning:
             full_reasoning = self.last_full_reasoning
         full_text = self._cap_final_output(full_text)
+        # C-18: stop-sequenzen auch im non-stream-pfad durchsetzen
+        if self.stop_sequences and full_text:
+            for stop_sequence in self.stop_sequences:
+                stop_index = full_text.find(stop_sequence)
+                if stop_index != -1:
+                    full_text = full_text[:stop_index]
+                    break
         clean_content, xml_tool_calls = parse_tool_calls_from_text(
             full_text.strip(),
             allowed_tool_names=self.allowed_tool_names,
@@ -2044,6 +2158,19 @@ class GLMEventAccumulator:
                     "Replacing empty non-streaming response after blocked tool attempts: %s",
                     blocked_names,
                 )
+        # T-18: MUSS vor dem message-bau passieren, sonst traegt die
+        # verletzungs-meldung nicht in die antroed des clients.
+        if not all_tool_calls and self.tool_choice_mode in {"required", "specific"}:
+            contract = (
+                f"exactly `{self.tool_choice_name}`" if self.tool_choice_mode == "specific" and self.tool_choice_name
+                else "at least one tool"
+            )
+            self.required_tool_missing = True
+            if final_content:
+                final_content = (
+                    f"[tool_choice_violation] The client required {contract} in this round, "
+                    "but the model answered with text only. No tool was executed.\n\n" + final_content
+                )
         message: dict[str, object] = {
             "role": "assistant",
             "content": None if all_tool_calls or not final_content else final_content,
@@ -2066,7 +2193,11 @@ class GLMEventAccumulator:
                     "finish_reason": (
                         "tool_calls"
                         if all_tool_calls
-                        else ("length" if self.output_limit_reached else "stop")
+                        else (
+                            "length"
+                            if self.output_limit_reached
+                            else ("error" if self.required_tool_missing or self.truncated_turn or self.blocked_tool_attempt_names else "stop")
+                        )
                     ),
                 }
             ],

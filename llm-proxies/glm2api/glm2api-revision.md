@@ -345,8 +345,9 @@ T-01, T-03, T-05, T-06, T-09, T-10, T-12, T-15 · C-07, C-09, C-10, C-12 · S-10
 C-01 (Queue-Ghost), S-01 (Ingress-Limits), C-02 (SSRF), C-03 (Session-Isolation), S-02 (Auth/CORS), C-04/A-16 (Token-Race), C-17/S-04/A-15 (Secret-Leaks in Logs), S-16 (Klartext-HTTP), S-03 (Queue-Backpressure)
 → Umsetzung und Nachweise: F-5d. Keine offenen P2-Befunde.
 
-### P3 — Semantik und Konsistenz
+### P3 — Semantik und Konsistenz — **ABGESCHLOSSEN 2026-09-25**
 T-14, T-16, T-17, T-18 · C-18/A-06 (Parameter) · A-05, A-07, A-08, A-10, A-12, A-14 · S-05 bis S-07, S-09, S-12, S-13, S-15
+→ Umsetzung und Nachweise: F-5e. Keine offenen P3-Befunde.
 
 ### P4 — Hygiene
 T-19 bis T-22 · C-08, C-13, C-15, C-19, C-20 · S-17 · D-10 bis D-13
@@ -513,6 +514,34 @@ hatte nie stattgefunden. Der Client las die Erfindung als Erfolg. Jetzt geht nac
 erschöpftem Follow-up-Budget eine ehrliche Notice voraus
 (`[blocked_tool_notice] … were NOT executed`), Position vor der Antwort. Endet die
 Folge mit einem gültigen Call, gibt es keine Notice.
+
+### F-5e P3 abgeschlossen (2026-09-25)
+
+Achtzehn Befunde, wieder einzeln geprüft statt blind neu gebaut. Elf waren
+bereits abgesichert (Adapter-Normalisierung, Server-Limits, Fehlerhygiene);
+sieben waren echt offen und sind umgesetzt:
+
+| Befund | Umsetzung | Verifikation |
+|---|---|---|
+| **T-14** | Der Paar-Schutz der History-Kompression galt nur für **ein** Result direkt nach dem Assistant. Bei `assistant(c1,c2) + tool(c1) + tool(c2)` blieb `tool(c2)` als eigenständige Nachricht im Prompt — ein Result **ohne seinen Call**. Nachgewiesen bei fünf Budgets (1000/700/400/200/100). Die gesamte Runde ist jetzt ein atomarer Block: Call plus alle Resultate, sonst nichts. | 1 Test über fünf Budgetstufen |
+| **T-16** | `file:/tmp/x` wurde durch `fp[6:]` zu `tmp/x` — ein **relativer** Pfad, der im CWD landete. Jetzt `urlsplit` statt Abschneiden; zusätzlich werden `.`/`..`/Doppel-Slashes aufgelöst, sodass `..` den Root nicht mehr verlassen kann. | 3 Tests |
+| **T-17** | Der Meta-Chatter-Filter war zeilenbasiert und kannte nur eine enge Liste deutscher Phrasen — die live beobachteten englischen Formulierungen („I'm sorry, I cannot use that tool", „I cannot access that URL") kamen durch, und eine Zeile mit Meta-Chatter **und** Antwort wurde komplett verworfen. Jetzt satzweise: nur der verdächtige Satz fällt, der Rest bleibt. | 2 Tests inkl. Gegenprobe |
+| **T-18** | `tool_choice=required` bzw. eine Namenswahl stand nur als Text im System-Prompt. Ein Turn mit Prosa galt als regulärer `stop` — der Client hatte einen Tool-Vertrag verlangt und bekam eine Antwort. Jetzt durchgesetzt (Stream und Non-Stream): `finish_reason="error"` plus `[tool_choice_violation]`. Live belegt: die Frage „Was ist 2+2?" mit `required` endet als Vertragsverletzung statt als fertige Antwort. | 3 Tests inkl. Gegenprobe (ohne Vertrag bleibt `stop`) |
+| **C-18/A-06** | `stop`/`stop_sequences` werden jetzt **vom Proxy durchgesetzt** (der Upstream kann es nicht); die Texte enden am ersten Treffer. `max_tokens` war schon abgedeckt. Die Sampling-Parameter bleiben best-effort — ChatGLMs Web-API führt kein Feld dafür, sie werden nicht vorgetäuscht. | 2 Tests; live: `stop=["ENDE"]` → exakt gekappt |
+| **A-14** | Bei kaputtem Argument-JSON erfand der Serializer `{"raw": arguments}`. Beim History-Roundtrip spiegelte das Modell den Call mit anderen Argumenten und hielt `raw` für eine echte Tool-Fähigkeit. Jetzt `_unusable_args` — der Defektzustand ist für das Modell erkennbar, statt eine erfundene Semantik zu transportieren. | 1 Test |
+| **S-13** | Code-Default und `.env.example` sagten **8000**, der Betrieb läuft auf **8001** (`infrastructure.md`, `infra/scripts/glm2api.sh`, opencode-Provider). Ein frischer Clone wäre auf 8000 gestartet und hätte jeden Client und jedes Betriebsscript gebrochen. Default und Beispiel sind jetzt 8001, mit Test gegen beide. | 2 Tests |
+
+**Bereits abgesichert, empirisch bestätigt:** A-05/S-12 (`tool_choice:none` und
+`disable_parallel_tool_use` werden transportiert), A-07 (`previous_response_id`
+geht ins Payload), A-08 (strukturierte `function_call_output`-Blöcke werden nicht
+mit `str()` zerstört), A-10 (nicht unterstützte Tool-Typen ergeben einen echten
+`ValueError` → 400 statt stiller Verwerfung), A-12 (Responses-Stream: exakt ein
+`output_text.delta` je Chunk plus ein `done` mit dem Gesamttext, keine
+Doppelauslieferung), S-05/S-06 (Upstream- und Client-Fehler getrennt, keine
+internen Details nach außen), S-07 (ein gemeinsamer Validierungspfad für alle
+vier POST-Endpoints), S-09 (`_write_error_json` setzt `close_connection`, bevor
+sie antwortet — kein Body-Rest auf der Keep-alive-Verbindung), S-15 (der
+Config-Parser warnt bei ungültigen Werten und nutzt sichere Defaults).
 
 ### F-6 Bewusst nicht umgesetzt
 

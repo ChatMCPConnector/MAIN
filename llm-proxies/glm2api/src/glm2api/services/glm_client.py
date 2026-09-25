@@ -33,6 +33,7 @@ from .translator import (
     extract_history_tool_call_signatures,
     extract_recent_user_url,
     filter_tools,
+    parse_tool_choice_policy,
     resolve_chat_mode,
     resolve_networking,
     resolve_upstream_model,
@@ -356,9 +357,24 @@ class GLMWebClient:
             return filtered_tools, set()
         return filtered_tools, {tool["function"]["name"] for tool in filtered_tools} # type: ignore[index]
 
+    @staticmethod
+    def _extract_tool_choice_and_stop(payload: dict[str, object]) -> tuple[dict[str, object], tuple[str, ...]]:
+        """C-18/T-18: die tool-wahl-policy und die stop-sequenzen aus dem
+        request holen. Die adapter normalisieren beide auf die interne form
+        (`tool_choice` als string/dict, `stop` bzw. `stop_sequences`)."""
+        policy = parse_tool_choice_policy(payload.get("tool_choice"))
+        stop_sequences: list[str] = []
+        for source in (payload.get("stop"), payload.get("stop_sequences")):
+            if isinstance(source, str) and source:
+                stop_sequences.append(source)
+            elif isinstance(source, list):
+                stop_sequences.extend(str(item) for item in source if item)
+        return policy, tuple(dict.fromkeys(stop_sequences))
+
     def chat_completion(self, payload: dict[str, object]) -> tuple[dict[str, object], str | None]:
         payload = dict(payload)  # lokal kopierbar fuer retry-mutationen (10040-budget)
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
+        tool_choice_policy, stop_sequences = self._extract_tool_choice_and_stop(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
         max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
         max_empty_response_retries = self.config.glm_empty_response_max_retries
@@ -405,6 +421,15 @@ class GLMWebClient:
                 history_tool_call_signatures=history_tool_call_signatures,
                 prompt_chars=prompt_chars,
                 max_output_tokens=effective_max_tokens,
+                # T-18/C-18: policy und stop werden durchgesetzt, nicht nur
+                # in den prompt geschrieben.
+                tool_choice_mode=str(tool_choice_policy.get("mode", "auto")),
+                tool_choice_name=(
+                    str(tool_choice_policy.get("tool_name"))
+                    if tool_choice_policy.get("tool_name")
+                    else None
+                ),
+                stop_sequences=stop_sequences,
             )
 
         accumulator = new_accumulator()
@@ -600,6 +625,7 @@ class GLMWebClient:
     def stream_chat_completion(self, payload: dict[str, object]):
         payload = dict(payload)  # lokal kopierbar fuer retry-mutationen (10040-budget)
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
+        tool_choice_policy, stop_sequences = self._extract_tool_choice_and_stop(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
         max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
         max_empty_response_retries = self.config.glm_empty_response_max_retries
@@ -631,6 +657,15 @@ class GLMWebClient:
                 history_tool_call_signatures=history_tool_call_signatures,
                 prompt_chars=prompt_chars,
                 max_output_tokens=effective_max_tokens,
+                # T-18/C-18: policy und stop werden durchgesetzt, nicht nur
+                # in den prompt geschrieben.
+                tool_choice_mode=str(tool_choice_policy.get("mode", "auto")),
+                tool_choice_name=(
+                    str(tool_choice_policy.get("tool_name"))
+                    if tool_choice_policy.get("tool_name")
+                    else None
+                ),
+                stop_sequences=stop_sequences,
             )
 
         lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")
