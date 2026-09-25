@@ -382,6 +382,71 @@ def repair_python_command_quotes(command: str) -> str:
     return command
 
 
+# T-23: parameter, die nach namenskonvention SKALAR sind. Der proxy hat
+# kein schema, mit dem er den zieltyp bestimmen koennte — fuer diese
+# namen ist ein JSON-objekt/-array mit hoher wahrscheinlichkeit der
+# gewollte STRING, und ein stiller typwechsel wuerde sie zerstoeren
+# (`{"url": "{\"a\":1}"}` wurde zu `{"url": {"a": 1}}`).
+# Alles andere — `command` (powerShell-argv-liste), `questions`, `meta`
+# usw. — darf weiterhin entpackt werden.
+_SCALAR_VALUE_PARAMETERS = frozenset(
+    {
+        "url",
+        "uri",
+        "fileurl",
+        "image_url",
+        "filepath",
+        "path",
+        "q",
+        "query",
+        "text",
+        "content",
+        "prompt",
+        "description",
+        "message",
+        "name",
+        "id",
+        "newstring",
+        "oldstring",
+        "notebook_path",
+        "pattern",
+    }
+)
+
+
+def _expects_structured_value(key: str, all_arguments: dict[str, object]) -> bool:
+    """Darf dieser parameter ein JSON-objekt/-array als wert tragen?
+
+    Nur wenn der name nicht zu den bekannten skalaren parametern gehoert.
+    Die Liste folgt der OpenAI/Anthropic-Tool-Konvention, in der
+    `url`, `filePath`, `path`, `content` und `q` immer String sind."""
+    return key.lower() not in _SCALAR_VALUE_PARAMETERS
+
+
+def _scan_string_end(text: str, start: int) -> int:
+    """Index des schliessenden anfuehrungszeichens, escape-bewusst.
+
+    T-23: das feldende wurde mit `rfind('"')` bestimmt — das findet das
+    LETZTE anfuehrungszeichen der zeile, nicht das des felds. Aus
+    `{"filePath":"/a","content":"hello","other":"z"}` wurde so
+    `content: 'hello","other":"z'` — bei einem bash-auftrag eine
+    ausfuehrungsrelevante datenbeschädigung. Hier wird stattdessen
+    vorwaerts gescannt; escapes (`\\"`, `\\\\`) ueberspringen.
+
+    Ist der string abgeschnitten (kein schliessendes zeichen), wird das
+    textende zurueckgegeben: der rest IST dann der wert."""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == '"':
+            return index
+        index += 1
+    return len(text)
+
+
 def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | None:
     if tool_name in {"write", "edit"}:
         fp_match = re.search(r"\"filePath\"\s*:\s*\"([^\"]+)\"", raw_str)
@@ -389,7 +454,7 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
         if fp_match and c_match:
             file_path = fp_match.group(1)
             content_start = c_match.end()
-            content_end = raw_str.rfind('"')
+            content_end = _scan_string_end(raw_str, content_start)
             if content_end > content_start:
                 return {"filePath": file_path, "content": _decode_escaped_text(raw_str[content_start:content_end])}
     elif tool_name in {"read"}:
@@ -400,7 +465,7 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
         cmd_match = re.search(r"\"command\"\s*:\s*\"", raw_str)
         if cmd_match:
             cmd_start = cmd_match.end()
-            cmd_end = raw_str.rfind('"')
+            cmd_end = _scan_string_end(raw_str, cmd_start)
             if cmd_end > cmd_start:
                 return {"command": _decode_escaped_text(raw_str[cmd_start:cmd_end])}
     return None
@@ -579,21 +644,32 @@ def sanitize_tool_call_payload(
     if "filePath" in cleaned and isinstance(cleaned["filePath"], str):
         cleaned["filePath"] = normalize_file_path(cleaned["filePath"])
 
-    # Repair: stringified JSON arrays or objects inside parameters (e.g. questions: "[{...}]")
-    # Ausgenommen write/edit: deren Textinhalte (content, newString, oldString) MÜSSEN Strings bleiben.
+    # Repair: stringified JSON arrays or objects inside parameters
+    # (e.g. questions: "[{...}]").
+    #
+    # T-23: das passierte fuer JEDEN parameter, dessen string wie JSON
+    # aussah. `{"url": "{\"a\":1}"}` wurde zu `{"url": {"a": 1}}` — ein
+    # stiller typwechsel, den der client nicht erwartet. Ohne schema gibt
+    # es keine entscheidungsgrundlage, deshalb gilt die reparatur nur fuer
+    # parameter, die nach benennung strukturierten inhalt erwarten
+    # (PLURAL + inhalt), und nur wenn das gesamte argumentobjekt NICHT
+    # aus einem einzelnen solchen feld besteht.
     if tool_name not in {"write", "edit"}:
         for key, val in list(cleaned.items()):
-            if isinstance(val, str):
-                stripped_val = val.strip()
-                if (stripped_val.startswith("[") and stripped_val.endswith("]")) or (
-                    stripped_val.startswith("{") and stripped_val.endswith("}")
-                ):
-                    try:
-                        parsed_nested = json.loads(stripped_val)
-                        if isinstance(parsed_nested, (dict, list)):
-                            cleaned[key] = parsed_nested
-                    except json.JSONDecodeError:
-                        pass
+            if not isinstance(val, str):
+                continue
+            if not _expects_structured_value(key, cleaned):
+                continue
+            stripped_val = val.strip()
+            if (stripped_val.startswith("[") and stripped_val.endswith("]")) or (
+                stripped_val.startswith("{") and stripped_val.endswith("}")
+            ):
+                try:
+                    parsed_nested = json.loads(stripped_val)
+                    if isinstance(parsed_nested, (dict, list)):
+                        cleaned[key] = parsed_nested
+                except json.JSONDecodeError:
+                    pass
 
     # Sicherheitsnetz fuer write/edit: falls das Modell ein Dictionary/Array direkt
     # als content/newString/oldString uebergeben hat, in einen formatierten JSON-String serialisieren
@@ -815,7 +891,15 @@ def strip_meta_chatter(text: str) -> str:
     kept_lines = []
     for line in lines:
         lower = line.lower()
-        if any(kw in lower for kw in _META_CHATTER_KEYWORDS):
+        # T-17: das schluesselwort muss am ANFANG der zeile stehen (evtl.
+        # nach einem aufzaehlungspunkt). Vorher loeschte ein beliebiges
+        # vorkommen die GANZE zeile — aus
+        # 'Die Datei ist da, aber open ist nicht dasselbe wie read.' wurde
+        # ''. Meta-chatter steht aber immer am anfang seiner zeile.
+        stripped_line = lower.lstrip()
+        if stripped_line[:2] in {"- ", "* "}:
+            stripped_line = stripped_line[2:].lstrip()
+        if any(stripped_line.startswith(kw) for kw in _META_CHATTER_KEYWORDS):
             continue
         if lower.strip() in {"read", "read read", "read\nread", "open", "write"}:
             continue
@@ -1581,6 +1665,8 @@ class GLMEventAccumulator:
         return cleaned
 
     def consume_event(self, payload: dict[str, object]) -> tuple[list[str], str | None]:
+        # D-05: siehe die verwendung unten.
+        blocked_native_seen: list[bool] | None = None
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE parsed event", payload)
         if not self.conversation_id and payload.get("conversation_id"):
             self.conversation_id = str(payload["conversation_id"])
@@ -1611,6 +1697,11 @@ class GLMEventAccumulator:
                     self._dirty_logic_ids.add(logic_id)
                     self._parts_epoch += 1
                 self._render_cache_dirty = True
+            # D-05: ein gesperrter nativer call beendet den durchlauf nicht
+            # mehr. Der marker merkt sich, dass einer gesehen wurde; nach dem
+            # parts-durchlauf wird genau einmal 'intervene' gemeldet.
+            if blocked_native_seen is None:
+                blocked_native_seen = [False]
             # Intercept server-side tool calls from meta_data or content items
             meta = part.get("meta_data") if isinstance(part, dict) else None
             if isinstance(meta, dict):
@@ -1624,10 +1715,14 @@ class GLMEventAccumulator:
                             self.blocked_tool_attempt_names.append(tool_call_name)
                         if self.logger:
                             self.logger.warning(
-                                "Intercepted blocked native tool call in meta_data tool=%s, triggering immediate intervene",
+                                "Intercepted blocked native tool call in meta_data tool=%s",
                                 tool_call_name,
                             )
-                        return [], "intervene"
+                        if blocked_native_seen is None:
+                            blocked_native_seen = [True]
+                        else:
+                            blocked_native_seen[0] = True
+                        continue
 
             # Extract server-side native tool_calls from content items
             if isinstance(part, dict) and isinstance(part.get("content"), list):
@@ -1705,16 +1800,33 @@ class GLMEventAccumulator:
                                             tool_name,
                                             mapped_args,
                                         )
-                            if self.allowed_tool_names is not None and tool_name not in self.allowed_tool_names:
+                            # T-02: `None` bedeutet "keine Tools deklariert"
+                            # und damit "kein Call ausfuehrbar". Vorher
+                            # uebersprang die pruefung in diesem pfad
+                            # komplett, sodass ein request OHNE tools einen
+                            # nativen call ausfuehren konnte.
+                            # D-05: bei einem gesperrten call wurde mit
+                            # `return` der ganze parts-durchlauf abgebrochen —
+                            # ein gueltiger call, der im selben event SPÄTER
+                            # kommt, ging verloren (reihenfolgeabhaengig).
+                            # Jetzt wird der versuch gemerkt und die
+                            # verarbeitung laeuft weiter.
+                            tool_not_permitted = (
+                                self.allowed_tool_names is None
+                                or tool_name not in self.allowed_tool_names
+                            )
+                            if tool_not_permitted:
                                 if tool_name not in self.blocked_tool_attempt_names:
                                     self.blocked_tool_attempt_names.append(tool_name)
                                 if is_blocked_tool_name(tool_name, None):
                                     if self.logger:
                                         self.logger.warning(
-                                            "Intercepted blocked native tool call tool=%s, triggering immediate intervene",
+                                            "Intercepted blocked native tool call tool=%s, recording blocked attempt",
                                             tool_name,
                                         )
-                                    return [], "intervene"
+                                    if blocked_native_seen is not None:
+                                        blocked_native_seen[0] = True
+                                    continue
                                 continue
                             if tool_name and tool_id and tool_id not in self._server_side_tool_call_ids:
                                 # C-13: die id-losen serverseitigen calls
@@ -1951,6 +2063,12 @@ class GLMEventAccumulator:
                     )
                 )
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE generated delta chunks", chunks)
+        # D-05: ein gesperrter nativer call beendet den durchlauf nicht mehr
+        # (ein gueltiger call im selben event geht nicht verloren) — er wird
+        # aber weiterhin als 'intervene' gemeldet, damit die negative
+        # rueckmeldung an das modell geht.
+        if blocked_native_seen is not None and blocked_native_seen[0]:
+            return chunks, "intervene"
         return chunks, str(payload.get("status")) if payload.get("status") is not None else None
 
     def _unwrap_protocol_only_fences(self, text: str) -> str | None:
@@ -2422,6 +2540,13 @@ class GLMEventAccumulator:
             full_text.strip(),
             allowed_tool_names=self.allowed_tool_names,
         )
+        # T-17: der meta-chatter-filter lief NUR im stream-pfad. Mit
+        # vorhandenen tool-calls blieb er hier ungefiltert — der client bekam
+        # 'open ist nicht verfuegbar' als antwort, waehrend der stream '' lieferte.
+        # Gleiche bedingung, gleicher filter: nur wenn dieser turn
+        # tatsaechlich tool-calls ausliefert, ist der rest meta-chatter.
+        if self._server_side_tool_calls or xml_tool_calls or self.tool_parser.tool_calls:
+            clean_content = strip_meta_chatter(clean_content)
         clean_content, fragment_count = strip_unparseable_call_fragments(clean_content)
         if fragment_count:
             self.truncated_turn = True

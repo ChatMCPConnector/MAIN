@@ -2528,3 +2528,170 @@ def test_part_continuation_rules():
     assert rendered(["Erster Absatz.", "Zweiter Absatz."]) == "Erster Absatz.\n\nZweiter Absatz."
     # markdown-blockstart -> absatz
     assert rendered(["## Titel", "| a |"]) == "## Titel\n\n| a |"
+
+
+# --- P1-Nachtrag aus der unabhängigen Prüfrunde --------------------------
+
+
+def test_native_call_is_not_executable_without_declared_tools():
+    """T-02 (im Nachtrag gefunden): die Wildcard-Semantik war nur im
+    Text-Parser behoben. Im nativen Pfad (`meta_data`/content-item
+    `tool_calls`) uebersprang die pruefung bei `allowed_tool_names=None`
+    komplett — ein Request OHNE Tools fuehrte einen nativen Call aus."""
+    for name, arguments in (
+        ("open_url", {"url": "https://x.com"}),
+        ("OPEN_URL", {"url": "https://x.com"}),
+        ("execute_sandbox_code", {"code": "open('/etc/hosts').read()"}),
+        ("read", {"filePath": "/a"}),
+    ):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+        accumulator.consume_event(
+            _event(
+                "c",
+                "p1",
+                status="finish",
+            )
+        )
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "status": "finish",
+                "parts": [
+                    {
+                        "logic_id": "p1",
+                        "status": "finish",
+                        "content": [
+                            {
+                                "type": "tool_calls",
+                                "tool_calls": {"name": name, "id": f"i-{name}", "arguments": arguments},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        accumulator.finalize("finish")
+        response = accumulator.build_response()
+
+        assert not (response["choices"][0]["message"].get("tool_calls") or []), name
+        assert name in accumulator.blocked_tool_attempt_names, name
+        assert response["choices"][0]["finish_reason"] == "error", name
+
+
+def test_valid_call_survives_a_blocked_call_in_the_same_event():
+    """D-05: ein gesperrter nativer Call brach den ganzen Parts-Durchlauf
+    ab. Ein gueltiger Call, der im selben Event SPÄTER kam, ging verloren —
+    reihenfolgeabhängig."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        {
+            "conversation_id": "c",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {
+                                "name": "open_url",
+                                "id": "b1",
+                                "arguments": {"url": "https://x.com"},
+                            },
+                        },
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {
+                                "name": "read",
+                                "id": "a1",
+                                "arguments": {"filePath": "/a.py"},
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    accumulator.finalize("finish")
+    response = accumulator.build_response()
+
+    calls = response["choices"][0]["message"].get("tool_calls") or []
+    assert [call["function"]["name"] for call in calls] == ["read"], (
+        "der gueltige call darf nicht am gesperrten verloren gehen"
+    )
+    assert "open_url" in accumulator.blocked_tool_attempt_names
+
+
+def test_raw_argument_recovery_ends_at_the_field_boundary():
+    """T-23: das Feldende wurde mit `rfind('"')` bestimmt — das findet das
+    LETZTE Anführungszeichen. Aus
+    `{"filePath":"/a","content":"hello","other":"z"}` wurde so
+    `content='hello","other":"z'` — bei einem Bash-Auftrag eine
+    ausführungsrelevante Datenbeschädigung."""
+    from glm2api.services.translator import repair_raw_tool_args
+
+    assert repair_raw_tool_args("write", '{"filePath":"/a","content":"hello","other":"z"}') == {
+        "filePath": "/a",
+        "content": "hello",
+    }
+    assert repair_raw_tool_args("bash", '{"command":"ls -la","cwd":"/tmp","timeout":5}') == {
+        "command": "ls -la"
+    }
+    # escapes im wert werden nicht als feldende missverstanden
+    assert repair_raw_tool_args("write", '{"filePath":"/a","content":"mit \\"x\\" drin","other":1}') == {
+        "filePath": "/a",
+        "content": 'mit "x" drin',
+    }
+
+
+def test_scalar_parameters_are_not_retyped():
+    """T-23: stringified JSON wurde in JEDEM parameter entpackt —
+    `{"url": "{\\"a\\":1}"}` wurde zu `{"url": {"a": 1}}`, ein stiller
+    Typwechsel ohne Schema."""
+    from glm2api.services.translator import sanitize_tool_call_payload
+
+    assert sanitize_tool_call_payload("webfetch", {"url": '{"a":1}'}) == {"url": '{"a":1}'}
+    assert sanitize_tool_call_payload("custom", {"q": "[1,2]"}) == {"q": "[1,2]"}
+    assert sanitize_tool_call_payload("read", {"filePath": '["x"]'}) == {"filePath": '["x"]'}
+
+
+def test_meta_chatter_filter_keeps_legitimate_sentences():
+    """T-17: ein Schlüsselwort irgendwo in der Zeile löschte die ganze
+    Zeile. Aus 'Die Datei ist da, aber open ist nicht dasselbe wie read.'
+    wurde ''. Meta-Chatter steht am Zeilenanfang."""
+    assert strip_meta_chatter(
+        "Die Datei ist da, aber open ist nicht dasselbe wie read."
+    ) == "Die Datei ist da, aber open ist nicht dasselbe wie read."
+    assert strip_meta_chatter("Das Ergebnis ist 42.") == "Das Ergebnis ist 42."
+    # am Zeilenanfang wird weiterhin entfernt
+    assert strip_meta_chatter("Ergebnis:\nopen ist nicht verfügbar\nWeiter gehts.") == (
+        "Ergebnis:\nWeiter gehts."
+    )
+    assert strip_meta_chatter("- open ist nicht verfügbar") == ""
+
+
+def test_meta_chatter_filter_runs_in_both_paths():
+    """T-17: der Filter lief nur im Stream-Pfad. Mit Tool-Calls blieb er
+    im Non-Stream-Pfad ungefiltert — Paritätsbruch (Stream lieferte '',
+    Non-Stream den Meta-Text als Antwort)."""
+    text = "Ergebnis:\nopen ist nicht verfügbar\nWeiter gehts."
+    protocol = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}'
+
+    with_call = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    with_call.consume_event(_event("c", "p1", text=f"{text}\n{protocol}", status="finish"))
+    with_call.finalize("finish")
+    with_call_response = with_call.build_response()
+
+    # ohne Tool-Call ist der meta-text die Antwort und bleibt stehen
+    without_call = GLMEventAccumulator(model="m", allowed_tool_names=None)
+    without_call.consume_event(_event("c", "p1", text=text, status="finish"))
+    without_call.finalize("finish")
+    without_call_response = without_call.build_response()
+
+    assert with_call_response["choices"][0]["finish_reason"] == "tool_calls"
+    assert not (with_call_response["choices"][0]["message"].get("content") or "").strip()
+    assert "open ist nicht verfügbar" in (
+        without_call_response["choices"][0]["message"]["content"]
+    )

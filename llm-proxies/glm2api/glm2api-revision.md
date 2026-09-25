@@ -757,6 +757,15 @@ bekannten Logic-IDs laufen. Eine echte Komplexitätskorrektur braucht einen
 ereignisbasierten Part-Index — ein Umbau, kein Feinschliff. Der Test
 sichert deshalb die gemessene Verbesserung ab, statt Linearität zu behaupten.
 
+### F-5l T-02, T-17, T-23, D-05 (2026-09-25)
+
+| Befund | Fehlverhalten (gemessen) | Umsetzung |
+|---|---|---|
+| **T-23** (Argumente) | `repair_raw_tool_args()` bestimmte das Feldende mit `rfind('"')` — dem **letzten** Anführungszeichen der Zeile. Aus `{"filePath":"/a","content":"hello","other":"z"}` wurde `content: 'hello","other":"z'`, aus `{"command":"ls -la","cwd":"/tmp","timeout":5}` wurde `command: 'ls -la","cwd":"/tmp","timeout'`. Bei einem Bash-Auftrag eine ausführungsrelevante Datenbeschädigung. | `_scan_string_end()` scannt vorwärts und überspringt Escapes; ein abgeschnittener String liefert den Rest. Zusätzlich eingeengt: die Umtypisierung stringified-JSON lief für **jeden** Parameter — `{"url": "{"a":1}"}` wurde zu `{"url": {"a": 1}}`. Jetzt nur noch für Parameter, die nicht nach Konvention Skalare sind (`url`, `filePath`, `path`, `q`, `content`, `command` bleibt reparierbar für PowerShell-Argv). |
+| **T-02** (Rest) | Die Wildcard-Semantik war nur im **Text-Parser** behoben. Im nativen Pfad (`meta_data`/content-item `tool_calls`) übersprang die Prüfung bei `allowed_tool_names=None` komplett: `open_url`, `OPEN_URL`, `execute_sandbox_code` und sogar `read` lieferten bei einem Request **ohne** deklarierte Tools je einen ausführbaren Call mit `finish_reason: tool_calls`. | `None` heißt jetzt auch hier „keine Tools deklariert": der Call wird als blockierter Versuch gemerkt, nicht ausgeführt, der Turn endet als `error`. |
+| **D-05** (Reihenfolge) | Ein gesperrter nativer Call brach mit `return` den **gesamten** Parts-Durchlauf ab. Ein gültiger Call, der im selben Event **später** kam, ging verloren — reihenfolgeabhängig (blocked zuerst → 0 Calls, gültig zuerst → 1 Call). | Der Durchlauf läuft weiter; der gesperrte Call wird gemerkt und `intervene` wird einmalig am Ende gemeldet. |
+| **T-17** | Zwei Fehler: (a) der Meta-Chatter-Filter lief **nur** im Stream-Pfad — der Non-Stream-Client bekam `open ist nicht verfügbar` als Antwort, während der Stream `''` lieferte; (b) ein Schlüsselwort **irgendwo** in einer Zeile löschte die ganze Zeile — aus `Die Datei ist da, aber open ist nicht dasselbe wie read.` wurde `''`. | (a) Der Filter läuft jetzt unter derselben Bedingung in beiden Pfaden (nur wenn der Turn tatsächlich Calls ausliefert — ohne Call ist der Meta-Text die Antwort und bleibt stehen). (b) Das Schlüsselwort muss am **Zeilenanfang** stehen (evtl. nach einem Aufzählungspunkt). |
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.
