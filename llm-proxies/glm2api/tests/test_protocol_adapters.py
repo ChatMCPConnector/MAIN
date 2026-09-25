@@ -1101,3 +1101,66 @@ def test_client_extracts_tool_choice_policy_and_stop():
     )
     assert policy_specific["mode"] == "specific"
     assert policy_specific["tool_name"] == "read"
+
+
+# --- A-02, A-07, A-10, A-14: Adapter und Reparaturtherken ---------------
+
+
+def test_thinking_blocks_reach_the_model():
+    """A-02: der Adapter modelliert `thinking` und `redacted_thinking`
+    korrekt, aber `extract_text_content` kannte nur `text`, `image_url`
+    und `file` — die Denkkette verschwand VOR dem Modell."""
+    from glm2api.services.anthropic_adapter import anthropic_to_openai
+    from glm2api.services.translator import convert_messages
+
+    payload = anthropic_to_openai({
+        "model": "m",
+        "messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "GEDANKENGANG", "signature": "SIG"},
+                {"type": "redacted_thinking", "data": "OPAQUE"},
+                {"type": "text", "text": "antwort"},
+            ]},
+            {"role": "user", "content": "weiter"},
+        ],
+    })
+    prompt = str(convert_messages(payload["messages"], [
+        {"type": "function", "function": {"name": "bash", "parameters": {}}}
+    ]))
+
+    assert "GEDANKENGANG" in prompt
+    assert "OPAQUE" in prompt
+
+
+def test_anthropic_server_side_tools_are_rejected():
+    """A-10: `computer_20250124`/`text_editor_20250124` tragen kein
+    `input_schema`. Sie wurden zu gewöhnlichen Client-Funktionen mit
+    leerem Schema — das Modell 'ruft' sie auf, der Client kennt sie
+    nicht, der Lauf scheitert kryptisch."""
+    from glm2api.services.anthropic_adapter import anthropic_to_openai
+
+    for tool_type in ("computer_20250124", "text_editor_20250124", "code_execution_20250522"):
+        with pytest.raises(ValueError):
+            anthropic_to_openai({
+                "messages": [{"role": "user", "content": "x"}],
+                "tools": [{"type": tool_type, "name": "t"}],
+            })
+
+
+def test_repair_markers_do_not_look_like_parameters():
+    """A-14: der Serializer erfand `{"raw": …}`; die Reparaturtherk
+    `_unusable_args`/`value` hatte dasselbe Problem. `$invalid_arguments`
+    ist im JSON-Schema für Meta-Keys reserviert und nicht als
+    Werkzeug-Fähigkeit lesbar."""
+    from glm2api.utils.tool_protocol import serialize_tool_call_block
+
+    broken = serialize_tool_call_block("bash", "{BROKEN")
+    assert '"raw"' not in broken
+    assert '"_unusable_args"' not in broken
+    assert "$invalid_arguments" in broken
+
+    # ein nicht reparierbares `_raw` darf nicht als parameter durchsickern
+    from glm2api.services.translator import sanitize_tool_call_payload
+
+    assert sanitize_tool_call_payload("webfetch", {"_raw": '{"command":"ls"}'}) is None

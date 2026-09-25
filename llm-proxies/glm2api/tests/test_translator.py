@@ -2041,7 +2041,11 @@ def test_serializer_does_not_invent_raw_argument_semantics():
     serialized = serialize_tool_call_block("read", "{kaputt")
 
     assert '"raw"' not in serialized
-    assert "_unusable_args" in serialized
+    # A-14: auch die Reparaturtherk selbst darf nicht wie ein Parameter
+    # aussehen — `$invalid_arguments` ist im JSON-Schema fuer Meta-Keys
+    # reserviert und nicht als Werkzeug-Faehigkeit lesbar.
+    assert "$invalid_arguments" in serialized
+    assert "_unusable_args" not in serialized
 
 
 def test_history_compression_keeps_multi_tool_round_atomic():

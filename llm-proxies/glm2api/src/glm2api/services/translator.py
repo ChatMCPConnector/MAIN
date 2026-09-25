@@ -344,6 +344,17 @@ def extract_text_content(content: object) -> str:
         item_type = item.get("type")
         if item_type == "text":
             text_parts.append(str(item.get("text", "")))
+        elif item_type in {"thinking", "redacted_thinking"}:
+            # A-02: der adapter modelliert thinking und redacted_thinking
+            # korrekt, aber `extract_text_content` kannte nur `text`,
+            # `image_url` und `file`. Die Denkkette verschwand damit
+            # VOR dem modell: das modell bekam seinen eigenen
+            # gedankengang nie zurueck und musste alles neu herleiten.
+            # Der inhalt wird als normaler text in die historie
+            # uebernommen (es ist gedankeninhalt, kein werkzeugaufruf).
+            thinking = item.get("thinking") or item.get("data") or item.get("text")
+            if isinstance(thinking, str) and thinking.strip():
+                text_parts.append(thinking)
         elif item_type == "image_url":
             # T-23: `image_url` ist laut schema ein OBJEKT, kommt aber
             # auch als reiner string vor. Das ungepruefte `.get()` brach
@@ -696,6 +707,14 @@ def sanitize_tool_call_payload(
         repaired_raw = repair_raw_tool_args(tool_name, cleaned["_raw"])
         if repaired_raw is not None:
             cleaned = repaired_raw
+        else:
+            # A-14: `_raw` war eine REPARATURMARKIERUNG, keine echte
+            # parameterkategorie. Konnte sie nicht aufgeloest werden,
+            # blieb sie im argument-objekt und das modell las daraus eine
+            # fähigkeit namens `_raw`. Jetzt wird der aufruf verworfen —
+            # der turn zaehlt dann ueber den unusable-call-pfad als
+            # fehlerhaft.
+            return None
     if cleaned == {"param_name": "url"} and fallback_url:
         cleaned = {"url": fallback_url}
     elif cleaned == {"param_name": "url"}:

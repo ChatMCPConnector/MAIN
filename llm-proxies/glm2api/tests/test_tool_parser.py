@@ -7,6 +7,7 @@ from glm2api.utils.tool_parser import (
     parse_tool_calls_from_text,
 )
 from glm2api.utils.tool_protocol import filter_tools, is_blocked_tool_name
+import pytest
 
 
 def test_streaming_json_tool_call_with_terminator_in_same_token():
@@ -909,3 +910,25 @@ def test_protocol_terminator_does_not_leak_into_visible_text():
         assert not (visible + tail).strip(), (
             f"chunk={chunk_size}: terminator als sichtbarer text {(visible + tail)!r}"
         )
+
+
+# --- A-13: Restumgehungen der Blockliste ---------------------------------
+
+
+@pytest.mark.parametrize("variant", [
+    "openurl", "open_url2", "CodeInterpreter", "websearch", "OPEN_URL\u200b",
+    "web.run_v2", "open_uri", "fetchurl", "browse\u00a0",
+])
+def test_blocklist_covers_spelling_variants(variant):
+    """A-13: nach der ersten Kanonisierung blieben Umgehungen offen —
+    `openurl`, `open_url2`, `CodeInterpreter`, `websearch` und Namen mit
+    Nullbreitenzeichen passierten die Sperre."""
+    assert is_blocked_tool_name(variant, None) is True, variant
+
+
+@pytest.mark.parametrize("legitimate", [
+    "read", "read2", "Write", "sha256", "bash", "query2", "pdf_processor", "step3",
+])
+def test_blocklist_canonization_does_not_hit_legitimate_tools(legitimate):
+    """Gegenprobe: echte Tools mit Ziffern im Namen bleiben benutzbar."""
+    assert is_blocked_tool_name(legitimate, None) is False, legitimate

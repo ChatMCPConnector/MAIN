@@ -282,6 +282,21 @@ class GLM2APIServer:
             if field not in prepared and field in state:
                 prepared[field] = copy.deepcopy(state[field])
 
+        if not has_tool_output:
+            # A-07: textfortsetzung — den sichtbaren verlauf der vorigen
+            # runde voranstellen, sonst sieht das modell einen turn ohne
+            # kontext. `function_call_output`-fortsetzungen bleiben
+            # unveraendert (unten).
+            prior_history = state.get("history")
+            if isinstance(prior_history, list) and prior_history:
+                if isinstance(input_data, list):
+                    prepared["input"] = copy.deepcopy(prior_history) + copy.deepcopy(input_data)
+                elif isinstance(input_data, str) and input_data.strip():
+                    prepared["input"] = copy.deepcopy(prior_history) + [
+                        {"role": "user", "content": input_data}
+                    ]
+            return prepared
+
         if isinstance(input_data, list) and has_tool_output:
             existing_call_ids = {
                 str(item.get("call_id", "")).strip()
@@ -315,9 +330,27 @@ class GLM2APIServer:
             and item.get("call_id")
             and item.get("name")
         ]
-        if not function_calls:
-            return
+        # A-07: es wurde NUR der aufruf-verlauf gespeichert. Eine
+        # textfortsetzung (`previous_response_id` ohne
+        # `function_call_output`) bekam deshalb einen kontextlosen turn —
+        # der client glaubt weiterzukonversationieren, das modell sieht
+        # nichts von dem, was vorher gesagt wurde (empirisch: die erste
+        # frage war im prompt der zweiten nicht mehr enthalten). Deshalb
+        # wird der sichtbare verlauf mitgemerkt.
         state: dict[str, object] = {"function_calls": function_calls}
+        history: list[object] = []
+        previous_input = responses_payload.get("input")
+        if isinstance(previous_input, list):
+            history = [copy.deepcopy(item) for item in previous_input if isinstance(item, dict)]
+        elif isinstance(previous_input, str) and previous_input.strip():
+            history = [{"role": "user", "content": previous_input}]
+        for item in output:
+            if isinstance(item, dict) and item.get("type") == "message":
+                history.append(copy.deepcopy(item))
+        if history:
+            state["history"] = history
+        if not function_calls and not history:
+            return
         for field in ("tools", "tool_choice", "parallel_tool_calls"):
             if field in responses_payload:
                 state[field] = copy.deepcopy(responses_payload[field])

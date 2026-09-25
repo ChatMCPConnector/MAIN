@@ -34,6 +34,13 @@ def normalize_tool_name(name: object) -> str:
     return str(name).strip()
 
 
+# A-13: format-/steuerzeichen, die in einem toolnamen nichts zu suchen
+# haben und mit denen die sperre umgangen wurde (`OPEN_URL\u200b`).
+_ZERO_WIDTH_CHARS = re.compile(
+    "[\u200b\u200c\u200d\ufeff\u00ad\u2060\u180e\u00a0]"
+)
+
+
 def policy_tool_key(name: object) -> str:
     """Kanonischer Schluessel fuer ALLE sicherheits-/sperr-vergleiche (A-13).
 
@@ -45,14 +52,52 @@ def policy_tool_key(name: object) -> str:
     und Versions-/Trailing-Suffixe. Der ORIGINAL-API-name bleibt unberuehrt:
     `normalize_tool_name()` wird weiterhin fuer den wire-format verwendet."""
     text = unicodedata.normalize("NFKC", str(name)).strip().casefold()
+    text = _ZERO_WIDTH_CHARS.sub("", text)
     text = re.sub(r"[\s.\-]+", "_", text)
     text = re.sub(r"_+", "_", text).strip("_")
     # `web.run_v2`, `open_url-2`, `browse_v1` sind dieselbe faehigkeit.
     return re.sub(r"_(?:v\d+|version\d+|\d+)$", "", text)
 
 
-# Vorberechnete kanonische schluessel der nativen sperre (A-13).
+def policy_tool_key_compact(name: object) -> str:
+    """Zweiter kanonischer schluessel OHNE trennzeichen (A-13).
+
+    `open_url`, `openurl`, `open-url` und `openUrl` sind dieselbe
+    faehigkeit — mit dem unterstrich-schluessel blieb `openurl` ungesperrt.
+    Nur fuer den sperrvergleich, nie fuer den wire-format: die
+    Originalschreibweise ist der API-vertrag."""
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]", "", policy_tool_key(name))
+
+
+# Vorberechnete kanonische schluessel der nativen sperre (A-13) — beide
+# formen, damit auch `openurl`/`CodeInterpreter` gesperrt sind.
 _NATIVE_BLOCK_KEYS = frozenset(policy_tool_key(name) for name in BLOCKED_NATIVE_TOOL_NAMES)
+_NATIVE_BLOCK_KEYS_COMPACT = frozenset(
+    policy_tool_key_compact(name) for name in BLOCKED_NATIVE_TOOL_NAMES
+)
+# zusaetzliche schreibweisen, die dieselbe faehigkeit bezeichnen
+_NATIVE_BLOCK_ALIASES = frozenset(
+    policy_tool_key_compact(alias)
+    for alias in (
+        "code_interpreter",
+        "codeinterpreter",
+        "python",
+        "python_code",
+        "exec_code",
+        "execute_code",
+        "web_search",
+        "websearch",
+        "open_url",
+        "openurl",
+        "openuri",
+        "browse",
+        "browsing",
+        "fetch_url",
+        "fetchurl",
+        "visit_url",
+        "visiturl",
+    )
+)
 
 
 def is_blocked_tool_name(name: object, blocked_tool_names: set[str] | None) -> bool:
@@ -64,9 +109,23 @@ def is_blocked_tool_name(name: object, blocked_tool_names: set[str] | None) -> b
     key = policy_tool_key(name)
     if key in _NATIVE_BLOCK_KEYS:
         return True
+    compact = policy_tool_key_compact(name)
+    if (
+        compact in _NATIVE_BLOCK_KEYS_COMPACT
+        or compact in _NATIVE_BLOCK_ALIASES
+        # `open_url2` / `websearch3`: auch die ziffern-Suffixe sind
+        # versionen. Gegenprobe: `read2` -> `read` steht nicht in der
+        # sperre, `sha256` -> `sha` ebenfalls nicht — echte tools mit
+        # ziffern bleiben benutzbar.
+        or re.sub(r"\d+$", "", compact) in _NATIVE_BLOCK_KEYS_COMPACT
+        or re.sub(r"\d+$", "", compact) in _NATIVE_BLOCK_ALIASES
+    ):
+        return True
     if not blocked_tool_names:
         return False
-    return any(policy_tool_key(blocked) == key for blocked in blocked_tool_names)
+    if any(policy_tool_key(blocked) == key for blocked in blocked_tool_names):
+        return True
+    return any(policy_tool_key_compact(blocked) == compact for blocked in blocked_tool_names)
 
 
 def filter_tools(tools: list[dict[str, object]] | None, blocked_tool_names: set[str]) -> list[dict[str, object]] | None:
@@ -89,20 +148,23 @@ def serialize_tool_call_block(name: str, arguments: object) -> str:
 
     A-14: bei kaputtem argument-json wurde `{"raw": arguments}` erfunden. Beim
     History-Roundtrip sieht das Modell daraus einen Call mit einem *echten*
-    parameter `raw` — der Aufruf wird mit anderen Argumenten erneut
+    Parameter `raw` — der Aufruf wird mit anderen Argumenten erneut
     ausgeführt, und das Modell hält `raw` für eine Fähigkeit des Tools.
-    Stattdessen wird ein nicht darstellbares Argument-Objekt als
-    `_unusable_args`-markiert: das Modell erkennt den defekten Zustand und
-    kann den Call korrigieren, statt ihn mit erfundener Semantik zu spiegeln.
+
+    Die Reparaturtherke selbst war nur die andere Hälfte desselben Problems:
+    auch `_unusable_args` und `value` sind Namen, die wie Parameter
+    aussehen. Sie tragen jetzt ein `$`-Praefix (`$invalid_arguments`), das
+    im JSON-Schema für Meta-Keys reserviert ist und nicht als
+    Werkzeug-Fähigkeit gelesen werden kann.
     """
     parsed_arguments = arguments
     if isinstance(arguments, str):
         try:
             parsed_arguments = json.loads(arguments)
         except json.JSONDecodeError:
-            parsed_arguments = {"_unusable_args": arguments}
+            parsed_arguments = {"$invalid_arguments": arguments}
     if not isinstance(parsed_arguments, dict):
-        parsed_arguments = {"value": parsed_arguments}
+        parsed_arguments = {"$invalid_arguments_value": parsed_arguments}
     return safe_json_dumps({"tool_calls": [{"name": name, "arguments": parsed_arguments}]}) + "[]"
 
 

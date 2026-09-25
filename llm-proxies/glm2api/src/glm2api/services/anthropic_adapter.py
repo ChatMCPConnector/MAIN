@@ -232,6 +232,21 @@ def anthropic_to_openai(payload: dict[str, object]) -> dict[str, object]:
         for tool in anthropic_tools:
             if not isinstance(tool, dict):
                 continue
+            # A-10: anthropic kennt SERVER-SEITIGE native tools
+            # (`computer_20250124`, `text_editor_20250124`,
+            # `code_execution_…`). Sie tragen kein `input_schema`, sondern
+            # eine eigene protokollform. Ohne diese pruefung wurden sie zu
+            # gewöhnlichen client-funktionen mit leerem schema — das
+            # modell "ruft" sie auf, der client kennt sie nicht, und der
+            # lauf scheitert mit einem kryptischen fehler. Sie werden
+            # abgelehnt, wie die nicht unterstuetzten responses-typen.
+            tool_type = str(tool.get("type", "")).strip()
+            if tool_type and not tool_type.startswith("custom"):
+                raise ValueError(
+                    f"Unsupported Anthropic tool type: {tool_type!r}. "
+                    "Server-side tools are not available through this proxy; "
+                    "declare the tool as a custom tool with an input_schema."
+                )
             openai_tools.append({
                 "type": "function",
                 "function": {
