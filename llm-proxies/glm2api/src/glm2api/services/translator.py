@@ -1797,6 +1797,66 @@ class GLMEventAccumulator:
                 for content in part["content"]:
                     if isinstance(content, dict) and content.get("type") == "tool_calls":
                         tool_calls_data = content.get("tool_calls")
+                        # T-11: `tool_calls` kann auch eine LISTE sein
+                        # (beobachtete upstream-form). Der dict-zweig
+                        # ignorierte sie komplett — der native call
+                        # kam nie an, der agent blieb stehen.
+                        if isinstance(tool_calls_data, list):
+                            # T-11: `tool_calls` kommt auch als LISTE vor.
+                            # WICHTIG: die gleichen pruefungen wie im
+                            # dict-zweig — ohne sie waeren gesperrte native
+                            # tools und calls ohne deklarierte tools
+                            # ausfuehrbar gewesen (selbst eingebaut und
+                            # sofort gemessen).
+                            for entry in tool_calls_data:
+                                if not isinstance(entry, dict):
+                                    continue
+                                entry_name = str(entry.get("name", "")).strip()
+                                if not entry_name or entry_name.lower() in {
+                                    "finish", "intervene", "cancel", "none"
+                                }:
+                                    continue
+                                entry_arguments = entry.get("arguments", "{}")
+                                if entry_name == "open":
+                                    mapped = map_native_open_tool_call(
+                                        entry_arguments, self.allowed_tool_names
+                                    )
+                                    if mapped is None:
+                                        self.blocked_tool_attempt_names.append(entry_name)
+                                        continue
+                                    entry_name, entry_arguments = mapped
+                                elif entry_name == "execute_sandbox_code":
+                                    mapped = map_native_sandbox_tool_call(
+                                        entry_arguments, self.allowed_tool_names
+                                    )
+                                    if mapped is None:
+                                        self.blocked_tool_attempt_names.append(entry_name)
+                                        continue
+                                    entry_name, entry_arguments = mapped
+                                if is_blocked_tool_name(entry_name, None):
+                                    self.blocked_tool_attempt_names.append(entry_name)
+                                    if blocked_native_seen is not None:
+                                        blocked_native_seen[0] = True
+                                    continue
+                                if (
+                                    self.allowed_tool_names is None
+                                    or entry_name not in self.allowed_tool_names
+                                ):
+                                    self.blocked_tool_attempt_names.append(entry_name)
+                                    continue
+                                self._server_side_tool_calls.append(
+                                    {
+                                        "id": _coerce_call_id(entry.get("id"))
+                                        or f"native-list-{len(self._server_side_tool_calls)}",
+                                        "type": "function",
+                                        "index": len(self._server_side_tool_calls),
+                                        "function": {
+                                            "name": entry_name,
+                                            "arguments": entry_arguments,
+                                        },
+                                    }
+                                )
+                            continue
                         if isinstance(tool_calls_data, dict):
                             tool_name = str(tool_calls_data.get("name", "")).strip()
                             tool_id = str(tool_calls_data.get("id", "")).strip()

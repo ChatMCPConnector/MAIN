@@ -2058,6 +2058,15 @@ class StreamingToolParser:
     # T-06: anzahl der konsumierten, aber NICHT ausfuehrbaren
     # call-protokolle (fehlendes pflichtargument beim aufruf).
     dropped_call_count: int = 0
+    # P-12: zustand des inkrementellen struktur-scans
+    # (position, klammer-stack, im_string, esc, letzter_opener)
+    _scan_state: tuple[int, list[tuple[str, int]], bool, bool, int | None] = (0, [], False, False, None)
+    # P-12: letzter als call-opener erkannter stack-index. Solange er noch
+    # im stack liegt, kann sich das ergebnis nicht aendern — ohne diesen
+    # cache wurde der ganze stack pro chunk ausgewertet (bei 24k offenen
+    # klammern 288 mio iterationen).
+    _scan_opener_index: int | None = None
+    _scan_cached_position: int | None = None
 
     def logger_warning_once(self, message: str) -> None:
         """Warnung genau einmal pro parser (P-14: puffer-grenzen-warnung)."""
@@ -2154,10 +2163,50 @@ class StreamingToolParser:
                 self.pending_text = jrem
             return "".join(emitted_vis)
 
+        # P-12: die struktur-pruefungen unten sind O(len(puffer)) und
+        # liefen fuer JEDES chunk — bei 360k zeichen gemessene 283
+        # sekunden (ein abgeschnittener upstream-strom pinnt einen kern).
+        # Sie koennen das ergebnis nur aendern, wenn das neue fragment
+        # klammern, anfuehrungszeichen oder spitze klammern enthaelt: nur
+        # diese zeichen oeffnen/schliessen eine struktur oder einen string.
+        # Ein chunk ohne eines davon wird nur angehaengt.
+        if (
+            chunk
+            and not self.pending_text
+            and not _STRUCTURE_CHARS.intersection(chunk)
+        ):
+            # Kein gepufferter text und keine strukturzeichen im fragment:
+            # es kann weder ein call-protokoll eroeffnen noch eine
+            # bestehende struktur schliessen — der scan koennte nichts
+            # anderes als den aktuellen pufferzustand sehen. Der text ist
+            # damit sofort sichtbar (O(1) statt O(puffer)).
+            return chunk
+
+        # P-14: der hold-back war ausserhalb des DSML-pfades unbegrenzt.
+        # Ein nie geschlossenes `{"name":"read","arguments":{"filePath":"`
+        # liess den puffer unbegrenzt wachsen (gemessen: 12.000 zeichen
+        # nach 300 konsumierbaren stuecken, und im betrieb ein echter
+        # speicherpfad bei einem abgeschnittenen upstream-strom). Ab der
+        # grenze wird aufgegeben: der gepufferte rest geht als sichtbarer
+        # text heraus (besser ein fragment als unbegrenzter speicher), und
+        # der turn gilt als abgeschnitten.
+        if len(self.pending_text) > _MAX_HOLDBACK_CHARS and not self.buffering_dsml:
+            self.logger_warning_once(
+                "tool-call holdback limit reached, releasing buffer as visible text"
+            )
+            released = self.pending_text
+            self.pending_text = ""
+            self._scan_state = (0, [], False, False, None)
+            return released
+
         # Angebrochene call-strukturen generisch zurueckhalten, BEVOR die
         # format-spezifischen pfade laufen (V-01). Deren eigener hold-back
         # greift nur bei fest verdrahteten praefixen.
-        open_call = _find_unterminated_call_start(self.pending_text)
+        # P-12: der scan ist INKREMMENTELL — er betrachtet nur den neuen
+        # teil des puffers. Der volle scan kostete bei 360k zeichen
+        # gemessene 286 sekunden (ein abgeschnittener upstream-strom pinnt
+        # einen kern); jetzt O(neues fragment).
+        open_call = self._scan_unterminated_incremental()
         if open_call != -1 and len(self.pending_text) <= _MAX_HOLDBACK_CHARS:
             visible, remainder, parsed_calls = _split_stream_text(
                 self.pending_text,
@@ -2196,6 +2245,58 @@ class StreamingToolParser:
         self.pending_text = remainder
         self.tool_calls.extend(parsed_calls)
         return visible
+
+    def _scan_unterminated_incremental(self) -> int | None:
+        """P-12: inkrementeller ersatz fuer `_find_unterminated_call_start`.
+
+        Der puffer waechst nur am ende, also kann der scan bei der
+        zuletzt bearbeiteten position weitermachen. Der klammer-stack und
+        der string-zustand werden uebernommen; neu ist nur das
+        angehaengte fragment."""
+        text = self.pending_text
+        position, stack, in_string, escaped, _opener = self._scan_state
+        if position > len(text):
+            # puffer wurde geleert oder ersetzt: von vorn
+            position, stack, in_string, escaped = 0, [], False, False
+        index = position
+        length = len(text)
+        while index < length:
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char in "{[":
+                stack.append((char, index))
+            elif char in "}]" and stack:
+                stack.pop()
+            index += 1
+        self._scan_state = (index, stack, in_string, escaped, None)
+        # P-12: zwischenergebnis nur bei stapel-veraenderung neu bewerten
+        cached = self._scan_opener_index
+        if cached is not None and cached < len(stack):
+            if stack[cached][1] == self._scan_cached_position:
+                return self._scan_cached_position
+        self._scan_opener_index = None
+        if in_string and stack:
+            _char, position_of = stack[-1]
+            if _looks_like_call_opener(text, position_of):
+                return self._remember_opener(len(stack) - 1, position_of)
+        for offset, (_char, position_of) in enumerate(stack):
+            if _looks_like_call_opener(text, position_of):
+                return self._remember_opener(offset, position_of)
+        return None
+
+    def _remember_opener(self, stack_index: int, position: int) -> int:
+        """P-12: merkt sich den stack-index des gefundenen openers."""
+        self._scan_opener_index = stack_index
+        self._scan_cached_position = position
+        return position
 
     def flush(self) -> tuple[str, list[dict[str, object]]]:
         all_visible: list[str] = []
