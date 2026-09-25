@@ -824,6 +824,18 @@ das war der blinde Fleck, den die unabhängige Prüfrunde aufgedeckt hat.
 | **C-20** | **Bereits behoben.** Fehler-Body ist begrenzt (`ERROR_BODY_MAX_BYTES`), Dekompression ebenfalls begrenzt (Gzip-Bomb), Logging mit `redact_sensitive_data`, Client-Nachrichten generisch („Upstream service error."). | Keine Änderung nötig. |
 | **C-11/C-12/C-13** | **Bereits behoben bzw. nicht reproduzierbar.** Gültige Calls neben blockierten werden ausgeliefert; Follow-up-Retries verwenden das Follow-up-Payload; zwei bewusst identische Calls werden beide geliefert. | Keine Änderung nötig. |
 
+### F-5r S-04, S-12, S-13, S-15, D-11, D-12, D-13 (2026-09-25)
+
+| Befund | Status nach Nachprüfung | Umsetzung |
+|---|---|---|
+| **S-12** | **Tatsächlich offen.** `tool_choice: none` blendete nur die Tool-Schemata aus dem Prompt — ein trotzdem erzeugter Call wurde regulär ausgeliefert. Der Client, der Tools ausdrücklich verboten hatte, bekam trotzdem einen strukturierten Tool-Call (das inverse Routing-Problem zu `required`). | Der Call wird in **beiden** Pfaden verweigert, als `[tool_choice_violation]` sichtbar gemacht und **nicht ausgeführt**; `finish_reason=error`. Gegenprobe: `none` erlaubt weiterhin normale Textantworten. |
+| **S-15** | **Tatsächlich offen.** Ungültige Werte fielen zwar mit Warnung auf sichere Defaults zurück, aber **Tippfehler wurden völlig lautlos verworfen**: `CORS_ALLOW_ORIGINS` → `*` (die genaue Umkehrung der beabsichtigten Absicherung), `SERVER_API_KEY` → keine Auth, `GLM_MAX_CONCURRANCY` → 3. | `_warn_unknown_config_keys()` meldet unbekannte Keys mit geringer Edit-Distanz zum bekannten Namen; Sicherheits-Keys als `ERROR`. Bewusst konservativ: `FOO_BAR` bleibt still, sonst wäre jeder Startup verrauscht. |
+| **S-13** | **Tatsächlich offen.** `.env` war ein **relativer** Pfad. Ein Direktstart aus anderem Verzeichnis lud eine falsche Config oder legte ungefragt eine `.env` dort an. | `_resolve_env_file()`: explizite absolute/Teilpfade bleiben unverändert, ein reiner Dateiname wird im CWD, dann neben dem Paket und der Repo-Wurzel gesucht. Ohne Betriebsdatei läuft der Dienst ohnehin auf dem Code-Default 8001. |
+| **D-11** | **Tatsächlich offen (zweite Hälfte).** Port-Drift war nicht mehr vorhanden (Code und Beispiel: 8001). Aber `GLM2API_LOG_DIR`/`_MAX_BYTES`/`_BACKUP_COUNT` wurden direkt aus `os.environ` gelesen — `load_config()` exportiert die `.env` **nicht** in die Umgebung, ein dort gesetzter Log-Pfad war also still unwirksam. | Die drei Werte laufen über den normalen Config-Weg und werden `setup_logging()` als Parameter übergeben. |
+| **D-12** | **Teilweise.** Build-Deps waren bereits exakt gepinnt, die Dev-Dep nicht (`pytest>=8` bei Lock 9.1.1). | `pytest==9.1.1`. **Bewusst offen:** eine erzwungene Coverage-Schwelle bräuchte `pytest-cov` und damit eine Fremdabhängigkeit — das Projekt ist stdlib-only. Das ist eine bewusste Entscheidung, kein Versehen. |
+| **D-13** | **Bereits behoben.** Der Autouse-Fixture in `tests/conftest.py` sichert `os.environ` und die `GLM*`-Keys. Empirisch gegengeprüft: jede Testdatei einzeln, Standard- und umgekehrte Reihenfolge → 393 grün, keine Reihenfolgeabhängigkeit. | Keine Änderung nötig. |
+| **S-04** | **Bereits behoben.** `logging_utils` erzwingt `0o700` fürs Verzeichnis und `0o600` für Logdateien inkl. Rotation; auf der Platte verifiziert. | Keine Änderung nötig. |
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

@@ -3028,3 +3028,66 @@ def test_native_tool_call_as_list_is_parsed_with_all_guards():
 
         assert not (response["choices"][0]["message"].get("tool_calls") or []), label
         assert response["choices"][0]["finish_reason"] == "error", label
+
+
+# --- S-12: tool_choice none ist eine verbotssplicht --------------------
+
+
+def test_tool_choice_none_refuses_a_spontaneous_call():
+    """S-12: `tool_choice: none` blendete nur die tool-schemata aus dem
+    prompt. Ein trotzdem erzeugter aufruf wurde regulaer ausgeliefert —
+    der client, der tools ausdruecklich verboten hat, bekam trotzdem einen
+    strukturierten tool-call (das inverse routing-problem zu `required`)."""
+    accumulator = GLMEventAccumulator(
+        model="m",
+        allowed_tool_names={"bash"},
+        tool_choice_mode="none",
+    )
+    accumulator.consume_event({
+        "conversation_id": "c",
+        "parts": [{"logic_id": "p1", "content": [
+            {"type": "text", "text": '{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}]}[]'}]}],
+    })
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    assert not message.get("tool_calls"), "der aufruf darf nicht ausgeliefert werden"
+    assert "tool_choice_violation" in (message.get("content") or "")
+    assert "bash" in (message.get("content") or "")
+
+
+def test_tool_choice_none_non_stream_matches_stream():
+    """Paritaet: der non-stream-pfad muss denselben aufruf verweigern."""
+    accumulator = GLMEventAccumulator(
+        model="m",
+        allowed_tool_names={"bash"},
+        tool_choice_mode="none",
+    )
+    accumulator.consume_event({
+        "conversation_id": "c",
+        "parts": [{"logic_id": "p1", "content": [
+            {"type": "text", "text": '{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}]}[]'}]}],
+    })
+    response = accumulator.build_response("finish")
+    message = response["choices"][0]["message"]
+
+    assert not message.get("tool_calls")
+    assert "tool_choice_violation" in (message.get("content") or "")
+    assert response["choices"][0]["finish_reason"] == "error"
+
+
+def test_tool_choice_none_still_allows_plain_text():
+    """Gegenprobe: `none` heisst 'keine tools', nicht 'keine antwort'."""
+    accumulator = GLMEventAccumulator(
+        model="m", allowed_tool_names={"bash"}, tool_choice_mode="none",
+    )
+    accumulator.consume_event({
+        "conversation_id": "c",
+        "parts": [{"logic_id": "p1", "content": [{"type": "text", "text": "Hier ist die Antwort."}]}],
+    })
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    assert not message.get("tool_calls")
+    assert "Hier ist die Antwort." in (message.get("content") or "")
+    assert "tool_choice_violation" not in (message.get("content") or "")

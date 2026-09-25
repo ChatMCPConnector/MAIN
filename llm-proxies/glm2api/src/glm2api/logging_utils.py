@@ -269,7 +269,12 @@ def _should_use_colour() -> bool:
     return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
 
-def setup_logging(level: str) -> None:
+def setup_logging(
+    level: str,
+    log_dir_name: str = "log",
+    max_bytes: int = 100 * 1024 * 1024,
+    backup_count: int = 3,
+) -> None:
     # Attempt to force UTF-8 on Windows consoles so Unicode icons survive emit.
     if _IS_WINDOWS:
         import io
@@ -296,7 +301,12 @@ def setup_logging(level: str) -> None:
 
     # ── File handler (plain text, only when DEBUG) ───────────────────────────
     if resolved_level <= logging.DEBUG:
-        log_dir = Path(os.environ.get("GLM2API_LOG_DIR", "log"))
+        # D-11: der wert kommt aus der config, nicht aus os.environ.
+        # `load_config()` liest die .env, exportiert sie aber nicht in die
+        # umgebung — ein in der datei gesetzter `GLM2API_LOG_DIR` war
+        # damit still wirkungslos, waehrend die datei ihn als gueltige
+        # option auswies.
+        log_dir = Path(log_dir_name)
         log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(log_dir, 0o700)
         for existing_log in log_dir.glob("glm2api_debug.log*"):
@@ -309,8 +319,8 @@ def setup_logging(level: str) -> None:
         # Ereignisse, die man zum Debuggen brauchte. Staendige
         # Wegwerf-Logs sind keine Datenhaltung — hier zaehlt
         # Nachvollziehbarkeit, und die Platte ist begrenzt.
-        max_bytes = _env_int("GLM2API_LOG_MAX_BYTES", 100 * 1024 * 1024, minimum=1024 * 1024, maximum=2 * 1024**3)
-        backup_count = _env_int("GLM2API_LOG_BACKUP_COUNT", 3, minimum=1, maximum=20)
+        # D-11: siehe log_dir — auch diese beiden kamen vorher nur aus
+        # os.environ und ignorierten die .env.
         file_handler = _SecureRotatingFileHandler(
             log_path,
             maxBytes=max_bytes,

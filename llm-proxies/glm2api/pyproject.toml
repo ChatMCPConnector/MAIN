@@ -17,7 +17,11 @@ dependencies = []
 glm2api = "glm2api.__main__:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+# D-12: auch die dev-abhaengigkeit exakt gepinnt. Mit `>=8` koennte ein
+# spaeterer build eine inkompatible pytest-version aufloesen, obwohl
+# uv.lock eine festhaelt — der lock haelt nur das auf, was beim
+# aufloesen bereits gewaehlt war.
+dev = ["pytest==9.1.1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

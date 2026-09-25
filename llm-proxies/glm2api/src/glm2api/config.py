@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import logging
 import math
 import os
@@ -342,6 +343,9 @@ class AppConfig:
     exposed_models: list[str]
     server_api_keys: list[str]
     cors_allow_origin: str
+    log_dir: str
+    log_max_bytes: int
+    log_backup_count: int
 
     @property
     def refresh_url(self) -> str:
@@ -380,6 +384,88 @@ def ensure_env_file(env_path: Path) -> bool:
     return True
 
 
+# S-15: unbekannte config-keys wurden vollstaendig lautlos verworfen.
+# Ein tippfehler wie `CORS_ALLOW_ORIGINS` (statt `CORS_ALLOW_ORIGIN`) oder
+# `SERVER_API_KEY` (statt `SERVER_API_KEYS`) sah aus wie eine konfiguration —
+# und war keine. Im CORS-fall war das die genaue umkehrung der beabsichtigten
+# absicherung: wer eine beschraenkung eintragen wollte, bekam `*`.
+# Es wird nicht jeder unbekannte key gemeldet (das wuerde bei jedem
+# request-verzeichnis verrauschen), sondern nur NAHBEIRRUNGEN: der key ist einem bekannten so
+# aehnlich, dass ein tippfehler die naheliegendste erklaerung ist.
+_CONFIG_KEY_NEAR_MISSES = (
+    # (bekannter key, schweregrad) — schweregrad steuert die deutlichkeit
+    ("CORS_ALLOW_ORIGIN", "security"),
+    ("SERVER_API_KEYS", "security"),
+    ("GLM_REFRESH_TOKEN", "security"),
+    ("GLM_USE_GUEST_REFRESH_TOKEN", "security"),
+    ("GLM_ASSISTANT_ID", "security"),
+    ("GLM_MAX_CONCURRENCY", "behavior"),
+    ("GLM_MAX_OUTPUT_TOKENS", "behavior"),
+    ("GLM_REQUEST_DEADLINE_SECONDS", "behavior"),
+    ("GLM_QUEUE_WAIT_TIMEOUT_SECONDS", "behavior"),
+    ("GLM_BUSY_RETRY_INTERVAL_SECONDS", "behavior"),
+    ("GLM_BLOCKED_TOOL_FOLLOW_UPS", "behavior"),
+    ("GLM_DELETE_CONVERSATION", "behavior"),
+    ("LOG_LEVEL", "behavior"),
+    ("PORT", "behavior"),
+    ("HOST", "behavior"),
+)
+
+
+def _warn_unknown_config_keys(values: dict[str, str], logger: logging.Logger) -> None:
+    """S-15: unbekannte keys mit geringer edit-distanz melden.
+
+    Absichtlich konservativ: nur keys, die einem bekannten aehnlich sind.
+    Wer `FOO_BAR=1` mitbringt, wird nicht beledigt; wer
+    `CORS_ALLOW_ORIGINS` tippt, schon — denn dort ist der
+    stillschweigende fallback die falsche Richtung."""
+    for key in sorted(values):
+        stripped = key.strip().upper()
+        if not stripped:
+            continue
+        for known, severity in _CONFIG_KEY_NEAR_MISSES:
+            if stripped == known:
+                break
+            if difflib.get_close_matches(stripped, [known], n=1, cutoff=0.82):
+                message = (
+                    f"Unknown config key {stripped!r} is IGNORED (did you mean {known!r}?). "
+                    f"The setting has NO effect."
+                )
+                if severity == "security":
+                    logger.error("SECURITY: %s", message)
+                else:
+                    logger.warning("%s", message)
+                break
+
+
+def _resolve_env_file(env_file: str) -> Path:
+    """S-13: `.env` war ein RELATIVER pfad.
+
+    Ein direkter start aus einem anderen verzeichnis lud damit eine
+    falsche konfiguration — oder legte ungefragt eine neue `.env` dort
+    an, weil `ensure_env_file()` sie dort erzeugte. Ohne die
+    betriebsdatei lief der dienst zudem auf dem code-default, waehrend
+    agent und supervisor auf 8001 warteten.
+
+    Reihenfolge: expliziter pfad (absolut oder mit pfadanteil) bleibt
+    unveraendert; ein reiner dateiname wird zuerst im
+    arbeitsverzeichnis, dann neben dem paket gesucht. `.env.example`
+    wandert fuer die erzeugung mit.
+    """
+    given = Path(env_file)
+    if given.is_absolute() or given.parent != Path("."):
+        return given
+    if given.exists():
+        return given
+    # neben dem paket / repo-wurzel suchen
+    package_root = Path(__file__).resolve().parent
+    for anchor in (package_root, package_root.parent, package_root.parent.parent):
+        candidate = anchor / given.name
+        if candidate.exists():
+            return candidate
+    return given
+
+
 def load_config(env_file: str = ".env") -> AppConfig:
     # Basis-Logging vorab konfigurieren: load_config laeuft VOR
     # Application.__init__ (setup_logging) — ohne Handler laufen die
@@ -392,10 +478,11 @@ def load_config(env_file: str = ".env") -> AppConfig:
         _logger.addHandler(_handler)
         _logger.setLevel(logging.INFO)
     logger = logging.getLogger("glm2api.config")
-    env_path = Path(env_file)
+    env_path = _resolve_env_file(env_file)
     env_file_created = ensure_env_file(env_path)
     file_values = parse_dotenv(env_path)
     values = {**file_values, **os.environ}
+    _warn_unknown_config_keys(values, logger)
 
     glm_max_concurrency = _config_int(
         values,
@@ -551,6 +638,15 @@ def load_config(env_file: str = ".env") -> AppConfig:
     # betrieb auseinander — ein frischer clone haette auf 8000 gehoert und
     # damit jeden client und jedes script gebrochen.
     port = _config_int(values, "PORT", 8001, 1, 65535, logger)
+    # D-11: diese drei standen vorher nur in `logging_utils` und wurden
+    # direkt aus os.environ gelesen. `load_config()` exportiert die .env
+    # aber nicht in die umgebung — ein in der datei gesetzter wert war
+    # damit still unwirksam.
+    log_dir = _first_config_value(values, "GLM2API_LOG_DIR") or "log"
+    log_max_bytes = _config_int(
+        values, "GLM2API_LOG_MAX_BYTES", 100 * 1024 * 1024, 1024 * 1024, 2 * 1024**3, logger
+    )
+    log_backup_count = _config_int(values, "GLM2API_LOG_BACKUP_COUNT", 3, 1, 20, logger)
     request_timeout = _config_int(
         values,
         "REQUEST_TIMEOUT_SECONDS",
@@ -715,6 +811,9 @@ def load_config(env_file: str = ".env") -> AppConfig:
         exposed_models=exposed_models,
         server_api_keys=server_api_keys,
         cors_allow_origin=cors_allow_origin,
+        log_dir=log_dir,
+        log_max_bytes=log_max_bytes,
+        log_backup_count=log_backup_count,
     )
 
     if not (1 <= config.port <= 65535):

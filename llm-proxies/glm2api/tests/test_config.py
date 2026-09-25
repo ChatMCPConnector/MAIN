@@ -1,5 +1,6 @@
 import logging
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -185,8 +186,10 @@ def test_debug_header_dump_redacts_credentials():
 
 def test_debug_log_directory_and_file_are_private(tmp_path, monkeypatch):
     log_dir = tmp_path / "logs"
-    monkeypatch.setenv("GLM2API_LOG_DIR", str(log_dir))
-    setup_logging("DEBUG")
+    # D-11: der pfad kommt als parameter aus der config, nicht mehr aus
+    # os.environ — `load_config()` exportiert die .env namlich nicht in die
+    # umgebung, ein dort gesetzter wert war damit still unwirksam.
+    setup_logging("DEBUG", log_dir_name=str(log_dir))
     try:
         log_file = log_dir / "glm2api_debug.log"
         assert stat.S_IMODE(log_dir.stat().st_mode) == 0o700
@@ -204,7 +207,7 @@ def test_debug_log_directory_and_file_are_private(tmp_path, monkeypatch):
             close = getattr(handler, "close", None)
             if close is not None:
                 close()
-        setup_logging("INFO")
+        setup_logging("INFO", log_dir_name="log")
 
 
 
@@ -270,3 +273,142 @@ def test_env_example_documents_every_operational_config_key():
     missing = sorted(key for key in read_keys if key not in documented)
 
     assert not missing, f"in .env.example nicht dokumentiert: {missing}"
+
+
+# --- S-15: stille tippfehler -------------------------------------------
+
+
+@pytest.mark.parametrize("typo,expected", [
+    ("CORS_ALLOW_ORIGINS", "CORS_ALLOW_ORIGIN"),
+    ("SERVER_API_KEY", "SERVER_API_KEYS"),
+    ("GLM_MAX_CONCURRANCY", "GLM_MAX_CONCURRENCY"),
+    ("GLM_MAX_OUTPUT_TOKEN", "GLM_MAX_OUTPUT_TOKENS"),
+])
+def test_typo_config_keys_are_reported(tmp_path, monkeypatch, caplog, typo, expected):
+    """S-15: `CORS_ALLOW_ORIGINS` statt `CORS_ALLOW_ORIGIN` sah aus wie
+    eine absicherung und war keine — der stille fallback lieferte `*`,
+    also genau die umkehrung der beabsichtigten schranke. Unbekannte
+    keys mit geringer edit-distanz werden gemeldet."""
+    import logging as _logging
+
+    from glm2api.config import _warn_unknown_config_keys
+
+    logger = _logging.getLogger("glm2api.config.test_typo")
+    with caplog.at_level(_logging.WARNING, logger=logger.name):
+        _warn_unknown_config_keys({typo: "x", "GLM_REFRESH_TOKEN": "t"}, logger)
+
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    assert typo in messages
+    assert expected in messages
+    assert "NO effect" in messages
+
+
+def test_unrelated_unknown_keys_stay_quiet(tmp_path, caplog):
+    """Gegenprobe: beliebige extra-keys werden nicht gemeldet — sonst
+    waere jeder startup verrauscht und die echte warnung verschaend."""
+    import logging as _logging
+
+    from glm2api.config import _warn_unknown_config_keys
+
+    logger = _logging.getLogger("glm2api.config.test_quiet")
+    with caplog.at_level(_logging.WARNING, logger=logger.name):
+        _warn_unknown_config_keys({"FOO_BAR": "1", "MY_OWN_NOTE": "x"}, logger)
+
+    assert caplog.records == []
+
+
+def test_valid_keys_are_not_reported_as_typos(tmp_path, caplog):
+    """Gegenprobe: die echten keys dürfen nicht als tippfehler
+    gemeldet werden — sonst startet jeder normale betrieb mit drei
+    'security'-warnungen."""
+    import logging as _logging
+
+    from glm2api.config import _warn_unknown_config_keys
+
+    logger = _logging.getLogger("glm2api.config.test_valid")
+    with caplog.at_level(_logging.WARNING, logger=logger.name):
+        _warn_unknown_config_keys(
+            {
+                "CORS_ALLOW_ORIGIN": "*",
+                "SERVER_API_KEYS": "sk-1",
+                "GLM_MAX_CONCURRENCY": "3",
+                "GLM_MAX_OUTPUT_TOKENS": "16384",
+                "LOG_LEVEL": "INFO",
+            },
+            logger,
+        )
+
+    assert caplog.records == []
+
+
+def test_log_settings_from_env_file_are_not_silently_dropped(tmp_path, monkeypatch):
+    """D-11: `GLM2API_LOG_DIR`/`_MAX_BYTES`/`_BACKUP_COUNT` wurden direkt
+    aus `os.environ` gelesen. `load_config()` liest die .env, exportiert
+    sie aber nicht in die umgebung — ein in der datei gesetzter
+    log-pfad war damit still unwirksam, waehrend die datei ihn als
+    gueltige option auswies."""
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "GLM_REFRESH_TOKEN=account-token\n"
+        "GLM_ASSISTANT_ID=1\n"
+        "GLM2API_LOG_DIR=/var/log/glm2api\n"
+        "GLM2API_LOG_MAX_BYTES=209715200\n"
+        "GLM2API_LOG_BACKUP_COUNT=7\n",
+        encoding="utf-8",
+    )
+    for name in ("GLM_REFRESH_TOKEN", "GLM_ASSISTANT_ID", "GLM2API_LOG_DIR",
+                 "GLM2API_LOG_MAX_BYTES", "GLM2API_LOG_BACKUP_COUNT"):
+        monkeypatch.delenv(name, raising=False)
+
+    config = load_config(str(env_path))
+
+    assert config.log_dir == "/var/log/glm2api"
+    assert config.log_max_bytes == 209715200
+    assert config.log_backup_count == 7
+
+
+def test_log_settings_default_safely_when_absent(tmp_path, monkeypatch):
+    """Ohne angaben bleiben die dokumentierten defaults erhalten."""
+    env_path = tmp_path / ".env"
+    env_path.write_text("GLM_REFRESH_TOKEN=t\nGLM_ASSISTANT_ID=1\n", encoding="utf-8")
+    for name in ("GLM_REFRESH_TOKEN", "GLM_ASSISTANT_ID", "GLM2API_LOG_DIR"):
+        monkeypatch.delenv(name, raising=False)
+
+    config = load_config(str(env_path))
+
+    assert config.log_dir == "log"
+    assert config.log_max_bytes == 100 * 1024 * 1024
+    assert config.log_backup_count == 3
+
+
+# --- S-13: direktstart aus fremdem verzeichnis -------------------------
+
+
+def test_env_file_is_found_when_started_from_another_directory(tmp_path, monkeypatch):
+    """S-13: `.env` war ein relativer pfad. Ein direktstart aus einem
+    anderen verzeichnis lud damit eine falsche konfiguration — oder legte
+    ungefragt eine neue `.env` dort an (`ensure_env_file()`). Ohne die
+    betriebsdatei lief der dienst auf dem code-default, waehrend agent
+    und supervisor auf 8001 warteten."""
+    from glm2api.config import _resolve_env_file
+
+    package_root = Path(__file__).resolve().parent.parent  # .../llm-proxies/glm2api
+    env_file = package_root / ".env"
+    if not env_file.exists():
+        pytest.skip("kein .env im repo (nur in einer echten installation)")
+
+    monkeypatch.chdir(tmp_path)  # verzeichnis OHNE .env
+    resolved = _resolve_env_file(".env")
+
+    assert resolved == env_file, "muss die repo-.env finden, nicht cwd/.env"
+
+
+def test_no_env_file_is_created_in_a_foreign_directory(tmp_path, monkeypatch):
+    """Gegenprobe zur eigentlichen副作用: ein start aus einem fremden
+    verzeichnis darf dort keine `.env` anlegen."""
+    from glm2api.config import ensure_env_file
+
+    monkeypatch.chdir(tmp_path)
+    ensure_env_file(Path(".env"))
+
+    assert not (tmp_path / ".env").exists()

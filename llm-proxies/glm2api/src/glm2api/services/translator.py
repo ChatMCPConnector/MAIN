@@ -2580,6 +2580,40 @@ class GLMEventAccumulator:
         # ergebnis — die antwort wird als vertragsverletzung markiert, damit
         # der client sie nicht als abschluss liest, und der aufrufer kann
         # eine erneute runde starten.
+        # S-12: `tool_choice: none` ist eine VERBOTSSPLICHT des clients.
+        # Bisher wurden nur die tool-schemata aus dem prompt entfernt —
+        # ein trotzdem erzeugter aufruf wurde regulaer ausgeliefert. Der
+        # client, der tools ausdruecklich verboten hat, konnte so doch
+        # einen strukturierten tool-call bekommen (das inverse
+        # routing-problem zu `required`). Der aufruf wird verweigert und
+        # als vertragsverletzung sichtbar gemacht, nicht ausgefuehrt.
+        if all_tool_calls and self.tool_choice_mode == "none":
+            refused = ", ".join(
+                sorted(
+                    {
+                        str((call.get("function") or {}).get("name", ""))  # type: ignore[union-attr]
+                        for call in all_tool_calls
+                    }
+                    - {""}
+                )
+            )
+            for call in all_tool_calls:
+                name = str((call.get("function") or {}).get("name", ""))  # type: ignore[union-attr]
+                if name and name not in self.blocked_tool_attempt_names:
+                    self.blocked_tool_attempt_names.append(name)
+            all_tool_calls = []
+            self.required_tool_missing = True
+            violation = (
+                f"[tool_choice_violation] The client set `tool_choice: none` for this round, "
+                f"but the model requested {refused or 'a tool'}. No tool was executed.\n\n"
+            )
+            final_text = (violation + final_text) if final_text.strip() else violation
+            log = self.logger or _LOGGER
+            log.warning(
+                "tool_choice=none violated: model requested %s — call refused, not executed",
+                refused or "an unnamed tool",
+            )
+
         if not all_tool_calls and final_text.strip() and self.tool_choice_mode in {"required", "specific"}:
             self.required_tool_missing = True
             contract = (
@@ -2911,6 +2945,36 @@ class GLMEventAccumulator:
                 )
         # T-18: MUSS vor dem message-bau passieren, sonst traegt die
         # verletzungs-meldung nicht in die antroed des clients.
+        # S-12: non-stream-gegenstueck zu `tool_choice: none` — siehe
+        # kommentar im stream-pfad. Ohne diesen guard waere die
+        # stream/non-stream-paritaet gebrochen: der client mit
+        # `none` bekame im non-stream-pfad trotzdem seinen aufruf.
+        if all_tool_calls and self.tool_choice_mode == "none":
+            refused = ", ".join(
+                sorted(
+                    {
+                        str((call.get("function") or {}).get("name", ""))  # type: ignore[union-attr]
+                        for call in all_tool_calls
+                    }
+                    - {""}
+                )
+            )
+            for call in all_tool_calls:
+                name = str((call.get("function") or {}).get("name", ""))  # type: ignore[union-attr]
+                if name and name not in self.blocked_tool_attempt_names:
+                    self.blocked_tool_attempt_names.append(name)
+            all_tool_calls = []
+            self.required_tool_missing = True
+            final_content = (
+                f"[tool_choice_violation] The client set `tool_choice: none` for this round, "
+                f"but the model requested {refused or 'a tool'}. No tool was executed."
+                + ("\n\n" + final_content if final_content else "")
+            )
+            log = self.logger or _LOGGER
+            log.warning(
+                "tool_choice=none violated (non-stream): model requested %s — call refused, not executed",
+                refused or "an unnamed tool",
+            )
         if not all_tool_calls and self.tool_choice_mode in {"required", "specific"}:
             contract = (
                 f"exactly `{self.tool_choice_name}`" if self.tool_choice_mode == "specific" and self.tool_choice_name

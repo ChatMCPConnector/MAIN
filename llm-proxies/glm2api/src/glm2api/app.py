@@ -16,7 +16,12 @@ class StartupError(RuntimeError):
 
 class Application:
     def __init__(self, config: AppConfig) -> None:
-        setup_logging(config.log_level)
+        setup_logging(
+            config.log_level,
+            log_dir_name=config.log_dir,
+            max_bytes=config.log_max_bytes,
+            backup_count=config.log_backup_count,
+        )
         self.config = config
         self.logger = get_logger("glm2api.app")
         self.logger.info(
