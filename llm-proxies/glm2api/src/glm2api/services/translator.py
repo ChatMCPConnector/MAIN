@@ -50,6 +50,30 @@ _LOGGER = logging.getLogger("glm2api.translator")
 _C0_ALLOWED = {"\n", "\t", "\r"}
 
 
+def _call_is_executable(tool_call: dict[str, object]) -> bool:
+    """Trägt ein call die für sein tool erforderlichen argumente?
+
+    Wird nach einer durchgesetzten Ausgabegrenze geprüft: ein am
+    Abschrittpunkt halbfertiger call würde sonst als ausführbare
+    Anweisung beim Client landen."""
+    function = tool_call.get("function")
+    if not isinstance(function, dict):
+        return False
+    name = str(function.get("name", "")).strip()
+    raw_args = str(function.get("arguments", "")).strip()
+    if raw_args in {"", "{}", "null"}:
+        return name in {"todowrite", "task", "done", "stop", "list"}
+    try:
+        parsed = json.loads(raw_args)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        # nicht parsebares argument-json: als roh-string weitergeben kann der
+        # sanitizer reparieren, aber es ist nie sicher ausfuehrbar
+        return False
+    if not isinstance(parsed, dict) or parsed:
+        return True
+    return name in {"todowrite", "task", "done", "stop", "list"}
+
+
 def _tool_call_identity(tool_call: dict[str, object]) -> str:
     """Identitaet eines tool-calls fuer die deduplizierung (T-04).
 
@@ -1156,6 +1180,36 @@ class GLMEventAccumulator:
     def __post_init__(self) -> None:
         self.tool_parser.allowed_tool_names = self.allowed_tool_names
 
+    def _cap_final_output(self, text: str) -> str:
+        """Finalen text auf das budget kuerzen.
+
+        Wichtig: die durchsetzung in consume_event() kappte nur die
+        STREAM-Deltas. Der aus dem akkumulierten cache zusammengesetzte
+        endtext (finalize/build_response) muss ebenfalls gekappt werden —
+        sonst liefert der proxy eine als 'length' markierte, aber
+        ungekappte antwort (live-verifiziert: 12k zeichen bei
+        max_tokens=30)."""
+        if self.max_output_tokens is None:
+            return text
+        budget = self.max_output_tokens * _CHARS_PER_TOKEN_ESTIMATE
+        if len(text) <= budget:
+            return text
+        self.output_limit_reached = True
+        if self.logger:
+            self.logger.warning(
+                "Output limit reached: final text capped from %s to %s characters (%s tokens)",
+                len(text),
+                budget,
+                self.max_output_tokens,
+            )
+        return text[:budget]
+
+    def _output_budget_remaining(self) -> int | None:
+        """Restbudget in zeichen, oder None wenn keine grenze gesetzt ist."""
+        if self.max_output_tokens is None:
+            return None
+        return max(0, self.max_output_tokens * _CHARS_PER_TOKEN_ESTIMATE - self._output_chars)
+
     def is_empty_response(self) -> bool:
         """True when a round has no client-visible result or tool call.
 
@@ -1567,6 +1621,30 @@ class GLMEventAccumulator:
         all_tool_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
         all_tool_calls = sanitize_tool_calls(all_tool_calls, fallback_url=self.fallback_tool_url)
 
+        if self.output_limit_reached and all_tool_calls:
+            # Die ausgabegrenze hat den turn abgeschnitten. sanitize_
+            # tool_calls verwirft bereits calls ohne erforderliche
+            # argumente (P-03) — ein unvollstaendiger call darf aber
+            # NIE als ausfuehrung durchgehen. Wir pruefen deshalb
+            # explizit auf parsebare, pflichtfeld-erfuellende calls.
+            executable = [
+                tc
+                for tc in all_tool_calls
+                if _call_is_executable(tc)
+            ]
+            if len(executable) != len(all_tool_calls):
+                dropped = len(all_tool_calls) - len(executable)
+                all_tool_calls = executable
+                if self.logger:
+                    self.logger.warning(
+                        "Output limit reached (%s tokens): dropped %s incomplete tool call(s)",
+                        self.max_output_tokens,
+                        dropped,
+                    )
+                if not all_tool_calls:
+                    self.output_limit_reached = False
+                    self.truncated_turn = True
+
         if self.logger:
             self.logger.info(
                 "Response finalize status=%s text_len=%s reasoning_len=%s tool_calls=%s server_tools=%s",
@@ -1579,6 +1657,9 @@ class GLMEventAccumulator:
 
         chunks: list[str] = []
         final_text = self._deferred_visible_text + tail_text
+        # Ausgabegrenze auch auf dem ZUSAMMENGESETZTEN endtext durchsetzen
+        # (die delta-kappung in consume_event greift fuer den cache nicht).
+        final_text = self._cap_final_output(final_text)
         self._deferred_visible_text = ""
         if final_text and self.allowed_tool_names is not None:
             # Fence-unwrap: models sometimes wrap the tool-call protocol in
@@ -1790,7 +1871,12 @@ class GLMEventAccumulator:
         # protokoll endet und keine verwertbare antwort hat, wird nicht als
         # regulaerer 'stop' ausgewiesen. Clients sollen daran erkennen
         # koennen, dass kein ergebnis vorliegt.
-        if self.blocked_tool_attempt_names or self.truncated_turn:
+        if self.output_limit_reached:
+            # Ausgabegrenze erreicht: das ist ein 'length'-Abschluss, kein
+            # Fehler — der client kann daraus ableiten, dass es weiter
+            # arbeiten muss.
+            finish_reason = "length"
+        elif self.blocked_tool_attempt_names or self.truncated_turn:
             finish_reason = "error" if not all_tool_calls else "tool_calls"
         else:
             finish_reason = "tool_calls" if all_tool_calls else "stop"
@@ -1818,6 +1904,7 @@ class GLMEventAccumulator:
             full_text = self.last_full_text
         if not full_reasoning and self.last_full_reasoning:
             full_reasoning = self.last_full_reasoning
+        full_text = self._cap_final_output(full_text)
         clean_content, xml_tool_calls = parse_tool_calls_from_text(
             full_text.strip(),
             allowed_tool_names=self.allowed_tool_names,
@@ -1889,7 +1976,11 @@ class GLMEventAccumulator:
                 {
                     "index": 0,
                     "message": message,
-                    "finish_reason": "tool_calls" if all_tool_calls else "stop",
+                    "finish_reason": (
+                        "tool_calls"
+                        if all_tool_calls
+                        else ("length" if self.output_limit_reached else "stop")
+                    ),
                 }
             ],
             "usage": self._estimated_usage(self._completion_chars(final_content or "", all_tool_calls)),

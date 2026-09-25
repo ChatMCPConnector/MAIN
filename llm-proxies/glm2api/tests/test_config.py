@@ -7,7 +7,7 @@ from glm2api.config import ConfigError, GUEST_REFRESH_TOKEN_MARKER, load_config
 from glm2api.logging_utils import serialize_for_debug, setup_logging
 
 
-def test_single_refresh_token_adds_guest_fallback(tmp_path, monkeypatch):
+def test_single_refresh_token_does_not_add_guest_fallback(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
     env_path.write_text(
         "GLM_REFRESH_TOKEN=account-token\n"
@@ -19,7 +19,9 @@ def test_single_refresh_token_adds_guest_fallback(tmp_path, monkeypatch):
 
     config = load_config(env_path)
 
-    assert config.glm_refresh_tokens == ["account-token", GUEST_REFRESH_TOKEN_MARKER]
+    # Kein impliziter Gast-Slot: das Gastkonto ist limitiert und fuer
+    # Agentenlaeufe nicht brauchbar (Nutzerentscheidung 2026-09-25).
+    assert config.glm_refresh_tokens == ["account-token"]
     assert config.glm_refresh_token == "account-token"
     assert config.glm_use_guest_refresh_token is False
     assert config.glm_persistent_conversation is False
@@ -79,7 +81,7 @@ def test_non_loopback_binding_requires_api_keys(tmp_path, monkeypatch):
     _clear_security_environment(monkeypatch)
     env_path = tmp_path / ".env"
     env_path.write_text(
-        "HOST=0.0.0.0\nCORS_ALLOW_ORIGIN=https://app.example\n",
+        "HOST=0.0.0.0\nCORS_ALLOW_ORIGIN=https://app.example\nGLM_REFRESH_TOKEN=acct-token\n",
         encoding="utf-8",
     )
 
@@ -91,7 +93,8 @@ def test_non_loopback_binding_rejects_wildcard_cors(tmp_path, monkeypatch):
     _clear_security_environment(monkeypatch)
     env_path = tmp_path / ".env"
     env_path.write_text(
-        "HOST=0.0.0.0\nSERVER_API_KEYS=local-key\nCORS_ALLOW_ORIGIN=*\n",
+        "HOST=0.0.0.0\nSERVER_API_KEYS=local-key\nCORS_ALLOW_ORIGIN=*\n"
+        "GLM_REFRESH_TOKEN=acct-token\n",
         encoding="utf-8",
     )
 
@@ -102,7 +105,10 @@ def test_non_loopback_binding_rejects_wildcard_cors(tmp_path, monkeypatch):
 def test_http_upstream_is_limited_to_loopback_hosts(tmp_path, monkeypatch):
     _clear_security_environment(monkeypatch)
     env_path = tmp_path / ".env"
-    env_path.write_text("GLM_BASE_URL=http://example.com/chatglm\n", encoding="utf-8")
+    env_path.write_text(
+        "GLM_BASE_URL=http://example.com/chatglm\nGLM_REFRESH_TOKEN=acct-token\n",
+        encoding="utf-8",
+    )
 
     with pytest.raises(ConfigError, match="loopback"):
         load_config(env_path)
@@ -113,7 +119,8 @@ def test_invalid_numeric_values_use_safe_defaults_and_warn(tmp_path, monkeypatch
     env_path = tmp_path / ".env"
     env_path.write_text(
         "GLM_MAX_CONCURRENCY=abc\n"
-        "GLM_BUSY_RETRY_INTERVAL_SECONDS=NaN\n",
+        "GLM_BUSY_RETRY_INTERVAL_SECONDS=NaN\n"
+        "GLM_REFRESH_TOKEN=acct-token\n",
         encoding="utf-8",
     )
 
@@ -135,7 +142,8 @@ def test_request_limits_are_loaded_and_capped(tmp_path, monkeypatch):
         "MAX_HEADERS=32\n"
         "MAX_HEADER_BYTES=32768\n"
         "MAX_CONNECTIONS=16\n"
-        "REQUEST_QUEUE_SIZE=8\n",
+        "REQUEST_QUEUE_SIZE=8\n"
+        "GLM_REFRESH_TOKEN=acct-token\n",
         encoding="utf-8",
     )
 
@@ -152,7 +160,7 @@ def test_request_limits_are_loaded_and_capped(tmp_path, monkeypatch):
 def test_empty_cors_value_does_not_become_wildcard(tmp_path, monkeypatch):
     _clear_security_environment(monkeypatch)
     env_path = tmp_path / ".env"
-    env_path.write_text("CORS_ALLOW_ORIGIN=\n", encoding="utf-8")
+    env_path.write_text("CORS_ALLOW_ORIGIN=\nGLM_REFRESH_TOKEN=acct-token\n", encoding="utf-8")
 
     config = load_config(env_path)
 

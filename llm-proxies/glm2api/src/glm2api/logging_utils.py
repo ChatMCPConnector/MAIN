@@ -98,6 +98,18 @@ _SENSITIVE_QUOTED_RE = re.compile(
 )
 
 
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    """Liest eine optionale Groessen-Konfiguration aus der Umgebung."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
+
+
 class _SecureRotatingFileHandler(RotatingFileHandler):
     def doRollover(self) -> None:
         super().doRollover()
@@ -259,10 +271,18 @@ def setup_logging(level: str) -> None:
             if existing_log.is_file() and not existing_log.is_symlink():
                 os.chmod(existing_log, 0o600)
         log_path = log_dir / "glm2api_debug.log"
+        # 100 MB pro Generation statt 10 MB: das Debug-Log ist bewusst
+        # vollstaendig (1:1 Requests/Antworten), weil es die Grundlage fuer
+        # Nachvollzug und Patches ist. Beim Wert von 10 MB fehlten genau die
+        # Ereignisse, die man zum Debuggen brauchte. Staendige
+        # Wegwerf-Logs sind keine Datenhaltung — hier zaehlt
+        # Nachvollziehbarkeit, und die Platte ist begrenzt.
+        max_bytes = _env_int("GLM2API_LOG_MAX_BYTES", 100 * 1024 * 1024, minimum=1024 * 1024, maximum=2 * 1024**3)
+        backup_count = _env_int("GLM2API_LOG_BACKUP_COUNT", 3, minimum=1, maximum=20)
         file_handler = _SecureRotatingFileHandler(
             log_path,
-            maxBytes=10 * 1024 * 1024,
-            backupCount=5,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
             encoding="utf-8",
         )
         os.chmod(log_path, 0o600)

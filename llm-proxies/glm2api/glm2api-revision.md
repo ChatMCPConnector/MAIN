@@ -450,6 +450,14 @@ Gesamt: **107 Befunde** in 1.511 Zeilen Detailbericht, konsolidiert auf 115 Zeil
 
 **Restnotiz (kosmetisch):** Beginnt ein Turn mit dem Terminator-Rest eines zuvor abgeschnittenen Protokolls (`] []`), kann diese kurze Zeile vor dem Call im Text erscheinen. Der Call selbst wird korrekt geliefert; die Zeile ist nutzlos, aber nicht funktional störend.
 
+### F-5b P2-Teil 1 — Ausgabegrenze (2026-09-25)
+
+| Punkt | Umsetzung |
+|---|---|
+| Ausgabegrenze | `GLM_MAX_OUTPUT_TOKENS` (Default **16384**, Bereich 1024–131072). Der Client-Wunsch `max_tokens`/`max_completion_tokens` gilt, aber nie über die Schranke hinaus. Durchgesetzt im Accumulator über Zeichen-pro-Token-Näherung (4:1); bei Erreichen endet der Turn mit `finish_reason: "length"`, unvollständige Tool-Calls werden verworfen statt als kaputtes JSON ausgeliefert. War **10k** erwogen: ein einzelner Datei-Write mit ~500 Zeilen liegt bereits bei ~5k Tokens, ein 10k-Limit würde legitime Calls mitten im JSON abschneiden. |
+| Debug-Log | Bewusst **1:1 und vollständig** (Nutzerentscheidung: Grundlage für Nachvollzug und Patches). Rotation erst bei **100 MB** je Generation, 3 Generationen; `GLM2API_LOG_MAX_BYTES` / `GLM2API_LOG_BACKUP_COUNT` überschreibbar. Vorher 10 MB — genau die fehlenden Ereignisse. |
+| Gastkonto | **Abgeschaltet.** Kein impliziter Gast-Slot mehr: ein gesetztes `GLM_REFRESH_TOKEN` erzeugte bisher `[token, GUEST]` — ein stummer Gast-Slot im Betrieb. Ohne Konto verweigert der Server den Start mit klarer Anweisung. Gastmodus bleibt als ausdrückliche Wahl (`GLM_USE_GUEST_REFRESH_TOKEN=true`) erhalten, mit Warnung. Nebeneffekt: `.env.example` nennt `GLM_MAX_CONCURRENCY=100` — über dem Cap 32, wurde daher auf 3 korrigiert. |
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

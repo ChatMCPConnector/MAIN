@@ -415,14 +415,29 @@ def load_config(env_file: str = ".env") -> AppConfig:
     ) or is_guest_token_value(single_refresh_token)
 
     if explicit_guest_mode:
+        # Gastmodus ist ausschliesslich eine ausdrueckliche Wahl. Das
+        # Gastkonto ist limitiert und fuer den Agentenbetrieb nicht
+        # brauchbar — ein stilles Mitlaufen ist schlimmer als ein Fehler.
         refresh_tokens = [GUEST_REFRESH_TOKEN_MARKER] * glm_max_concurrency
         single_refresh_token = GUEST_REFRESH_TOKEN_MARKER
-    elif not refresh_tokens and single_refresh_token:
-        refresh_tokens = [single_refresh_token, GUEST_REFRESH_TOKEN_MARKER]
-    elif not refresh_tokens:
-        refresh_tokens = [GUEST_REFRESH_TOKEN_MARKER] * glm_max_concurrency
-        single_refresh_token = GUEST_REFRESH_TOKEN_MARKER
-        explicit_guest_mode = True
+        if not is_guest_token_value(single_refresh_token) and logger:
+            logger.warning(
+                "GLM_USE_GUEST_REFRESH_TOKEN is set: running on the guest account "
+                "(limited, not usable for agent runs)"
+            )
+    else:
+        # Kein impliziter Gast-Slot. Entweder ein echtes Konto, oder der
+        # Start schlaegt mit einer klaren Anweisung fehl.
+        refresh_tokens = [token for token in refresh_tokens if token]
+        if single_refresh_token and not refresh_tokens:
+            refresh_tokens = [single_refresh_token]
+        if not refresh_tokens or all(is_guest_token_value(token) for token in refresh_tokens):
+            raise SystemExit(
+                "glm2api: kein ChatGLM-Konto konfiguriert.\n"
+                "  Setze GLM_REFRESH_TOKEN in .env (oder hinterlege token.txt),\n"
+                "  oder starte bewusst im Gastmodus: GLM_USE_GUEST_REFRESH_TOKEN=true\n"
+                "  Der Gastmodus ist limitiert und fuer Agentenlaeufe nicht brauchbar."
+            )
 
     persistent_conv = parse_bool(
         values.get("GLM_PERSISTENT_CONVERSATION"),

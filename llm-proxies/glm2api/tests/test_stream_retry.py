@@ -7,6 +7,7 @@ from glm2api.services.glm_client import GLMWebClient, UpstreamAPIError
 class _RetryConfig:
     glm_stream_error_max_retries = 2
     glm_stream_error_retry_interval = 0.0
+    glm_max_output_tokens = 16384
     glm_blocked_tool_follow_ups = 0
     glm_empty_response_max_retries = 2
     glm_history_max_chars = 120000

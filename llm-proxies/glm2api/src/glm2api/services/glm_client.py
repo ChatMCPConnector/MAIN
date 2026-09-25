@@ -298,6 +298,17 @@ class GLMWebClient:
             lease.release()
             raise
 
+        # Ausgabegrenze: der client-wunsch gilt, aber nie ueber die
+        # konfigurationsschranke hinaus (der upstream kann sie nicht
+        # durchsetzen, der proxy muss es selbst tun).
+        client_max = payload.get("max_tokens")
+        if not isinstance(client_max, int) or client_max <= 0:
+            client_max = payload.get("max_completion_tokens")
+        if isinstance(client_max, int) and client_max > 0:
+            effective_max_tokens = min(client_max, self.config.glm_max_output_tokens)
+        else:
+            effective_max_tokens = self.config.glm_max_output_tokens
+
         def new_accumulator() -> GLMEventAccumulator:
             return GLMEventAccumulator(
                 model=str(payload["model"]),
@@ -307,6 +318,7 @@ class GLMWebClient:
                 logger=self.logger,
                 history_tool_call_signatures=history_tool_call_signatures,
                 prompt_chars=prompt_chars,
+                max_output_tokens=effective_max_tokens,
             )
 
         accumulator = new_accumulator()
@@ -485,6 +497,17 @@ class GLMWebClient:
         history_budget = self.config.glm_history_max_chars
         prompt_chars = _estimate_prompt_chars(payload)
 
+        # Ausgabegrenze: der client-wunsch gilt, aber nie ueber die
+        # konfigurationsschranke hinaus (der upstream kann sie nicht
+        # durchsetzen, der proxy muss es selbst tun).
+        client_max = payload.get("max_tokens")
+        if not isinstance(client_max, int) or client_max <= 0:
+            client_max = payload.get("max_completion_tokens")
+        if isinstance(client_max, int) and client_max > 0:
+            effective_max_tokens = min(client_max, self.config.glm_max_output_tokens)
+        else:
+            effective_max_tokens = self.config.glm_max_output_tokens
+
         def new_accumulator() -> GLMEventAccumulator:
             return GLMEventAccumulator(
                 model=str(payload["model"]),
@@ -494,6 +517,7 @@ class GLMWebClient:
                 logger=self.logger,
                 history_tool_call_signatures=history_tool_call_signatures,
                 prompt_chars=prompt_chars,
+                max_output_tokens=effective_max_tokens,
             )
 
         lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")

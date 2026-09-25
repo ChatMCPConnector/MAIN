@@ -1618,3 +1618,75 @@ def test_sandbox_mapping_is_capped_per_turn():
     message = accumulator.build_response()["choices"][0]["message"]
 
     assert len(message.get("tool_calls") or []) <= _MAX_MAPPED_SANDBOX_CALLS
+
+
+def test_output_limit_caps_response_and_reports_length():
+    """Der Upstream kennt keine Ausgabegrenze — der Proxy setzt sie selbst.
+    Live-Fall 2026-09-25: 30k Zeichen / 24 Calls in einem Turn."""
+    accumulator = GLMEventAccumulator(
+        model="glm-test", allowed_tool_names=None, max_output_tokens=200,
+    )
+    chunks = []
+    for index in range(50):
+        emitted, _status = accumulator.consume_event({
+            "conversation_id": "c_limit",
+            "status": "update",
+            "parts": [{"logic_id": f"p{index}", "status": "update",
+                        "content": [{"type": "text", "text": "A" * 100}]}],
+        })
+        chunks.extend(emitted)
+
+    final = accumulator.finalize(status="finish")
+    payload = "".join(final)
+    content = json.loads(final[-2][6:].strip())
+
+    # 200 Token ~ 800 Zeichen; mehr wird nicht ausgeliefert
+    assert sum(len(json.loads(c[6:].strip())["choices"][0]["delta"].get("content") or "")
+               for c in chunks if c.startswith("data: ") and "[DONE]" not in c) <= 800
+    assert accumulator.output_limit_reached is True
+    assert content["choices"][0]["finish_reason"] == "length"
+
+
+def test_output_limit_drops_incomplete_tool_call():
+    accumulator = GLMEventAccumulator(
+        model="glm-test", allowed_tool_names={"write"}, max_output_tokens=200,
+    )
+    # Text, der mitten im call-json abgeschnitten wird
+    payload = "Hier kommt der Plan. " + '{"tool_calls":[{"name":"write","arguments":{"filePath":"/a.py","content":"' + ("x" * 5000) + '}}]}[]'
+    for index in range(0, len(payload), 400):
+        accumulator.consume_event({
+            "conversation_id": "c_limit_call",
+            "status": "update",
+            "parts": [{"logic_id": f"p{index}", "status": "update",
+                        "content": [{"type": "text", "text": payload[index:index + 400]}]}],
+        })
+    final = accumulator.finalize(status="finish")
+    body = json.loads(final[-2][6:].strip())
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    # ein abgeschnittener write-call darf NICHT ausgeliefert werden
+    assert not (message.get("tool_calls") or []), "unvollstaendiger call wurde ausgeliefert"
+    assert body["choices"][0]["finish_reason"] in {"length", "error", "stop"}
+
+
+def test_output_limit_caps_final_text_not_only_deltas():
+    """Regression 2026-09-25: die delta-kappung in consume_event() greift
+    nicht fuer den aus dem cache zusammengesetzten endtext. Ohne diese
+    zweite Kappung lieferte der Proxy finish_reason=length alongside
+    12.367 ungekappte zeichen (max_tokens=30)."""
+    accumulator = GLMEventAccumulator(
+        model="glm-test", allowed_tool_names=None, max_output_tokens=200,
+    )
+    for index in range(30):
+        accumulator.consume_event({
+            "conversation_id": "c_final_cap",
+            "status": "update",
+            "parts": [{"logic_id": f"p{index}", "status": "update",
+                        "content": [{"type": "text", "text": "B" * 1000}]}],
+        })
+    accumulator.finalize(status="finish")
+    body = accumulator.build_response()
+
+    content = body["choices"][0]["message"]["content"]
+    assert len(content) <= 200 * 4, f"endtext ungekappt: {len(content)} zeichen"
+    assert body["choices"][0]["finish_reason"] == "length"
