@@ -27,15 +27,15 @@
       "label": "antigravity-proxy",
       "onAutoForward": "silent"
     },
+    "2000": {
+      "onAutoForward": "ignore"
+    },
     "5900": {
       "onAutoForward": "ignore"
     },
     "5920": {
       "onAutoForward": "ignore"
     }
-  },
-  "otherPortsAttributes": {
-    "onAutoForward": "ignore"
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
   "postStartCommand": "cd /workspaces/MAIN && git pull --rebase --autostash origin main 2>/dev/null || true; bash .devcontainer/start-on-boot.sh",
@@ -44,7 +44,9 @@
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
         "files.eol": "\n",
-        "remote.autoForwardPorts": false
+        "remote.autoForwardPorts": true,
+        "remote.autoForwardPortsSource": "process",
+        "remote.restoreForwardedPorts": false
       },
       "extensions": [
         "ms-azuretools.vscode-docker",

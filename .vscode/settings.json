@@ -1,10 +1,9 @@
 {
   "terminal.integrated.defaultProfile.linux": "bash",
   "files.eol": "\n",
-  "remote.autoForwardPorts": false,
-  "remote.otherPortsAttributes": {
-    "onAutoForward": "ignore"
-  },
+  "remote.autoForwardPorts": true,
+  "remote.autoForwardPortsSource": "process",
+  "remote.restoreForwardedPorts": false,
   "remote.portsAttributes": {
     "4096": {
       "label": "opencode-Server",
@@ -21,6 +20,15 @@
     "9878": {
       "label": "antigravity-proxy",
       "onAutoForward": "silent"
+    },
+    "2000": {
+      "onAutoForward": "ignore"
+    },
+    "5900": {
+      "onAutoForward": "ignore"
+    },
+    "5920": {
+      "onAutoForward": "ignore"
     }
   }
 }

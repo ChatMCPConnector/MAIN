@@ -182,7 +182,7 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
 - **Kanonisch ist:** gepinnte Version im Repo + reproduzierbares Skript.
   PID-/Port-Ausgaben sind ephemeral — vor Wiederverwendung einmal prüfen
   (`pgrep`, `ss`, `curl`), nie als Blocker oder Dauerzustand dokumentieren.
-- **Kanonische Codespace-Ports (4 Dienste):** Port `4096` (opencode-Server), Port `6082` (noVNC Browser), Port `8001` (glm2api-Proxy), Port `9878` (antigravity-proxy). In `.devcontainer/devcontainer.json` fest via `forwardPorts` + `portsAttributes` + `otherPortsAttributes: { onAutoForward: "ignore" }` und `remote.autoForwardPorts: false` verdrahtet, damit temporäre/interne Sockets (5900, 5920, 8080, 8083, 8931) nicht auto-geforwarded werden.
+- **Kanonische Codespace-Ports (4 Dienste):** Port `4096` (opencode-Server), Port `6082` (noVNC Browser), Port `8001` (glm2api-Proxy), Port `9878` (antigravity-proxy). In `.devcontainer/devcontainer.json` und `.vscode/settings.json` via `forwardPorts` + `portsAttributes` + `remote.autoForwardPorts: true` + `remote.autoForwardPortsSource: "process"` und `remote.restoreForwardedPorts: false` verdrahtet: Die 4 Dauer-Dienste bleiben permanent geforwarded; neue temporäre Dev-Server (z.B. Web-Apps auf 3000/5173) werden während ihrer aktiven Laufzeit automatisch erkannt und nach Prozessende sofort wieder sauber aus dem Ports-Panel entfernt. Interne Sockets (2000, 5900, 5920) werden ignoriert.
 - **Browser-Runtime:** **Firefox** (Mozilla-Tarball, Version gepinnt in
   `infra/scripts/firefox-install.sh`, Install nach `.runtime/firefox`, gitignored)
   → `./infra/scripts/browser-start.sh [URL]` (Xvfb, x11vnc, noVNC; idempotent).
