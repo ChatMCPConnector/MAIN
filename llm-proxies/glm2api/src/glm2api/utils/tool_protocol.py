@@ -289,3 +289,93 @@ def tools_to_prompt(
         ),
     ]
     return "\n".join(part for part in parts if part is not None).strip()
+
+
+# D-01: alle praefixe, mit denen ein unvollstaendiger tool-aufruf beginnen
+# kann — auch ABGESCHNITTENE. `{"tool` ist ein praefix von `{"tool_calls"`,
+# genau der fall, der im final-pfad durchrutschte.
+_TOOL_PROTOCOL_STARTS = (
+    '{"tool_calls"',
+    '{"name"',
+    '{"arguments"',
+    '{"function"',
+    '{"type": "function"',
+    '{"id"',
+)
+_TOOL_PROTOCOL_PREFIX_SET = frozenset(
+    token[:length]
+    for token in _TOOL_PROTOCOL_STARTS
+    for length in range(3, len(token) + 1)
+)
+
+
+def strip_unterminated_tool_prefix(text: str) -> tuple[str, int]:
+    """Entfernt einen angebrochenen tool-protokoll-praefix am textende.
+
+    D-01: der streaming-pfad haelt so einen praefix im holdback zurueck,
+    der FINAL-pfad nicht. Ergebnis: der client sah im stream nichts, in
+    der abschlussantwort aber `{"tool` als inhalt — und bekam dazu
+    `finish_reason: stop`, also eine als ERFOLG verlesene antwort.
+
+    Konservativ, in drei schritten:
+      1. nur kandidaten ab der LETZTEN offenen geschweiften klammer,
+      2. der rest ab dort muss ein echtes protokoll-praefix sein
+         (`{"` + anfang eines protokollfelds),
+      3. die klammer muss ungeschlossen sein — ein vollstaendiger
+         aufruf darf hier nicht ankommen, den holt der parser.
+    Prosa, die mit `{` endet, bleibt unangetastet.
+    """
+    if not text:
+        return text, 0
+    # Ein einzelnes abschliessendes `{` ist der ERSTE character des
+    # protokolls und damit der erste character, den der stream-holdback
+    # zurueckhaelt. Der final-pfad muss dasselbe tun, sonst laeuft er bei
+    # chunk-groesse 1 eine stufe weiter als der stream. Der preis: eine
+    # normale zeile, die mit `{` endet, verliert ihre klammer — das ist
+    # derselbe tradeoff, den der stream-pfad bereits macht, und deutlich
+    # guenstiger als ein protokoll-fragment als antwort zu liefern.
+    stripped_text = text.rstrip()
+    if stripped_text.endswith("{") and not _braces_balanced(stripped_text):
+        return stripped_text[:-1].rstrip(), 1
+    if '"' not in text:
+        return text, 0
+    for index in range(text.rfind("{"), -1, -1):
+        tail = text[index:]
+        if not tail.startswith('{"'):
+            continue
+        # (2) echtes protokoll-praefix?
+        if not any(token.startswith(tail) or tail.startswith(token) for token in _TOOL_PROTOCOL_PREFIX_SET):
+            continue
+        # (3) ungeschlossen? bei geschlossener klammer hat der parser
+        # den aufruf schon geholt — nichts zu entfernen.
+        if _braces_balanced(tail):
+            continue
+        return text[:index].rstrip(), 1
+    return text, 0
+
+
+def _braces_balanced(fragment: str) -> bool:
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in fragment:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+    # nur am ENDE zaehlt: eine zwischenzeitlich auf 0 fallende klammer ist
+    # eine verschachtelte, nicht der schluss des ganzen fragments.
+    # `depth <= 0` statt `== 0`: der `[]`-terminator schliesst das
+    # aufruf-objekt und zieht den zaehler darueber hinaus ins negative —
+    # das ist ein vollstaendiger aufruf, kein abgeschnittener.
+    return depth <= 0 and not in_string

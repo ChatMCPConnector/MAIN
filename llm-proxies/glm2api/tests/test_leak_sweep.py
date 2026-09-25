@@ -199,3 +199,103 @@ def test_separate_markdown_blocks_stay_separated():
     )
     rendered, _ = accumulator.render_full_output()
     assert rendered == "## Ueberschrift\n\n| a | b |\n|--|--|"
+
+
+# --- D-01, D-04, D-05, D-08: die tests selbst pruefen das kernsymptom ---
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 13, 29])
+def test_d01_deferral_never_leaks_the_raw_tool_prefix(chunk_size):
+    """D-01: der alte deferral-test behauptete nur `assert 'tool' in
+    combined` — und `tool` stand bereits im protocol des erlaubten
+    aufrufs. Die behauptung konnte nicht fehlschlagen. Geprueft wird
+    jetzt der ROHE praefix am sichtbaren stream."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    text = '{"tool'
+    chunks, _ = accumulator.consume_event({
+        "conversation_id": "c",
+        "parts": [{"logic_id": "p1", "content": [{"type": "text", "text": text[:chunk_size]}]}],
+    })
+    visible = "".join(
+        json.loads(chunk[6:])["choices"][0]["delta"].get("content", "")
+        for chunk in chunks
+        if chunk.startswith("data: ") and "[DONE]" not in chunk
+    )
+    assert '{"tool' not in visible
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+    assert '{"tool' not in (message.get("content") or "")
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 9, 11, 13])
+def test_d04_echo_marker_survives_early_chunk_splits(chunk_size):
+    """D-04: der vermeintliche boundary-test lieferte den marker als
+    kompletten anfangs-chunk. Fruehe teilungen mitten in `U`/`Us` waren
+    ungeprueft — genau dort entstehen die leaks."""
+    text = 'User: [{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}]}[]\n'
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    streamed: list[str] = []
+    for index in range(0, len(text), chunk_size):
+        chunks, _ = accumulator.consume_event({
+            "conversation_id": "c",
+            "parts": [{"logic_id": f"p{index}", "content": [{"type": "text", "text": text[index : index + chunk_size]}]}],
+        })
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+    visible = "".join(streamed) + (message.get("content") or "")
+
+    for marker in ('User: [{"', 'user: [{"', 'Assistant: {"'):
+        assert marker not in visible, f"{marker} bei chunk={chunk_size}"
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 13, 29])
+def test_d05_mixed_allowed_and_blocked_across_chunk_sizes(chunk_size):
+    """D-05: gemischte turns (gueltiger call neben blockiertem) waren
+    ungetestet — genau der pfad, auf dem C-11 den gueltigen call verlor."""
+    text = (
+        '{"tool_calls":[{"name":"read","arguments":{"filePath":"/tmp/a"}}]}[]'
+        '{"tool_calls":[{"name":"open_url","arguments":{"url":"https://x"}}]}[]'
+    )
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    for index in range(0, len(text), chunk_size):
+        accumulator.consume_event({
+            "conversation_id": "c",
+            "parts": [{"logic_id": "p1", "content": [{"type": "text", "text": text[index : index + chunk_size]}]}],
+        })
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    names = [call["function"]["name"] for call in (message.get("tool_calls") or [])]
+    assert names == ["read"], f"gueltiger call geht verloren bei chunk={chunk_size}: {names}"
+
+
+@pytest.mark.parametrize("build", ["stream", "non-stream"])
+def test_d08_blocked_attempt_is_never_a_successful_answer(build):
+    """D-08: die tests schrieben den blockierten versuch als normale
+    erfolgreiche antwort fest. Der vertrag ist inzwischen: sichtbarer
+    hinweis JA, aber `finish_reason=error` — ein agent darf daraus keinen
+    vollstaendigen tool-turn ableiten."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    accumulator.consume_event({
+        "conversation_id": "c",
+        "status": "finish",
+        "parts": [{"logic_id": "p1", "content": [
+            {"type": "text", "text": '{"tool_calls":[{"name":"open_url","arguments":{"url":"https://x"}}]}[]'},
+        ]}],
+    })
+    if build == "stream":
+        accumulator.finalize("finish")
+    choice = accumulator.build_response("finish")["choices"][0]
+
+    assert choice["finish_reason"] == "error"
+    assert not choice["message"].get("tool_calls")
+    assert "unavailable tool" in (choice["message"].get("content") or "")

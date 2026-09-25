@@ -883,6 +883,44 @@ gegen die Doku.
 | **S-16** | Bereits behoben. | `GLM_BASE_URL` darf `http` nur für Loopback-Hosts; eingebettete Credentials werden abgelehnt. Deployment nutzt `https://chatglm.cn`. |
 | **S-17** | Bereits behoben. | `sys_version = ""` — die Python-Laufzeitversion wird nicht ausgeliefert. |
 
+### F-5v D-01 (echter Bug) und D-04/D-05/D-08/D-10 (Testlücken) (2026-09-25)
+
+**D-01 war kein Testfehler, sondern ein echter Bug im Code.** Der Test
+behauptete nur `assert 'tool' in combined` — und `tool` stand bereits im
+Protokoll des erlaubten Aufrufs, die Behauptung konnte nicht fehlschlagen.
+Der Test wurde durch sein echtes Symptom ersetzt, und das schlug fehl:
+
+| Chunk-Größe | Final-`content` vorher | `finish_reason` |
+|---|---|---|
+| 3, 5, 7, 13, 29 | `'{"tool'` | `stop` |
+| 1 | `'{'` | `stop` |
+
+Der Streaming-Pfad hielt den Präfix im Holdback korrekt zurück — der
+**Final-Pfad** nicht. Der Client sah im Stream nichts und in der
+Abschlussantwort rohes Protokoll, gemeldet als **Erfolg**.
+
+- `strip_unterminated_tool_prefix()`: entfernt am Textende einen
+  angebrochenen Protokoll-Präfix, konservativ in drei Schritten — nur ab
+  der letzten offenen Klammer, nur wenn der Rest ein echtes Protokoll-
+  Präfix ist (`{"` + Anfang eines Protokollfelds), nur wenn die Klammer
+  **ungeschlossen** ist. Prosa, die mit `{` endet, bleibt stehen; ein
+  geschlossener Aufruf wird nie angefasst.
+- Der finale Pfad wendet dieselbe Entscheidung an wie der Holdback, sonst
+  sind die beiden Pfade nicht gleichwertig. `truncated_turn` wird gesetzt
+  → `finish_reason=error`.
+- Gemessen über 9 Chunk-Größen: 0 Leaks, Stream und Final deckungsgleich.
+- Der Preis ist derselbe wie im Holdback: eine Zeile, die mit `{` endet,
+  verliert ihre Klammer. Das ist ein bewusster Tausch — ein Protokoll-
+  Fragment als Antwort zu liefern ist der schlimmere Fehler.
+
+| Befund | Status |
+|---|---|
+| **D-04** | Symptom geprüft über 8 Chunk-Größen mit Splitten *mitten* in `U`/`Us` (die alten Tests lieferten den Marker als kompletten Chunk): 0 Marker-Treffer. Als Test festgeschrieben. |
+| **D-05** | Gemischte Turns (gültiger Call neben blockiertem) über 5 Chunk-Größen: gültiger Call kommt in **allen** an, blockierter wird verweigert. Als Test festgeschrieben. |
+| **D-08** | Der Vertrag hält: blockierter Versuch ohne gültige Calls → sichtbarer Hinweis **und** `finish_reason=error`, Stream wie Non-Stream. Als Test festgeschrieben. |
+| **D-09** | Der Verifier führt die echte Symptom-Suite aus. Kontrolliert bewiesen: mit absichtlich abgeschaltetem P-07 meldet er `exit 1` mit `FAILED` in `test_leak_sweep.py`, nach dem Zurücksetzen `exit 0`. |
+| **D-10** | Neuer Selbsttest `infra/scripts/verify-verifier-selftest.sh`: baut die Regression ein, erwartet `exit != 0` **mit** `FAILED` in der Symptom-Suite, stellt wieder her und erwartet `exit 0`. Läuft durch — der Verifier sagt also nicht immer grün. |
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

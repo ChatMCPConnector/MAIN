@@ -25,6 +25,7 @@ from ..utils.tool_parser import (
     text_continues_protocol,
 )
 from ..utils.tool_protocol import (
+    strip_unterminated_tool_prefix,
     BLOCKED_NATIVE_TOOL_NAMES,
     is_blocked_tool_name,
     CANONICAL_TOOL_CALL_EXAMPLE,
@@ -2825,6 +2826,21 @@ class GLMEventAccumulator:
         # Der stream-pfad haelt es ueber den markup-holdback zurueck, der
         # finalpfad tat das nicht und lieferte rohes DSML als antwort
         # (gemessen in 12 von 12 chunk-groessen).
+        # D-01: der streaming-pfad haelt einen angebrochenen
+        # tool-protokoll-praefix im holdback zurueck, der final-pfad tat
+        # das nicht. Der client sah im stream nichts und in der
+        # abschlussantwort `{"tool` als inhalt — mit `finish_reason:
+        # stop`, also als ERFOLG verlesen. Dieselbe entscheidung muss der
+        # final-pfad treffen, sonst sind die beiden pfade nicht
+        # gleichwertig.
+        full_text, tool_prefix_fragments = strip_unterminated_tool_prefix(full_text)
+        if tool_prefix_fragments:
+            self.truncated_turn = True
+            log = self.logger or _LOGGER
+            log.warning(
+                "Stripped %s unterminated tool-protocol prefix(es) from non-streaming text",
+                tool_prefix_fragments,
+            )
         full_text, markup_fragments = strip_unterminated_markup(full_text)
         if markup_fragments:
             self.truncated_turn = True

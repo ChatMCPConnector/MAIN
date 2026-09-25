@@ -932,3 +932,60 @@ def test_blocklist_covers_spelling_variants(variant):
 def test_blocklist_canonization_does_not_hit_legitimate_tools(legitimate):
     """Gegenprobe: echte Tools mit Ziffern im Namen bleiben benutzbar."""
     assert is_blocked_tool_name(legitimate, None) is False, legitimate
+
+
+# --- D-01: unvollstaendiger protokoll-praefix im FINAL-pfad -------------
+
+
+@pytest.mark.parametrize("payload,expect_stripped", [
+    ("{", True),                              # erstes protokollzeichen
+    ('{"t', True),
+    ('{"tool', True),
+    ('{"tool_calls"', True),
+    ('text {"name": "bash"', True),           # prosa + angebrochener aufruf
+    ('{"tool_calls":[{"name":"bash","arguments":{', True),
+    ("normaler text", False),
+    ("ende mit brace {", True),               # tradeoff, wie im stream-holdback
+    ('a {"x": 1', False),                     # gewoehnliches JSON, kein protokoll
+    ('{ "a": 1 }', False),                    # geschlossen
+    ('{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}]}[]', False),
+])
+def test_unterminated_tool_prefix_is_stripped(payload, expect_stripped):
+    """D-01: der streaming-pfad haelt einen angebrochenen
+    protokoll-praefix im holdback zurueck, der final-pfad nicht. Der
+    client sah im stream nichts, in der abschlussantwort aber `{"tool`
+    als inhalt — mit `finish_reason: stop`, also als erfolg verlesen."""
+    from glm2api.utils.tool_protocol import strip_unterminated_tool_prefix
+
+    _, stripped = strip_unterminated_tool_prefix(payload)
+    assert stripped == (1 if expect_stripped else 0), payload
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 4, 5, 6, 7, 13, 29])
+def test_truncated_tool_call_never_reaches_the_client(chunk_size):
+    """Der eigentliche symptomtest: ein abgeschnittener tool-call ist in
+    keinem pfad und bei keiner chunk-groesse sichtbar."""
+    from glm2api.services.translator import GLMEventAccumulator
+
+    text = '{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}'
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    streamed: list[str] = []
+    for index in range(0, len(text), chunk_size):
+        chunks, _ = accumulator.consume_event({
+            "conversation_id": "c",
+            "parts": [{"logic_id": f"p{index}", "content": [{"type": "text", "text": text[index : index + chunk_size]}]}],
+        })
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                streamed.append(json.loads(chunk[6:].strip())["choices"][0]["delta"].get("content", "") or "")
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+    accumulator.finalize("finish")
+    choice = accumulator.build_response()["choices"][0]
+    visible = "".join(streamed) + (choice["message"].get("content") or "")
+
+    assert "tool_calls" not in visible
+    assert not choice["message"].get("tool_calls")
+    assert choice["finish_reason"] == "error", "ein abgeschnittener turn ist kein erfolg"
