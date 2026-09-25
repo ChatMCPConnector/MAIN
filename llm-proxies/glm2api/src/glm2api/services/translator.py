@@ -1263,6 +1263,11 @@ class GLMEventAccumulator:
     _server_side_tool_calls: list[dict[str, object]] = field(default_factory=list)
     _server_side_tool_call_ids: set[str] = field(default_factory=set)
     _server_side_tool_call_signatures: set[str] = field(default_factory=set)
+    # T-20 (interleaving): was bereits an den client gesendet wurde —
+    # als praefix, damit die fortsetzungs-pruefung den protokollauslauf
+    # auch ueber den aufruf-grenzen hinweg sieht.
+    _emitted_text_prefix: str = ""
+    _emitted_reasoning_prefix: str = ""
     _deferred_visible_text: str = ""
     _deferred_reasoning: str = ""
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
@@ -2337,9 +2342,8 @@ class GLMEventAccumulator:
                     # eingefuegtes `\n\n` mitten im json-protokoll liess den
                     # parser den call verlieren und den rest als text
                     # ausliefern.
-                    emitted_so_far = "".join(text_delta_parts)
                     if (text_delta_parts or self._part_text_sent) and not text_continues_protocol(
-                        emitted_so_far
+                        self._emitted_text_prefix
                     ):
                         text_delta_parts.append("\n\n")
                     text_delta_parts.append(rendered_text)
@@ -2354,17 +2358,20 @@ class GLMEventAccumulator:
                     self._known_logic_ids_for_reasoning.append(logic_id)
                     # siehe text-zweig: gleiche regel fuer den
                     # reasoning-kanal (dort landen die protocol-fragmenten).
-                    emitted_reasoning = "".join(reasoning_delta_parts)
                     if (
                         reasoning_delta_parts or self._part_reasoning_sent
-                    ) and not text_continues_protocol(emitted_reasoning):
+                    ) and not text_continues_protocol(self._emitted_reasoning_prefix):
                         reasoning_delta_parts.append("\n\n")
                     reasoning_delta_parts.append(rendered_reasoning)
                 elif len(rendered_reasoning) > prev_len:
                     reasoning_delta_parts.append(rendered_reasoning[prev_len:])
                 self._part_reasoning_sent[logic_id] = len(rendered_reasoning)
 
-        return "".join(text_delta_parts), "".join(reasoning_delta_parts)
+        text_delta = "".join(text_delta_parts)
+        reasoning_delta = "".join(reasoning_delta_parts)
+        self._emitted_text_prefix += text_delta
+        self._emitted_reasoning_prefix += reasoning_delta
+        return text_delta, reasoning_delta
 
     def _render_full_output(self) -> tuple[str, str]:
         if not self._render_cache_dirty:

@@ -1032,10 +1032,18 @@ def text_continues_protocol(text: str) -> bool:
             stack.pop()
     if not stack and not in_string:
         return False
-    # nur als protokoll-fortsetzung werten, wenn es nach einem call aussieht
-    if "tool_calls" in text or '"name"' in text or '"arguments"' in text:
+    # Nur als protokoll-fortsetzung werten, wenn der text JSON-spuren zeigt
+    # und mit einer geoeffneten struktur endet. Damit bleibt normale prosa
+    # unangetastet: `normale { klammer am ende` hat keine anfuehrungszeichen,
+    # `Hallo "unterminierter string` keine geoeffnete struktur.
+    if '"' not in text:
+        return False
+    if stack:
         return True
-    return False
+    # Ein string laeuft noch, aber es gab vorher nie eine geoeffnete
+    # struktur — das ist prosa (`Hallo "unterminierter string`), keine
+    # protokoll-fortsetzung.
+    return in_string and ("{" in text or "[" in text)
 
 
 def strip_unparseable_call_fragments(text: str) -> tuple[str, int]:

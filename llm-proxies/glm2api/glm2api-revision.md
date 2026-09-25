@@ -572,6 +572,39 @@ und wird beim nächsten Start als Konflikt gemeldet. Jetzt räumt **beide** Wege
 verwaiste Kindprozesse mit Warte-Schleife und KILL-Eskalation ab; nach dem Fix
 läuft der Restart wieder durch und der Server hat wieder eine PID-Datei.
 
+### F-5g T-20 Interleaving geschlossen — letzte offene Stelle (2026-09-25)
+
+Der in F-5f dokumentierte Rest war: ChatGLM zerlegt einen einzigen logischen
+Text über **viele** `logic_id`s (live: 166 IDs in einem Turn). Der Accumulator
+hängt die Part-Texte mit `\n\n` zusammen — dieser Trenner **zerriss ein
+JSON-Protokoll, das über die Part-Grenze läuft**: der String brach mitten im
+`content` ab, der Parser erkannte keinen Call mehr, und der Rest landete als
+sichtbarer Text. Der Chunk-Sweep über die vier echten Leak-Texte × 512
+Chunk-Größen mit *je Fragment eigener* `logic_id` zeigte **23 Lecks**.
+
+Drei Eingriffe, alle gegen denselben Mechanismus:
+
+1. **`text_continues_protocol()`** (neu): „endet der Text in einer offenen
+   JSON-Struktur?" — bewusst *anderes* Kriterium als
+   `_find_unterminated_call_start()`. Letzteres hält für den Streaming-Hold-back
+   absichtlich keine Prosa zurück und liefert bei Text *vor* dem Protokoll
+   `-1`; für die Verknüpfung ist genau das falsch. Das neue Kriterium verlangt
+   zusätzlich JSON-Spuren, damit normale Prosa (`normale { klammer am ende`,
+   `Hallo "unterminierter string`) nicht unbeabsichtigt mitverschmolzen wird.
+2. **`_render_full_output()`** (Final-Pfad): läuft ein Part mitten in einer
+   angebrochenen Protokoll-Struktur weiter, wird es ohne Trenner angehängt.
+3. **`_compute_deltas()`** (Streaming-Pfad): dieselbe Regel, plus ein
+   explizit nachgeführtes Präfix (`_emitted_text_prefix`). Das war der
+   entscheidende Teil: der Delta-Buffer enthält je Aufruf nur die *neuen*
+   Teile, die Prüfung sah den bereits gesendeten Text nicht und schlug deshalb
+   trotz korrekter Regel fehl. Diesen Pfad sieht der Client live — hier war
+   der eigentliche Leck.
+
+**Ergebnis:** Beide Sweeps (ein `logic_id` je Turn **und** Fragment je
+`logic_id`) über je 4 × 512 Läufe: **0 Lecks**, vorher 23. Dazu 4 Regressionstests,
+einer über zwölf Chunk-Größen. Live bestätigt: ein Turn mit Reasoning-Modell und
+zwei Calls liefert `bash` **und** `read`, ohne Protokollreste.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

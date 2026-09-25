@@ -2198,3 +2198,89 @@ def test_native_call_without_id_is_not_silently_dropped():
     # eine gewollte wiederholung mit neuem ziel kommt an
     calls = build("/neu.py")["choices"][0]["message"].get("tool_calls") or []
     assert [call["function"]["name"] for call in calls] == ["read"]
+
+
+# --- T-20 (interleaving): ein protokoll ueber viele logic_ids -----------
+
+
+def test_protocol_split_across_logic_ids_stays_one_call():
+    """ChatGLM zerlegt einen einzigen logischen text ueber viele
+    `logic_id`s (live: 166 ids in einem turn). Der accumulator haengte die
+    part-texte mit `\\n\\n` zusammen — der trenner zerriss das JSON mitten
+    im `content`, der parser fand keinen call mehr und der rest landete
+    als sichtbarer text."""
+    protocol = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}[]'
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    for index in range(0, len(protocol), 7):
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {
+                        "logic_id": f"s{index}",
+                        "content": [{"type": "text", "text": protocol[index : index + 7]}],
+                    }
+                ],
+            }
+        )
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    calls = message.get("tool_calls") or []
+    assert [call["function"]["name"] for call in calls] == ["read"]
+    assert not (message.get("content") or "").strip(), "protokollreste im content"
+    assert json.loads(calls[0]["function"]["arguments"])["filePath"] == "/a.py"
+
+
+def test_protocol_continuation_survives_every_chunk_size():
+    """Gegenprobe ueber alle chunk-grenzen: der call darf nicht von der
+    fragmentierung abhaengen."""
+    protocol = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}[]'
+    for chunk_size in (1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 31, 47):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+        for index in range(0, len(protocol), chunk_size):
+            accumulator.consume_event(
+                {
+                    "conversation_id": "c",
+                    "parts": [
+                        {
+                            "logic_id": f"s{index}",
+                            "content": [{"type": "text", "text": protocol[index : index + chunk_size]}],
+                        }
+                    ],
+                }
+            )
+        accumulator.finalize("finish")
+        message = accumulator.build_response()["choices"][0]["message"]
+        calls = message.get("tool_calls") or []
+        assert [call["function"]["name"] for call in calls] == ["read"], f"chunk_size={chunk_size}"
+        assert not (message.get("content") or "").strip(), f"chunk_size={chunk_size} leakt"
+
+
+def test_prose_parts_are_still_separated_by_a_blank_line():
+    """Gegenprobe: echte, getrennte text-parts duerfen NICHT
+    zusammenschmelzen — die fortsetzungs-regel greift nur bei
+    angebrochenen protokoll-strukturen."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+    accumulator.consume_event(_event("c", "p1", text="Erster Absatz."))
+    accumulator.consume_event(_event("c", "p2", text="Zweiter Absatz."))
+    text, _reasoning = accumulator.render_full_output()
+
+    assert text == "Erster Absatz.\n\nZweiter Absatz."
+
+
+def test_text_continues_protocol_predicate():
+    """Die Heuristik selbst: offene struktur + JSON-spuren = fortsetzung,
+    normale prosa bleibt unangetastet."""
+    from glm2api.utils.tool_parser import text_continues_protocol
+
+    assert text_continues_protocol('{"tool_') is True
+    assert text_continues_protocol('Ich pruefe das. {"tool_calls":[{') is True
+    assert text_continues_protocol('{"tool_calls":[{"name":"read","arguments":{"url"') is True
+    # vollstaendiges protokoll -> keine fortsetzung
+    assert text_continues_protocol('{"tool_calls":[{"name":"read","arguments":{}}]}[]') is False
+    # prosa mit klammer oder offenem string -> keine fortsetzung
+    assert text_continues_protocol("normale { klammer am ende") is False
+    assert text_continues_protocol('Hallo "unterminierter string') is False
+    assert text_continues_protocol("Erster Absatz.") is False
+    assert text_continues_protocol("") is False
