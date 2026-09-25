@@ -921,6 +921,34 @@ Abschlussantwort rohes Protokoll, gemeldet als **Erfolg**.
 | **D-09** | Der Verifier führt die echte Symptom-Suite aus. Kontrolliert bewiesen: mit absichtlich abgeschaltetem P-07 meldet er `exit 1` mit `FAILED` in `test_leak_sweep.py`, nach dem Zurücksetzen `exit 0`. |
 | **D-10** | Neuer Selbsttest `infra/scripts/verify-verifier-selftest.sh`: baut die Regression ein, erwartet `exit != 0` **mit** `FAILED` in der Symptom-Suite, stellt wieder her und erwartet `exit 0`. Läuft durch — der Verifier sagt also nicht immer grün. |
 
+### F-5w T-20: der superlineare Delta-Aufbau (2026-09-25)
+
+Der letzte offene Performance-Befund. `_render_full_output()` hatte bereits
+einen Dirty-Cache, **aber** `_compute_deltas()` lief weiterhin pro Event
+über **alle** bekannten Parts — bei 1000 Parts x 1000 Events also rund
+1.000.000 Dict-Zugriffe.
+
+| Parts | vorher | nachher | Faktor je Verdopplung (vorher → nachher) |
+|---|---|---|---|
+| 500 | 0,48 s | 0,18 s | – |
+| 1000 | 3,51 s | **0,33 s** | 7,4x → **1,9x** |
+| 2000 | 20,69 s | **0,89 s** | 5,9x → 2,7x |
+| 4000 | – | 3,14 s | – |
+
+Ursache: `_render_full_output()` **leert** das Dirty-Set, bevor
+`_compute_deltas()` iteriert. Es gab also nichts, was man dort iterieren
+konnte. Jetzt wird der Satz der tatsächlich neu aufbereiteten Parts vor
+dem Leeren als Schnappschuss behalten (`_last_rendered_dirty`), nach
+Part-Rang sortiert (die Deltas entstehen sonst in anderer Reihenfolge als
+die Parts) und nach der Berechnung wieder verworfen.
+
+- **Ausgabe byte-identisch**: sha256 des 500-Part-Ergebnisses vor und nach
+  der Änderung: `d55fc1f51fc865b3` — beide Male. Es geht nichts verloren.
+- Als Test festgeschrieben: die Zeit darf bei 4x Parts nicht um mehr als
+  Faktor 8 wachsen (quadratisch wäre 16x), und die Fortsetzungs-Parität
+  („Die Datei" / „ ist im " / „Repository gefunden" bleibt ein Satz)
+  wird gegen die Trenner-Regel geprüft.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.
