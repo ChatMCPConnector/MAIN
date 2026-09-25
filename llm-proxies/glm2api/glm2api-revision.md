@@ -649,6 +649,36 @@ EOF
 
 **Damit: kein offener Befund mehr im Register.**
 
+### F-5i Unabhängige Prüfrunde — Befunde, die meine Abschlussmeldung widerlegt hat (2026-09-25)
+
+Auf ausdrücklichen Wunsch lief eine zweite, **unabhängige** Runde: vier
+Prüfer ohne Kenntnis meiner Schlüsse, mit der Auflage, ausschließlich
+ausgeführten Code zu bewerten und die Dokumentation zu ignorieren. Sie
+wurden nur mit „prüfe empirisch, widerlege die Behauptung" beauftragt.
+
+**Die Behauptung „alle Befunde erledigt" hat nicht gehalten.** Von 107
+Befunden wurden rund 40 als offen oder teilweise offen gemeldet. Die fünf
+kritischsten sind in diesem Arbeitsgang bereits behoben und verifiziert:
+
+| Befund | Schwere | Gemessenes Fehlverhalten | Umsetzung |
+|---|---|---|---|
+| **C-14** | kritisch, **fern auslösbar** | Ein Client, der die Verbindung vor dem ersten Chunk schließt (`gen.close()` ohne Iteration), hielt die **Queue-Lease dauerhaft** und ließ die **Upstream-Response offen**. Gemessen: nach drei TCP-RSTs nimmt der Endpoint keine Streaming-Requests mehr an (`GLM queue wait timed out`). Chat, Images und SSE teilen sich eine Queue — ein unlesender Stream blockiert alles. | Lease und Upstream-Stream werden nicht mehr beim Methodenaufruf, sondern **erst beim ersten Pull** geöffnet. Ein nie gestarteter Generator erwirbt nichts und räumt nichts ab. |
+| **C-06** | kritisch, Ressourcenerschöpfung | Der Trunkierungs-Retry im **Non-Stream**-Pfad hatte **kein Retry-Limit** (der Transient-Zweig schon). Gemessen: **17.993 Upstream-Versuche in 3 s** bei `glm_stream_error_max_retries=1`. Mit der Standard-Deadline (300 s) wären das ~1,8 Mio. Requests und ebensoviele Upstream-Conversations — jeweils unter gehaltener Lease, gefolgt von sequentiellen DELETE-Aufrufen. | Der Zweig prüft jetzt `attempt >= max_stream_retries` und wirft dann `UpstreamAPIError(transient=True)`. Gemessen: 2 Versuche. |
+| **C-02** | hoch (SSRF) | `_download_image_as_base64()` war der **einzige** Abrufpfad ohne Schutz: `file:///…/secret.txt` lieferte lokalen Dateiinhalt, `http://127.0.0.1:PORT/…` einen lokalen Dienst, `response.read()` war unbegrenzt. Die Datei-Behandlung hatte Schema-, IP- und Redirect-Prüfung — dieser Pfad nichts. | Teilt sich jetzt `_assert_public_url` (inkl. Redirect-Nachprüfung) und ein Größenlimit; `data:` bleibt erlaubt, Fehlertexte werden redigiert. |
+| **C-19** | hoch (Kontokontamination) | Der Attachment-Cache war **client-instanzweit**, nicht pro Request. Gemessen: ein Upload von Konto 0 wurde für den Chat von Konto 1 wiederverwendet — die `source_id` eines **fremden Kontos** im Request des anderen. | Der Cache wird pro Request neu angelegt und als Argument durchgereicht. Zusätzlich: parallele Requests mit derselben URL laden jetzt einmal hoch statt mehrfach. |
+| **T-21** | hoch (Kommando-Injektion) | Der Sandbox-Code wurde roh in ein Here-Doc gesetzt. Eine Zeile exakt `EOF` beendet es vorzeitig, **alles danach läuft als Shell-Befehl**: Code `y = 2\nEOF\nrm -rf /` wurde zu `python3 - << 'EOF'\ny = 2\nEOF\nrm -rf /\nEOF`. | Der Delimiter ist datenabhängig (`PY_EOF`, bei Kollision verlängert) und kommt im Code nachweislich nicht vor. End-to-End gegen eine echte Shell verifiziert: die Marker-Datei entsteht nicht mehr. |
+
+**Der wichtigste Befund der Runde ist aber ein anderer — und er trifft meine
+Arbeit, nicht den Code:** `tests/test_leak_sweep.py` (die Symptom-Suite, die
+ich selbst geschrieben habe) liest **ausschließlich** `build_response()`.
+Sie ist damit **strukturell blind für jeden Leak, der nur im Stream-Delta
+auftaucht** — und genau dort lagen mehrere der gefundenen Lecks
+(Text-Funktionsaufruf bei Chunk-Größe 1–3, Trunkierung nach Prosa,
+Transcript-Echo). Drei weitere Tests schreiben nachweislich **fehlerhaftes
+Verhalten als korrekt** fest. Diese Tests sind der Grund, warum meine
+Abschlussmeldung falsch war: das Messinstrument war defekt, nicht nur die
+Messung.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

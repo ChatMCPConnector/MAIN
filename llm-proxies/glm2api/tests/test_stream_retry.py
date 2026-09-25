@@ -932,8 +932,38 @@ def test_attachment_upload_is_not_repeated_for_every_retry():
     first = client._upload_referenced_files(messages)
     second = client._upload_referenced_files(messages)
 
-    assert uploads == ["https://x/a.pdf"], f"upload {len(uploads)}x ausgefuehrt"
+    assert uploads == ["https://x/a.pdf", "https://x/a.pdf"], (
+        f"erwartet 2 uploads (ein je request), {len(uploads)} gemessen"
+    )
     assert first == second, "beide runden sehen dieselbe referenz"
+
+
+def test_upload_cache_does_not_leak_across_requests():
+    """C-19: der cache war client-instanzweit. Gemessen: ein upload von
+    konto 0 wurde fuer den chat von konto 1 wiederverwendet — die
+    `source_id` eines fremden kontos im request des anderen."""
+    import logging
+
+    from glm2api.services.glm_client import GLMWebClient
+
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.logger = logging.getLogger("test.upload_scope")
+    client.logger.addHandler(logging.NullHandler())
+    client._upload_reference_cache = {}
+    uploads: list[str] = []
+
+    def fake_upload(file_url, is_image=False):
+        uploads.append(file_url)
+        return {"type": "file_upload", "source_id": f"src-konto-{len(uploads)}"}
+
+    client._upload_file_reference = fake_upload
+    messages = [{"role": "user", "content": [{"type": "file", "file_url": {"url": "https://x/a.pdf"}}]}]
+
+    first = client._upload_referenced_files(messages)
+    second = client._upload_referenced_files(messages)
+
+    assert len(uploads) == 2, "zweiter request muss neu hochladen"
+    assert first[0]["source_id"] != second[0]["source_id"], "cache leak zwischen requests"
 
 
 def test_upload_cache_does_not_grow_unbounded():

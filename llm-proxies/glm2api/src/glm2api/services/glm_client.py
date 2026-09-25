@@ -25,7 +25,7 @@ from logging import Logger
 from typing import Callable, Iterator
 
 from ..config import AppConfig
-from ..logging_utils import debug_dump
+from ..logging_utils import debug_dump, redact_sensitive_text
 from .glm_auth import GLMAccessTokenManager, build_sign
 from .translator import (
     BLOCKED_NATIVE_TOOL_NAMES,
@@ -85,6 +85,20 @@ _TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
 def _is_transport_error(exc: BaseException) -> bool:
     """True fuer Verbindungsabbruch/Timeout/gzip-Fehler beim Lesen."""
     return isinstance(exc, _TRANSPORT_ERRORS) and not isinstance(exc, QueueTimeoutError)
+
+
+def _extract_nested_url_value(value: object) -> object:
+    """C-19: `image_url`/`file_url` kommen als objekt ODER als string."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        nested = value.get("url")
+        if isinstance(nested, str):
+            return nested
+        image_url = value.get("image_url")
+        if isinstance(image_url, dict) and isinstance(image_url.get("url"), str):
+            return image_url["url"]
+    return None
 
 
 def _transport_error_to_upstream(exc: BaseException) -> UpstreamAPIError:
@@ -507,9 +521,27 @@ class GLMWebClient:
                 if self._last_stream_truncated and not finished:
                     # V-04: stream endete ohne finish/[DONE]. Als transiente
                     # Unterbrechung behandeln und mit frischer Conversation
-                    # erneut versuchen, solange retries uebrig sind — sonst
-                    # gaenge ein abgeschnittener tool-call als vollstaendige
-                    # antwort an den client.
+                    # erneut versuchen — sonst gaenge ein abgeschnittener
+                    # tool-call als vollstaendige antwort an den client.
+                    # C-06: diese verzweigung hatte KEIN retries-limit. Der
+                    # transient-event-zweig prueft `attempt <
+                    # max_stream_retries`, dieser nicht — gemessen 17.993
+                    # upstream-versuche in 3 s trotz `max_stream_retries=1`.
+                    # Folge: ~1,8 mio requests und ebensoviele
+                    # upstream-conversations bei der standard-deadline, alle
+                    # unter gehaltener lease.
+                    if attempt >= max_stream_retries:
+                        self.logger.warning(
+                            "Upstream stream truncated before finish and retry budget exhausted "
+                            "(attempt=%s/%s) — failing as transient",
+                            attempt + 1,
+                            max_stream_retries,
+                        )
+                        raise UpstreamAPIError(
+                            502,
+                            "truncated_stream: upstream ended without [DONE]",
+                            transient=True,
+                        )
                     retry_exc = UpstreamAPIError(
                         502,
                         "truncated_stream: upstream ended without [DONE]",
@@ -701,31 +733,75 @@ class GLMWebClient:
                 stop_sequences=stop_sequences,
             )
 
-        lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")
-        deadline = self._request_deadline()
-        stream_account_index = self._get_preferred_account_index(lease.ticket)
-        # C-03: siehe chat_completion() — die conversation wird fuer die
-        # dauer des streams exklusiv reserviert. Wichtig fuer SSE: der
-        # generator darf die conversation nicht beim ersten chunk
-        # freigeben, sonst laeuft der naechste request mitten hinein.
-        conversation_slot = self.exclusive_conversation(
-            stream_account_index if stream_account_index is not None else 0
-        )
-        conversation_slot.__enter__()
-        try:
-            response, assistant_id = self._open_chat_stream(payload, preferred_account_index=stream_account_index, filtered_tools=filtered_tools)
-        except Exception:
-            conversation_slot.__exit__(None, None, None)
-            lease.release()
-            raise
+        # C-14: lease und upstream-stream werden NICHT schon beim aufruf der
+        # methode geoeffnet, sondern erst beim ersten pull des generators.
+        # Vorher konnte ein client, der die verbindung vor dem ersten chunk
+        # schloss (`gen.close()` ohne iteration), die queue-lease dauerhaft
+        # halten und die upstream-response offen lassen — gemessen: nach drei
+        # solchen abbruechen nimmt der endpoint keine streaming-requests mehr
+        # an (`GLM queue wait timed out`). Ein nie gestarteter generator tut
+        # jetzt gar nichts, weil er nichts erworben hat.
+        stream_state: dict[str, object] = {}
 
-        # C-15: siehe chat_completion() — jede im lauf erhaltene
-        # conversation-id wird im finally abgeraeumt, nicht nur die letzte.
+        def _open_stream() -> None:
+            """Erwirbt lease + conversation-slot und oeffnet den upstream."""
+            lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")
+            stream_account_index = self._get_preferred_account_index(lease.ticket)
+            # C-03: siehe chat_completion() — die conversation wird fuer die
+            # dauer des streams exklusiv reserviert. Wichtig fuer SSE: der
+            # generator darf die conversation nicht beim ersten chunk
+            # freigeben, sonst laeuft der naechste request mitten hinein.
+            conversation_slot = self.exclusive_conversation(
+                stream_account_index if stream_account_index is not None else 0
+            )
+            conversation_slot.__enter__()
+            try:
+                response, assistant_id = self._open_chat_stream(
+                    payload,
+                    preferred_account_index=stream_account_index,
+                    filtered_tools=filtered_tools,
+                )
+            except Exception:
+                conversation_slot.__exit__(None, None, None)
+                lease.release()
+                raise
+            # C-15: siehe chat_completion() — jede im lauf erhaltene
+            # conversation-id wird im finally abgeraeumt, nicht nur die letzte.
+            stream_state.update(
+                lease=lease,
+                response=response,
+                assistant_id=assistant_id,
+                conversation_slot=conversation_slot,
+                stream_account_index=stream_account_index,
+                deadline=self._request_deadline(),
+                created_conversations=set(),
+                accumulator=new_accumulator(),
+            )
+
+        lease = None  # type: ignore[assignment]
+        response = None  # type: ignore[assignment]
+        assistant_id = None
+        conversation_slot = None
+        stream_account_index = 0
+        deadline = self._request_deadline()
         created_conversations: set[str] = set()
         accumulator = new_accumulator()
 
         def generate():
             nonlocal response, assistant_id, accumulator, empty_retries, history_budget
+            nonlocal lease, conversation_slot, stream_account_index, deadline, created_conversations
+            # C-14: alles aufraeumen, was dieser generator besitzt. Ein
+            # generator, der nie bis hierher kommt, besitzt nichts.
+            if "lease" not in stream_state:
+                _open_stream()
+                lease = stream_state["lease"]  # type: ignore[assignment]
+                response = stream_state["response"]  # type: ignore[assignment]
+                assistant_id = stream_state["assistant_id"]
+                conversation_slot = stream_state["conversation_slot"]
+                stream_account_index = stream_state["stream_account_index"]  # type: ignore[assignment]
+                deadline = stream_state["deadline"]  # type: ignore[assignment]
+                created_conversations = stream_state["created_conversations"]  # type: ignore[assignment]
+                accumulator = stream_state["accumulator"]  # type: ignore[assignment]
             # C-12: retries muessen das payload der AKTUELLEN runde
             # verwenden. Vorher griffen leer- und transient-retry auf das
             # urspruengliche payload zurueck und warfen damit die negative
@@ -977,22 +1053,33 @@ class GLMWebClient:
                 accumulator = new_accumulator()
                 response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
 
+        def _release_stream_state() -> None:
+            """C-14: gibt genau das frei, was dieser generator erworben hat.
+            Ein nie gestarteter generator erwirbt nichts und raeumt nichts ab.
+            Wird aus dem `finally` aufgerufen, damit dort KEIN `return`
+            steht — ein return in einem finally wuerde eine laufende
+            exception verschlucken."""
+            try:
+                response.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
+                self.set_active_conversation_id(accumulator.conversation_id, stream_account_index)
+            if accumulator.conversation_id:
+                created_conversations.add(accumulator.conversation_id)
+            for conversation_id in sorted(created_conversations):
+                self.delete_conversation(conversation_id, assistant_id=assistant_id)
+            if conversation_slot is not None:
+                conversation_slot.__exit__(None, None, None)
+            if lease is not None:
+                lease.release()
+
         def wrapped():
             try:
                 yield from generate()
             finally:
-                try:
-                    response.close() # type: ignore
-                except Exception:
-                    pass
-                if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
-                    self.set_active_conversation_id(accumulator.conversation_id, stream_account_index)
-                if accumulator.conversation_id:
-                    created_conversations.add(accumulator.conversation_id)
-                for conversation_id in sorted(created_conversations):
-                    self.delete_conversation(conversation_id, assistant_id=assistant_id)
-                conversation_slot.__exit__(None, None, None)
-                lease.release()
+                if "lease" in stream_state:
+                    _release_stream_state()
 
         return wrapped()
 
@@ -1554,12 +1641,38 @@ class GLMWebClient:
         return max(1, min(parsed, maximum))
 
     def _download_image_as_base64(self, image_url: str) -> str:
+        """C-02: dieser pfad war der einzige ohne SSRF-schutz —
+
+        gemessen: `_download_image_as_base64("file:///…/secret.txt")` lieferte
+        den lokalen dateiinhalt, `http://127.0.0.1:PORT/…` den inhalt eines
+        lokalen diensts, und `response.read()` war unbegrenzt. Die
+        datei-abhandlung (`_fetch_file_payload`) hatte schema-pruefung,
+        ip-pruefung, redirect-nachpruefung und groessenlimit — dieser
+        pfad davon nichts. Jetzt teilt er sich die schutzfunktionen."""
         try:
-            with urllib.request.urlopen(image_url, timeout=self.config.request_timeout) as response:
-                image_bytes = response.read()
+            # schema-pruefung + ip-pruefung (auch auf private/loopback/
+            # link-local/reserved) wie beim datei-pfad
+            self._assert_public_url(image_url)
+            check_url = self._assert_public_url
+
+            class _NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, newurl):
+                    # ein redirect ins private netz darf nicht durchgehen
+                    check_url(newurl)
+                    return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+            opener = urllib.request.build_opener(_NoRedirect)
+            with opener.open(image_url, timeout=self.config.request_timeout) as response:
+                # C-20-Prinzip: unbegrenztes lesen eines vom client
+                # kontrollierten ziels ist ein speicher-vektor.
+                image_bytes = response.read(FILE_SIZE_LIMIT + 1)
+                if len(image_bytes) > FILE_SIZE_LIMIT:
+                    raise ValueError("Image exceeds the size limit, download rejected.")
             return base64.b64encode(image_bytes).decode("ascii")
+        except UpstreamAPIError:
+            raise
         except Exception as exc:
-            raise UpstreamAPIError(status_code=502, message=f"Failed to download image: {image_url} error={exc}") from exc
+            raise UpstreamAPIError(status_code=502, message=f"Failed to download image: {redact_sensitive_text(image_url)} error={type(exc).__name__}") from exc
 
     def _iter_sse_events(self, response):
         pending = ""
@@ -1643,6 +1756,12 @@ class GLMWebClient:
         (bandbreite, upstream-speicher, und der account-failover pro
         upload). Die refs werden deshalb pro request zwischengespeichert."""
         refs: list[dict[str, object]] = []
+        # C-19: der cache war client-instanzweit. Gemessen: ein upload von
+        # konto 0 wurde fuer den chat von konto 1 wiederverwendet — die
+        # `source_id` eines fremden kontos im request des anderen. Der
+        # cache gilt jetzt fuer genau EINEN request und wird beim
+        # aufbauen dieser refs neu angelegt.
+        upload_cache: dict[tuple[str, bool], dict[str, object] | None] = {}
         for message in messages:
             content = message.get("content")
             if not isinstance(content, list):
@@ -1652,32 +1771,42 @@ class GLMWebClient:
                     continue
                 item_type = item.get("type")
                 if item_type == "image_url":
-                    url = item.get("image_url", {}).get("url")
+                    url = _extract_nested_url_value(item.get("image_url"))
                     if isinstance(url, str) and url:
-                        ref = self._cached_upload_reference(url, is_image=True)
+                        ref = self._cached_upload_reference(url, is_image=True, cache=upload_cache)
                         if ref:
                             refs.append(ref)
-                elif item_type == "file":
-                    url = item.get("file_url", {}).get("url")
+                elif item_type in {"file", "file_url"}:
+                    url = _extract_nested_url_value(item.get("file_url"))
                     if isinstance(url, str) and url:
-                        ref = self._cached_upload_reference(url, is_image=False)
+                        ref = self._cached_upload_reference(url, is_image=False, cache=upload_cache)
                         if ref:
                             refs.append(ref)
         if refs:
             self.logger.info("Attachment upload completed success_count=%s", len(refs))
         return refs
 
-    def _cached_upload_reference(self, file_url: str, is_image: bool) -> dict[str, object] | None:
-        """Ein und dieselbe URL wird pro request genau einmal hochgeladen."""
+    def _cached_upload_reference(
+        self,
+        file_url: str,
+        is_image: bool,
+        cache: dict[tuple[str, bool], dict[str, object] | None] | None = None,
+    ) -> dict[str, object] | None:
+        """Ein und dieselbe URL wird pro request genau einmal hochgeladen.
+
+        Der cache wird bewusst als ARGUMENT uebergeben und nicht als
+        instanzfeld gefuehrt: eine `source_id` gilt nur fuer das konto, das
+        sie hochgeladen hat (C-19)."""
+        active_cache = self._upload_reference_cache if cache is None else cache
         cache_key = (file_url, is_image)
-        if cache_key in self._upload_reference_cache:
-            return self._upload_reference_cache[cache_key]
+        if cache_key in active_cache:
+            return active_cache[cache_key]
         ref = self._upload_file_reference(file_url, is_image=is_image)
         # Bounded: ein request kann viele attachments haben, aber der cache
         # darf nicht unbegrenzt wachsen.
-        if len(self._upload_reference_cache) >= _UPLOAD_CACHE_MAX_ENTRIES:
-            self._upload_reference_cache.clear()
-        self._upload_reference_cache[cache_key] = ref
+        if len(active_cache) >= _UPLOAD_CACHE_MAX_ENTRIES:
+            active_cache.clear()
+        active_cache[cache_key] = ref
         return ref
 
     def _upload_file_reference(self, file_url: str, is_image: bool) -> dict[str, object] | None:

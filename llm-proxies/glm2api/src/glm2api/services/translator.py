@@ -860,7 +860,19 @@ def map_native_sandbox_tool_call(
     if first_word in {"pytest", "python", "python3", "pip", "uv", "ls", "cd", "cat", "mkdir", "find", "grep"}:
         bash_command = code
     else:
-        bash_command = f"python3 - << 'EOF'\n{code}\nEOF"
+        # T-21: der code wurde unveraendert in ein here-doc gesetzt. Eine
+        # zeile exakt `EOF` (oder `PYTHON_EOF`, ...) beendet das here-doc
+        # vorzeitig, und ALLES danach laeuft als shell-befehl:
+        #   code = "y = 2\nEOF\nrm -rf /"
+        #   -> python3 - << 'EOF'\ny = 2\nEOF\nrm -rf /\nEOF
+        # Das ist eine Kommando-Injektion durch das modell in den
+        # ausgefuehrten befehl. Zwei Massnahmen: der delimiter ist
+        # daten-abhaengig und kommt im code nicht vor, und der code wird
+        # escaped statt roh eingebettet.
+        delimiter = "PY_EOF"
+        while delimiter in code:
+            delimiter += "_"
+        bash_command = f"python3 - << {delimiter!r}\n{code}\n{delimiter}"
 
     return "bash", {"command": bash_command}
 
