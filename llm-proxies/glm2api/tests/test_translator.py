@@ -121,7 +121,12 @@ def test_streaming_empty_response_after_blocked_tool_has_visible_fallback():
     assert "open_url" in output
     # T-13: ein turn, der nur an einem blockierten protokoll endet, darf
     # nicht als regulaerer 'stop' ausgewiesen werden.
-    assert '"finish_reason":"error"' in output
+    # Ein GESPERRTER aufruf ist kein fehler, sondern eine vollstaendige
+    # antwort ("dieses werkzeug gibt es nicht"). Als `error` gegangen,
+    # wertete der echte client das als stream-fehler und wiederholte den
+    # turn mit 5-minuten-backoff — endlosschleife, weil das modell `open`
+    # bei jedem versuch erneut aufrief (natives GLM-werkzeug).
+    assert '"finish_reason":"stop"' in output
 
 
 def test_non_streaming_empty_response_after_blocked_tool_has_visible_fallback():
@@ -147,7 +152,7 @@ def test_non_streaming_empty_response_after_blocked_tool_has_visible_fallback():
     assert "open_url" in message["content"]
     # T-18/C-18: leerer turn nach blockiertem aufruf ist kein erfolgreicher
     # 'stop' (parität zum stream-pfad seit diesem fix).
-    assert response["choices"][0]["finish_reason"] == "error"
+    assert response["choices"][0]["finish_reason"] == "stop"
 
 
 def test_accumulator_streaming_tool_call_emits_assistant_role_before_tool_delta():
@@ -515,8 +520,11 @@ def test_accumulator_reports_unavailable_dsml_tool_instead_of_empty_response():
     assert chunks == []
     assert "undeclared tool" in final_chunks[0]
     assert "`search`" in final_chunks[0]
-    # T-13: blockiertes protokoll ohne ergebnis -> finish_reason "error"
-    assert '"finish_reason":"error"' in final_chunks[1]
+    # Ein gesperrtes protokoll ohne ergebnis ist eine vollstaendige
+    # antwort mit sichtbarem hinweis -> `stop`, KEIN fehler. Als `error`
+    # loeste es beim echten client eine retry-schleife aus (5 min
+    # backoff, ohne fortschritt).
+    assert '"finish_reason":"stop"' in final_chunks[1]
 
 
 def test_convert_messages_respects_tool_choice_none_and_specific():
@@ -814,7 +822,10 @@ def test_accumulator_ignores_unallowed_native_tool_call_blocks():
     # jetzt genauso aus wie der stream-pfad — 'error', nicht 'stop'. Vorher
     # gab es hier eine stream/non-stream-paritaetsabweichung, die die tests
     # festgeschrieben hatten.
-    assert response["choices"][0]["finish_reason"] == "error"
+    # Ein GESPERRTER aufruf endet regulaer: als `error` wertete der
+    # echte client das als stream-fehler und wiederholte den turn mit
+    # 5-minuten-backoff endlos (agentenlauf 2026-09-26).
+    assert response["choices"][0]["finish_reason"] == "stop"
     assert "tool_calls" not in message
 
 
@@ -1989,6 +2000,10 @@ def test_tool_choice_required_is_enforced_streaming():
     accumulator.finalize("finish")
     response = accumulator.build_response()
 
+    # `tool_choice=required` verletzt ist ein echter vertragsbruch, kein
+    # gesperrter aufruf: der client MUSS etwas bekommen, das er ausfuehren
+    # kann. Daher bleibt es hier bei `error` (anders als beim gesperrten
+    # aufruf, der eine vollstaendige antwort ist).
     assert response["choices"][0]["finish_reason"] == "error"
     assert "[tool_choice_violation]" in (response["choices"][0]["message"]["content"] or "")
 
@@ -2584,7 +2599,14 @@ def test_native_call_is_not_executable_without_declared_tools():
 
         assert not (response["choices"][0]["message"].get("tool_calls") or []), name
         assert name in accumulator.blocked_tool_attempt_names, name
-        assert response["choices"][0]["finish_reason"] == "error", name
+        # Ein GESPERRTER aufruf ist keine fehlerhafte runde, sondern eine
+        # vollstaendige antwort ("dieses werkzeug gibt es nicht"). Als
+        # `error` wertete der echte client das als stream-fehler und
+        # wiederholte den turn mit 5-minuten-backoff endlos — gemessen am
+        # agentenlauf 2026-09-26, wo `open` (natives GLM-werkzeug) bei jedem
+        # versuch erneut aufgerufen wurde. Der aufruf selbst wird weiterhin
+        # NICHT ausgeliefert (das sichert die zeile davor).
+        assert response["choices"][0]["finish_reason"] == "stop", name
 
 
 def test_valid_call_survives_a_blocked_call_in_the_same_event():
@@ -2726,6 +2748,15 @@ def test_turn_with_only_unusable_calls_is_a_failure_not_an_empty_success():
         accumulator.finalize("finish")
         response = accumulator.build_response()
 
+        # T-06 bleibt `error`: hier war der aufruf ERLAUBT und scheiterte an
+        # einem fehlenden pflichtargument. Dem client fehlt damit etwas
+        # Brauchbares, ein Retry ist berechtigt.
+        #
+        # Anders liegt der Fall bei einem GESPERRTEN aufruf (dort `stop`):
+        # der war vollstaendig formuliert und wurde nur abgelehnt. Als
+        # `error` wertete der echte client das als stream-fehler und
+        # wiederholte den turn mit 5-minuten-backoff endlos (agentenlauf
+        # 2026-09-26).
         assert response["choices"][0]["finish_reason"] == "error", payload
         assert accumulator.truncated_turn is True, payload
 
@@ -3027,7 +3058,14 @@ def test_native_tool_call_as_list_is_parsed_with_all_guards():
         response = accumulator.build_response()
 
         assert not (response["choices"][0]["message"].get("tool_calls") or []), label
-        assert response["choices"][0]["finish_reason"] == "error", label
+        # Ein GESPERRTER aufruf ist keine fehlerhafte runde, sondern eine
+        # vollstaendige antwort ("dieses werkzeug gibt es nicht"). Als
+        # `error` wertete der echte client das als stream-fehler und
+        # wiederholte den turn mit 5-minuten-backoff endlos — gemessen am
+        # agentenlauf 2026-09-26, wo `open` (natives GLM-werkzeug) bei jedem
+        # versuch erneut aufgerufen wurde. Der aufruf selbst wird weiterhin
+        # NICHT ausgeliefert (das sichert die zeile davor).
+        assert response["choices"][0]["finish_reason"] == "stop", label
 
 
 # --- S-12: tool_choice none ist eine verbotssplicht --------------------
@@ -3259,3 +3297,39 @@ def test_reasoning_cannot_consume_the_whole_output_budget():
     text_only.finalize("finish")
     only_text = text_only.build_response()["choices"][0]["message"].get("content") or ""
     assert len(only_text) >= budget * 0.99, f"nur {len(only_text)} von {budget} zeichen"
+
+
+def test_blocked_tool_is_stop_but_a_broken_turn_is_still_error():
+    """Der unterschied ist der ganze fix.
+
+    Ein GESPERRTER aufruf ist eine vollstaendige antwort: das modell hat
+    geantwortet, der hinweis sagt ausdruecklich, dass nichts ausgefuehrt
+    wurde. Als `error` wertete der echte client das als stream-fehler und
+    wiederholte den turn mit exponentiellem backoff (5 min gemessen) —
+    endlosschleife, weil `open` bei jedem versuch erneut aufgerufen wird.
+
+    Ein ABGESCHNITTENER turn dagegen fehlt dem client wirklich etwas
+    Brauchbares — dort bleibt `error` richtig, ein Retry ist berechtigt.
+    """
+    # (a) gesperrter aufruf -> stop
+    blocked = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    blocked.consume_event({
+        "conversation_id": "c",
+        "status": "finish",
+        "parts": [{"logic_id": "p1", "content": [
+            {"type": "text", "text": '{"tool_calls":[{"name":"open_url","arguments":{"url":"https://x"}}]}[]'}]}],
+    })
+    blocked.finalize("finish")
+    blocked_choice = blocked.build_response()["choices"][0]
+    assert blocked_choice["finish_reason"] == "stop"
+    assert "unavailable tool" in (blocked_choice["message"].get("content") or "")
+
+    # (b) abgeschnittener turn -> error bleibt
+    truncated = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    truncated.consume_event({
+        "conversation_id": "c",
+        "status": "finish",
+        "parts": [{"logic_id": "p1", "content": [{"type": "text", "text": '{"tool_calls":[{"name":"bash","arguments":{"command":"ls -'}]}],
+    })
+    truncated.finalize("finish")
+    assert truncated.build_response()["choices"][0]["finish_reason"] == "error"

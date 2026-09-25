@@ -296,9 +296,15 @@ def test_d08_blocked_attempt_is_never_a_successful_answer(build):
         accumulator.finalize("finish")
     choice = accumulator.build_response("finish")["choices"][0]
 
-    assert choice["finish_reason"] == "error"
     assert not choice["message"].get("tool_calls")
     assert "unavailable tool" in (choice["message"].get("content") or "")
+    # Der turn endet mit `stop`, NICHT mit `error`: als `error` wertete der
+    # echte client das als stream-fehler und wiederholte ihn mit 5-minuten-
+    # backoff endlos (agentenlauf 2026-09-26). Der gesperrte aufruf ist eine
+    # vollstaendige antwort ("dieses werkzeug gibt es nicht") — der
+    # sichtbare hinweis verhindert die falsche behauptung, der turn ist
+    # damit regulaer beendet.
+    assert choice["finish_reason"] == "stop"
 
 
 @pytest.mark.parametrize("chunk_size", sorted(CHUNK_SIZES))

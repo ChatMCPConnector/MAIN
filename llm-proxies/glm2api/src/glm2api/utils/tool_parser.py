@@ -1143,6 +1143,38 @@ def text_continues_protocol(text: str) -> bool:
     return in_string and ("{" in text or "[" in text)
 
 
+def count_blocked_call_fragments(text: str, blocked_names: object) -> int:
+    """Wie viele der unparsebaren fragmente sind GESPERRTE aufrufe?
+
+    Ein vollstaendig formulierter, aber abgelehnter aufruf (etwa `open`)
+    bleibt nach dem verweigern als fragment im text stehen und wird von
+    `strip_unparseable_call_fragments` mitgezaehlt. Das ist kein
+    abgeschnittener turn — der aufruf war vollstaendig, er wurde nur
+    abgelehnt. Ohne diese unterscheidung meldet der accumulator
+    `truncated_turn` und der turn endet als fehler, was den client eine
+    endlose retry-schleife fahren laesst (gemessen: 5 minuten backoff
+    pro versuch).
+
+    Nur fragmente, deren werkzeugname wirklich gesperrt war, werden hier
+    als erklaert gezaehlt. Alles andere bleibt echt abgeschnitten.
+    """
+    if not text:
+        return 0
+    if isinstance(blocked_names, str):
+        names = {blocked_names}
+    elif isinstance(blocked_names, (list, tuple, set, frozenset)):
+        names = {str(name).strip() for name in blocked_names if str(name).strip()}
+    else:
+        return 0
+    if not names:
+        return 0
+    return sum(
+        1
+        for match in re.finditer(r'"name"\s*:\s*"([^"]{1,80})"', text)
+        if match.group(1).strip() in names
+    )
+
+
 def strip_unparseable_call_fragments(text: str) -> tuple[str, int]:
     """Entfernt tool-call-Fragmente, die NICHT parsebar sind (typisch: der
     upstream-stream brach mitten im JSON ab). Sie sind nie eine echte antwort

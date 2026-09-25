@@ -16,6 +16,7 @@ from ..config import AppConfig
 from ..logging_utils import debug_dump
 from ..model_variants import model_requests_search, model_requests_thinking, split_model_features
 from ..utils.tool_parser import (
+    count_blocked_call_fragments,
     CODE_FENCE_PATTERN,
     StreamingToolParser,
     _find_unterminated_call_start,
@@ -1679,6 +1680,14 @@ class GLMEventAccumulator:
     max_output_tokens: int | None = None
     output_limit_reached: bool = False
     _output_chars: int = 0
+    # Anzahl der aus GRUND DER POLICY abgelehnten aufrufe. Sie sind
+    # vollstaendig formuliert, nur nicht erlaubt — das ist etwas anderes
+    # als ein unbrauchbarer call (fehlendes pflichtargument, kaputtes
+    # json). `dropped_call_count` zaehlt beides, weshalb hier der
+    # gesonderte zaehler noetig ist: sonst endet ein turn, in dem das
+    # modell ein gesperrtes werkzeug versucht, als `error` — und der
+    # client wiederholt ihn endlos (5 min backoff, gemessen 2026-09-26).
+    _policy_dropped_call_count: int = 0
     # separat gefuehrt, weil das reasoning einen ANTEIL des budgets
     # bekommen darf, nicht alles (siehe `_REASONING_BUDGET_SHARE`).
     _reasoning_chars: int = 0
@@ -1847,6 +1856,7 @@ class GLMEventAccumulator:
                     elif is_blocked_tool_name(tool_call_name, None):
                         if tool_call_name not in self.blocked_tool_attempt_names:
                             self.blocked_tool_attempt_names.append(tool_call_name)
+                        self._policy_dropped_call_count += 1
                         if self.logger:
                             self.logger.warning(
                                 "Intercepted blocked native tool call in meta_data tool=%s",
@@ -2012,6 +2022,10 @@ class GLMEventAccumulator:
                             if tool_not_permitted:
                                 if tool_name not in self.blocked_tool_attempt_names:
                                     self.blocked_tool_attempt_names.append(tool_name)
+                                # pro VORKOMMEN, unabhaengig von der
+                                # entdopplung oben — `dropped_call_count`
+                                # zaehlt naemlich jedes fragment einzeln.
+                                self._policy_dropped_call_count += 1
                                 if is_blocked_tool_name(tool_name, None):
                                     if self.logger:
                                         self.logger.warning(
@@ -2457,7 +2471,31 @@ class GLMEventAccumulator:
         collected_raw_calls = list(self.tool_parser.tool_calls) + list(
             self._server_side_tool_calls
         )
-        if (collected_raw_calls or self.tool_parser.dropped_call_count) and not all_tool_calls:
+        # Ein GESPERRTER aufruf ist ein vollstaendig formulierter aufruf,
+        # der nur abgelehnt wurde — er hat weder ein fehlendes
+        # pflichtargument noch ist er abgeschnitten. Ohne diese
+        # unterscheidung endet der turn als `error` und der client
+        # wiederholt ihn endlos (5 min backoff je versuch, gemessen am
+        # 2026-09-26).
+        def _call_name(call: object) -> str:
+            if not isinstance(call, dict):
+                return ""
+            function = call.get("function")
+            if isinstance(function, dict):
+                return str(function.get("name", "")).strip()
+            return str(call.get("name", "")).strip()
+
+        # Die Klassifikation kommt aus der SOLL-liste, nicht aus
+        # `blocked_tool_attempt_names`: die wird erst weiter unten aus dem
+        # text ermittelt und ist an dieser stelle noch leer. Sonst wuerde
+        # jeder abgelehnte aufruf hier als 'nicht ausfuehrbar' gelten und
+        # der turn endet als fehler — der client wiederholt ihn dann
+        # endlos (5 min backoff je versuch, gemessen 2026-09-26).
+        if (
+            collected_raw_calls or self.tool_parser.dropped_call_count
+        ) and not all_tool_calls and not self._unusable_calls_are_only_policy(
+            list(collected_raw_calls), self.tool_parser.dropped_call_count
+        ):
             self.truncated_turn = True
             log = self.logger or _LOGGER
             log.warning(
@@ -2554,6 +2592,10 @@ class GLMEventAccumulator:
                         recovered_calls.append(tc_copy)
                     else:
                         self.blocked_tool_attempt_names.append(tool_name)
+                        # policy-drop, kein unbrauchbarer call (siehe
+                        # `_policy_dropped_call_count`): der aufruf war
+                        # vollstaendig, nur nicht erlaubt.
+                        self._policy_dropped_call_count += 1
                 # T-12: safety-net-calls durch dieselbe sanitisation und
                 # required-argument-pruefung schicken wie der normale
                 # parser-pfad — sonst koennte ein write-call ohne content
@@ -2567,7 +2609,24 @@ class GLMEventAccumulator:
             # unparsebar und wurde vom parser zurueckgehalten, wuerde hier
             # aber als sichtbarer text durchgehen. Nie eine antwort.
             final_text, fragment_count = strip_unparseable_call_fragments(final_text)
-            if fragment_count:
+            # Ein GESPERRTER aufruf ist vollstaendig formuliert und wurde
+            # nur abgelehnt — er ist KEIN abgeschnittener turn. Ohne diese
+            # gegenrechnung endet der turn als `error` und der client
+            # wiederholt ihn endlos (5 min backoff, gemessen).
+            # Die namen der abgelehnten aufrufe stehen zu diesem zeitpunkt
+            # noch nicht fest (sie werden weiter unten erst aus dem text
+            # ermittelt). Die klassifikation kommt deshalb direkt aus dem
+            # text gegen die SOLL-liste: ein fragment, dessen werkzeug
+            # nicht deklariert ist, ist ein policy-drop und KEIN
+            # abgeschnittener turn.
+            policy_fragments = 0
+            if self.allowed_tool_names is not None:
+                allowed_lower = {name.lower() for name in self.allowed_tool_names}
+                for match in re.finditer(r'"name"\s*:\s*"([^"]{1,80})"', final_text):
+                    if match.group(1).strip().lower() not in allowed_lower:
+                        policy_fragments += 1
+            fragment_count = max(0, fragment_count - policy_fragments)
+            if fragment_count > 0:
                 self.truncated_turn = True
                 log = self.logger or _LOGGER
                 log.warning(
@@ -2598,6 +2657,13 @@ class GLMEventAccumulator:
             )
             if unavailable_names:
                 self.blocked_tool_attempt_names.extend(unavailable_names)
+                # Jeder hier gefundene name ist ein POLICY-drop: der
+                # aufruf war vollstaendig formuliert und wurde nur
+                # abgelehnt. Ohne diesen zaehler stuft die T-06-stelle
+                # den turn als `truncated_turn` ein und der client
+                # wiederholt ihn endlos (5 min backoff, gemessen
+                # 2026-09-26 am agentenlauf).
+                self._policy_dropped_call_count += len(unavailable_names)
                 allowed_names = ", ".join(sorted(self.allowed_tool_names)) or "(none)"
                 # Die Negativ-Rueckmeldung ersetzt nur dann den sichtbaren
                 # Text, wenn es in diesem Turn keine gueltigen Calls gibt —
@@ -2789,8 +2855,31 @@ class GLMEventAccumulator:
             # Fehler — der client kann daraus ableiten, dass es weiter
             # arbeiten muss.
             finish_reason = "length"
-        elif self.blocked_tool_attempt_names or self.truncated_turn or self.required_tool_missing:
-            finish_reason = "error" if not all_tool_calls else "tool_calls"
+        elif self.blocked_tool_attempt_names and not (self.truncated_turn or self.required_tool_missing):
+            # Ein GESPERRTER oder nicht deklarierter aufruf ist KEIN fehler.
+            #
+            # Gemessen an einem echten agentenlauf (2026-09-26): der
+            # abschluss dieser klasse ging als `finish_reason: "error"`
+            # raus. Der client wertete das als stream-fehler und
+            # wiederholte den turn mit exponentiellem backoff — 5 min
+            # bis zum naechsten versuch, dann wieder, weil das modell
+            # `open` erneut aufrief (gleicher prompt, gleiche
+            # modell-neigung; `open` ist im GLM-webchat ein natives
+            # werkzeug und deshalb in der sperrliste). Endlose
+            # schleife, ohne dass sich etwas bewegt hat.
+            #
+            # Der turn ist in Wahrheit VOLLSTAENDIG: das modell hat
+            # geantwortet ("dieses werkzeug gibt es nicht, ich mache
+            # stattdessen X"). Der sichtbare hinweis sagt ausdruecklich,
+            # dass nichts ausgefuehrt wurde — es gibt also nichts zu
+            # verbergen und nichts zu wiederholen. `stop` beendet den
+            # turn regulaer; der agent liest den hinweis und macht
+            # weiter.
+            #
+            # `truncated_turn` und `required_tool_missing` bleiben
+            # `error`: dort fehlt dem client wirklich etwas
+            # Brauchbares, und ein Retry ist berechtigt.
+            finish_reason = "tool_calls" if all_tool_calls else "stop"
         elif self.terminal_status and self.terminal_status not in _SUCCESSFUL_TERMINAL_STATUSES:
             # T-13/S-08: es gab KEINEN terminalstatus-vertrag. Jeder status
             # ('error', 'aborted', 'cancelled', 'timeout', 'intervene')
@@ -2910,7 +2999,10 @@ class GLMEventAccumulator:
         if self._server_side_tool_calls or xml_tool_calls or self.tool_parser.tool_calls:
             clean_content = strip_meta_chatter(clean_content)
         clean_content, fragment_count = strip_unparseable_call_fragments(clean_content)
-        if fragment_count:
+        fragment_count -= count_blocked_call_fragments(
+            clean_content, self.blocked_tool_attempt_names
+        )
+        if fragment_count > 0:
             self.truncated_turn = True
             log = self.logger or _LOGGER
             log.warning(
@@ -2981,14 +3073,23 @@ class GLMEventAccumulator:
         xml_tool_calls = _dedupe_tool_call_list(xml_tool_calls)
         merged_raw_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
         all_tool_calls = sanitize_tool_calls(merged_raw_calls, fallback_url=self.fallback_tool_url)
+        # T-06: siehe finalize() — ein turn, dessen einziger call
+        # unbrauchbar war (fehlendes pflichtargument), ist kein leerer
+        # erfolg, sondern ein fehlerhafter turn.
+        #
+        # Ein GESPERRTER aufruf ist davon zu unterscheiden: er war
+        # vollstaendig formuliert und wurde nur abgelehnt. Zaehlt man ihn
+        # hier mit, endet der turn als `error`, und der echte client
+        # wiederholt ihn endlos (5 min backoff je versuch, gemessen am
+        # agentenlauf 2026-09-26). Deshalb wird der anteil der
+        # abgelehnten aufrufe herausgerechnet — dieselbe rechnung wie im
+        # stream-pfad.
+        _ns_collected = list(self.tool_parser.tool_calls) + list(self._server_side_tool_calls)
         if (
-            list(self.tool_parser.tool_calls)
-            or self._server_side_tool_calls
-            or self.tool_parser.dropped_call_count
-        ) and not all_tool_calls:
-            # T-06: siehe finalize() — ein turn, dessen einziger call
-            # unbrauchbar war (fehlendes pflichtargument), ist kein leerer
-            # erfolg, sondern ein fehlerhafter turn.
+            _ns_collected or self.tool_parser.dropped_call_count
+        ) and not all_tool_calls and not self._unusable_calls_are_only_policy(
+            _ns_collected, self.tool_parser.dropped_call_count
+        ):
             self.truncated_turn = True
 
         final_content = self._sanitize_visible_text(clean_content.strip())
@@ -3081,7 +3182,21 @@ class GLMEventAccumulator:
                                 if (
                                     self.required_tool_missing
                                     or self.truncated_turn
-                                    or self.blocked_tool_attempt_names
+                                    # Ein GESPERRTER aufruf ist KEIN fehler,
+                                    # sondern eine vollstaendige antwort
+                                    # ("dieses werkzeug gibt es nicht") — als
+                                    # `error` wertete der echte client das als
+                                    # stream-fehler und wiederholte den turn
+                                    # mit 5-minuten-backoff endlos, weil das
+                                    # modell `open` bei jedem versuch erneut
+                                    # aufrief (agentenlauf 2026-09-26).
+                                    # Ein abgeschnittener turn
+                                    # (`truncated_turn`) bleibt `error`:
+                                    # dort fehlt dem client wirklich etwas.
+                                    or (
+                                        self.blocked_tool_attempt_names
+                                        and not self._blocked_only_turn()
+                                    )
                                     or effective_status
                                     and effective_status not in _SUCCESSFUL_TERMINAL_STATUSES
                                 )
@@ -3258,6 +3373,78 @@ class GLMEventAccumulator:
         state[1] = len(parts)
         state[4] = self._parts_epoch
         return state[0]
+
+    def _blocked_only_turn(self) -> bool:
+        """War der EINZIGE MAENGEL dieses turns ein gesperrter aufruf?
+
+        Ohne anderen Mangel (kein abgeschnittenes protokoll, keine
+        fehlende pflichtauswahl, kein gestarteter ausgabepfad) ist ein
+        gesperrter aufruf eine vollstaendige antwort und der turn endet
+        regulaer. Sonst bleibt `error` bestehen.
+        """
+        return bool(self.blocked_tool_attempt_names) and not (
+            self.truncated_turn
+            or self.required_tool_missing
+            or self.output_limit_reached
+        )
+
+    def _unusable_calls_are_only_policy(self, collected: list[object], dropped: int) -> bool:
+        """Sind die NICHT ausfuehrbaren calls ausschliesslich POLICY-drops?
+
+        Gemessen am agentenlauf 2026-09-26: ein turn, in dem das modell ein
+        gesperrtes werkzeug versucht (hier `open`, ein natives GLM-
+        werkzeug), endete als `finish_reason: "error"`. Der echte client
+        wertete das als stream-fehler und wiederholte den turn mit
+        exponentiellem backoff — 5 minuten bis zum naechsten versuch,
+        dann wieder, weil `open` erneut aufgerufen wurde. Endlosschleife
+        ohne jeden fortschritt.
+
+        Die zwei faelle sind aber grundverschieden:
+
+        * **Policy-drop** — der aufruf war vollstaendig formuliert, nur
+          nicht erlaubt. Der turn ist eine vollstaendige antwort ("dieses
+          werkzeug gibt es nicht") und endet regulaer mit `stop`.
+        * **Unbrauchbar** — der aufruf war erlaubt, scheiterte aber an
+          einem fehlenden pflichtargument (T-06) oder ist mitten im json
+          abgeschnitten. Dem client fehlt etwas Brauchbares, `error` ist
+          richtig und ein Retry ist berechtigt.
+
+        Diese methode beantwortet genau diese Frage und wird an beiden
+        abschluss-pfaden (stream und non-stream) benutzt, damit die beide
+        nicht auseinanderlaufen.
+        """
+        if self.allowed_tool_names is None:
+            return False
+        allowed_lower = {name.lower() for name in self.allowed_tool_names}
+
+        def call_name(call: object) -> str:
+            if not isinstance(call, dict):
+                return ""
+            function = call.get("function")
+            if isinstance(function, dict):
+                return str(function.get("name", "")).strip()
+            return str(call.get("name", "")).strip()
+
+        # ERLAUBTE calls, die trotzdem nicht ausfuehrbar wurden: das ist
+        # immer ein echter fehlschlag, unabhaengig vom policy-drop.
+        for call in collected:
+            name = call_name(call).lower()
+            if name and name in allowed_lower:
+                return False
+
+        # policy-drops gegen die als "nicht deklariert" erkannten namen
+        # herausrechnen — die stehen zu diesem zeitpunkt noch nicht in
+        # `blocked_tool_attempt_names` (das wird erst beim abschluss
+        # ermittelt), also direkt aus dem aufgebauten text nehmen.
+        policy_drops = 0
+        for source_text in (self._cached_full_text, self._cached_full_reasoning):
+            if not source_text:
+                continue
+            for name in detect_tool_call_names(source_text):
+                if name.lower() not in allowed_lower:
+                    policy_drops += 1
+        policy_drops = max(policy_drops, self._policy_dropped_call_count)
+        return dropped - policy_drops <= 0
 
     def _render_full_output(self) -> tuple[str, str]:
         if not self._render_cache_dirty:
