@@ -3333,3 +3333,36 @@ def test_blocked_tool_is_stop_but_a_broken_turn_is_still_error():
     })
     truncated.finalize("finish")
     assert truncated.build_response()["choices"][0]["finish_reason"] == "error"
+
+
+def test_blocked_only_turn_ends_cleanly_in_both_paths():
+    """Die praezise trennung, an beiden abschluss-pfaden.
+
+    Ein GESPERRTER aufruf ist eine vollstaendige antwort: das werkzeug
+    gibt es nicht, das modell hat das gemerkt und weitergearbeitet. Als
+    `error` ging dieser turn im echten agentenlauf in eine endlose
+    retry-schleife (5 min backoff je versuch, 2026-09-26).
+
+    Ein ERLAUBTER aufruf mit fehlendem pflichtargument ist dagegen ein
+    echter fehlschlag — dort bleibt `error`, und genau diese
+    unterscheidung ist der kern des fixes. Beide pfade muessen dasselbe
+    sagen, sonst haengt der client je nach aufrufpfad.
+    """
+    blocked = '{"tool_calls":[{"name":"open_url","arguments":{"url":"https://x"}}]}[]'
+    unusable = '{"tool_calls":[{"name":"write","arguments":{"filePath":"/a.py"}}]}[]'
+
+    for payload, allowed, expected in (
+        (blocked, {"bash"}, "stop"),
+        (unusable, {"write", "read", "bash"}, "error"),
+    ):
+        for path in ("stream", "non-stream"):
+            accumulator = GLMEventAccumulator(model="m", allowed_tool_names=allowed)
+            accumulator.consume_event(
+                _event("c", "p1", text=payload, status="process")
+            )
+            if path == "stream":
+                accumulator.finalize("finish")
+                finish = accumulator.build_response()["choices"][0]["finish_reason"]
+            else:
+                finish = accumulator.build_response("finish")["choices"][0]["finish_reason"]
+            assert finish == expected, f"{path} / {payload[:40]} -> {finish}, erwartet {expected}"

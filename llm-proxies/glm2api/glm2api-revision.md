@@ -1199,6 +1199,79 @@ Ob der Agent danach weiterarbeitet, entscheidet opencode. Mit 32 768
 statt 8 192 hat er dafür aber den Raum, den er für einen mehrstufigen
 Auftrag braucht.
 
+### F-5w3 Die Retry-Schleife bei gesperrten Werkzeugen (2026-09-26)
+
+Der Nutzer meldete, dass der Agentenlauf am Ende hängen blieb. Gezielt
+im glm2api-Log gesucht, nicht geraten:
+
+```
+22:32:06  Stream -> Antwort mit finish_reason: "error"
+22:37:09  nächster Stream   <-- 5 MINUTEN SPÄTER
+```
+
+Die Fünf-Minuten-Lücke ist ein **Retry-Backoff**. Die Kausalkette:
+
+1. Das Modell ruft `open` auf — ein **natives GLM-Werkzeug**, weshalb es
+   überhaupt in der Sperrliste steht. `open` ist *nicht* in der
+   Tool-Schema-Liste, die das Modell sieht (0 Treffer), und die
+   Negativmeldung sagt bereits „Do not call them again" und listet die
+   Alternativen. Das Modell ruft es trotzdem erneut auf.
+2. Der Proxy lehnt ab und sendet `finish_reason: "error"`.
+3. Der echte Client wertet das als **Stream-Fehler** und wiederholt den
+   Turn mit exponentiellem Backoff.
+4. Gleicher Prompt, gleiche Modell-Neigung → wieder `open` → wieder
+   `error` → Endlosschleife. In 90 Sekunden kein einziger
+   Werkzeugaufruf.
+
+**Die Wurzel ist nicht das Modell, sondern unser Signal.** Ein
+*gesperrter* Aufruf ist eine **vollständige Antwort**: „dieses Werkzeug
+gibt es nicht, ich habe stattdessen X gemacht". Es fehlt dem Client
+nichts, es gibt nichts zu wiederholen. `error` war hier schlicht das
+falsche Signal.
+
+**Die Korrektur und ihr Preis:**
+
+| Fall | vorher | jetzt | Begründung |
+|---|---|---|---|
+| gesperrter / nicht deklarierter Aufruf | `error` | **`stop`** | vollständige Antwort; `error` löste die Schleife aus |
+| erlaubter Aufruf ohne Pflichtargument (T-06) | `error` | `error` | dem Client fehlt etwas Brauchbares, Retry ist berechtigt |
+| abgeschnittenes Protokoll | `error` | `error` | ebenso |
+| `tool_choice=required` verletzt | `error` | `error` | Vertragsbruch, dem Client muss etwas Ausführbares fehlen |
+| Terminalstatus fehlerhaft (T-13) | `error` | `error` | ebenso |
+
+Der Preis ist ehrlich benannt: `stop` heißt, der Client akzeptiert den
+Turn. Das ist vertretbar, **weil** der sichtbare Hinweis ausdrücklich sagt,
+dass nichts ausgeführt wurde — die eigentliche Gefahr (der Agent behauptet,
+er habe ein Ergebnis gesehen) bleibt ausgeschlossen.
+
+**Der Fund war teurer als die eine Zeile.** Drei Stellen mussten getrennt
+werden, weil sie den gesperrten Aufruf jeweils mit einem echten Fehler
+verwechselten — jeweils an einer anderen Stelle im Ablauf:
+
+1. `strip_unparseable_call_fragments()` zählte den **vollständigen, nur
+   abgelehnten** Aufruf als abgeschnittenes Fragment.
+2. Die T-06-Prüfung in `finalize()` stufte ihn als „nicht ausführbar"
+   ein (fehlendes Pflichtargument).
+3. Dasselbe in `build_response()` für den Non-Stream-Pfad.
+
+Und an allen drei Stellen war die Klassifikation **nicht verfügbar**:
+`blocked_tool_attempt_names` wird erst *später* aus dem Text ermittelt, war
+an diesen Stellen also noch leer. Die Prüfung musste deshalb gegen die
+**Soll-Liste** selbst klassifizieren. Beide Abschluss-Pfade teilen sich nun
+eine Methode (`_unusable_calls_are_only_policy()`), damit sie nicht
+auseinanderlaufen können.
+
+**Nachweis, dass nichts schlimmer wurde:**
+- 492 Tests grün (vorher 490)
+- Beide Leak-Sweeps 0
+- Der Benchmark-Verifier weiterhin `OK` (baseline + Mutation)
+- Die 4-Fall-Matrix stimmt in **beiden** Pfaden
+
+**Offen:** die Live-Gegenprüfung gegen das echte Upstream. Nach den vielen
+Tests ist das Konto in **HTTP 429 / Code 10061** (Ratelimit) — dort lässt
+sich derzeit nichts mehr prüfen. Die deterministische Prüfung oben
+ersetzt das nicht, sie verschiebt es nur.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.
