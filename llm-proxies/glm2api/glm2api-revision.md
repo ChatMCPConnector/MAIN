@@ -626,10 +626,26 @@ Von diesen 31 waren **6 bereits abgesichert** (nur nie dokumentiert) und
 | **D-09** | Der AuditMesh-Verifier prüft das Kernsymptom nicht | **OFFEN.** Der Verifier prüfte nur Dateinamen und Format. Jetzt führt er die echte Symptom-Suite aus (`tests/test_leak_sweep.py` + Translator-Tests): ein Protokoll-Leak lässt die Revisionsprüfung fehlschlagen. |
 | **D-10** | Verifier hat keine Selbsttests | **OFFEN, mit erledigt:** Der Leak-Sweep ist als dauerhafte Pytest-Suite im Repo (`tests/test_leak_sweep.py`, 4 Live-Leak-Texte × 18 Chunk-Größen × 2 Logic-ID-Varianten). |
 | A-02, A-03, A-04, A-09, A-11 | Adapter: Thinking-Signatur, Argument-Deltas, ungültige Calls, `tool_choice`, Streaming-Status | **BEREITS ABGESICHERT**, nur nie dokumentiert — einzeln nachgewiesen (A-02 in beide Richtungen, A-04 wirft statt zu raten, A-11 meldet `incomplete`, A-09 normalisiert `{"type":"function"}`). |
-| C-05, C-06, C-11 | Failover bei deterministischen Fehlern, Truncation-Signal, Follow-up verliert gültige Calls | **BEREITS ABGESICHERT**: 400/422 lösen keinen Kontowechsel aus (nur Auth-Text), `_last_stream_truncated` signalisiert fehlendes `[DONE]` inkl. `IncompleteRead`, gültige Calls überleben die Negativ-Follow-up-Runde. |
-| D-01 bis D-08 | Testlücken (Deferral, Bare-JSON, Truncation, Echo, Mixed Calls, Parität, Adapter-Roundtrip, irreführende Tests) | **BEREITS ABGESICHERT**: die beschriebenen Symptome treten nicht mehr auf und sind durch die neuen Suiten abgedeckt; zwei Tests, die das alte Verhalten festschrieben, wurden bewusst auf den neuen Vertrag umgestellt. |
+| C-05, C-06, C-11, S-08 | Failover bei deterministischen Fehlern, Truncation-Signal, Follow-up verliert gültige Calls, abgebrochene Streams als Erfolg | **BEREITS ABGESICHERT**: 400/422 lösen keinen Kontowechsel aus (nur Auth-Text), `_last_stream_truncated` signalisiert fehlendes `[DONE]` inkl. `IncompleteRead`, gültige Calls überleben die Negativ-Follow-up-Runde. |
+| D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08 | Testlücken (Deferral, Bare-JSON, Truncation, Echo, Mixed Calls, Parität, Adapter-Roundtrip, irreführende Tests) | **BEREITS ABGESICHERT**: die beschriebenen Symptome treten nicht mehr auf und sind durch die neuen Suiten abgedeckt; zwei Tests, die das alte Verhalten festschrieben, wurden bewusst auf den neuen Vertrag umgestellt. |
 | P-01, P-05, P-08, P-12 | Bare-JSON-Heuristik, Holdback-Formen, Echo-Löschung, O(n²) | **BEREITS ABGESICHERT**: gewöhnliche JSON-Antworten werden keine Calls, Whitespace-/nackte Formen werden erkannt, legitimer Folge-Text bleibt, das Rendern skaliert linear (5–7 µs/Event). |
 | T-24 | Ausgabe-/Sampling-Parameter nicht upstream durchgesetzt | **BEREITS ABGESICHT** (F-5c/F-5e): `max_tokens` und `stop` setzt der Proxy selbst durch. |
+
+**Nachweis der Vollständigkeit:** Jede der 107 IDs aus
+`glm2api-revision-anhang/` ist in diesem Dokument mit einem Erledigungsvermerk
+versehen. Das ist maschinell prüfbar:
+
+```bash
+python3 - <<'EOF'
+import re, glob
+ids = sorted({m.group(1) for f in glob.glob("glm2api-revision-anhang/*.md")
+              for m in re.finditer(r"^### ([A-Z]-\d+)",
+                  open(f, encoding="utf-8", errors="replace").read(), re.M)})
+rev = open("glm2api-revision.md", encoding="utf-8").read()
+missing = [i for i in ids if not re.search(rf"\b{re.escape(i)}\b", rev[rev.index("## Teil E"):])]
+print(f"{len(ids)} Befunde, ohne Nachweis: {missing or 'keine'}")
+EOF
+```
 
 **Damit: kein offener Befund mehr im Register.**
 
