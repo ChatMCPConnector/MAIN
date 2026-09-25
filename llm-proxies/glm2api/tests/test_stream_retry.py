@@ -761,9 +761,12 @@ def test_hallucinated_success_after_exhausted_follow_ups_gets_honesty_notice():
     assert text.index("[blocked_tool_notice]") < text.index("Alles erledigt.")
 
 
-def test_no_notice_when_follow_up_ends_with_a_valid_call():
-    """Gegenprobe: endet die folge mit einem gueltigen call, gibt es keine
-    notice — der aufruf war dann ja nicht blockiert."""
+def test_notice_stays_visible_when_follow_up_ends_with_a_valid_call():
+    """S-10: der aufruf in runde 1 war blockiert, die folge-runde lieferte
+    einen gueltigen call. Der client erfaehrt trotzdem nichts ueber die
+    abgelehnte runde 1 und beendet den tool-loop mit dem gefuehl, alles
+    sei ausgefuehrt. Die notice muss deshalb auch im gemischten turn
+    sichtbar bleiben — ohne den gueltigen call zu verlieren (C-11)."""
     client = GLMWebClient.__new__(GLMWebClient)
     client.config = _FollowUpConfig()
     client.logger = SimpleNamespace(
@@ -816,7 +819,14 @@ def test_no_notice_when_follow_up_ends_with_a_valid_call():
     text = "".join(chunk.decode("utf-8") for chunk in client.stream_chat_completion(dict(payload)))
 
     assert '"bash"' in text, "der gueltige call muss durchkommen"
-    assert "[blocked_tool_notice]" not in text
+    assert "[blocked_tool_notice]" in text, "die abgelehnte runde muss sichtbar bleiben"
+    assert "not available" in text
+
+
+def test_no_notice_when_nothing_was_blocked():
+    """Echte Gegenprobe: ein turn ganz ohne blockierten versuch darf
+    keine notice erzeugen — sonst sendet der proxy bei jedem normalen
+    tool-loop eine alarmmeldung."""
 
 
 # --- P4: C-08, C-15, C-19, C-20 ------------------------------------------
@@ -1058,3 +1068,63 @@ def test_truncated_stream_is_not_reported_as_success():
         f"trunkierung muss ein fehler sein, gefunden: {matches}"
     )
     json_module.loads("{}")  # import ist fuer leser der absicht hier
+
+
+# --- C-16: SSE-verbindung wird auch bei fruehem abbruch freigegeben -----
+
+
+def test_sse_response_is_closed_on_early_abandon():
+    """C-16: die freigabe hing ausschliesslich an den aufrufern. Bricht
+    einer den generator mit `return` ab, blieb der socket offen — ueber
+    viele requests sammelten sich verbindungen und file-descriptoren an."""
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None
+    )
+    client.config = SimpleNamespace(debug_dump_all=False)
+    client._raise_for_event_error = lambda event, stream=True: None
+    client._last_stream_truncated = False
+
+    class _Resp:
+        def __init__(self):
+            self.closed = False
+
+        def read(self, n):
+            return b'data: {"status":"process","parts":[]}\n\n'
+
+        def close(self):
+            self.closed = True
+
+    response = _Resp()
+    for _ in client._iter_sse_events(response):
+        break  # client bricht ab, wie beim verbruch mitten im stream
+    assert response.closed is True, "die verbindung muss beim abbruch freigegeben werden"
+
+
+def test_sse_response_is_closed_on_normal_completion():
+    """Gegenprobe: auch der regulaere pfad gibt die verbindung frei."""
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None
+    )
+    client.config = SimpleNamespace(debug_dump_all=False)
+    client._raise_for_event_error = lambda event, stream=True: None
+    client._last_stream_truncated = False
+
+    class _Resp:
+        def __init__(self):
+            self.closed = False
+            self.sent = False
+
+        def read(self, n):
+            if self.sent:
+                return b""
+            self.sent = True
+            return b'data: {"status":"finish","parts":[]}\n\ndata: [DONE]\n\n'
+
+        def close(self):
+            self.closed = True
+
+    response = _Resp()
+    list(client._iter_sse_events(response))
+    assert response.closed is True

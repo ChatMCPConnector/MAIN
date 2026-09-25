@@ -149,3 +149,58 @@ def test_no_persistent_conversation_without_flag():
     client = _client(glm_persistent_conversation=False)
 
     assert client._resolve_target_conversation_id({}, 0) == ""
+
+
+# --- C-15: Loeschung am ERZEUGERKONTO ------------------------------------
+
+
+def test_delete_conversation_targets_the_creating_account():
+    """C-15: die conversation gehoert dem konto, das sie erzeugt hat.
+    `delete_conversation` lief aber ueber `_call_with_account_failover`
+    und konnte ein anderes konto waehlen — bei mehreren accounts wurde
+    dann die falsche conversation geloescht und die eigentliche blieb
+    serverseitig liegen (memory-/context-leck, haenger queue-slot)."""
+    from glm2api.services.glm_client import GLMWebClient
+
+    client = GLMWebClient.__new__(GLMWebClient)
+    used_accounts = []
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    client.config = SimpleNamespace(
+        glm_persistent_conversation=False,
+        glm_delete_conversation=True,
+        glm_assistant_id="a1",
+        request_timeout=5,
+        delete_conversation_url="https://example.invalid/delete",
+    )
+    client.logger = SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
+    client.auth = SimpleNamespace(
+        get_browser_headers=lambda: {},
+        get_access_token_for_account=lambda i: (used_accounts.append(i), f"tok{i}")[1],
+        read_json_response=lambda r: {"status": 0},
+    )
+
+    def send_request(account_index, access_token):
+        used_accounts.append(account_index)
+        return _Resp()
+
+    # der gezielte pfad darf _call_with_account_failover nicht benutzen
+    client._call_with_account_failover = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("failover darf bei bekanntem konto nicht greifen")
+    )
+    import glm2api.services.glm_client as mod
+
+    original = mod.urllib.request.urlopen
+    mod.urllib.request.urlopen = lambda request, timeout=None: _Resp()
+    try:
+        client.delete_conversation("conv-1", assistant_id="a1", account_index=2)
+    finally:
+        mod.urllib.request.urlopen = original
+
+    assert 2 in used_accounts, "das erzeugerkonto muss den aufruf ausfuehren"

@@ -226,6 +226,37 @@ class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
             self._connection_slots.release()
 
 
+def _host_header_is_allowed(host_header: object, bound_host: str) -> bool:
+    """S-02: schutz gegen DNS-REBINDING.
+
+    Laeuft der dienst auf loopback, kann eine beliebige website ihn ueber
+    `http://127.0.0.1:8001` erreichen. Ein simples CORS-verbot hilft
+    gegen das nicht: beim rebinding ist die anfrage aus browsersicht
+    same-origin, es findet also gar kein preflight statt. Der
+    Host-header bleibt dabei der fremde name — genau daran ist der
+    angriff zu erkennen.
+
+    Ohne diese pruefung konnte eine website im browser des nutzers
+    kontoinhalte und antworten des proxies lesen. Geprueft wird der
+    name-/ip-anteil des Host-headers, der port ist egal.
+    """
+    if not is_loopback_host(bound_host):
+        # bei LAN-/remote-binding ist der host ohnehin nicht loopback;
+        # dort greift die API-key-pflicht aus der config-validierung.
+        return True
+    raw = str(host_header or "").strip()
+    if not raw:
+        return False
+    if raw.startswith("["):
+        closing = raw.find("]")
+        if closing == -1:
+            return False
+        hostname = raw[1:closing]
+    else:
+        hostname = raw.rsplit(":", 1)[0] if ":" in raw else raw
+    return is_loopback_host(hostname)
+
+
 class GLM2APIServer:
     def __init__(self, config: AppConfig, glm_client: GLMWebClient, logger: Logger) -> None:
         self.config = config
@@ -500,6 +531,14 @@ class GLM2APIServer:
                 return True
 
             def do_OPTIONS(self) -> None:
+                if not self._host_header_allowed():
+                    logger.warning(
+                        "Rejected preflight with non-loopback Host header on loopback binding: %s",
+                        self.headers.get("Host"),
+                    )
+                    self.send_response(HTTPStatus.FORBIDDEN)
+                    self.end_headers()
+                    return
                 self.send_response(HTTPStatus.NO_CONTENT)
                 self._send_common_headers()
                 self.end_headers()
@@ -507,6 +546,20 @@ class GLM2APIServer:
             def do_GET(self) -> None:
                 try:
                     self._debug_log_request_start()
+                    if not self._host_header_allowed():
+                        # S-02: der Host-header passt nicht zur Bindung — das ist
+                        # das erkennungszeichen von DNS-rebinding. Der Dienst ist
+                        # an loopback gebunden, der aufrufer kommt aber unter einem
+                        # fremden hostnamen daher.
+                        logger.warning(
+                            "Rejected request with non-loopback Host header on loopback binding: %s",
+                            self.headers.get("Host"),
+                        )
+                        self._write_error_json(
+                            HTTPStatus.FORBIDDEN,
+                            {"error": {"message": "Host header not allowed for loopback binding", "type": "forbidden"}},
+                        )
+                        return
                     path = self._path_without_query()
                     if path == "/health":
                         if not self._authorize():
@@ -556,6 +609,20 @@ class GLM2APIServer:
             def do_POST(self) -> None:
                 try:
                     self._debug_log_request_start()
+                    if not self._host_header_allowed():
+                        # S-02: der Host-header passt nicht zur Bindung — das ist
+                        # das erkennungszeichen von DNS-rebinding. Der Dienst ist
+                        # an loopback gebunden, der aufrufer kommt aber unter einem
+                        # fremden hostnamen daher.
+                        logger.warning(
+                            "Rejected request with non-loopback Host header on loopback binding: %s",
+                            self.headers.get("Host"),
+                        )
+                        self._write_error_json(
+                            HTTPStatus.FORBIDDEN,
+                            {"error": {"message": "Host header not allowed for loopback binding", "type": "forbidden"}},
+                        )
+                        return
                     path = self._path_without_query()
                     if path not in {
                         f"{config.api_prefix}/chat/completions",
@@ -1080,6 +1147,12 @@ class GLM2APIServer:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def _host_header_allowed(self) -> bool:
+                """S-02: rebinding-guard, siehe modulfunktion."""
+                return _host_header_is_allowed(
+                    self.headers.get("Host"), getattr(config, "host", "127.0.0.1")
+                )
 
             def _send_common_headers(self) -> None:
                 origin = getattr(config, "cors_allow_origin", "")

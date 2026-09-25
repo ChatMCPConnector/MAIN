@@ -1164,3 +1164,45 @@ def test_repair_markers_do_not_look_like_parameters():
     from glm2api.services.translator import sanitize_tool_call_payload
 
     assert sanitize_tool_call_payload("webfetch", {"_raw": '{"command":"ls"}'}) is None
+
+
+# --- S-02: DNS-Rebinding --------------------------------------------------
+
+
+@pytest.mark.parametrize("host_header", [
+    "evil.example.com",
+    "attacker.test",
+    "localhost.evil.com",   # subdomain-spoofing
+    "127.0.0.1.evil.com",
+    "",                     # fehlender header
+])
+def test_foreign_host_header_is_rejected_on_loopback(host_header):
+    """S-02: laeuft der dienst auf loopback, kann eine beliebige website
+    ihn unter `http://127.0.0.1:8001` erreichen. Ein CORS-verbot hilft
+    dagegen nicht: beim rebinding ist die anfrage aus browsersicht
+    same-origin, es findet kein preflight statt. Erkennungszeichen ist
+    der fremde Host-header."""
+    from glm2api.server import _host_header_is_allowed
+
+    assert _host_header_is_allowed(host_header, "127.0.0.1") is False
+
+
+@pytest.mark.parametrize("host_header", [
+    "127.0.0.1:8001", "localhost:8001", "127.0.0.1", "localhost", "[::1]:8001",
+])
+def test_loopback_host_headers_still_work(host_header):
+    """Gegenprobe: die regulaeren CLI-clients und das lokale web-UI
+    muessen unveraendert funktionieren — das war das komfortrisiko
+    der haertung."""
+    from glm2api.server import _host_header_is_allowed
+
+    assert _host_header_is_allowed(host_header, "127.0.0.1") is True
+
+
+def test_host_check_is_skipped_for_lan_bindings():
+    """Bei LAN-/remote-binding greift die API-key-pflicht aus der
+    config-validierung; dort darf der host-check nicht zusaetzlich
+    fehlkonfigurierte clients aussperren."""
+    from glm2api.server import _host_header_is_allowed
+
+    assert _host_header_is_allowed("10.0.0.5:8001", "0.0.0.0") is True

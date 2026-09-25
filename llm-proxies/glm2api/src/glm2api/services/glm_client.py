@@ -269,6 +269,60 @@ def _halve_history_budget(
     return history_budget
 
 
+def _blocked_notice_text(names: object) -> str:
+    """S-10: sichtbarer hinweis, dass ein tool-Aufruf ABGELEHNT wurde.
+
+    Das OpenAI-schema hat kein feld fuer abgelehnte aufrufe. Ohne
+    signal bleibt der client bei 'alles gelaufen' stehen und beendet
+    den tool-loop — oder behauptet gar, das ergebnis gesehen zu haben.
+    Der text geht deshalb VOR der inhaltlichen antwort raus."""
+    if isinstance(names, str):
+        cleaned = [part.strip() for part in names.split(",") if part.strip()]
+    elif isinstance(names, (list, tuple, set)):
+        cleaned = [str(part).strip() for part in names if str(part).strip()]
+    else:
+        cleaned = []
+    if not cleaned:
+        return ""
+    return (
+        f"[blocked_tool_notice] The tool(s) {', '.join(cleaned)} are not available in "
+        "this environment and were NOT executed. Do not claim to have called them "
+        "or to have seen any result from them."
+    )
+
+
+# C-18: die GLM-Web-Chat-API kennt KEINE sampling-parameter. Ein
+# client, der `temperature`/`top_p` sendet, erwartet eine Wirkung, die es
+# technisch nicht geben kann. Statt den wunsch zu erfuellen (erfundene
+# semantik) oder ihn kommentarlos zu verwerfen (der client glaubt, seine
+# einstellung sei aktiv), wird er sichtbar protokolliert. `max_tokens` ist
+# die ausnahme: der wird als ausgabebudget erzwungen, weiter unten.
+_IGNORED_SAMPLING_PARAMS = ("temperature", "top_p", "top_k", "frequency_penalty", "presence_penalty", "seed")
+
+
+def _log_unsupported_sampling_params(payload: dict[str, object], logger: object) -> None:
+    """Meldet sampling-parameter, die dieser proxy nicht umsetzen kann.
+
+    Bewusst KEIN harter fehler: OpenAI-clients (opencode, aider, ...)
+    senden `temperature` standardmaessig mit. Eine ablehnung wuerde jeden
+    normalen aufruf brechen, obwohl an der stelle nichts falsch laeuft —
+    der parameter hat upstream schlicht keine Entsprechung.
+    """
+    if not isinstance(payload, dict):
+        return
+    present = [name for name in _IGNORED_SAMPLING_PARAMS if payload.get(name) is not None]
+    if not present:
+        return
+    log = getattr(logger, "warning", None)
+    if callable(log):
+        log(
+            "Client sent sampling parameter(s) %s that this proxy cannot enforce: "
+            "the GLM chat upstream exposes no sampling controls. max_tokens IS enforced "
+            "as an output budget.",
+            ", ".join(present),
+        )
+
+
 class GLMWebClient:
     def __init__(self, config: AppConfig, logger: Logger) -> None:
         self.config = config
@@ -429,6 +483,7 @@ class GLMWebClient:
         # Ausgabegrenze: der client-wunsch gilt, aber nie ueber die
         # konfigurationsschranke hinaus (der upstream kann sie nicht
         # durchsetzen, der proxy muss es selbst tun).
+        _log_unsupported_sampling_params(payload, self.logger)
         client_max = payload.get("max_tokens")
         if not isinstance(client_max, int) or client_max <= 0:
             client_max = payload.get("max_completion_tokens")
@@ -463,7 +518,12 @@ class GLMWebClient:
         # wurde dabei verworfen — ohne delete_conversation blieb sie beim
         # upstream liegen (pro versuch eine conversation). Alle im lauf
         # gesammelten ids werden im finally abgeraeumt.
-        created_conversations: set[str] = set()
+        # C-15: conversation_id -> ERZEUGERKONTO. Ohne das konto konnte
+        # der aufraeumpfad die falsche conversation loeschen.
+        created_conversations: dict[str, int] = {}
+        # C-15: das konto, mit dem die AKTUELLE runde laeuft. Die
+        # conversation gehoert diesem konto, nicht irgendeinem.
+        _conversation_account_index = account_index
         accumulator = new_accumulator()
         # C-12: retries der non-stream-runde verwenden das payload der
         # aktuellen runde; nach einer follow-up-runde ist das deren payload
@@ -574,9 +634,10 @@ class GLMWebClient:
                         )
                         time.sleep(self.config.glm_stream_error_retry_interval)
                         if accumulator.conversation_id:
-                            created_conversations.add(accumulator.conversation_id)
+                            created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
-                        response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        _conversation_account_index = self._get_preferred_account_index(lease.ticket)
+                        response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
                         continue
                     has_valid_calls = False
                     choices_obj = result.get("choices")
@@ -605,7 +666,7 @@ class GLMWebClient:
                         )
                         response.close() # type: ignore
                         if accumulator.conversation_id:
-                            created_conversations.add(accumulator.conversation_id)
+                            created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         # C-12: follow-up-runde wird zur aktiven runde
@@ -616,10 +677,25 @@ class GLMWebClient:
                         # ausgeliefert, die blockierten Namen protokolliert.
                         # Ohne diese Zeile verschwaende der blocked-versuch
                         # still; das Modell wiederholt ihn dann.
+                        blocked_names = sorted(set(accumulator.blocked_tool_attempt_names))
                         self.logger.warning(
                             "Turn contained valid and blocked tool calls; delivering valid calls, blocked=%s",
-                            ", ".join(sorted(set(accumulator.blocked_tool_attempt_names))),
+                            ", ".join(blocked_names),
                         )
+                        # S-10/C-11: die gueltigen calls zu verwerfen war
+                        # der urspruengliche fehler (C-11) — sie werden
+                        # ausgeliefert. Aber der client muss AUCH erfahren,
+                        # dass ein aufruf abgelehnt wurde: ohne sichtbares
+                        # signal endet der turn wie ein vollstaendiger und
+                        # der agent beendet den tool-loop.
+                        notice = _blocked_notice_text(blocked_names)
+                        if notice:
+                            choices = result.get("choices")
+                            if isinstance(choices, list) and choices:
+                                message = choices[0].get("message")
+                                if isinstance(message, dict):
+                                    existing = str(message.get("content") or "")
+                                    message["content"] = f"{notice}\n{existing}" if existing else notice
                     return result, accumulator.conversation_id
                 if retry_exc is None:
                     break
@@ -644,17 +720,22 @@ class GLMWebClient:
                     history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 if accumulator.conversation_id:
-                    created_conversations.add(accumulator.conversation_id)
+                    created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                 accumulator = new_accumulator()
-                response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                _conversation_account_index = self._get_preferred_account_index(lease.ticket)
+                response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
         finally:
             response.close() # type: ignore
             if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
                 self.set_active_conversation_id(accumulator.conversation_id, account_index)
             if accumulator.conversation_id:
-                created_conversations.add(accumulator.conversation_id)
-            for conversation_id in sorted(created_conversations):
-                self.delete_conversation(conversation_id, assistant_id=assistant_id)
+                created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
+            for conversation_id, owner_account in sorted(created_conversations.items()):
+                self.delete_conversation(
+                    conversation_id,
+                    assistant_id=assistant_id,
+                    account_index=owner_account,
+                )
             conversation_slot.__exit__(None, None, None)
             lease.release()
         return accumulator.build_response(), accumulator.conversation_id
@@ -704,6 +785,7 @@ class GLMWebClient:
         # Ausgabegrenze: der client-wunsch gilt, aber nie ueber die
         # konfigurationsschranke hinaus (der upstream kann sie nicht
         # durchsetzen, der proxy muss es selbst tun).
+        _log_unsupported_sampling_params(payload, self.logger)
         client_max = payload.get("max_tokens")
         if not isinstance(client_max, int) or client_max <= 0:
             client_max = payload.get("max_completion_tokens")
@@ -774,7 +856,7 @@ class GLMWebClient:
                 conversation_slot=conversation_slot,
                 stream_account_index=stream_account_index,
                 deadline=self._request_deadline(),
-                created_conversations=set(),
+                created_conversations={},
                 accumulator=new_accumulator(),
             )
 
@@ -784,12 +866,14 @@ class GLMWebClient:
         conversation_slot = None
         stream_account_index = 0
         deadline = self._request_deadline()
-        created_conversations: set[str] = set()
+        created_conversations: dict[str, int] = {}
+        # C-15: siehe non-stream — pro runde das verwendete konto mitschreiben.
+        _conversation_account_index = stream_account_index
         accumulator = new_accumulator()
 
         def generate():
             nonlocal response, assistant_id, accumulator, empty_retries, history_budget
-            nonlocal lease, conversation_slot, stream_account_index, deadline, created_conversations
+            nonlocal lease, conversation_slot, stream_account_index, deadline, created_conversations, _conversation_account_index
             # C-14: alles aufraeumen, was dieser generator besitzt. Ein
             # generator, der nie bis hierher kommt, besitzt nichts.
             if "lease" not in stream_state:
@@ -981,7 +1065,7 @@ class GLMWebClient:
                         )
                         response.close() # type: ignore
                         if accumulator.conversation_id:
-                            created_conversations.add(accumulator.conversation_id)
+                            created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
                         if served_content:
                             accumulator.emitted_role = True
@@ -1012,9 +1096,10 @@ class GLMWebClient:
                         )
                         time.sleep(self.config.glm_stream_error_retry_interval)
                         if accumulator.conversation_id:
-                            created_conversations.add(accumulator.conversation_id)
+                            created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
-                        response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                        _conversation_account_index = self._get_preferred_account_index(lease.ticket)
+                        response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
                         continue
                     # Ist die negativ-follow-up-runde erschoepft (oder war von
                     # anfang an keine moeglich) und hat die LETZTE runde selbst
@@ -1024,6 +1109,31 @@ class GLMWebClient:
                     # seiteninhalt — der call hatte nie stattgefunden. Ohne
                     # diese notice liest der client die erfindung als erfolg
                     # und beendet den tool-loop.
+                    if turn_blocked_names and turn_has_valid_calls and not blocked:
+                        # S-10/C-11 (stream): dieselbe luecke wie im
+                        # non-stream-pfad. Die gueltigen calls werden
+                        # ausgeliefert (C-11), aber der abgelehnte aufruf
+                        # muss fuer den client sichtbar bleiben — sonst
+                        # beendet der agent den tool-loop mit dem
+                        # gefuehl, alles sei ausgefuehrt worden.
+                        blocked_names_text = ", ".join(sorted(set(turn_blocked_names)))
+                        self.logger.warning(
+                            "Stream turn contained valid and blocked tool calls; "
+                            "delivering valid calls with notice, blocked=%s",
+                            blocked_names_text,
+                        )
+                        notice = _blocked_notice_text(turn_blocked_names)
+                        if notice:
+                            delta: dict[str, object] = {"content": notice}
+                            if not accumulator.emitted_role:
+                                delta = {"role": "assistant", "content": notice}
+                                accumulator.emitted_role = True
+                            finalize_chunks = [
+                                accumulator._chunk_json(
+                                    {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
+                                ),
+                                *finalize_chunks,
+                            ]
                     if turn_blocked_names and not turn_has_valid_calls and not blocked:
                         blocked_names_text = ", ".join(sorted(set(turn_blocked_names)))
                         self.logger.warning(
@@ -1054,9 +1164,10 @@ class GLMWebClient:
                     history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 if accumulator.conversation_id:
-                    created_conversations.add(accumulator.conversation_id)
+                    created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                 accumulator = new_accumulator()
-                response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+                _conversation_account_index = self._get_preferred_account_index(lease.ticket)
+                response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
 
         def _release_stream_state() -> None:
             """C-14: gibt genau das frei, was dieser generator erworben hat.
@@ -1071,9 +1182,13 @@ class GLMWebClient:
             if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
                 self.set_active_conversation_id(accumulator.conversation_id, stream_account_index)
             if accumulator.conversation_id:
-                created_conversations.add(accumulator.conversation_id)
-            for conversation_id in sorted(created_conversations):
-                self.delete_conversation(conversation_id, assistant_id=assistant_id)
+                created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
+            for conversation_id, owner_account in sorted(created_conversations.items()):
+                self.delete_conversation(
+                    conversation_id,
+                    assistant_id=assistant_id,
+                    account_index=owner_account,
+                )
             if conversation_slot is not None:
                 conversation_slot.__exit__(None, None, None)
             if lease is not None:
@@ -1179,7 +1294,20 @@ class GLMWebClient:
                 return {"message": "GLM part status error"}
         return None
 
-    def delete_conversation(self, conversation_id: str, assistant_id: str | None = None) -> None:
+    def delete_conversation(
+        self,
+        conversation_id: str,
+        assistant_id: str | None = None,
+        account_index: int | None = None,
+    ) -> None:
+        """C-15: die conversation gehoert DEM konto, das sie erzeugt hat.
+
+        Ohne die bindung lief `delete_conversation` ueber
+        `_call_with_account_failover` und konnte ein anderes konto waehlen.
+        Bei mehreren accounts loeschte das dann die falsche conversation
+        und die eigentliche blieb serverseitig liegen (memory-/context-leck
+        und ein haenger queue-slot)."""
+
         if getattr(self.config, "glm_persistent_conversation", False):
             return
         if not self.config.glm_delete_conversation:
@@ -1215,8 +1343,22 @@ class GLMWebClient:
                 )
                 return urllib.request.urlopen(request, timeout=self.config.request_timeout)
 
-            with self._call_with_account_failover("delete_conversation", send_request) as response: # type: ignore
-                payload = self.auth.read_json_response(response)
+            if account_index is not None:
+                # C-15: gezielt das erzeugerkonto, kein failover.
+                try:
+                    access_token = self.auth.get_access_token_for_account(account_index)
+                except Exception as exc:  # pragma: no cover - konto weg
+                    self.logger.warning(
+                        "Skipping conversation deletion: account %s unavailable (%s)",
+                        account_index,
+                        exc,
+                    )
+                    return
+                with send_request(account_index, access_token) as response:  # type: ignore
+                    payload = self.auth.read_json_response(response)
+            else:
+                with self._call_with_account_failover("delete_conversation", send_request) as response: # type: ignore
+                    payload = self.auth.read_json_response(response)
             status = payload.get("status", payload.get("code"))
             if status not in {0, None}:
                 self.logger.warning(
@@ -1680,6 +1822,16 @@ class GLMWebClient:
             raise UpstreamAPIError(status_code=502, message=f"Failed to download image: {redact_sensitive_text(image_url)} error={type(exc).__name__}") from exc
 
     def _iter_sse_events(self, response):
+        """C-16: die SSE-verbindung wird hier selbst geschlossen.
+
+        Vorher hing die Freigabe ausschliesslich an den aufrufern. Bricht
+        einer den generator vorzeitig ab (`return` mitten in der
+        schleife, client-abruf), blieb der socket offen — ueber viele
+        requests sammelten sich HTTP-verbindungen und file-descriptoren
+        an und belasteten upstream-verbindungen, threads und queue-slots.
+
+        Kein aufrufer verwendet `response` nach der schleife, doppeltes
+        `close()` ist bei http.client unkritisch."""
         pending = ""
         decoder = codecs.getincrementaldecoder("utf-8")("ignore")
         saw_done = False
@@ -1701,59 +1853,66 @@ class GLMWebClient:
                 self.logger.debug("Ignoring unparseable SSE fragment: %s", payload)
                 return None
 
-        while True:
-            stop_after_chunk = False
-            try:
-                raw_chunk = response.read(4096)
-            except http.client.IncompleteRead as exc:
-                raw_chunk = exc.partial or b""
-                stop_after_chunk = True
-                incomplete_read = True
-                self.logger.warning("Upstream SSE connection closed early, finalizing with received data bytes=%s", len(raw_chunk))
-            if not raw_chunk:
-                break
+        try:
+            while True:
+                stop_after_chunk = False
+                try:
+                    raw_chunk = response.read(4096)
+                except http.client.IncompleteRead as exc:
+                    raw_chunk = exc.partial or b""
+                    stop_after_chunk = True
+                    incomplete_read = True
+                    self.logger.warning("Upstream SSE connection closed early, finalizing with received data bytes=%s", len(raw_chunk))
+                if not raw_chunk:
+                    break
 
-            # \r\n-Normalisierung auf dem AKKUMULIERTEN pending: ein Paar,
-            # das ueber eine 4096er chunk-grenze split ('\r' | '\n'), wird
-            # sonst nie ersetzt — die block-separatoren bleiben unerkannt
-            # und events gehen als 'unparseable fragment' verloren.
-            pending = (pending + decoder.decode(raw_chunk, False)).replace("\r\n", "\n")
+                # \r\n-Normalisierung auf dem AKKUMULIERTEN pending: ein Paar,
+                # das ueber eine 4096er chunk-grenze split ('\r' | '\n'), wird
+                # sonst nie ersetzt — die block-separatoren bleiben unerkannt
+                # und events gehen als 'unparseable fragment' verloren.
+                pending = (pending + decoder.decode(raw_chunk, False)).replace("\r\n", "\n")
 
-            while "\n\n" in pending:
-                block, pending = pending.split("\n\n", 1)
-                event = emit_block(block.strip())
+                while "\n\n" in pending:
+                    block, pending = pending.split("\n\n", 1)
+                    event = emit_block(block.strip())
+                    if event == "[DONE]":
+                        saw_done = True
+                        return
+                    if event is not None:
+                        yield event
+
+                if stop_after_chunk:
+                    break
+
+            remaining = decoder.decode(b"", True)
+            if remaining:
+                pending = (pending + remaining).replace("\r\n", "\n")
+
+            if pending.strip():
+                event = emit_block(pending.strip())
                 if event == "[DONE]":
-                    saw_done = True
                     return
                 if event is not None:
                     yield event
 
-            if stop_after_chunk:
-                break
+            # V-04: ein stream, der ohne [DONE] endet, ist abgeschnitten. Das war
+            # bisher ein stiller erfolg — der client finalisierte daraus eine
+            # vollstaendige antwort, obwohl inhalt fehlte oder ein tool-call
+            # mitten im json abbrach. Der fehler wird jetzt als zustand
+            # gemerkt; die aufrufer entscheiden ueber retry oder fehler.
+            if not saw_done:
+                self._last_stream_truncated = True
+                self.logger.warning(
+                    "Upstream SSE ended without [DONE] sentinel (incomplete_read=%s) — treating turn as truncated",
+                    incomplete_read,
+                )
 
-        remaining = decoder.decode(b"", True)
-        if remaining:
-            pending = (pending + remaining).replace("\r\n", "\n")
-
-        if pending.strip():
-            event = emit_block(pending.strip())
-            if event == "[DONE]":
-                return
-            if event is not None:
-                yield event
-
-        # V-04: ein stream, der ohne [DONE] endet, ist abgeschnitten. Das war
-        # bisher ein stiller erfolg — der client finalisierte daraus eine
-        # vollstaendige antwort, obwohl inhalt fehlte oder ein tool-call
-        # mitten im json abbrach. Der fehler wird jetzt als zustand
-        # gemerkt; die aufrufer entscheiden ueber retry oder fehler.
-        if not saw_done:
-            self._last_stream_truncated = True
-            self.logger.warning(
-                "Upstream SSE ended without [DONE] sentinel (incomplete_read=%s) — treating turn as truncated",
-                incomplete_read,
-            )
-
+        finally:
+            # C-16: verbindung auch bei fruehem abbruch freigeben.
+            try:
+                response.close()
+            except Exception:
+                pass
     def _upload_referenced_files(self, messages: list[dict[str, object]]) -> list[dict[str, object]]:
         """C-19: der upload lief bei JEDEM versuch erneut — transient-retry,
         leer-retry und negative follow-up-runde rufen `_open_chat_stream()`
