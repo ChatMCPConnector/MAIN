@@ -27,7 +27,15 @@ echo "Weitergeleitete Ports (VS Code Panel):"
 if command -v gh >/dev/null 2>&1; then
   cs="$(gh codespace list --json name 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['name'] if d else '')" 2>/dev/null)"
   if [ -n "${cs:-}" ]; then
-    gh codespace ports --codespace "$cs" 2>/dev/null | sed 's/^/  /' || echo "  (nicht ermittelbar)"
+    gh codespace ports --codespace "$cs" 2>/dev/null | while read -r line; do
+      [ -n "$line" ] || continue
+      p="$(echo "$line" | awk '{print $1}')"
+      if python3 -c "import socket; s=socket.socket(); s.settimeout(0.1); res=s.connect_ex(('127.0.0.1', int('$p'))); s.close(); exit(0 if res==0 else 1)" 2>/dev/null; then
+        echo "  [AKTIV]    $line"
+      else
+        echo "  [INAKTIV]  $line"
+      fi
+    done || echo "  (nicht ermittelbar)"
   else
     echo "  (Codespace-Name nicht ermittelbar)"
   fi

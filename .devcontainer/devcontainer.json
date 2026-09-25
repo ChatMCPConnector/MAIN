@@ -9,13 +9,42 @@
   "containerEnv": {
     "TZ": "Europe/Berlin"
   },
+  "forwardPorts": [4096, 6082, 8001, 9878],
+  "portsAttributes": {
+    "4096": {
+      "label": "opencode-Server",
+      "onAutoForward": "silent"
+    },
+    "6082": {
+      "label": "noVNC (Browser)",
+      "onAutoForward": "notify"
+    },
+    "8001": {
+      "label": "glm2api",
+      "onAutoForward": "silent"
+    },
+    "9878": {
+      "label": "antigravity-proxy",
+      "onAutoForward": "silent"
+    },
+    "5900": {
+      "onAutoForward": "ignore"
+    },
+    "5920": {
+      "onAutoForward": "ignore"
+    }
+  },
+  "otherPortsAttributes": {
+    "onAutoForward": "ignore"
+  },
   "postCreateCommand": "bash .devcontainer/setup.sh",
   "postStartCommand": "cd /workspaces/MAIN && git pull --rebase --autostash origin main 2>/dev/null || true; bash .devcontainer/start-on-boot.sh",
   "customizations": {
     "vscode": {
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
-        "files.eol": "\n"
+        "files.eol": "\n",
+        "remote.autoForwardPorts": false
       },
       "extensions": [
         "ms-azuretools.vscode-docker",
