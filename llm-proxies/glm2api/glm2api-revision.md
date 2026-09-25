@@ -981,6 +981,35 @@ dem D-01-Fix ist der Punkt **0 von 12** und die Frage beantwortet:
   Markierung. Er wird zu Recht ausgeliefert; zu aggressives Abschneiden
   würde hier echte Aufrufe zerstören. Als Gegenprobe festgeschrieben.
 
+### F-5y T-20 vollständig (2026-09-25) — die zweite Hälfte
+
+F-5w hat nur die *Delta-Berechnung* linearisiert. Ein neu geschriebener
+Test über eine größere Strecke (8x Parts statt 4x) deckte die **restliche**
+Superlinearität auf: der Skalierungsnachweis war zu kurz angesetzt.
+
+Drei weitere Ursachen, jede einzeln gemessen:
+
+| Ursache | Messung | Fix |
+|---|---|---|
+| `_render_full_output()` füllte `text_parts` bei **jedem** Event neu aus allen bekannten Parts (36 Mio Dict-Gets bei 6 000 Parts, 18 s) | tottime 11,5 s von 18,8 s | persistente Part-Listen; angehängt wird nur, was neu ist. Nur wenn eine Part **erneut** gesendet wird (Epoch-Wechsel), wird einmal komplett neu gebaut — das ist der seltene Fall. |
+| `is_new = logic_id not in self._known_logic_ids_for_text` — linearer Scan über eine **Liste** | 110 µs pro Event bei 20k Parts | Sets daneben: O(1)-Mitgliedschaft, die Listen bleiben für die Reihenfolge. |
+| Der Aufbauteil baute den kompletten Text auch dann, wenn das Ausgabebudget längst erschöpft war (944k Zeichen, davon 880k direkt wieder weggeschnitten). Die Zusammenführung ist String-Verkettung → quadratisch in der Gesamtlänge. | 16k Parts: 43,8 s | Sinkt die Sammellänge unter das Restbudget, wird nichts mehr angehängt. Der Vertrag bleibt: was hinter der Grenze liegt, wird nie ausgeliefert, `finish_reason=length`. |
+
+Ergebnis (mit Ausgabegrenze 16384, der reale Fall):
+
+| Parts | F-5w-Stand | jetzt | Faktor je Verdopplung |
+|---|---|---|---|
+| 2 000 | 0,94 s | 0,15 s | – |
+| 16 000 | 43,8 s | **0,59 s** | 46x → **3,9x** |
+| 64 000 | – | **1,97 s** | 3,3x |
+
+Ohne Ausgabegrenze bleibt die Verkettung sichtbar (2 000 → 0,38 s,
+8 000 → 2,58 s) — das ist ehrlich dokumentiert statt wegoptimiert, denn
+ohne Grenze gibt es keine Frühabbrüche, an denen man aufhören könnte.
+
+**Ausgabe byte-identisch**: sha256 des 500-Part-Ergebnisses ist vor wie
+nach allen drei Fixes `d55fc1f51fc865b3` (29 497 Zeichen).
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

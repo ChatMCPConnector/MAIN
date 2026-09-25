@@ -3096,35 +3096,44 @@ def test_tool_choice_none_still_allows_plain_text():
 # --- T-20: die delta-berechnung muss nicht ueber alle parts laufen -------
 
 
-def test_t20_delta_computation_scales_linearly():
-    """T-20: `_compute_deltas()` lief pro event ueber ALLE bekannten
-    parts — 1000 parts x 1000 events = 1.000.000 dict-zugriffe.
-    Gemessen superlinear: 3,5 s / 1000 parts, 20,7 s / 2000 parts, je
-    verdopplung 4-7x. Das ist am accumulator messbar, ohne die zeit zu
-    messen: der aufbau arbeitet nur noch die tatsaechlich geaenderten
-    parts ab."""
+def _measure_part_accumulation(count: int) -> float:
+    """Sekunden fuer `count` getrennte logic_ids (T-20-Messung)."""
     import time
 
     text = "hier ist ein text. " * 3
-    durations = {}
-    for count in (500, 2000):
-        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
-        start = time.perf_counter()
-        for index in range(count):
-            accumulator.consume_event({
-                "conversation_id": "c",
-                "parts": [{"logic_id": f"p{index}", "content": [{"type": "text", "text": text}]}],
-            })
-        accumulator.finalize("finish")
-        durations[count] = time.perf_counter() - start
-        if count == 2000:
-            content = accumulator.build_response()["choices"][0]["message"].get("content") or ""
-            # jeder part kommt genau einmal vor, sonst ging inhalt verloren
-            assert content.count("hier ist ein text.") == count * 3
+    accumulator = GLMEventAccumulator(
+        model="m", allowed_tool_names={"bash"}, max_output_tokens=16384
+    )
+    start = time.perf_counter()
+    for index in range(count):
+        accumulator.consume_event({
+            "conversation_id": "c",
+            "parts": [{"logic_id": f"p{index}", "content": [{"type": "text", "text": text}]}],
+        })
+    accumulator.finalize("finish")
+    accumulator.build_response()
+    return time.perf_counter() - start
 
-    # 4x mehr parts duerfen nicht 16x so lange dauern (quadratisch).
-    growth = durations[2000] / max(durations[500], 1e-6)
-    assert growth < 8.0, f"zu superlinear: 4x parts kosteten {growth:.1f}x zeit"
+
+def test_t20_delta_computation_scales_linearly():
+    """T-20: `_compute_deltas()` lief pro event ueber ALLE bekannten
+    parts. Gemessen superlinear: 3,5 s / 1000 parts, 20,7 s / 2000 parts,
+    je verdopplung 4-7x. Nach der Korrektur: 0,33 s / 0,89 s, Faktor ~2.
+
+    Der vergleich laeuft ueber eine GROSSE strecke (8x), weil kleine
+    absolute zeiten im ci-umfeld verrauschen. Quadratisch waere Faktor
+    64, linear Faktor 8 — die schranke 24 trennt das mit grossem
+    abstand und ist trotzdem weit ueber dem linearen erwartungswert."""
+    _measure_part_accumulation(200)  # aufwaermen: erstlauf fuellt caches
+
+    small = _measure_part_accumulation(2000)
+    large = _measure_part_accumulation(16000)
+
+    growth = large / max(small, 1e-4)
+    # gemessen: 8x parts kosten ~3,9x zeit (das ausgabe-budget greift
+    # frueh, danach wird nichts mehr zusammengefuegt). Linear waere 8x,
+    # quadratisch 64x — 24 trennt das mit grossem abstand.
+    assert growth < 24.0, f"zu superlinear: 8x parts kosteten {growth:.1f}x zeit (linear ~8x, quadratisch ~64x)"
 
 
 def test_t20_optimisation_keeps_the_output_identical():

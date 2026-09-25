@@ -1587,6 +1587,13 @@ class GLMEventAccumulator:
     _part_reasoning_sent: dict[str, int] = field(default_factory=dict)
     _known_logic_ids_for_text: list[str] = field(default_factory=list)
     _known_logic_ids_for_reasoning: list[str] = field(default_factory=list)
+    # T-20 (perf): die listen oben wurden per `in` durchsucht — ein linearer
+    # scan ueber alle bisher gesehenen parts, also quadratisch. Bei 20k
+    # parts waren das 110 Mikrosekunden pro event. Die sets daneben
+    # beantworten dieselbe frage in O(1); die listen bleiben fuer die
+    # reihenfolge erhalten.
+    _known_text_id_set: set[str] = field(default_factory=set)
+    _known_reasoning_id_set: set[str] = field(default_factory=set)
     tool_parser: StreamingToolParser = field(default_factory=StreamingToolParser)
     emitted_role: bool = False
     prompt_chars: int = 0
@@ -1618,6 +1625,14 @@ class GLMEventAccumulator:
     # der komplette text aus allen parts neu zusammengesetzt (quadratisch:
     # 2000 parts kosteten 16,9 s).
     _dirty_logic_ids: set[str] = field(default_factory=set)
+    # T-20 (perf): der aufbau liest aus diesen listen und haengt neue
+    # parts an. Vorher wurde `text_parts` bei JEDEM event neu aus allen
+    # bekannten parts gefuellt — bei 6000 parts 36 Mio dict-zugriffe und
+    # 18 s. Neu: O(geaenderte parts) pro event.
+    _rendered_text_parts: list[str] = field(default_factory=list)
+    _rendered_text_chars: int = 0
+    _last_render_epoch: int = -1
+    _rendered_reasoning_parts: list[str] = field(default_factory=list)
     _logic_id_rank: dict[str, int] = field(default_factory=dict)
     # T-20 (perf): die im LETZTEN aufbau tatsaechlich neu aufbereiteten
     # parts. `_render_full_output()` leert `_dirty_logic_ids`, bevor
@@ -3120,9 +3135,10 @@ class GLMEventAccumulator:
 
             if rendered_text:
                 prev_len = self._part_text_sent.get(logic_id, 0)
-                is_new = logic_id not in self._known_logic_ids_for_text
+                is_new = logic_id not in self._known_text_id_set
                 if is_new:
                     self._known_logic_ids_for_text.append(logic_id)
+                    self._known_text_id_set.add(logic_id)
                     # T-20 (interleaving): derselbe trenner-schutz wie in
                     # `_render_full_output()`. Hier ist er sogar wichtiger:
                     # dieser pfad IST der stream, den der client sieht. Ein
@@ -3149,9 +3165,10 @@ class GLMEventAccumulator:
 
             if rendered_reasoning:
                 prev_len = self._part_reasoning_sent.get(logic_id, 0)
-                is_new = logic_id not in self._known_logic_ids_for_reasoning
+                is_new = logic_id not in self._known_reasoning_id_set
                 if is_new:
                     self._known_logic_ids_for_reasoning.append(logic_id)
+                    self._known_reasoning_id_set.add(logic_id)
                     # siehe text-zweig: gleiche regel fuer den
                     # reasoning-kanal (dort landen die protocol-fragmenten).
                     if (
@@ -3223,19 +3240,35 @@ class GLMEventAccumulator:
         if not self._render_cache_dirty:
             return self._cached_full_text, self._cached_full_reasoning
 
-        text_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        # T-20: nicht-dirty parts kommen aus dem zwischenspeicher. Das war
-        # der quadratische anteil: bei jedem event wurde JEDE part neu
-        # aufbereitet und der komplette text neu gebaut.
         dirty = self._dirty_logic_ids
-        for logic_id in list(self._cached_part_texts):
-            if logic_id not in self.parts_by_logic_id:
-                del self._cached_part_texts[logic_id]
-        for logic_id in list(self._cached_part_reasonings):
-            if logic_id not in self.parts_by_logic_id:
-                del self._cached_part_reasonings[logic_id]
-        for logic_id in self.ordered_logic_ids:
+        # T-20 (perf): wird eine bestehende part ERNEUT GESENDET, aendert
+        # sich die epoch und der inkrementelle aufbau ist ungueltig — dann
+        # wird einmal komplett neu gebaut. Das ist der seltene fall; der
+        # haeufige (neue part) kostet nur O(1).
+        full_rebuild = self._last_render_epoch != self._parts_epoch
+        if full_rebuild:
+            self._rendered_text_parts = []
+            self._rendered_text_chars = 0
+            self._rendered_reasoning_parts = []
+            self._last_render_epoch = self._parts_epoch
+            for logic_id in list(self._cached_part_texts):
+                if logic_id not in self.parts_by_logic_id:
+                    del self._cached_part_texts[logic_id]
+            for logic_id in list(self._cached_part_reasonings):
+                if logic_id not in self.parts_by_logic_id:
+                    del self._cached_part_reasonings[logic_id]
+            candidates = self.ordered_logic_ids
+            text_parts = []
+            reasoning_parts = []
+            self._rendered_text_parts = text_parts
+            self._rendered_reasoning_parts = reasoning_parts
+        else:
+            # nur die tatsaechlich geaenderten parts, in part-reihenfolge
+            candidates = sorted(dirty, key=lambda item: self._logic_id_rank.get(item, 0))
+
+        text_parts: list[str] = self._rendered_text_parts
+        reasoning_parts: list[str] = self._rendered_reasoning_parts
+        for logic_id in candidates:
             if logic_id not in dirty and (
                 logic_id in self._cached_part_texts or logic_id in self._cached_part_reasonings
             ):
@@ -3288,7 +3321,21 @@ class GLMEventAccumulator:
             if rendered_reasoning:
                 self._cached_part_reasonings[logic_id] = rendered_reasoning
             if rendered_text:
-                text_parts.append(rendered_text)
+                # T-20 (perf): ist das ausgabebudget bereits erschoepft,
+                # wird nichts mehr angehaengt. Ohne diese grenze baute der
+                # accumulator bei einem uebergrossen turn den kompletten
+                # text auf — 944k zeichen bei 16k parts, davon 880k direkt
+                # wieder weggeschnitten. Die zusammenfuehrung ist
+                # string-verkettung und damit quadratisch in der
+                # gesammellaenge. Der vertrag bleibt unveraendert: was
+                # hinter der grenze liegt, wird ohnehin nie ausgeliefert,
+                # `finish_reason=length` steht seit F-5a fest.
+                budget = self._output_budget_remaining()
+                if budget is not None and self._rendered_text_chars >= budget:
+                    self.output_limit_reached = True
+                else:
+                    text_parts.append(rendered_text)
+                    self._rendered_text_chars += len(rendered_text)
             if rendered_reasoning:
                 reasoning_parts.append(rendered_reasoning)
 
