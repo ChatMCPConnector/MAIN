@@ -43,6 +43,23 @@ from ..utils.tool_protocol import (
 # Naeherung fuer gemischten Text.
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
+# Das aufgabenbudget ist zwischen zwei kanaelen zu verteilen: dem internen
+# denkkanal (`reasoning_content`) und dem LIEFERKANAL (text + tool_calls,
+# aus dem der parser die aufrufe gewinnt).
+#
+# Ohne diese reservierung fraess das reasoning bei `reasoning_effort: max`
+# das gesamte budget. Gemessen an einer echten opencode-session
+# (2026-09-25): reasoning_len=61 820 zeichen, der client bekam 1 768
+# zeichen reasoning, NULL text und NULL tool_calls, `finish_reason: length`.
+# Der agent hatte damit einen abgeschlossenen, erfolgreichen turn, in dem
+# nichts zu tun war — er wartet vergeblich auf eine antwort, die nie
+# kommen kann. Der auftrag war schlicht unerfuellbar.
+#
+# 30 % reserviert: genug fuer eine echte antwort oder einen tool-aufruf,
+# auch bei sehr langem denkprozess. Das reasoning kann weiterhin 70 % des
+# budgets nutzen — das ist der normale, grosse anteil.
+_REASONING_BUDGET_SHARE = 0.7
+
 ASSISTANT_ID_PATTERN = re.compile(r"^[a-z0-9]{24,}$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()\"']+")
 
@@ -1662,6 +1679,9 @@ class GLMEventAccumulator:
     max_output_tokens: int | None = None
     output_limit_reached: bool = False
     _output_chars: int = 0
+    # separat gefuehrt, weil das reasoning einen ANTEIL des budgets
+    # bekommen darf, nicht alles (siehe `_REASONING_BUDGET_SHARE`).
+    _reasoning_chars: int = 0
     # T-18: `tool_choice=required`/<namenswahl> stand bisher nur als text im
     # system-prompt. Ein turn, der stattdessen prosa lieferte, galt als
     # regulaerer 'stop' — der client hatte einen tool-vertrag verlangt und
@@ -2136,14 +2156,17 @@ class GLMEventAccumulator:
                     text_delta = ""
                     self.output_limit_reached = True
                 else:
-                    if len(reasoning_delta) > room:
-                        reasoning_delta = reasoning_delta[:room]
-                        text_delta = ""
-                        self.output_limit_reached = True
-                    elif len(reasoning_delta) + len(text_delta) > room:
+                    # der denkkanal darf hoechstens seinen anteil nehmen;
+                    # der rest bleibt fuer den lieferkanal reserviert.
+                    reasoning_budget = int(budget_chars * _REASONING_BUDGET_SHARE) - self._reasoning_chars
+                    reasoning_room = min(room, max(0, reasoning_budget))
+                    if len(reasoning_delta) > reasoning_room:
+                        reasoning_delta = reasoning_delta[:reasoning_room]
+                    if len(reasoning_delta) + len(text_delta) > room:
                         text_delta = text_delta[: max(0, room - len(reasoning_delta))]
                         self.output_limit_reached = True
                     self._output_chars += len(reasoning_delta) + len(text_delta)
+                    self._reasoning_chars += len(reasoning_delta)
 
         chunks: list[str] = []
         if reasoning_delta:
@@ -3356,7 +3379,25 @@ class GLMEventAccumulator:
                     if self.max_output_tokens is not None
                     else None
                 )
-                if full_budget is not None and self._rendered_text_chars >= full_budget:
+                # REINER PERFORMANCE-GUARD, und er trigger nur, wenn der
+                # STREAM ohnehin schon nichts mehr ausliefert. Dann ist
+                # der weitere aufbau umsonst, und der quadratischen
+                # anhaengen wird ein ende gesetzt.
+                #
+                # Die frueheren fassungen schnitten am text selbst ab —
+                # einmal gegen das bereits abgezogene budget (50,7 % des
+                # lieferkanals, siehe F-5w1), einmal gegen 70 % des
+                # budgets. Beides nahm dem client text weg, den der
+                # stream-pfad noch ausgeliefert haette. Eine
+                # eigenstaendige grenze im aufbau ist hier grundlos
+                # falsch: die budget-fuehrung gehoert an EINE stelle,
+                # und das ist der stream.
+                if self.output_limit_reached:
+                    pass  # nichts mehr anhaengen
+                elif full_budget is not None and self._rendered_text_chars >= full_budget:
+                    # Rueckfallnetz fuer den pfad ohne max_tokens:
+                    # text allein kann nie mehr zeichen liefern als das
+                    # volle budget.
                     self.output_limit_reached = True
                 else:
                     text_parts.append(rendered_text)

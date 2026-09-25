@@ -3204,3 +3204,58 @@ def test_output_cap_does_not_shrink_the_budget():
             f"({len(content) / budget * 100:.1f}%)"
         )
         assert choice["finish_reason"] == "length", "die grenze muss weiterhin greifen"
+
+
+def test_reasoning_cannot_consume_the_whole_output_budget():
+    """Regression (2026-09-25, zweite): an einer echten opencode-session
+    mit `reasoning_effort: max` fraess das denkkanal das GANZE budget.
+    Log: `reasoning_len=61 820`, der client bekam 1 768 zeichen
+    reasoning, NULL text, NULL tool_calls, `finish_reason: length` —
+    ein abgeschlossener, erfolgreicher turn, in dem fuer den agenten
+    nichts zu tun war. Der auftrag war unerfuellbar.
+
+    Der denkkanal darf hoechstens `_REASONING_BUDGET_SHARE` des budgets
+    nehmen; der rest ist fuer die lieferung reserviert."""
+    from glm2api.services.translator import (
+        _CHARS_PER_TOKEN_ESTIMATE,
+        _REASONING_BUDGET_SHARE,
+    )
+
+    max_tokens = 8192
+    budget = max_tokens * _CHARS_PER_TOKEN_ESTIMATE
+
+    # reasoning, das das doppelte des budgets fuer sich beansprucht
+    accumulator = GLMEventAccumulator(
+        model="m", allowed_tool_names={"read", "bash"}, max_output_tokens=max_tokens,
+    )
+    # `type: "think"` ist die reale GLM-reasoning-form (aus dem log)
+    for index, part in enumerate(["Ich denke nach. " * 3000, "Noch mehr nachdenken. " * 1000]):
+        accumulator.consume_event({
+            "conversation_id": "c",
+            "status": "process",
+            "parts": [{"logic_id": f"r{index}", "content": [{"think": part}]}],
+        })
+    accumulator.consume_event({
+        "conversation_id": "c",
+        "status": "process",
+        "parts": [{"logic_id": "t0", "content": [{"type": "text", "text": "Hier ist die Antwort."}]}],
+    })
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    assert _REASONING_BUDGET_SHARE < 1.0, "das reasoning darf nie das ganze budget nehmen"
+    assert (message.get("content") or "").strip(), (
+        "der lieferkanal muss text bekommen — sonst ist der turn fuer den "
+        "agenten unbrauchbar"
+    )
+    # und das budget selbst bleibt voll ausgeschoepft
+    text_only = GLMEventAccumulator(model="m", allowed_tool_names={"read"}, max_output_tokens=max_tokens)
+    for index in range(2000):
+        text_only.consume_event({
+            "conversation_id": "c",
+            "status": "process",
+            "parts": [{"logic_id": f"p{index}", "content": [{"type": "text", "text": "hier ist ein textabsatz. " * 10}]}],
+        })
+    text_only.finalize("finish")
+    only_text = text_only.build_response()["choices"][0]["message"].get("content") or ""
+    assert len(only_text) >= budget * 0.99, f"nur {len(only_text)} von {budget} zeichen"

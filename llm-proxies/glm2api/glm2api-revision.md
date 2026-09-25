@@ -1105,6 +1105,62 @@ Fehler fiel nur auf, weil ein *Agentenlauf mit großem Reasoning-Budget*
 als Zeuge da war. Ein Systemverhalten muss mit dem realen Volumen
 getestet werden, nicht nur mit Rauchtests.
 
+### F-5w2 REGRESSION 2: das Reasoning fraess das ganze Budget (2026-09-25)
+
+Zweite echte Regression, wieder an einer echten opencode-Session
+gemeldet. Diese ist **nicht** von mir eingebaut worden — sie ist im
+selben Zug wie F-5y entstanden bzw. von der Audit-Runde offen gelassen
+worden.
+
+**Symptom im glm2api-Log** (`ses_f25816657ffepyG6tnzohDJhoh`,
+`reasoning_effort: max`, `max_tokens: 8192`):
+
+```
+Response finalize status=finish text_len=1262 reasoning_len=61820 tool_calls=0
+Streaming request completed model=glm-5.3 failed=False
+```
+
+Der Client bekam: **1 768 Zeichen Reasoning, 0 Text, 0 Tool-Calls**,
+`finish_reason: length`. Das Modell hatte also 61 820 Zeichen Denktext
+erzeugt — das 1,9-fache des erlaubten Budgets von 32 768.
+
+**Warum das den Agenten lahmlegt:** der Turn gilt als *erfolgreich
+beendet* (`failed=False`), enthält aber nichts. Der Agent wartet auf eine
+Antwort oder einen Tool-Aufruf, die nie kommen kann. Ein Turn mit
+`length` und leerem Ergebnis ist kein „abgekürzt", sondern ein toter
+Turn — der Auftrag ist schlicht unerfüllbar.
+
+**Ursache:** Reasoning und Lieferkanal teilten sich ein Budget ohne
+Obergrenze für das Reasoning. Im Stream-Guard stand wörtlich
+`text_delta = ""`, sobald das Reasoning den Raum füllte — und weil
+Tool-Calls aus dem Textkanal geparst werden, war mit dem Text auch der
+Aufrufkanal tot.
+
+**Fix:** `_REASONING_BUDGET_SHARE = 0.7`. Der Denkkanal darf höchstens
+70 % des Budgets nehmen, 30 % bleiben für Text und Tool-Aufrufe
+reserviert. Das Reasoning kann weiterhin der größere Teil sein — das
+ist der normale Fall bei langen Denkprozessen.
+
+**Und die Leerstelle, die F-5w1 geschaffen hatte, ist mit beseitigt:**
+der Performance-Guard im Aufbau wird jetzt **nur** ausgelöst, wenn der
+Stream ohnehin schon nichts mehr ausliefert (`output_limit_reached`).
+Damit gibt es genau *eine* Stelle, die das Budget führt — der Stream.
+Ein zweiter, unabhängiger Budget-Schneidepunkt im Aufbau hatte in F-5w1
+50,7 % geliefert und mit der Quote-Variante 30,7 %.
+
+Gemessen nach dem Fix:
+
+| Eigenschaft | Wert |
+|---|---|
+| Reiner Text, `max_tokens=2048` / `8192` | 8 192 / 32 768 Zeichen — **100 %** |
+| Deep-Thinking-Turn | Tool-Call kommt an (`finish_reason=tool_calls`) |
+| 64 000 Parts | 2,5 s (unverändert linear) |
+
+**Die Lehre ist die zweite in Folge:** eine Budget-Führung an zwei
+Stellen ist eine Fehlerquelle. Die Aufgabengrenze gehört in *eine*
+Komponente; alles andere darf sie nur noch **beobachten** (und
+darf stoppen, wenn die beobachtete Komponente selbst gestoppt hat).
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.
