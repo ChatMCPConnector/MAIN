@@ -1061,6 +1061,50 @@ baut eine kontrollierte Regression ein, erwartet `exit != 0` **mit**
 Ohne diesen Test ist „der Verifier sagt immer grün" nicht unterscheidbar
 von „der Verifier prüft wirklich".
 
+### F-5w1 REGRESSION: die Ausgabegrenze halbierte das Budget (2026-09-25)
+
+**Das ist meine Regression aus F-5y und sie hat einen echten
+Agentenlauf unbrauchbar gemacht.** Sie fiel auf, weil der Nutzer eine
+wiederaufgenommene opencode-session (`ses_f25931fd6ffezO0Igb6dxI36RU`,
+`glm-5.3`, `reasoning_effort: max`) mit „völlig kaputt" meldete.
+
+**Symptom im glm2api-Log:** jeder Turn endete mit
+`finish_reason: "length"`, obwohl das Modell noch lange nicht fertig war
+(22 433 Prompt-Tokens, Antwort bei 16 629 Zeichen abgeschnitten).
+
+**Ursache:** der Performance-Guard aus F-5y verglich den aufgebauten
+Text gegen `_output_budget_remaining()` — also gegen
+`max_output_tokens*4 - _output_chars`, wobei `_output_chars` den bereits
+gesendeten Text **und das Reasoning** bereits abgezogen hatte. Der
+aufgebaute Text wurde also ein zweites Mal gegen dasselbe Budget
+geprüft: das Budget halbierte sich. Bei `reasoning_effort: max` fraess
+das Reasoning `_output_chars` zusätzlich, wodurch fast nichts übrig
+blieb.
+
+Gemessen: 16 629 von 32 768 Zeichen — **50,7 %**.
+
+**Korrekt:** der Guard existiert nur, um den quadratischen Aufbau
+abzubrechen, und darf nie Text entfernen, den der Stream-Pfad sonst
+liefern würde. Er vergleicht jetzt gegen das **volle** Budget. Text
+allein kann nie mehr Zeichen liefern als das ganze Budget — der Guard
+kann also nichts verlieren. Die Ausgabegrenze selbst setzt weiter der
+Stream-Pfad.
+
+| `max_tokens` | vorher | jetzt |
+|---|---|---|
+| 2 048 | 4 096 Zeichen (50 %) | 8 192 (100 %) |
+| 8 192 | 16 629 Zeichen (50,7 %) | 32 768 (100 %) |
+
+Als Test festgeschrieben: der gelieferte Text muss ≥ 99 % des Budgets
+sein, **und** `finish_reason` muss weiterhin `length` werden — sonst
+wäre die Grenze durch den Fix still verschwunden.
+
+**Lehre für die eigene Prüfung:** alle 487 Tests waren grün, beide
+Leak-Sweeps 0, die Live-Smokes zeigten kurze Antworten ohne Fehler. Der
+Fehler fiel nur auf, weil ein *Agentenlauf mit großem Reasoning-Budget*
+als Zeuge da war. Ein Systemverhalten muss mit dem realen Volumen
+getestet werden, nicht nur mit Rauchtests.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

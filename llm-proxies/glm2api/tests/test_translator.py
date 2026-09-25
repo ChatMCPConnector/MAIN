@@ -3169,3 +3169,38 @@ def test_t20_continuing_parts_are_not_separated():
 
     assert "Die Datei ist im Repository gefunden" in content
     assert "\n\n" not in content
+
+
+def test_output_cap_does_not_shrink_the_budget():
+    """Regression (2026-09-25, gefunden am wiederaufgenommenen
+    agentenlauf): der performance-guard im render-pfad verglich gegen
+    `_output_budget_remaining()` — also gegen ein budget, aus dem der
+    bereits gesendete text (und das reasoning) schon abgezogen war.
+    Zaehlte man den aufgebauten text noch einmal dagegen, halbierte sich
+    die grenze: gemessen 16 629 statt 32 768 zeichen, also 50,7 % —
+    `finish_reason: length` bei JEDEM turn. Mit `reasoning_effort: max`
+    (das frisst `_output_chars` zusaetzlich) blieb fast nichts ueber.
+
+    Der vertrag: was der stream-pfad liefern wuerde, muss auch geliefert
+    werden. Der guard darf nur den quadratischen aufbau abbrechen."""
+    for max_tokens in (2048, 8192):
+        accumulator = GLMEventAccumulator(
+            model="m", allowed_tool_names={"read"}, max_output_tokens=max_tokens,
+        )
+        part = "hier ist ein textabsatz. " * 10
+        for index in range(2000):
+            accumulator.consume_event({
+                "conversation_id": "c",
+                "status": "process",
+                "parts": [{"logic_id": f"p{index}", "content": [{"type": "text", "text": part}]}],
+            })
+        accumulator.finalize("finish")
+        choice = accumulator.build_response()["choices"][0]
+        content = choice["message"].get("content") or ""
+        budget = max_tokens * 4  # _CHARS_PER_TOKEN_ESTIMATE
+
+        assert len(content) >= budget * 0.99, (
+            f"max_tokens={max_tokens}: nur {len(content)} von {budget} zeichen geliefert "
+            f"({len(content) / budget * 100:.1f}%)"
+        )
+        assert choice["finish_reason"] == "length", "die grenze muss weiterhin greifen"

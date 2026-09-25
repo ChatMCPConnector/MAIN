@@ -3330,8 +3330,33 @@ class GLMEventAccumulator:
                 # gesammellaenge. Der vertrag bleibt unveraendert: was
                 # hinter der grenze liegt, wird ohnehin nie ausgeliefert,
                 # `finish_reason=length` steht seit F-5a fest.
-                budget = self._output_budget_remaining()
-                if budget is not None and self._rendered_text_chars >= budget:
+                # REINER PERFORMANCE-GUARD: er verhindert nur das
+                # quadratische anhaengen. Er darf NIE text entfernen, den
+                # der stream-pfad noch liefern wuerde.
+                #
+                # Die fruehere fassung verglich gegen
+                # `_output_budget_remaining()` — also gegen
+                # `max_output_tokens*4 - _output_chars`, wobei
+                # `_output_chars` den bereits GESENDETEN text (und das
+                # reasoning) bereits abgezogen hat. Zaehlte man den
+                # aufgebauten text noch einmal dagegen, halbierte sich das
+                # budget: gemessen 16 629 statt 32 768 zeichen (50,7 %),
+                # `finish_reason: length` bei JEDEM turn. Mit
+                # `reasoning_effort: max` frisst das reasoning
+                # `_output_chars` zusaetzlich, wodurch es noch schlimmer
+                # wurde — der agent bekam nahezu gar nichts.
+                #
+                # Korrekt ist der Vergleich gegen das VOLLE budget: text
+                # allein kann nie mehr Zeichen liefern als das ganze
+                # budget, also kann dieser guard nichts verlieren, was der
+                # stream-pfad sonst ausliefern wuerde. Die ausgabegrenze
+                # selbst setzt der stream-pfad (siehe `_output_chars`).
+                full_budget = (
+                    self.max_output_tokens * _CHARS_PER_TOKEN_ESTIMATE
+                    if self.max_output_tokens is not None
+                    else None
+                )
+                if full_budget is not None and self._rendered_text_chars >= full_budget:
                     self.output_limit_reached = True
                 else:
                     text_parts.append(rendered_text)
