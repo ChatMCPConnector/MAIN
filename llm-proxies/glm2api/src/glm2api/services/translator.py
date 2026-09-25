@@ -1626,6 +1626,9 @@ class GLMEventAccumulator:
     required_tool_missing: bool = False
     # T-22: ein turn wird genau einmal abgeschlossen
     _finalized: bool = False
+    # T-07/D-06: eine praeambel wurde erkannt; bis ein tool-call auftaucht
+    # oder der turn endet, wird der gesamte sichtbare text gepuffert.
+    _preamble_pending: bool = False
     # T-13/S-08: der terminalstatus des turns. Nicht-erfolgreiche status
     # duerfen nicht als 'stop' enden.
     terminal_status: str | None = None
@@ -2103,27 +2106,74 @@ class GLMEventAccumulator:
             # deshalb nur in kleinen, eindeutig protokollfreien stuecken
             # ausgegeben und bei einem spaeter auftauchenden call zurueck-
             # gehalten, statt unumkehrbar gestreamt zu werden.
+            # D-06: solange eine praeambel offen ist, ALLES puffern — erst
+            # ein tool-call (dann ist die praeambel gegenstand) oder das
+            # ende des turns (dann ist der gepufferte text die antwort und
+            # muss in reihenfolge ausgegeben werden) loest das auf.
+            turn_has_calls = bool(self._server_side_tool_calls or self.tool_parser.tool_calls)
+            if self._preamble_pending:
+                if turn_has_calls:
+                    # der turn liefert aufrufe: die gepufferte praeambel ist
+                    # gegenstand und wird nicht ausgegeben
+                    self._deferred_visible_text = ""
+                    self._preamble_pending = False
+                else:
+                    self._deferred_visible_text += visible_text_delta
+                    visible_text_delta = ""
             if (
-                self.allowed_tool_names is not None
+                visible_text_delta
+                and not self._preamble_pending
+                and self.allowed_tool_names is not None
                 and not self._server_side_tool_calls
                 and not self.tool_parser.tool_calls
             ):
                 looks_like_preamble = bool(
                     re.search(
+                        # T-07: die muster waren ausschliesslich deutsch.
+                        # Live vorgekommen sind englische varianten
+                        # ("I will read the file", "Let me check the file",
+                        # "I'll now open the file") — die liefen komplett
+                        # unerkannt durch.
                         r"\b(?:ich|ich\s+werde|als\s+nächstes|jetzt\s+|zuerst|"
-                        r"ich\s+schreibe|ich\s+lese|ich\s+führe)\b",
+                        r"ich\s+schreibe|ich\s+lese|ich\s+führe"
+                        r"|i\s+will|i['’]?ll\s+(?:now\s+)?|let\s+me|"
+                        r"i\s+(?:am\s+going\s+to|will\s+now)|"
+                        r"i'?m\s+going\s+to|now\s+i\s+will|"
+                        r"ich\s+werde\s+jetzt|ich\s+schau(?:e|te)|"
+                        r"als\s+nächstes\s+schau)\b",
                         visible_text_delta,
                         re.IGNORECASE,
                     )
                 )
                 if looks_like_preamble:
+                    # D-06: nur die praeambel zurueckzuhalten liess den
+                    # FOLGETEXT sofort streamen — der client bekam dann
+                    # "mache das." und erst spaeter "Ich" (gemessen:
+                    # 'Ich mache das.' bei chunk=3 als ' mache das.').
+                    # Das ist eine REIHENFOLGEUMSTELLUNG des sichtbaren
+                    # texts. Solange unklar ist, ob der turn ueberhaupt
+                    # tool-calls liefert, wird deshalb ALLES gepuffert.
+                    self._preamble_pending = True
                     self._deferred_visible_text += visible_text_delta
                     visible_text_delta = ""
-            if self.allowed_tool_names is not None and (
-                self.tool_parser.pending_text
-                or fence_pending
-                or fence_opens
-                or protocol_fragment
+            # D-06: ein reiner whitespace-delta wird NIE zurueckgehalten.
+            # Er kann kein protokollfragment und keine fence-eroeffnung
+            # enthalten — die zurueckhaltung hat also keinen zweck, und
+            # weil der zurueckgehaltene text erst in der finalen antwort
+            # wieder auftaucht, FEHLTE ein zwischenzeichen im stream:
+            # 'Hier ist die Anleitung.' kam als 'Hier ist dieAnleitung.'
+            # an (gemessen bei chunk-groesse 2).
+            whitespace_only = not visible_text_delta.strip()
+            if (
+                visible_text_delta
+                and not whitespace_only
+                and self.allowed_tool_names is not None
+                and (
+                    self.tool_parser.pending_text
+                    or fence_pending
+                    or fence_opens
+                    or protocol_fragment
+                )
             ):
                 # Deferral: (a) parser haelt ein potentielles tool-protokoll-
                 # stueck, (b) ein fence ist offen, (c) dieser delta oeffnet

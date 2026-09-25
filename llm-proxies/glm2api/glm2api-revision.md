@@ -782,6 +782,17 @@ erst der Messwert (2 IDs statt 1) hat ihn gezeigt. Das ist der Grund,
 warum hier jede Änderung gegen eine Messung geprüft wird und nicht gegen
 eine Vermutung.
 
+### F-5n T-07 und D-06: Reihenfolge und Zeichentreue im Stream (2026-09-25)
+
+| Befund | Fehlverhalten (gemessen) | Umsetzung |
+|---|---|---|
+| **T-07** | Die Präambel-Erkennung kannte **nur deutsche** Muster (`ich`, `zuerst`, `ich lese` …). Die live vorgekommenen englischen Varianten („I will read the file", „Let me check the file") liefen unerkannt durch und standen als Antwort vor dem Aufruf. | Muster um die englischen Formen erweitert (`i will`, `i'll now`, `let me`, `i'm going to`, `now i will`). |
+| **D-06** | Zwei Fehler in derselben Kette: (a) es wurde **nur die Präambel** zurückgehalten, der Folgetext streamte sofort — der Client bekam `mache das.` und erst später `Ich` (gemessen: `Ich mache das.` bei Chunk-Größe 3 als `' mache das.'`); (b) ein **reiner Whitespace**-Delta wurde ebenfalls zurückgehalten. Da der zurückgehaltene Text erst in der *finalen* Antwort wieder auftaucht, fehlte er im Stream: `Hier ist die Anleitung.` kam als `Hier ist dieAnleitung.` an. | (a) Solange eine Präambel offen ist, wird der **gesamte** sichtbare Text gepuffert — erst ein Tool-Call (dann ist die Präambel gegenstand) oder das Turn-Ende (dann wird der gepufferte Text in Reihenfolge ausgegeben) löst das auf. (b) Whitespace-Deltas werden **nie** zurückgehalten: sie können weder Protokollfragment noch Fence-Öffnung sein. |
+
+Beide Fehler waren **stream-only** — die finale Antwort war in beiden Fällen
+korrekt. Ein Test, der nur `build_response()` prüft, sieht sie nicht; genau
+das war der blinde Fleck, den die unabhängige Prüfrunde aufgedeckt hat.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

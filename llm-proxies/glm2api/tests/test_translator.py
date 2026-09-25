@@ -2897,3 +2897,88 @@ def test_reasoning_call_is_delivered_once_in_the_stream():
             )
 
     assert len(ids) == 1, f"doppelte calls im stream: {ids}"
+
+
+# --- T-07 (Preamble) und D-06 (Stream-Reihenfolge) -----------------------
+
+
+def _stream_visible(text: str, chunk_size: int, allowed=None):
+    """Was der Client im Stream tatsaechlich sieht (nur content-deltas)."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=allowed or {"read", "bash"})
+    streamed: list[str] = []
+    for index in range(0, len(text), chunk_size):
+        chunks, _ = accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {"logic_id": "p1", "content": [{"type": "text", "text": text[index : index + chunk_size]}]}
+                ],
+            }
+        )
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            if delta.get("content"):
+                streamed.append(delta["content"])
+    accumulator.finalize("finish")
+    return "".join(streamed), accumulator
+
+
+@pytest.mark.parametrize("text", [
+    "Hier ist die Anleitung.",
+    "Die Datei ist nicht leer.",
+    "Ergebnis: alles geprueft und dokumentiert.",
+])
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 11])
+def test_stream_never_loses_characters_of_plain_prose(text, chunk_size):
+    """D-06: der Stream stellte Prosa um und verlor zeichen. Ein reiner
+    whitespace-delta wurde zurueckgehalten und kam nur in der finalen
+    antwort wieder — im stream fehlte er
+    ('Hier ist die Anleitung.' -> 'Hier ist dieAnleitung.')."""
+    streamed, _accumulator = _stream_visible(text, chunk_size)
+
+    # Was im stream fehlt, muss spaeter in der finalen antwort kommen —
+    # zusammen muss es exakt die eingabe ergeben.
+    message = _accumulator.build_response()["choices"][0]["message"]
+    final = message.get("content") or ""
+
+    assert streamed + final == text or final == text, (
+        f"zeichenverlust: stream={streamed!r} final={final!r} erwartet={text!r}"
+    )
+
+
+@pytest.mark.parametrize("preamble", [
+    "I will read the file now.\n",
+    "Let me check the file.\n",
+    "Ich lese die Datei jetzt.\n",
+])
+def test_preamble_is_suppressed_when_a_call_follows(preamble):
+    """T-07: die Praeambel-Erkennung kannte nur deutsche Muster. Die live
+    vorgekommenen englischen Varianten liefen unerkannt durch. Ist die
+    Praeambel nicht unterdrueckt, steht sie als Antwort vor dem Call."""
+    protocol = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}'
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    for index in range(0, len(preamble), 5):
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {"logic_id": "p1", "content": [{"type": "text", "text": preamble[index : index + 5]}]}
+                ],
+            }
+        )
+    for index in range(0, len(protocol), 9):
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {"logic_id": "p1", "content": [{"type": "text", "text": protocol[index : index + 9]}]}
+                ],
+            }
+        )
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    assert [call["function"]["name"] for call in (message.get("tool_calls") or [])] == ["read"]
+    assert not (message.get("content") or "").strip(), "praeambel steht als antwort vor dem call"
