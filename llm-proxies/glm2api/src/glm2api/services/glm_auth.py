@@ -483,8 +483,29 @@ class GLMAccessTokenManager:
         return AccessToken(
             access_token=access_token,
             refresh_token=refresh_token,
-            expires_at=time.time() + ACCESS_TOKEN_EXPIRES_SECONDS - random.randint(10, 30),
+            expires_at=time.time() + self._token_lifetime(payload),
         )
+
+    @staticmethod
+    def _token_lifetime(payload: object) -> float:
+        """A-18: die lebensdauer war unabhaengig von einer upstream-angabe
+        fest auf knapp eine stunde gesetzt. Liefert der upstream ein
+        `expires_in`, wird es uebernommen — sonst greift der konservative
+        default mit sicherheitsabschlag. Unsinnige werte (0, negativ,
+        nicht-numerisch, absurd hoch) fallen auf den default zurueck."""
+        default = ACCESS_TOKEN_EXPIRES_SECONDS - random.randint(10, 30)
+        if not isinstance(payload, dict):
+            return default
+        raw_expires = payload.get("expires_in")
+        if raw_expires is None:
+            return default
+        try:
+            expires_in = float(raw_expires)
+        except (TypeError, ValueError):
+            return default
+        if not 60.0 <= expires_in <= ACCESS_TOKEN_EXPIRES_SECONDS:
+            return default
+        return expires_in - random.randint(5, 20)
 
     def _fetch_guest_access_token(self, account_index: int) -> AccessToken:
         timestamp, nonce, sign = build_sign()

@@ -2284,3 +2284,129 @@ def test_text_continues_protocol_predicate():
     assert text_continues_protocol('Hallo "unterminierter string') is False
     assert text_continues_protocol("Erster Absatz.") is False
     assert text_continues_protocol("") is False
+
+
+# --- Schlussabgleich (F-5h): die nachgeprueften befunde ---------------
+
+
+def test_request_without_declared_tools_produces_no_call():
+    """T-02 (Kritisch, im Schlussabgleich als OFFEN wiedergefunden):
+    `allowed_tool_names=None` galt nur im Text-Parser als 'keine Tools'.
+    Ein natives `open` wurde trotzdem zu `webfetch` — mit
+    `finish_reason='tool_calls'`. Ein nachgelagerter Agent haette
+    ausgefuehrt."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+    accumulator.consume_event(
+        {
+            "conversation_id": "c",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {"name": "open", "arguments": {"url": "https://x.com"}},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    accumulator.finalize("finish")
+    response = accumulator.build_response()
+
+    assert not (response["choices"][0]["message"].get("tool_calls") or [])
+    assert response["choices"][0]["finish_reason"] != "tool_calls"
+
+
+def test_url_is_never_mapped_to_a_file_read():
+    """T-02: ohne `webfetch` wurde eine URL als `read` mit der URL als
+    filePath abgebildet — ein unerfuellbarer Leseauftrag."""
+    from glm2api.services.translator import map_native_open_tool_call
+
+    assert map_native_open_tool_call({"url": "https://x.com"}, allowed_tool_names={"read"}) is None
+    assert map_native_open_tool_call({"path": "/a.py"}, allowed_tool_names={"read"}) == (
+        "read",
+        {"filePath": "/a.py"},
+    )
+
+
+def test_valid_protocol_with_terminator_is_not_stripped():
+    """P-09: der 'unparseable'-Stripper loeschte JEDES vollstaendige
+    protokoll samt allem, was danach im selben part stand."""
+    from glm2api.utils.tool_parser import strip_unparseable_call_fragments
+
+    complete = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}[]'
+    cleaned, fragments = strip_unparseable_call_fragments(complete)
+
+    assert fragments == 0
+    assert cleaned == complete
+
+    truncated = 'text {"tool_calls":[{"name":"read","arguments":'
+    cleaned_truncated, fragments_truncated = strip_unparseable_call_fragments(truncated)
+    assert fragments_truncated == 1
+    assert cleaned_truncated == "text"
+
+
+def test_dsml_repair_does_not_touch_argument_data():
+    """P-10: `replace('">>', '">')` lief global und verletzte ein
+    semantisch gueltiges argument — bei einem bash-auftrag eine
+    ausfuehrungsrelevante datenbeschädigung."""
+    from glm2api.utils.tool_parser import _repair_malformed_dsml
+
+    block = '<|DSML|invoke name="bash"><![CDATA[{"command": "printf \'a">>b\'"}]]><|DSML|>'
+    repaired = _repair_malformed_dsml(block)
+
+    assert "a\">>b" in repaired, "argument-daten wurden veraendert"
+    # die tag-reparatur greift weiterhin ausserhalb von CDATA
+    assert '">>' not in _repair_malformed_dsml('<|DSML|invoke name="x">><|DSML|>')
+
+
+def test_string_valued_image_url_does_not_crash():
+    """T-23: `image_url` als String brach mit AttributeError ab und wurde
+    zum 500er."""
+    from glm2api.services.translator import extract_text_content
+
+    assert extract_text_content([{"type": "image_url", "image_url": "https://x/a.png"}]) == (
+        "[image:https://x/a.png]"
+    )
+    assert extract_text_content([{"type": "file", "file_url": "https://x/b.pdf"}]) == (
+        "[file:https://x/b.pdf]"
+    )
+
+
+def test_null_call_id_does_not_become_the_string_none():
+    """T-11: `str(None)` erzeugte die id "None" — erfunden, aber scheinbar
+    gueltig."""
+    from glm2api.services.translator import GLMEventAccumulator
+
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        {
+            "conversation_id": "c",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {
+                                "name": "read",
+                                "id": None,
+                                "arguments": {"filePath": "/a"},
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    accumulator.finalize("finish")
+    calls = accumulator.build_response()["choices"][0]["message"].get("tool_calls") or []
+
+    assert calls, "der call selbst darf nicht verloren gehen"
+    assert calls[0]["id"] != "None"

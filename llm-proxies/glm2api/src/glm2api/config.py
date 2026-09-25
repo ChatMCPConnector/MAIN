@@ -37,6 +37,8 @@ MAX_QUEUE_WAIT_TIMEOUT_SECONDS = 900
 MAX_BUSY_RETRIES = 30
 MAX_BUSY_RETRY_INTERVAL_SECONDS = 60.0
 MAX_GUEST_RETRIES = 10
+MAX_REQUEST_DEADLINE_SECONDS = 1800
+DEFAULT_REQUEST_DEADLINE_SECONDS = 300.0
 MAX_STREAM_ERROR_RETRIES = 5
 MAX_STREAM_ERROR_RETRY_INTERVAL_SECONDS = 60.0
 MAX_BLOCKED_TOOL_FOLLOW_UPS = 5
@@ -331,6 +333,8 @@ class AppConfig:
     glm_stream_error_max_retries: int
     glm_stream_error_retry_interval: float
     glm_max_output_tokens: int
+    # S-14: gesamt-deadline einer requestlaufzeit (0 = aus)
+    glm_request_deadline_seconds: float
     glm_blocked_tool_follow_ups: int
     glm_history_max_chars: int
     glm_empty_response_max_retries: int
@@ -595,6 +599,19 @@ def load_config(env_file: str = ".env") -> AppConfig:
         MAX_STREAM_ERROR_RETRIES,
         logger,
     )
+    # S-14: ein requestweises GESAMT-deadline. Die einzelnen zaehler
+    # (stream-retry, leer-retry, busy-retry, blocked-follow-up) sind je
+    # request begrenzt, ihre summe nicht: ein request mit vielen
+    # transienten runden konnte einen slot minutenlang belegen und die
+    # queue aufhalten. 0 = aus (verhalten wie bisher).
+    glm_request_deadline_seconds = _config_float(
+        values,
+        "GLM_REQUEST_DEADLINE_SECONDS",
+        DEFAULT_REQUEST_DEADLINE_SECONDS,
+        0,
+        MAX_REQUEST_DEADLINE_SECONDS,
+        logger,
+    )
     glm_stream_error_retry_interval = _config_float(
         values,
         "GLM_STREAM_ERROR_RETRY_INTERVAL_SECONDS",
@@ -690,6 +707,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
         glm_stream_error_max_retries=glm_stream_error_max_retries,
         glm_stream_error_retry_interval=glm_stream_error_retry_interval,
         glm_max_output_tokens=glm_max_output_tokens,
+        glm_request_deadline_seconds=glm_request_deadline_seconds,
         glm_blocked_tool_follow_ups=glm_blocked_tool_follow_ups,
         glm_history_max_chars=glm_history_max_chars,
         glm_empty_response_max_retries=glm_empty_response_max_retries,

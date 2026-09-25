@@ -7,6 +7,7 @@ import http.client
 import ipaddress
 import json
 import mimetypes
+import random
 import re
 import socket
 import threading
@@ -391,6 +392,11 @@ class GLMWebClient:
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
         lease = self.request_queue.acquire(f"chat:{payload.get('model', 'unknown')}")
+        # S-14: gesamt-deadline fuer diesen request. Die einzelnen
+        # retry-zaehler sind begrenzt, ihre summe nicht — ohne deadline
+        # konnte ein request mit vielen transienten runden einen slot
+        # minutenlang belegen und die queue aufhalten.
+        deadline = self._request_deadline()
         account_index = self._get_preferred_account_index(lease.ticket)
         # C-03: die persistierte conversation gehoert fuer die dauer dieser
         # runde exklusiv zu dieser runde — sonst teilen sich parallele
@@ -470,7 +476,7 @@ class GLMWebClient:
                         try:
                             self._raise_for_event_error(event, stream=False)
                         except UpstreamAPIError as exc:
-                            if exc.transient and attempt < max_stream_retries:
+                            if exc.transient and attempt < max_stream_retries and not self._deadline_exceeded(deadline):
                                 retry_exc = exc
                                 break
                             raise
@@ -597,6 +603,12 @@ class GLMWebClient:
                     retry_exc,
                 )
                 if retry_exc is not None:
+                    if self._deadline_exceeded(deadline):
+                        self.logger.warning(
+                            "Request deadline exceeded before another retry (attempt=%s) — giving up",
+                            attempt + 1,
+                        )
+                        raise retry_exc
                     history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 if accumulator.conversation_id:
@@ -690,6 +702,7 @@ class GLMWebClient:
             )
 
         lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")
+        deadline = self._request_deadline()
         stream_account_index = self._get_preferred_account_index(lease.ticket)
         # C-03: siehe chat_completion() — die conversation wird fuer die
         # dauer des streams exklusiv reserviert. Wichtig fuer SSE: der
@@ -825,7 +838,7 @@ class GLMWebClient:
                 if self._last_stream_truncated and finalize_chunks is None:
                     # V-04: stream endete ohne finish/[DONE] — als transiente
                     # Unterbrechung retryen, solange nichts ausgeliefert wurde.
-                    if not served_content and attempt < max_stream_retries:
+                    if not served_content and attempt < max_stream_retries and not self._deadline_exceeded(deadline):
                         retry_exc = UpstreamAPIError(
                             502,
                             "truncated_stream: upstream ended without [DONE]",
@@ -907,6 +920,7 @@ class GLMWebClient:
                         not served_visible_text
                         and accumulator.is_empty_response()
                         and empty_retries < max_empty_response_retries
+                        and not self._deadline_exceeded(deadline)
                     ):
                         empty_retries += 1
                         response.close() # type: ignore
@@ -1288,7 +1302,12 @@ class GLMWebClient:
                 except urllib.error.HTTPError as exc:
                     error_payload = self._read_error_payload(exc)
                     if self._should_retry_busy_error(exc.code, error_payload) and attempt < self.config.glm_busy_max_retries:
-                        wait_seconds = self.config.glm_busy_retry_interval
+                        # S-14: exponentielles backoff mit jitter statt
+                        # fester wartezeit. Ohne exponentiellen anteil
+                        # stampfen alle versuche im gleichen takts erneut
+                        # auf dasselbe ausgelastete upstream; der jitter
+                        # entzerrt mehrere parallele clienten.
+                        wait_seconds = self._busy_backoff_seconds(attempt)
                         self.logger.warning(
                             "GLM is processing another conversation, waiting to retry attempt=%s/%s wait=%.1fs account=%s",
                             attempt + 1,
@@ -1841,6 +1860,28 @@ class GLMWebClient:
         except json.JSONDecodeError:
             pass
         return {"message": text}
+
+    def _request_deadline(self) -> float | None:
+        """S-14: absolute grenze fuer die gesamte requestlaufzeit."""
+        total = float(getattr(self.config, "glm_request_deadline_seconds", 0.0) or 0.0)
+        if total <= 0:
+            return None
+        return time.monotonic() + total
+
+    @staticmethod
+    def _deadline_exceeded(deadline: float | None) -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    def _busy_backoff_seconds(self, attempt: int) -> float:
+        """S-14: exponentiell mit jitter, gedeckelt.
+
+        `glm_busy_retry_interval` ist die basis. Jeder weitere versuch
+        verdoppelt (bis zum vierfachen der basis), plus bis zu 50 %
+        jitter nach oben und 10 % nach unten — damit sich mehrere clienten nicht
+        synchron wieder auf dasselbe fenster stauen."""
+        base = max(0.1, float(self.config.glm_busy_retry_interval))
+        backoff = min(base * (2 ** min(attempt, 3)), base * 4)
+        return backoff * random.uniform(0.9, 1.5)
 
     def _should_retry_busy_error(self, status_code: int, payload: dict[str, object]) -> bool:
         if status_code != 429:

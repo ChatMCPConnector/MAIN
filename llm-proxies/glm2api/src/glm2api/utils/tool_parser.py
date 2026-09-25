@@ -143,8 +143,33 @@ def _repair_malformed_dsml(block: str) -> str:
     # leeres CDATA-Öffnen ('<![CDATA[>') fallen lassen — öffnet sonst einen
     # CDATA-Bereich, der alle nachfolgenden Tags bis zum nächsten ']]>' schluckt
     repaired = repaired.replace("<![CDATA[>", "")
-    # doppeltes '>' nach Mashup-Repair fallen lassen
-    repaired = repaired.replace('">>', '">')
+    # P-10: das doppelte '>' nach dem Mashup-Repair darf NUR die
+    # fehlerhaften *tags* betreffen. Vorher lief `replace('">>', '">')`
+    # global über den block und veränderte damit semantisch gültige
+    # argument-daten: der befehl `printf 'a">>b'` kam als `printf 'a">b'`
+    # beim tool an — bei einem bash-auftrag eine ausführungsrelevante
+    # datenbeschädigung. Deshalb wird ausserhalb von CDATA repariert:
+    # die argument-daten stehen zu 100 % in CDATA-abschnitten.
+    def _drop_double_gt_outside_cdata(text: str) -> str:
+        out: list[str] = []
+        position = 0
+        cdata_start = re.compile(r"<!\[CDATA\[")
+        cdata_end = re.compile(r"\]\]>")
+        while True:
+            open_match = cdata_start.search(text, position)
+            if open_match is None:
+                out.append(text[position:].replace('">>', '">'))
+                break
+            out.append(text[position : open_match.start()].replace('">>', '">'))
+            end_match = cdata_end.search(text, open_match.end())
+            if end_match is None:
+                out.append(text[open_match.start() :])
+                break
+            out.append(text[open_match.start() : end_match.end()])
+            position = end_match.end()
+        return "".join(out)
+
+    repaired = _drop_double_gt_outside_cdata(repaired)
     # Root-Varianten '<DStool_calls>' auf kanonisch '<tool_calls>' mappen,
     # damit der schließende Tag '</tool_calls>' matched
     repaired = re.sub(r"<dstool_calls\b[^>]*>", "<DStool_calls>", repaired, flags=re.IGNORECASE)
@@ -1088,7 +1113,16 @@ def strip_unparseable_call_fragments(text: str) -> tuple[str, int]:
     fragment = text[start:]
     if not fragment.lstrip().startswith("{"):
         return text, 0
-    if _balanced_json_end(fragment, 0) == len(fragment):
+    balanced_end = _balanced_json_end(fragment, 0)
+    if balanced_end == len(fragment):
+        return text, 0
+    # P-09: das vollstaendige protokoll traegt den `[]`-terminator. Ohne
+    # diese ausnahme galt jeder vollstaendige call als 'abgeschnittenes
+    # fragment' und wurde geloescht — also gueltiges JSON entfernt, mit
+    # allem was danach im selben part stand. Nach der klammer ist nur noch
+    # der terminator erlaubt, dann ist nichts abgeschnitten.
+    trailer = fragment[balanced_end:].strip()
+    if trailer in ("", "[]", ";", ",", "[];", "[],", ";[]"):
         return text, 0
     return text[:start].rstrip(), 1
 

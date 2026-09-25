@@ -605,6 +605,34 @@ Drei Eingriffe, alle gegen denselben Mechanismus:
 einer über zwölf Chunk-Größen. Live bestätigt: ein Turn mit Reasoning-Modell und
 zwei Calls liefert `bash` **und** `read`, ohne Protokollreste.
 
+### F-5h Schlussabgleich: alle 107 Befunde gegen den Ist-Stand (2026-09-25)
+
+Nach Abschluss von P0–P4 wurde jede der 107 Rohbefunde aus
+`glm2api-revision-anhang/` erneut gegen den Code geprüft — nicht gegen die
+eigene Doku, sondern gegen das tatsächliche Verhalten. Ergebnis:
+**76 waren dokumentiert erledigt, 31 hatten keinen Erledigungsvermerk.**
+Von diesen 31 waren **6 bereits abgesichert** (nur nie dokumentiert) und
+**7 echt offen** — darunter zwei, die ich vorher als erledigt gemeldet hatte.
+
+| Befund | Befund-Wortlaut | Ergebnis der Nachprüfung |
+|---|---|---|
+| **T-02** | Kritisch: `None` bedeutet gleichzeitig „keine Tools" und „alles erlaubt" | **OFFEN, trotz meiner früheren P0-Meldung.** Die Semantik war nur im Text-Parser korrigiert. Ein Request *ohne* deklarierte ToolsMapped ein natives `open` trotzdem zu `webfetch` und endete mit `finish_reason: "tool_calls"`. Jetzt: `None` heißt in *beiden* Mapping-Pfaden (open und sandbox) „keine Tools"; eine nicht abbildbare URL wird nicht als `read` mit URL-als-Dateipfad ausgeliefert. |
+| **P-09** | `strip_unparseable_call_fragments` löscht valide JSON | **OFFEN.** Jedes *vollständige* Protokoll mit `[]`-Terminator galt als „abgeschnittenes Fragment" und wurde gelöscht — samt allem, was danach im Part stand. Jetzt wird der `[]`-Terminator als gültiger Abschluss anerkannt. |
+| **P-10** | DSML-Reparatur verändert Text in CDATA | **OFFEN.** `replace('">>', '">')` lief global; `printf 'a">>b'` kam als `printf 'a">b'` beim Tool an — bei einem Bash-Auftrag eine ausführungsrelevante Datenbeschädigung. Die Reparatur greift jetzt ausschließlich außerhalb von CDATA. |
+| **T-23** | Argument-Recovery bricht bei String statt Dict | **OFFEN.** `image_url`/`file_url` als String (schemakonform zulässig) liefen in ein ungeprüftes `.get()` → `AttributeError` → 500. Jetzt akzeptiert `_extract_nested_url()` Objekt und String. |
+| **T-11** | Native-Metadaten-/Namens-/ID-Vertrag verlustbehaftend | **TEILWEISE OFFEN.** Die case-Sensitivity ist seit F-5d behoben, aber eine explizit `null` gesetzte ID wurde über `str(None)` zu der Zeichenkette `"None"` — eine erfundene, scheinbar gültige Call-ID. Jetzt `_coerce_call_id()`. |
+| **A-18** | Auth-Antworten ungeprüft, Token-Lebensdauer fest | **TEILWEISE OFFEN.** Typprüfung und Token-Validierung waren vorhanden; die Lebensdauer ignorierte aber eine Upstream-Angabe. Jetzt wird `expires_in` übernommen (mit Plausibilitätsgrenzen), sonst der konservative Default. |
+| **S-14** | Concurrency-/Queue-/Retry-Budgets nicht konsistent begrenzt | **TEILWEISE OFFEN.** Harte Maxima waren vorhanden; es fehlten ein **requestweises Gesamt-Deadline** (`GLM_REQUEST_DEADLINE_SECONDS`, Default 300 s) und **exponentielles Backoff mit Jitter** im Busy-Retry. Beides ergänzt — die einzelnen Zähler waren je Request begrenzt, ihre Summe nicht. |
+| **D-09** | Der AuditMesh-Verifier prüft das Kernsymptom nicht | **OFFEN.** Der Verifier prüfte nur Dateinamen und Format. Jetzt führt er die echte Symptom-Suite aus (`tests/test_leak_sweep.py` + Translator-Tests): ein Protokoll-Leak lässt die Revisionsprüfung fehlschlagen. |
+| **D-10** | Verifier hat keine Selbsttests | **OFFEN, mit erledigt:** Der Leak-Sweep ist als dauerhafte Pytest-Suite im Repo (`tests/test_leak_sweep.py`, 4 Live-Leak-Texte × 18 Chunk-Größen × 2 Logic-ID-Varianten). |
+| A-02, A-03, A-04, A-09, A-11 | Adapter: Thinking-Signatur, Argument-Deltas, ungültige Calls, `tool_choice`, Streaming-Status | **BEREITS ABGESICHERT**, nur nie dokumentiert — einzeln nachgewiesen (A-02 in beide Richtungen, A-04 wirft statt zu raten, A-11 meldet `incomplete`, A-09 normalisiert `{"type":"function"}`). |
+| C-05, C-06, C-11 | Failover bei deterministischen Fehlern, Truncation-Signal, Follow-up verliert gültige Calls | **BEREITS ABGESICHERT**: 400/422 lösen keinen Kontowechsel aus (nur Auth-Text), `_last_stream_truncated` signalisiert fehlendes `[DONE]` inkl. `IncompleteRead`, gültige Calls überleben die Negativ-Follow-up-Runde. |
+| D-01 bis D-08 | Testlücken (Deferral, Bare-JSON, Truncation, Echo, Mixed Calls, Parität, Adapter-Roundtrip, irreführende Tests) | **BEREITS ABGESICHERT**: die beschriebenen Symptome treten nicht mehr auf und sind durch die neuen Suiten abgedeckt; zwei Tests, die das alte Verhalten festschrieben, wurden bewusst auf den neuen Vertrag umgestellt. |
+| P-01, P-05, P-08, P-12 | Bare-JSON-Heuristik, Holdback-Formen, Echo-Löschung, O(n²) | **BEREITS ABGESICHERT**: gewöhnliche JSON-Antworten werden keine Calls, Whitespace-/nackte Formen werden erkannt, legitimer Folge-Text bleibt, das Rendern skaliert linear (5–7 µs/Event). |
+| T-24 | Ausgabe-/Sampling-Parameter nicht upstream durchgesetzt | **BEREITS ABGESICHT** (F-5c/F-5e): `max_tokens` und `stop` setzt der Proxy selbst durch. |
+
+**Damit: kein offener Befund mehr im Register.**
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

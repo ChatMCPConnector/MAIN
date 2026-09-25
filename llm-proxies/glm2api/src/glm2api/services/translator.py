@@ -83,7 +83,10 @@ def _tool_call_identity(tool_call: dict[str, object]) -> str:
     Primaer die call-id: zwei calls mit unterschiedlicher id sind zwei
     aufrufe, auch bei identischen argumenten. Ohne id greift der
     name + die normalisierten argumente."""
-    call_id = str(tool_call.get("id", "")).strip()
+    # T-11: `str(None)` erzeugte die id "None" — eine scheinbar gueltige,
+    # aber erfundene call-id. Eine fehlende oder explizit null gesetzte id
+    # ist eine LEERE id und wird als solche gefuehrt.
+    call_id = _coerce_call_id(tool_call.get("id"))
     if call_id:
         return f"id:{call_id}"
     function = tool_call.get("function")
@@ -238,6 +241,34 @@ def _merge_part_texts(existing: dict[str, object], incoming: dict[str, object], 
     return merged
 
 
+def _coerce_call_id(value: object) -> str:
+    """T-11: eine call-id ist ein string. `None`, Zahlen und leere Werte
+    duerfen NICHT zu "None"/"1234" werden — das waere eine erfundene,
+    scheinbar gueltige id, die beim roundtrip einen call mit falscher
+    zuordnung erzeugt."""
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() == "none" else text
+
+
+def _extract_nested_url(value: object) -> str:
+    """T-23: akzeptiert `{"url": …}`, `{"image_url": {"url": …}}` und
+    einen blossen string — ohne AttributeError."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        nested = value.get("url")
+        if isinstance(nested, str):
+            return nested
+        image_url = value.get("image_url")
+        if isinstance(image_url, dict) and isinstance(image_url.get("url"), str):
+            return str(image_url["url"])
+    return ""
+
+
 def extract_text_content(content: object) -> str:
     if isinstance(content, str):
         return content
@@ -254,10 +285,17 @@ def extract_text_content(content: object) -> str:
         if item_type == "text":
             text_parts.append(str(item.get("text", "")))
         elif item_type == "image_url":
-            url = item.get("image_url", {}).get("url", "")
+            # T-23: `image_url` ist laut schema ein OBJEKT, kommt aber
+            # auch als reiner string vor. Das ungepruefte `.get()` brach
+            # mit AttributeError ab — aus einem schiefen content-item
+            # wurde ein 500er statt eines verstaendlichen texts.
+            url = _extract_nested_url(item.get("image_url"))
             text_parts.append(f"[image:{url}]")
         elif item_type == "file":
-            url = item.get("file_url", {}).get("url", "")
+            url = _extract_nested_url(item.get("file_url"))
+            text_parts.append(f"[file:{url}]")
+        elif item_type == "file_url":
+            url = _extract_nested_url(item.get("file_url"))
             text_parts.append(f"[file:{url}]")
     return "\n".join(part for part in text_parts if part)
 
@@ -495,6 +533,8 @@ def sanitize_tool_call_payload(
 def map_native_open_tool_call(
     arguments: object,
     allowed_tool_names: set[str] | None = None,
+    *,
+    unrestricted: bool = False,
 ) -> tuple[str, dict[str, object]] | None:
     """Maps ChatGLM's native open(ref_id=...) call to an allowed OpenCode tool
     (read or webfetch) if the target is a valid path or URL.
@@ -524,7 +564,7 @@ def map_native_open_tool_call(
     if not command:
         command = str(parsed.get("command", "") or parsed.get("cmd", "") or "").strip()
     if command:
-        if allowed_tool_names is None or "bash" in allowed_tool_names:
+        if unrestricted or (allowed_tool_names is not None and "bash" in allowed_tool_names):
             return "bash", {"command": command}
 
     if not target:
@@ -534,7 +574,7 @@ def map_native_open_tool_call(
         return None
 
     if target.startswith("http://") or target.startswith("https://"):
-        if allowed_tool_names is None or "webfetch" in allowed_tool_names:
+        if unrestricted or (allowed_tool_names is not None and "webfetch" in allowed_tool_names):
             if extra_targets:
                 _LOGGER.warning(
                     "Native open call carried %s target(s); only the first was mapped",
@@ -546,7 +586,7 @@ def map_native_open_tool_call(
     # datei-erkennung und wurde als read auf einen nicht existierenden
     # dateinamen abgebildet. Eine bare domain ist eine URL.
     if "://" not in target and re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", target):
-        if allowed_tool_names is None or "webfetch" in allowed_tool_names:
+        if unrestricted or (allowed_tool_names is not None and "webfetch" in allowed_tool_names):
             if extra_targets:
                 _LOGGER.warning(
                     "Native open call carried %s target(s); only the first was mapped",
@@ -563,7 +603,12 @@ def map_native_open_tool_call(
             # den Fehler nicht auf. Besser: als blockierten Versuch
             # kennzeichnen, damit die negative Rueckmeldung greift.
             return None
-        if allowed_tool_names is None or "read" in allowed_tool_names:
+        # T-02/T-21: eine URL ist KEINE Datei. Ohne `webfetch` in der
+        # deklarierten tool-liste darf sie nicht als read mit der URL als
+        # filePath fallen — das erzeugt einen unerfuellbaren Leseauftrag.
+        if "://" in target or re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", target):
+            return None
+        if unrestricted or (allowed_tool_names is not None and "read" in allowed_tool_names):
             return "read", {"filePath": target}
 
     return None
@@ -780,14 +825,22 @@ def _is_side_effect_free_sandbox_code(code: str) -> bool:
 def map_native_sandbox_tool_call(
     arguments: object,
     allowed_tool_names: set[str] | None = None,
+    *,
+    unrestricted: bool = False,
 ) -> tuple[str, dict[str, object]] | None:
     """Maps ChatGLM's native execute_sandbox_code(code=...) call to bash
     if bash is allowed. Runs python3 with the provided code.
-    Returns (mapped_tool_name, mapped_arguments) or None if unmappable."""
+    Returns (mapped_tool_name, mapped_arguments) or None if unmappable.
+
+    T-02: `allowed_tool_names=None` bedeutet 'keine Tools deklariert' und
+    damit 'nie einen Call erzeugen' — nicht 'alles erlaubt'. Vorher lief
+    ein request ohne tools mit einem nativen sandbox-call in einen
+    ausfuehrbaren bash-call."""
     if is_dummy_sandbox_code(arguments):
         return None
-    if allowed_tool_names is not None and "bash" not in allowed_tool_names:
-        return None
+    if not unrestricted:
+        if allowed_tool_names is None or "bash" not in allowed_tool_names:
+            return None
 
     parsed = arguments
     if isinstance(arguments, str):
@@ -827,7 +880,10 @@ def sanitize_tool_calls(
         original_arguments = function.get("arguments", "{}")
         original_value: object = original_arguments
         if tool_name == "open":
-            mapped = map_native_open_tool_call(original_arguments)
+            # `unrestricted=True`: das ist die interne Namens-SEMANTIK
+            # (open -> read/webfetch), NICHT die Ausführungsfreigabe. Die
+            # entscheidet der accumulator über `allowed_tool_names`.
+            mapped = map_native_open_tool_call(original_arguments, unrestricted=True)
             if mapped is not None:
                 tool_name, mapped_args = mapped
                 original_arguments = mapped_args
@@ -835,7 +891,9 @@ def sanitize_tool_calls(
         elif tool_name in {"execute_sandbox_code", "code_interpreter", "sandbox", "run_code"}:
             if is_dummy_sandbox_code(original_arguments):
                 continue
-            mapped = map_native_sandbox_tool_call(original_arguments)
+            # siehe map_native_open_tool_call: interne Namens-Semantik,
+            # keine Ausführungsfreigabe.
+            mapped = map_native_sandbox_tool_call(original_arguments, unrestricted=True)
             if mapped is not None:
                 tool_name, mapped_args = mapped
                 original_arguments = mapped_args
@@ -877,7 +935,7 @@ def sanitize_tool_calls(
             continue
         sanitized.append(
             {
-                "id": str(tool_call.get("id", "")) or f"call_repaired_{index}",
+                "id": _coerce_call_id(tool_call.get("id")) or f"call_repaired_{index}",
                 "type": "function",
                 "index": index,
                 "_repaired": normalized and not required_missing,
@@ -1079,7 +1137,7 @@ def convert_messages(
                         arguments=function.get("arguments", "{}"),
                     )
                 )
-                tool_call_id = str(tool_call.get("id", "")).strip()
+                tool_call_id = _coerce_call_id(tool_call.get("id"))
                 if tool_call_id:
                     valid_tool_call_ids.add(tool_call_id)
                     tool_names_by_call_id[tool_call_id] = tool_name
@@ -1448,7 +1506,21 @@ class GLMEventAccumulator:
                                 continue
                             if tool_name == "open":
                                 mapped = map_native_open_tool_call(arguments, self.allowed_tool_names)
-                                if mapped is not None:
+                                if mapped is None:
+                                    # T-02: nicht abbildbar heisst in
+                                    # jedem fall 'nicht ausfuehrbar' — kein
+                                    # mapping (kein webfetch/read vorhanden
+                                    # oder gar keine tools deklariert). Der
+                                    # call wird als blockierter versuch
+                                    # gemeldet und NICHT ueber die interne
+                                    # sanitize-stelle doch noch abgebildet.
+                                    self.blocked_tool_attempt_names.append(tool_name)
+                                    if self.logger:
+                                        self.logger.info(
+                                            "Dropped native open call: not mappable under the declared tool contract"
+                                        )
+                                    continue
+                                else:
                                     mapped_name, mapped_args = mapped
                                     tool_name = mapped_name
                                     arguments = mapped_args
@@ -1481,7 +1553,12 @@ class GLMEventAccumulator:
                                         )
                                     continue
                                 mapped = map_native_sandbox_tool_call(arguments, self.allowed_tool_names)
-                                if mapped is not None:
+                                if mapped is None:
+                                    # T-02: siehe open-Zweig — nicht
+                                    # abbildbar heisst 'nicht ausfuehrbar'.
+                                    self.blocked_tool_attempt_names.append(tool_name)
+                                    continue
+                                else:
                                     mapped_name, mapped_args = mapped
                                     tool_name = mapped_name
                                     arguments = mapped_args

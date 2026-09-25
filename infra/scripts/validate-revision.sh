@@ -57,3 +57,18 @@ print(f'Revision validation passed: {len(lines)} lines, {len(begin)} parts')
 PY
 
 git diff --check -- Revision.md
+
+# D-09: der verifier pruefte bisher NUR dateinamen und format - nie das
+# kernsymptom. Wenn glm2api zur revisionsarbeit gehoert, laeuft jetzt die
+# echte symptom-suite: der tool-call-leak-sweep ueber die vier live-leak-
+# texte in beiden logic-id-varianten. Ein leck schlaegt den verifier an.
+case "${SKIP_CODE_CHECKS:-0}" in
+  1) echo "validate-revision: code-checks uebersprungen (SKIP_CODE_CHECKS=1)" ;;
+  *)
+    if [ -d "llm-proxies/glm2api/tests" ]; then
+      echo "validate-revision: glm2api symptom-suite ..."
+      (cd llm-proxies/glm2api && uv run pytest tests/test_leak_sweep.py tests/test_translator.py -q)
+      echo "validate-revision: kernsymptom geprueft (kein protokoll-leak)"
+    fi
+    ;;
+esac
