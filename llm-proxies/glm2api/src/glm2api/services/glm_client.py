@@ -57,6 +57,36 @@ class UpstreamAPIError(RuntimeError):
         self.transient = transient
 
 
+# C-07: transportfehler, die weder in _raise_for_event_error() noch in der
+# queue-logik auftauchen. Ein ConnectionReset/Timeout/gzip-defekt mitten in
+# einem tool-call-fragment hat den generator vorher einfach abgebrochen — ohne
+# retry, obwohl bis dahin noch NICHTS an den client gegangen war. Genau die
+# faelle, die die recovery existiert: der retry setzt den turn neu auf und
+# liefert eine vollstaendige antwort statt eines halben protocols.
+#   RemoteDisconnected erbt von ConnectionResetError, BadGzipFile von OSError,
+#   IncompleteRead von HTTPException.
+_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    TimeoutError,
+    OSError,
+    EOFError,
+    http.client.HTTPException,
+)
+
+
+def _is_transport_error(exc: BaseException) -> bool:
+    """True fuer Verbindungsabbruch/Timeout/gzip-Fehler beim Lesen."""
+    return isinstance(exc, _TRANSPORT_ERRORS) and not isinstance(exc, QueueTimeoutError)
+
+
+def _transport_error_to_upstream(exc: BaseException) -> UpstreamAPIError:
+    return UpstreamAPIError(
+        502,
+        f"upstream_transport_error: {type(exc).__name__}: {exc}",
+        transient=True,
+    )
+
+
 class QueueTimeoutError(RuntimeError):
     pass
 
@@ -334,21 +364,47 @@ class GLMWebClient:
                 retry_exc: UpstreamAPIError | None = None
                 finished = False
                 self._last_stream_truncated = False
-                for event in self._iter_sse_events(response):
-                    if not event:
-                        continue
-                    status = event.get("status")
-                    try:
-                        self._raise_for_event_error(event, stream=False)
-                    except UpstreamAPIError as exc:
-                        if exc.transient and attempt < max_stream_retries:
-                            retry_exc = exc
+                # C-07: ein verbindungsabbruch mitten im stream (reset,
+                # timeout, gzip-defekt) brach den generator vorher hart ab —
+                # ohne retry, obwohl noch nichts ausgeliefert war. Solche
+                # fehler sind transient und gehoeren in dieselbe
+                # zustandsmaschine wie ein 10040-event.
+                try:
+                    for event in self._iter_sse_events(response):
+                        if not event:
+                            continue
+                        status = event.get("status")
+                        try:
+                            self._raise_for_event_error(event, stream=False)
+                        except UpstreamAPIError as exc:
+                            if exc.transient and attempt < max_stream_retries:
+                                retry_exc = exc
+                                break
+                            raise
+                        accumulator.consume_event(event)
+                        if status in {"finish", "intervene"}:
+                            finished = True
                             break
+                except UpstreamAPIError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    if not _is_transport_error(exc):
                         raise
-                    accumulator.consume_event(event)
-                    if status in {"finish", "intervene"}:
-                        finished = True
-                        break
+                    upstream_exc = _transport_error_to_upstream(exc)
+                    if attempt >= max_stream_retries:
+                        # Auch der letzte versuch meldet den vertrag:
+                        # ein UpstreamAPIError mit transient=True, damit die
+                        # server-schicht daraus ein 502 mit retrybarem code
+                        # macht — nicht ein roher ConnectionResetError.
+                        raise upstream_exc from exc
+                    retry_exc = upstream_exc
+                    self.logger.warning(
+                        "Upstream transport error mid-stream (%s: %s); retrying attempt=%s/%s",
+                        type(exc).__name__,
+                        exc,
+                        attempt + 1,
+                        max_stream_retries,
+                    )
                 if self._last_stream_truncated and not finished:
                     # V-04: stream endete ohne finish/[DONE]. Als transiente
                     # Unterbrechung behandeln und mit frischer Conversation
@@ -546,45 +602,70 @@ class GLMWebClient:
                 blocked: list[str] = []
                 status: str | None = None
                 self._last_stream_truncated = False
-                for event in self._iter_sse_events(response):
-                    if not event:
-                        continue
-                    try:
-                        self._raise_for_event_error(event, stream=True)
-                    except UpstreamAPIError as exc:
-                        if (
-                            exc.transient
-                            and not served_content
-                            and attempt < max_stream_retries
-                        ):
-                            retry_exc = exc
-                            break
-                        raise
-                    chunks, status = accumulator.consume_event(event)
-                    for chunk in chunks:
-                        encoded = chunk.encode("utf-8")
-                        if not served_content and b'"content"' in encoded and b'"reasoning_content"' not in encoded:
-                            # trivial protocol residue ("[]") does not count
-                            # as served content — it must not block recovery
-                            # rounds (blocked-tool follow-up, transient retry)
-                            try:
-                                delta = json.loads(
-                                    encoded.decode("utf-8").removeprefix("data: ").strip()
-                                )["choices"][0]["delta"]
-                                content_value = delta.get("content")
-                                if content_value and str(content_value).strip() not in ("", "[]"):
+                # C-07: transportfehler mitten im stream gehoeren in die
+                # retry-zustandsmaschine. Bedingung wie beim transient-event:
+                # nur solange noch NICHTS an den client ging — ein teilweise
+                # ausgelieferter turn kann nicht zurueckgenommen werden.
+                try:
+                    for event in self._iter_sse_events(response):
+                        if not event:
+                            continue
+                        try:
+                            self._raise_for_event_error(event, stream=True)
+                        except UpstreamAPIError as exc:
+                            if (
+                                exc.transient
+                                and not served_content
+                                and attempt < max_stream_retries
+                            ):
+                                retry_exc = exc
+                                break
+                            raise
+                        chunks, status = accumulator.consume_event(event)
+                        for chunk in chunks:
+                            encoded = chunk.encode("utf-8")
+                            if not served_content and b'"content"' in encoded and b'"reasoning_content"' not in encoded:
+                                # trivial protocol residue ("[]") does not count
+                                # as served content — it must not block recovery
+                                # rounds (blocked-tool follow-up, transient retry)
+                                try:
+                                    delta = json.loads(
+                                        encoded.decode("utf-8").removeprefix("data: ").strip()
+                                    )["choices"][0]["delta"]
+                                    content_value = delta.get("content")
+                                    if content_value and str(content_value).strip() not in ("", "[]"):
+                                        served_content = True
+                                except (json.JSONDecodeError, KeyError, IndexError, ValueError):
                                     served_content = True
-                            except (json.JSONDecodeError, KeyError, IndexError, ValueError):
-                                served_content = True
-                        yield encoded
+                            yield encoded
 
-                    if status in {"finish", "intervene"}:
-                        finalize_chunks = accumulator.finalize(
-                            status=status,
-                            last_error=event.get("last_error") if isinstance(event.get("last_error"), dict) else None,
-                        )
-                        blocked = list(accumulator.blocked_tool_attempt_names)
-                        break
+                        if status in {"finish", "intervene"}:
+                            finalize_chunks = accumulator.finalize(
+                                status=status,
+                                last_error=event.get("last_error") if isinstance(event.get("last_error"), dict) else None,
+                            )
+                            blocked = list(accumulator.blocked_tool_attempt_names)
+                            break
+                except UpstreamAPIError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    if not _is_transport_error(exc):
+                        raise
+                    upstream_exc = _transport_error_to_upstream(exc)
+                    if served_content or attempt >= max_stream_retries:
+                        # Nach ausgeliefertem content ist der turn unumkehrbar
+                        # (S-03/P-04: der client haette sonst zwei antworten),
+                        # nach dem letzten versuch gibt es nichts mehr zu
+                        # versuchen. Beides endet als UpstreamAPIError.
+                        raise upstream_exc from exc
+                    retry_exc = upstream_exc
+                    self.logger.warning(
+                        "Upstream transport error mid-stream (%s: %s); retrying attempt=%s/%s",
+                        type(exc).__name__,
+                        exc,
+                        attempt + 1,
+                        max_stream_retries,
+                    )
                 if self._last_stream_truncated and finalize_chunks is None:
                     # V-04: stream endete ohne finish/[DONE] — als transiente
                     # Unterbrechung retryen, solange nichts ausgeliefert wurde.
@@ -725,6 +806,33 @@ class GLMWebClient:
     # _open_chat_stream), deshalb transient.
     TRANSIENT_UPSTREAM_ERROR_CODES = {10025, 10040, 10061, 10062}
 
+    def _payload_is_transient(self, payload: object) -> bool:
+        """C-07: transient-Erkennung ZENTRAL. Vorher galt sie nur fuer SSE-
+        events; ein transienter code im JSON-body (non-stream) oder im
+        HTTP-error wurde als permanenter fehler behandelt und nicht
+        recovered."""
+        if not isinstance(payload, dict):
+            return False
+        candidates = [
+            payload.get("error_code"),
+            payload.get("code"),
+        ]
+        nested = payload.get("error")
+        if isinstance(nested, dict):
+            candidates.extend([nested.get("error_code"), nested.get("code")])
+        last_error = payload.get("last_error")
+        if isinstance(last_error, dict):
+            candidates.extend([last_error.get("error_code"), last_error.get("code")])
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                if int(candidate) in self.TRANSIENT_UPSTREAM_ERROR_CODES:  # type: ignore[arg-type]
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
     def _raise_for_event_error(self, event: dict[str, object], stream: bool) -> None:
         status = str(event.get("status", "")).strip().lower()
         last_error = event.get("last_error")
@@ -747,12 +855,7 @@ class GLMWebClient:
             or ("GLM stream request error" if stream else "GLM request error")
         ).strip()
         detail = f"code={error_code} " if error_code is not None else ""
-        transient = False
-        if error_code is not None:
-            try:
-                transient = int(error_code) in self.TRANSIENT_UPSTREAM_ERROR_CODES  # type: ignore[arg-type]
-            except (TypeError, ValueError):
-                transient = False
+        transient = self._payload_is_transient(error_payload or event)
         raise UpstreamAPIError(
             status_code=502,
             message=f"GLM upstream returned an error | {detail}{error_message}".strip(),
@@ -985,7 +1088,16 @@ class GLMWebClient:
                     if target_conv_id and (exc.code in {400, 404} or "conversation" in message.lower() or "对话" in message):
                         self.logger.warning("GLM conversation %s seems invalid or expired (%s) — resetting active conversation", target_conv_id, message)
                         self.reset_active_conversation()
-                    raise UpstreamAPIError(status_code=exc.code, message=message, payload=error_payload) from exc
+                    # C-07: transienter upstream-code im error-body (z.b. 10040
+                    # bei zu grosser historie) wird auch bei HTTP-Fehlern
+                    # als transient markiert, damit der stream-retry ihn
+                    # mit halbiertem budget aufnehmen kann.
+                    raise UpstreamAPIError(
+                        status_code=exc.code,
+                        message=message,
+                        payload=error_payload,
+                        transient=self._payload_is_transient(error_payload),
+                    ) from exc
 
             raise UpstreamAPIError(status_code=429, message="GLM has been busy for a long time, please retry later.")
 
@@ -1105,6 +1217,11 @@ class GLMWebClient:
                     status_code=502,
                     message=self._build_error_message(200, payload),
                     payload=payload,
+                    # C-07: ein transienter code im JSON-body (z.B. 10040
+                    # "kontext zu gross") war hier dauerhaft und wurde
+                    # weder retried noch mit halbiertem historien-budget
+                    # erneut versucht.
+                    transient=self._payload_is_transient(payload),
                 )
 
             response_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

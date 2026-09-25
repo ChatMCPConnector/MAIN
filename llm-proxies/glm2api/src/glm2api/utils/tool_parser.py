@@ -796,6 +796,7 @@ _TRANSCRIPT_ECHO_ROW_TAIL_RE = re.compile(
     r'[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
 )
 _CALL_OPENER_INLINE_RE = re.compile(r'\{\s*"(?:tool_calls|name)"\s*:')
+_FUNC_CALL_NAME_RE = re.compile(r"(?<![\w.$])([A-Za-z_][A-Za-z0-9_.\-]*)\s*\(")
 _INLINE_BARE_NAME_RE = re.compile(r'\{\s*"name"\s*:\s*"([A-Za-z_][A-Za-z0-9_\-]*)"')
 # Obergrenze fuer zurueckgehaltenen text: darueberhinweg wird die aufbewahrung
 # aufgegeben, damit ein nie geschlossener opfer keine unbegrenzte
@@ -1000,14 +1001,30 @@ def strip_unparseable_call_fragments(text: str) -> tuple[str, int]:
     Gibt (bereinigter_text, anzahl_entfernter_fragmente) zurueck."""
     if not text:
         return text, 0
+    # T-09/T-05: leere call-huellen und terminator-reste sind genauso wenig
+    # eine antwort wie ein abgeschnittenes fragment. Sie entstehen, wenn der
+    # parser einen blockierten call entfernt hat und die huelle zuruecklässt
+    # ('{"tool_calls": }') bzw. wenn ein turn mit dem rest eines
+    # abgeschnittenen protokolls beginnt ('] []').
+    for residue_pattern in (_EMPTY_CALL_WRAPPER_RE, _TERMINATOR_RESIDUE_RE):
+        match = residue_pattern.search(text)
+        if match is not None:
+            return text[: match.start()].rstrip(), 1
+    # T-01/T-09: ein opfer in einer ```-fence ist eine DOKUMENTATION, kein
+    # abgeschnittenes protokoll. Ohne diese pruefung riss der inline-pfad
+    # dokumentations-beispiele mitten im text ab ('```json {"tool_calls":…
+    # ``` als Beispiel' wurde zu '```json').
+    masked = _mask_code_fences(text)
     match = _UNPARSEABLE_CALL_START_RE.search(text)
+    if match is not None and masked[match.start()] != match.group()[0]:
+        return text, 0
     if match is not None:
         start = match.start() + (1 if text[match.start()] == "\n" else 0)
     else:
         # T-09: aufruf-spezifische opfer duerfen auch mitten in einer zeile
         # greifen — 'sieh vorher {"tool_calls":...' ist haeufig.
         inline = _CALL_OPENER_INLINE_RE.search(text)
-        if inline is None:
+        if inline is None or masked[inline.start()] != inline.group()[0]:
             return text, 0
         start = inline.start()
     fragment = text[start:]
@@ -1451,6 +1468,10 @@ def _find_json_tool_call(
 
 
 _UNPARSEABLE_CALL_START_RE = re.compile(r'(?:\A|\n)[ \t]*\{\s*"(?:tool_calls|name|filePath|command)"\s*:')
+# T-09/T-05: leere call-huelle (blockierter call wurde entfernt, die huelle
+# blieb zurueck) und der terminator-rest eines abgeschnittenen protokolls.
+_EMPTY_CALL_WRAPPER_RE = re.compile(r'\s*\{\s*"tool_calls"\s*:\s*(?:\}|\]|\{\s*\}\s*,?\s*\}\s*[,;]?)')
+_TERMINATOR_RESIDUE_RE = re.compile(r'(?:\A|(?<=\s))\][ \t]*\[\](?=\s|\Z)')
 
 
 def _split_stream_text(
@@ -1827,6 +1848,19 @@ def detect_tool_call_names(text: str) -> list[str]:
             name = name.strip()
             if name:
                 names.append(name)
+    # T-10 (nachtrag): funktionssyntax. Das modell schreibt tool-aufrufe
+    # auch als `open_url("https://…")` — diese Form war voellig blind und
+    # liess einen blockierten versuch als leeren stop-turn durchgehen. Das
+    # vokabular ist absichtlich geschlossen (nur bekannte tool-namen), damit
+    # ein normaler funktionsaufruf im prosatext keine negative
+    # follow-up-runde ausloest.
+    known_tool_names = {name.lower() for name in BLOCKED_NATIVE_TOOL_NAMES}
+    known_tool_names.update(name.lower() for name in _TEXT_FUNC_NAMES)
+    for match in _FUNC_CALL_NAME_RE.finditer(masked):
+        candidate = match.group(1)
+        if candidate.lower() not in known_tool_names:
+            continue
+        names.append(candidate)
     # Reihenfolge erhalten, Duplikate entfernen: dieselbe struktur wird von
     # mehreren formen erkannt (wrapper + bare-namensregex).
     seen: set[str] = set()

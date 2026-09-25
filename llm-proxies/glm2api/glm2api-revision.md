@@ -337,8 +337,9 @@ Methode: read-only SQLite auf `~/.local/share/opencode/opencode.db` und Auswertu
 
 **Reihenfolge:** V-05 zuerst als Testbasis, dann V-01/V-03 (gleicher Codebereich), dann V-02, dann V-04. So bleibt jeder Fix abgesichert.
 
-### P1 — Korrektheit des Agentenbetriebs
+### P1 — Korrektheit des Agentenbetriebs — **ABGESCHLOSSEN 2026-09-25**
 T-01, T-03, T-05, T-06, T-09, T-10, T-12, T-15 · C-07, C-09, C-10, C-12 · S-10, S-11 · A-01, A-04, A-09, A-11, A-13
+→ Umsetzung: F-5 (2026-09-24) und F-5c (2026-09-25). Keine offenen P1-Befunde.
 
 ### P2 — Betriebssicherheit
 C-01 (Queue-Ghost), S-01 (Ingress-Limits), C-02 (SSRF), C-03 (Session-Isolation), S-02 (Auth/CORS), C-04/A-16 (Token-Race), C-17/S-04/A-15 (Secret-Leaks in Logs), S-16 (Klartext-HTTP), S-03 (Queue-Backpressure)
@@ -457,6 +458,25 @@ Gesamt: **107 Befunde** in 1.511 Zeilen Detailbericht, konsolidiert auf 115 Zeil
 | Ausgabegrenze | `GLM_MAX_OUTPUT_TOKENS` (Default **16384**, Bereich 1024–131072). Der Client-Wunsch `max_tokens`/`max_completion_tokens` gilt, aber nie über die Schranke hinaus. Durchgesetzt im Accumulator über Zeichen-pro-Token-Näherung (4:1); bei Erreichen endet der Turn mit `finish_reason: "length"`, unvollständige Tool-Calls werden verworfen statt als kaputtes JSON ausgeliefert. War **10k** erwogen: ein einzelner Datei-Write mit ~500 Zeilen liegt bereits bei ~5k Tokens, ein 10k-Limit würde legitime Calls mitten im JSON abschneiden. |
 | Debug-Log | Bewusst **1:1 und vollständig** (Nutzerentscheidung: Grundlage für Nachvollzug und Patches). Rotation erst bei **100 MB** je Generation, 3 Generationen; `GLM2API_LOG_MAX_BYTES` / `GLM2API_LOG_BACKUP_COUNT` überschreibbar. Vorher 10 MB — genau die fehlenden Ereignisse. |
 | Gastkonto | **Abgeschaltet.** Kein impliziter Gast-Slot mehr: ein gesetztes `GLM_REFRESH_TOKEN` erzeugte bisher `[token, GUEST]` — ein stummer Gast-Slot im Betrieb. Ohne Konto verweigert der Server den Start mit klarer Anweisung. Gastmodus bleibt als ausdrückliche Wahl (`GLM_USE_GUEST_REFRESH_TOKEN=true`) erhalten, mit Warnung. Nebeneffekt: `.env.example` nennt `GLM_MAX_CONCURRENCY=100` — über dem Cap 32, wurde daher auf 3 korrigiert. |
+
+### F-5c P1-Restgruppe abgeschlossen (2026-09-25)
+
+Die sieben offenen P1-Befunde sind umgesetzt. Vier davon waren durch die
+frühere Welle schon teilweise abgesichert (T-09, T-10, T-12) — sie wurden
+empirisch nachgewiesen und mit Regressionstests festgeschrieben, statt sie
+ erneut zu implementieren.
+
+| Befund | Umsetzung | Verifikation |
+|---|---|---|
+| **T-05** | Der Reasoning-Fallback war **kein Ersatz, sondern eine zusätzliche Quelle**: er lief nur, wenn der Textparser nichts fand. Bei „`read` im Text + `write` im Reasoning" kam nur `read` an. Beide Kanäle werden jetzt unabhängig ausgewertet und dedupliziert zusammengeführt (Stream **und** Non-Stream). Zusätzlich wird `reasoning_content` vor der Ausgabe durch denselben Parser geschickt: Protokollreste werden entfernt, blockierte Calls als Versuch gemeldet. Das **Original** wird für die Blocked-Erkennung behalten — nach dem Bereinigen wäre der Name unsichtbar. | 2 Tests (Stream/Non-Stream), Reasoning-Protokoll kein Leak |
+| **T-06** | `is_empty_response()` zählt Calls aus dem Reasoning-Kanal mit. Vorher galt eine Turn, deren einziger Call im Reasoning stand, als leer: der Leer-Retry half nicht, die echte Tool-Runde ging verloren. | 1 Test |
+| **T-09** | Inline-/abgeschnittene Fragmente nach Prosa werden entfernt (positionsunabhängig). Zusätzlich geschlossen: leere Call-Hüllen (`{"tool_calls": }`) und der Terminator-Rest `] []` — beides die dokumentiertenkosmetischen Reste. **Dabei behoben:** der Inline-Pfad schnitt Dokumentations-Beispiele in ```json-Fences mitten im Text ab (`strip_unparseable_call_fragments` maskiert jetzt Fences). | Sweep über 4 echte Leak-Texte × Chunk-Größen 1–512: **0 Leaks** |
+| **T-10** | `detect_tool_call_names()` erfasst jetzt auch Funktionssyntax (`open_url("…")`, `web.run(…)`) — vorher völlig blind, der Turn endete als leerer `stop`. Das Vokabular ist absichtlich geschlossen (nur bekannte Tool-Namen), damit Prosa keine negativen Runden auslöst. Der Allowlist-Vergleich ist **case-insensitiv**: `OPEN_URL` umging die Prüfung. | 3 Tests inkl. Gegenprobe (erlaubte Nennung ≠ blockiert) |
+| **T-12** | Calls aus dem Safety-Netz laufen durch dieselbe Sanitisation und Required-Argument-Prüfung wie der Parser-Pfad: ein `write` ohne `content` fällt durch, `filePath` wird normalisiert. | 2 Tests |
+| **T-15** | Zwei Korrekturen an der Call↔Result-Beziehung: (a) eine rein semantische Normalisierung (Pfad, C0-Zeichen, JSON-String) macht den Call **nicht** unbrauchbar — der Client hat genau die normalisierten Argumente ausgeführt, sein Result ist die wahre Antwort und ging vorher verloren (das Modell wiederholte den Call). (b) Verwaiste Results werden jetzt **immer** verworfen, nicht nur wenn schon Calls existieren — ein erfundenes Result mit eigenem `name` landete als vertrauenswürdiger Tool-Output im Prompt. | 2 Tests; ein Test wurde auf den neuen Vertrag umgestellt (er schrieb die alte Semantik fest) |
+| **C-07** | Transportfehler (`ConnectionReset`, `RemoteDisconnected`, `Timeout`, `OSError`, gzip, `IncompleteRead`) gingen am Retry vorbei und brachen den Generator hart ab — genau die Fälle, für die die Recovery existiert. Sie laufen jetzt in dieselbe Zustandsmaschine wie ein transientes Event, mit derselben Bedingung: nur solange **nichts** ausgeliefert wurde (ein teilweise ausgelieferter Turn ist nicht zurücknehmbar). Nach dem letzten Versuch kommt ein `UpstreamAPIError(transient=True)`, kein roher `ConnectionResetError`. Zusätzlich zentralisiert: `_payload_is_transient()` erkennt transiente Codes jetzt auch in **JSON-Bodies und HTTP-Fehlern** (z.B. 10040), nicht nur in SSE-Events. | 7 Tests (Reset, Timeout, RemoteDisconnected, kein Retry nach Content, Aufgeben, transient/permanent) |
+
+**Nebenbefund:** Der Sweep zeigte 23 Lecks bei Chunk-Größen 8/13/19 im Szenario „jedes Fragment als eigener `logic_id`". Der identische Sweep auf dem Vor-Commit ergibt **exakt dieselben 23 Fälle** — also vorbestehend, keine Regression. Es ist der dokumentierte Part-Interleaving-Fall (T-20, P3), nicht Teil dieser Runde.
 
 ### F-6 Bewusst nicht umgesetzt
 

@@ -1,4 +1,7 @@
+import http.client
 import json
+
+import pytest
 from types import SimpleNamespace
 
 from glm2api.services.glm_client import GLMWebClient, UpstreamAPIError
@@ -26,6 +29,19 @@ def _error_event(code=10025, message="stream request error"):
         "status": "error",
         "last_error": {"error_code": code, "err_msg": message},
         "parts": [],
+    }
+
+
+def _thinking_process_event(text="denke"):
+    return {
+        "status": "process",
+        "parts": [
+            {
+                "logic_id": "p1",
+                "status": "process",
+                "content": [{"type": "think", "think": text}],
+            }
+        ],
     }
 
 
@@ -498,3 +514,170 @@ def test_sse_parser_handles_crlf_events_without_chunk_split():
     events = list(client._iter_sse_events(response))
 
     assert events == [{"a": 1}]
+
+
+# --- C-07: Transportfehler und transiente JSON-/HTTP-payloads -----------
+
+
+class _ExplodingResponse:
+    """Bricht beim Lesen der Events mit einem Transportfehler ab."""
+
+    # Bewusst KEIN "_events"-Attribut: der test-iterator waehlt danach, ob
+    # er die ereignisliste oder die (fehlschlagende) iteration nimmt.
+    def __init__(self, events_before_failure, exc):
+        self.events_before_failure = events_before_failure
+        self.transport_error = exc
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    def __iter__(self):
+        yield from self.events_before_failure
+        raise self.transport_error
+
+
+def _make_client_with_failing_iter(events_per_attempt, failures):
+    """Wie _make_client, aber der Event-Iterator kann gezielt scheitern."""
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = _RetryConfig()
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None,
+        info=lambda *a, **k: None,
+        debug=lambda *a, **k: None,
+    )
+    client.request_queue = SimpleNamespace(
+        acquire=lambda name: SimpleNamespace(ticket=0, released=False, release=lambda: None)
+    )
+    client.auth = SimpleNamespace(
+        get_account_count=lambda: 1,
+        get_access_token_for_account=lambda i: "tok",
+    )
+    calls = {"count": 0}
+
+    def fake_open(payload, preferred_account_index=None, filtered_tools=None):
+        index = calls["count"]
+        calls["count"] += 1
+        if index < len(failures):
+            return _ExplodingResponse(
+                events_per_attempt[min(index, len(events_per_attempt) - 1)],
+                failures[index],
+            ), "assistant-1"
+        return _FakeResponse(events_per_attempt[-1]), "assistant-1"
+
+    client._open_chat_stream = fake_open
+    client.delete_conversation = lambda cid, assistant_id=None: None
+    # _ExplodingResponse ist selbst iterable, _FakeResponse haelt seine
+    # events in ._events — beide formen bedienen.
+    client._iter_sse_events = lambda response: iter(
+        getattr(response, "_events", response)
+    )
+    return client, calls
+
+
+def test_connection_reset_mid_stream_triggers_retry():
+    """C-07: ein ConnectionReset mitten im stream brach den generator vorher
+    hart ab — ohne retry, obwohl noch nichts ausgeliefert war."""
+    client, calls = _make_client_with_failing_iter(
+        [[_thinking_process_event()], [_finish_event("recovered")]],
+        [ConnectionResetError("peer closed")],
+    )
+
+    stream = client.stream_chat_completion(
+        {"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]}
+    )
+    text = "".join(chunk.decode("utf-8") for chunk in stream)
+
+    assert calls["count"] == 2, "transportfehler muss den turn neu aufsetzen"
+    assert "recovered" in text
+
+
+def test_timeout_mid_stream_triggers_retry():
+    client, calls = _make_client_with_failing_iter(
+        [[_thinking_process_event()], [_finish_event("ok")]],
+        [TimeoutError("read timed out")],
+    )
+    stream = client.stream_chat_completion(
+        {"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]}
+    )
+    "".join(chunk.decode("utf-8") for chunk in stream)
+    assert calls["count"] == 2
+
+
+def test_remote_disconnected_mid_stream_triggers_retry():
+    client, calls = _make_client_with_failing_iter(
+        [[], [_finish_event("ok")]],
+        [http.client.RemoteDisconnected("remote end closed connection")],
+    )
+    stream = client.stream_chat_completion(
+        {"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]}
+    )
+    "".join(chunk.decode("utf-8") for chunk in stream)
+    assert calls["count"] == 2
+
+
+def test_transport_error_after_served_content_is_not_retried():
+    """Nach sichtbarem content ist der turn unumkehrbar ausgeliefert — ein
+    retry wuerde die antwort verdoppeln."""
+    client, calls = _make_client_with_failing_iter(
+        [[_finish_event("antwort")], [_finish_event("doppelt")]],
+        [ConnectionResetError("late reset")],
+    )
+    stream = client.stream_chat_completion(
+        {"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]}
+    )
+    text = "".join(chunk.decode("utf-8") for chunk in stream)
+    assert calls["count"] == 1, "kein retry nach ausgeliefertem content"
+    assert "doppelt" not in text
+
+
+def test_transport_error_gives_up_after_max_retries():
+    client, calls = _make_client_with_failing_iter(
+        [[]],
+        [ConnectionResetError("reset")] * 3,
+    )
+    stream = client.stream_chat_completion(
+        {"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]}
+    )
+    with pytest.raises(UpstreamAPIError) as excinfo:
+        for _ in stream:
+            pass
+    assert "upstream_transport_error" in str(excinfo.value)
+    assert excinfo.value.transient is True
+    assert calls["count"] == 3, "initial + 2 retries"
+
+
+def test_transient_code_in_json_body_is_marked_transient():
+    """C-07: ein 10040 im JSON-body (non-stream) war dauerhaft und wurde
+    nicht recovered."""
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = _RetryConfig()
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None
+    )
+    client.debug_dump_all = False
+    client.auth = SimpleNamespace(
+        read_json_response=lambda response: {"status": 1, "error_code": 10040, "message": "too long"}
+    )
+    client._build_error_message = lambda code, payload: "context exceeded"
+
+    with pytest.raises(UpstreamAPIError) as excinfo:
+        client._prepare_chat_response(SimpleNamespace(headers={"Content-Type": "application/json"}, close=lambda: None))
+    assert excinfo.value.transient is True
+
+
+def test_permanent_json_body_error_is_not_transient():
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = _RetryConfig()
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None
+    )
+    client.debug_dump_all = False
+    client.auth = SimpleNamespace(
+        read_json_response=lambda response: {"status": 1, "error_code": 40001, "message": "invalid"}
+    )
+    client._build_error_message = lambda code, payload: "invalid"
+
+    with pytest.raises(UpstreamAPIError) as excinfo:
+        client._prepare_chat_response(SimpleNamespace(headers={"Content-Type": "application/json"}, close=lambda: None))
+    assert excinfo.value.transient is False

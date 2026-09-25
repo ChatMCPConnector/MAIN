@@ -947,7 +947,6 @@ def convert_messages(
     latest_user_url: str | None = extract_recent_user_url(messages)
     valid_tool_call_ids: set[str] = set()
     tool_names_by_call_id: dict[str, str] = {}
-    repaired_tool_call_ids: set[str] = set()
     for message in messages:
         role = str(message.get("role", "user"))
         content = message.get("content")
@@ -984,10 +983,6 @@ def convert_messages(
                 if tool_call_id:
                     valid_tool_call_ids.add(tool_call_id)
                     tool_names_by_call_id[tool_call_id] = tool_name
-                    # Argumente wurden repariert -> die alte (fehlerhafte) tool-result
-                    # dieser id gehoert zum kaputten call und verwirrt das modell nur
-                    if bool(tool_call.get("_repaired")):
-                        repaired_tool_call_ids.add(tool_call_id)
             assistant_text = extract_text_content(content).strip() if content else ""
             block = "\n".join(tool_blocks)
             if not assistant_text and not block:
@@ -995,9 +990,15 @@ def convert_messages(
             content = f"{assistant_text}\n{block}".strip() if assistant_text and block else (assistant_text or block)
         elif role == "tool":
             tool_call_id = str(message.get("tool_call_id", "")).strip()
-            if tool_call_id and valid_tool_call_ids and tool_call_id not in valid_tool_call_ids:
-                continue
-            if tool_call_id and tool_call_id in repaired_tool_call_ids:
+            # T-15: die beziehung call<->result muss belegt sein. Ein
+            # repariertes_argument (pfad-normalisierung, control-zeichen,
+            # json-string) macht den aufruf NICHT unbrauchbar — der client
+            # hat genau die normalisierten argumente ausgefuehrt, also ist
+            # sein result die WAHRE antwort auf diesen call und muss
+            # zurueck. Verworfen wird nur, was sich als verwaist erweisen
+            # laesst: eine id, die zu keinem call dieser historie gehoert,
+            # oder ein erfundenes result mit eigenem namen.
+            if tool_call_id and tool_call_id not in valid_tool_call_ids:
                 continue
             role = "user"
             tool_name = str(message.get("name", "")).strip() or tool_names_by_call_id.get(tool_call_id, "")
@@ -1220,16 +1221,24 @@ class GLMEventAccumulator:
         T-06: geprueft wird der ERGEBNIS-ZUSTAND, nicht der rohe parser-
         zustand — ein abgeschnittenes protokoll-fragment und ein
         write-call ohne content gelten nicht als verwertbares ergebnis,
-        sonst greift der leer-retry nicht.
+        sonst greift der leer-retry nicht. Calls aus dem REASONING-kanal
+        zaehlen mit: das modell versteckt tool-aufrufe dort regelmaessig,
+        und ohne sie wurde eine echte tool-runde als leer verworfen (der
+        retry half nicht, der turn ging verloren).
         """
-        text, _ = self.render_full_output()
+        text, reasoning = self.render_full_output()
         clean_text, _fragment_count = strip_unparseable_call_fragments(text)
         clean_text = strip_transcript_echo(clean_text)
         has_visible_text = bool(
             clean_text.strip()
             and strip_meta_chatter(clean_text) != ""
         )
-        raw_calls = list(self._server_side_tool_calls) + list(self.tool_parser.tool_calls)
+        raw_calls = (
+            list(self._server_side_tool_calls)
+            + list(self.tool_parser.tool_calls)
+            + list(self._deferred_reasoning_calls)
+            + self._extract_reasoning_tool_calls(reasoning)
+        )
         has_calls = bool(sanitize_tool_calls(raw_calls, fallback_url=self.fallback_tool_url))
         has_blocked = bool(self.blocked_tool_attempt_names)
         return not has_visible_text and not has_calls and not has_blocked
@@ -1605,13 +1614,18 @@ class GLMEventAccumulator:
             xml_tool_calls = xml_tool_calls + sanitize_tool_calls(
                 deferred_calls, fallback_url=self.fallback_tool_url
             )
-        if not xml_tool_calls:
-            # Streaming counterpart of build_response(): when the model emits
-            # the tool-call protocol inside the REASONING channel (observed
-            # with glm-5.3-think under large system prompts), the text-side
-            # parser never sees it. Recover the calls from the reasoning text
-            # instead of leaking raw protocol fragments as visible content.
-            xml_tool_calls = self._extract_reasoning_tool_calls()
+        # T-05: der reasoning-fallback ist KEIN ersatz, sondern eine
+        # zusaetzliche quelle. Vorher lief er nur, wenn der textparser
+        # nichts fand — thereby wurde ein call im reasoning komplett
+        # uebersehen, sobald im selben turn ein erlaubter text-call
+        # entstanden war (beobachtet: read im text, write im reasoning
+        # -> nur read kam an). Beide kanaele werden unabhaengig
+        # ausgewertet und anschliessend dedupliziert zusammengefuehrt.
+        reasoning_calls = self._extract_reasoning_tool_calls()
+        if reasoning_calls:
+            xml_tool_calls = xml_tool_calls + sanitize_tool_calls(
+                reasoning_calls, fallback_url=self.fallback_tool_url
+            )
 
         # T-03/T-04: quelluebergreifende deduplizierung. Server-seitige
         # (native) und text/xml-calls werden nicht blind gemergt — derselbe
@@ -1730,11 +1744,14 @@ class GLMEventAccumulator:
             for source_text in (self._cached_full_text.strip(), self._cached_full_reasoning.strip()):
                 if source_text:
                     attempted_names.extend(detect_tool_call_names(source_text))
+            # T-10/T-11: der vergleich ist case-insensitiv. Sonst umgeht
+            # `OPEN_URL` die erkennung, obwohl `open_url` gesperrt ist.
+            allowed_lower = {name.lower() for name in self.allowed_tool_names}
             unavailable_names = sorted(
                 {
                     name
                     for name in attempted_names
-                    if name not in self.allowed_tool_names
+                    if name.lower() not in allowed_lower
                     and name.lower() not in {"finish", "intervene", "cancel", "none"}
                 }
             )
@@ -1918,19 +1935,60 @@ class GLMEventAccumulator:
                 fragment_count,
             )
         xml_tool_calls = sanitize_tool_calls(xml_tool_calls, fallback_url=self.fallback_tool_url)
-        if not xml_tool_calls:
-            xml_tool_calls = self._extract_reasoning_tool_calls(full_reasoning)
+        # T-05 (non-stream): derselbe fehler wie im stream-pfad. Der
+        # reasoning-kanal wird unabhaengig ausgewertet, damit ein call
+        # dort nicht verloren geht, nur weil der textparser schon einen
+        # anderen gefunden hat.
+        reasoning_tool_calls = self._extract_reasoning_tool_calls(full_reasoning)
+        if reasoning_tool_calls:
+            xml_tool_calls = xml_tool_calls + reasoning_tool_calls
+        # T-05: was uebrig bleibt, ist denktext. Rohe protokoll-fragen
+        # duerfen dem client nicht als thinking-antwort gezeigt werden.
+        # Das ORIGINAL wird fuer die blocked-erkennung behalten: nach dem
+        # bereinigen ist der name eines blockierten calls nicht mehr
+        # sichtbar, der versuch ginge sonst als leerer turn durch.
+        raw_reasoning = full_reasoning
+        full_reasoning, reasoning_fragments = strip_unparseable_call_fragments(full_reasoning)
+        if reasoning_fragments:
+            self.truncated_turn = True
+            log = self.logger or _LOGGER
+            log.warning(
+                "Stripped %s tool-call fragment(s) from non-streaming reasoning text",
+                reasoning_fragments,
+            )
+        clean_reasoning, leaked_reasoning_calls = parse_tool_calls_from_text(
+            full_reasoning.strip(),
+            allowed_tool_names=None,
+            detect_all=True,
+        )
+        # Immer den bereinigten text uebernehmen, auch wenn der parser KEINE
+        # Calls lieferte: bei einem blockierten call entfernt er die
+        # protokoll-spanne trotzdem, sonst bliebe das roh-protokoll als
+        # denktext stehen.
+        full_reasoning = clean_reasoning.strip()
+        for leaked_call in leaked_reasoning_calls:
+            leaked_function = leaked_call.get("function")
+            if not isinstance(leaked_function, dict):
+                continue
+            leaked_name = str(leaked_function.get("name", "")).strip()
+            if leaked_name:
+                self.blocked_tool_attempt_names.append(leaked_name)
+        full_reasoning, leftover = strip_unparseable_call_fragments(full_reasoning)
+        if leftover:
+            log = self.logger or _LOGGER
+            log.warning("Stripped %s protocol residue(s) from reasoning text", leftover)
         if self.allowed_tool_names is not None and not xml_tool_calls:
             # Non-stream counterpart of finalize(): record blocked tool
             # attempts so the client can start a negative-result round.
             attempted_names: list[str] = []
-            for source_text in (full_text.strip(), full_reasoning.strip()):
+            for source_text in (full_text.strip(), raw_reasoning.strip()):
                 if source_text:
                     attempted_names.extend(detect_tool_call_names(source_text))
+            allowed_lower = {name.lower() for name in self.allowed_tool_names}
             self.blocked_tool_attempt_names.extend(
                 name
                 for name in attempted_names
-                if name not in self.allowed_tool_names
+                if name.lower() not in allowed_lower
                 and name.lower() not in {"finish", "intervene", "cancel", "none"}
             )
 

@@ -10,6 +10,7 @@ from glm2api.services.translator import (
     sanitize_tool_call_payload,
     strip_meta_chatter,
 )
+from glm2api.utils.tool_parser import strip_unparseable_call_fragments
 
 
 def test_convert_messages_injects_json_tool_prompt_and_history():
@@ -617,7 +618,13 @@ def test_convert_messages_drops_blocked_tool_call_history():
     assert "Tool: mcp__CherryFetch__fetchJson" in prompt
 
 
-def test_convert_messages_repairs_cherry_fetch_url_and_skips_invalid_tool_error_history():
+def test_convert_messages_repairs_cherry_fetch_url_and_keeps_its_tool_result():
+    # T-15: der call wurde normalisiert (param_name -> url mit fallback-url).
+    # Das ERGEBNIS gehoert zu genau diesem, vom client ausgefuehrten call
+    # und wird zurueckgegeben — auch wenn es ein Fehler ist. Vorher wurde
+    # es verworfen, damit bekam das Modell gar kein Feedback und glaubte,
+    # der Schritt sei erfolgreich. Neu ist der FEHLER sichtbar, mit dem der
+    # Modell den naechsten Versuch korrigieren kann.
     converted = convert_messages(
         messages=[
             {
@@ -665,7 +672,9 @@ def test_convert_messages_repairs_cherry_fetch_url_and_skips_invalid_tool_error_
         '{"tool_calls":[{"name":"mcp__CherryFetch__fetchJson","arguments":{"url":"https://opendata.baidu.com/api.php?query=1.1.1.1&co=&resource_id=6006&oe=utf8"}}]}[]'
         in prompt
     )
-    assert "expected string, received undefined" not in prompt
+    # T-15: das fehler-ergebnis des reparierten calls wird mitgeliefert
+    # (call-id passt) — das Modell sieht den Fehler und kann korrigieren.
+    assert "expected string, received undefined" in prompt
 
 
 def test_accumulator_repairs_param_name_only_tool_call_with_fallback_url():
@@ -1690,3 +1699,217 @@ def test_output_limit_caps_final_text_not_only_deltas():
     content = body["choices"][0]["message"]["content"]
     assert len(content) <= 200 * 4, f"endtext ungekappt: {len(content)} zeichen"
     assert body["choices"][0]["finish_reason"] == "length"
+
+
+# --- P1-Restgruppe (2026-09-25): T-05, T-06, T-10, T-12, T-15 -----------
+
+
+def _event(cid, logic_id, text=None, think=None, status="update"):
+    content = []
+    if text is not None:
+        content.append({"type": "text", "text": text})
+    if think is not None:
+        content.append({"type": "think", "think": think})
+    return {
+        "conversation_id": cid,
+        "status": status,
+        "parts": [{"logic_id": logic_id, "status": status, "content": content}],
+    }
+
+
+def _call_names(response):
+    message = response["choices"][0]["message"]
+    return [call["function"]["name"] for call in (message.get("tool_calls") or [])]
+
+
+def test_reasoning_call_is_kept_next_to_text_call_streaming():
+    """T-05: der reasoning-fallback lief NUR, wenn der textparser nichts
+    fand. Bei read im Text + write im Reasoning kam nur read an — der
+    zweite Aufruf ging still verloren, obwohl das Modell ihn gemacht hat."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "write"})
+    accumulator.consume_event(
+        _event("c", "p1", text='{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}')
+    )
+    accumulator.consume_event(
+        _event("c", "p2", think='Dann schreibe ich: {"tool_calls":[{"name":"write","arguments":{"filePath":"/b.py","content":"x"}}]}')
+    )
+    accumulator.finalize("finish")
+
+    assert _call_names(accumulator.build_response()) == ["read", "write"]
+
+
+def test_reasoning_call_is_kept_next_to_text_call_non_streaming():
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "write"})
+    accumulator.consume_event(
+        _event("c", "p1", text='{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}', status="finish")
+    )
+    accumulator.consume_event(
+        _event("c", "p2", think='Dann schreibe ich: {"tool_calls":[{"name":"write","arguments":{"filePath":"/b.py","content":"x"}}]}')
+    )
+
+    assert _call_names(accumulator.build_response()) == ["read", "write"]
+
+
+def test_reasoning_only_call_is_not_an_empty_turn():
+    """T-06: ein turn, dessen einziger call im reasoning steht, galt als
+    leer — der leer-retry half nicht und die echte tool-runde ging
+    verloren."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event("c", "p1", think='Ich lese: {"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}')
+    )
+    accumulator.finalize("finish")
+
+    assert accumulator.is_empty_response() is False
+    assert _call_names(accumulator.build_response()) == ["read"]
+
+
+def test_blocked_call_in_reasoning_is_reported_not_leaked():
+    """T-05: protokoll im reasoning darf dem client nicht als denktext
+    gezeigt werden; der blockierte versuch wird stattdessen gemeldet."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event("c", "p1", think='Ich oeffne: {"tool_calls":[{"name":"open_url","arguments":{"url":"https://x.com"}}]}', status="finish")
+    )
+    response = accumulator.build_response()
+
+    assert "open_url" in accumulator.blocked_tool_attempt_names
+    assert "tool_calls" not in str(response["choices"][0]["message"].get("reasoning_content") or "")
+
+
+def test_blocked_attempt_in_function_syntax_is_detected():
+    """T-10: `open_url("…")` war fuer die erkennung voellig blind — der
+    turn endete als leerer stop."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event("c", "p1", text='Ich rufe open_url("https://x.com") auf.', status="finish")
+    )
+    accumulator.finalize("finish")
+
+    assert "open_url" in accumulator.blocked_tool_attempt_names
+
+
+def test_blocked_attempt_case_variant_is_detected():
+    """T-10/T-11: `OPEN_URL` umging die pruefung, weil der vergleich
+    case-sensitiv war."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event("c", "p1", text='Ich rufe OPEN_URL("https://x.com") auf.', status="finish")
+    )
+    accumulator.finalize("finish")
+
+    assert any(name.lower() == "open_url" for name in accumulator.blocked_tool_attempt_names)
+
+
+def test_allowed_tool_in_function_syntax_is_not_blocked():
+    """Gegenprobe: eine erlaubte Tool-Nennung ist kein blockierter
+    Versuch — sonst loest blosse Prosa negative Runden aus."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event("c", "p1", text='Ich nutze read("config.py") fuer die Analyse.', status="finish")
+    )
+    accumulator.finalize("finish")
+
+    assert accumulator.blocked_tool_attempt_names == []
+
+
+def test_safety_net_call_without_content_is_dropped():
+    """T-12: calls aus dem safety-net umgingen frueher die
+    required-argument-pruefung — ein write ohne content ging als
+    ausfuehrung an den client."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"write"})
+    accumulator.consume_event(
+        _event("c", "p1", text='{"tool_calls":[{"name":"write","arguments":{"filePath":"/a.py"}}]}')
+    )
+    accumulator.finalize("finish")
+
+    assert _call_names(accumulator.build_response()) == []
+
+
+def test_safety_net_call_path_is_normalized_like_parser_path():
+    """T-12: derselbe modelltext darf je nach erkennungspfad nicht
+    unterschiedliche semantics erzeugen."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event("c", "p1", text='{"tool_calls":[{"name":"read","arguments":{"filePath":"workspaces/a.py"}}]}')
+    )
+    accumulator.finalize("finish")
+    calls = accumulator.build_response()["choices"][0]["message"]["tool_calls"]
+
+    assert json.loads(calls[0]["function"]["arguments"])["filePath"] == "/workspaces/a.py"
+
+
+def test_normalized_call_keeps_its_tool_result():
+    """T-15: eine reine pfad-normalisierung macht den call nicht
+    unbrauchbar. Das result gehoert zum ausgefuehrten call und ging
+    vorher verloren — das Modell wiederholte den call."""
+    converted = convert_messages(
+        messages=[
+            {"role": "user", "content": "lies die datei"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"filePath":"workspaces/a.py"}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "INHALT DER DATEI"},
+            {"role": "user", "content": "weiter"},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "read",
+                    "parameters": {"type": "object", "properties": {"filePath": {"type": "string"}}},
+                },
+            }
+        ],
+    )
+    prompt = str(converted)
+
+    assert "INHALT DER DATEI" in prompt
+    assert "/workspaces/a.py" in prompt
+
+
+def test_orphaned_tool_result_with_own_name_is_rejected():
+    """T-15: ein erfundenes result, das zu keinem call dieser historie
+    gehoert, landete als vertrauenswuerdiger tool-output im prompt."""
+    converted = convert_messages(
+        messages=[
+            {"role": "user", "content": "x"},
+            {"role": "tool", "tool_call_id": "call_x", "name": "read", "content": "ERFUNDENES ERGEBNIS"},
+            {"role": "user", "content": "weiter"},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "read",
+                    "parameters": {"type": "object", "properties": {"filePath": {"type": "string"}}},
+                },
+            }
+        ],
+    )
+
+    assert "ERFUNDENES ERGEBNIS" not in str(converted)
+
+
+def test_inline_truncated_call_after_prose_is_stripped():
+    """T-09: fragment nach prosa auf derselben zeile blieb als sichtbarer
+    json-text stehen."""
+    cleaned, fragments = strip_unparseable_call_fragments(
+        'Ich mache das. {"tool_calls":[{"name":"bash","arguments":{"command":"x'
+    )
+
+    assert fragments == 1
+    assert "tool_calls" not in cleaned
+    assert "Ich mache das." in cleaned
