@@ -399,6 +399,11 @@ _CONFIG_KEY_NEAR_MISSES = (
     ("GLM_REFRESH_TOKEN", "security"),
     ("GLM_USE_GUEST_REFRESH_TOKEN", "security"),
     ("GLM_ASSISTANT_ID", "security"),
+    # GUELTIGE keys, die dennoch als nahbeirrung auffallen. Geprueft
+    # 2026-09-26: `GLM_IMAGE_ASSISTANT_ID` wurde faelschlich als tippfehler
+    # von `GLM_ASSISTANT_ID` gemeldet, obwohl der key gueltig ist — eine
+    # sicherheitswarnung, die immer brennt, wird ignoriert.
+    ("GLM_IMAGE_ASSISTANT_ID", "security"),
     ("GLM_MAX_CONCURRENCY", "behavior"),
     ("GLM_MAX_OUTPUT_TOKENS", "behavior"),
     ("GLM_REQUEST_DEADLINE_SECONDS", "behavior"),
@@ -423,10 +428,20 @@ def _warn_unknown_config_keys(values: dict[str, str], logger: logging.Logger) ->
         stripped = key.strip().upper()
         if not stripped:
             continue
-        for known, severity in _CONFIG_KEY_NEAR_MISSES:
+        # Reihenfolge unabhaengig (geprueft 2026-09-26): ZUERST gegen alle
+        # bekannten namen auf exakte uebereinstimmung pruefen, nur wenn
+        # keiner passt, auf aehnlichkeit. Vorher gewann der erste treffer —
+        # `GLM_IMAGE_ASSISTANT_ID` kollidiert als praefix mit
+        # `GLM_ASSISTANT_ID` und wurde deshalb faelschlich als tippfehler
+        # gemeldet, obwohl der key gueltig ist. Eine sicherheitswarnung,
+        # die immer brennt, wird vom betreiber ignoriert.
+        for known, _severity in _CONFIG_KEY_NEAR_MISSES:
             if stripped == known:
                 break
-            if difflib.get_close_matches(stripped, [known], n=1, cutoff=0.82):
+        else:
+            for known, severity in _CONFIG_KEY_NEAR_MISSES:
+                if not difflib.get_close_matches(stripped, [known], n=1, cutoff=0.82):
+                    continue
                 message = (
                     f"Unknown config key {stripped!r} is IGNORED (did you mean {known!r}?). "
                     f"The setting has NO effect."

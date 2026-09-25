@@ -1272,6 +1272,42 @@ Tests ist das Konto in **HTTP 429 / Code 10061** (Ratelimit) — dort lässt
 sich derzeit nichts mehr prüfen. Die deterministische Prüfung oben
 ersetzt das nicht, sie verschiebt es nur.
 
+### F-5w4 Falsch-positive Sicherheitswarnung + Session-Leichen (2026-09-26)
+
+**Befund aus der `.env`:** `GLM_IMAGE_ASSISTANT_ID` ist ein gültiger Key,
+wurde aber von der S-15-Tippfehler-Warnung als „did you mean
+GLM_ASSISTANT_ID" gemeldet — mit `SECURITY:`-Stufe. Die Schleife verglich
+der Reihe nach und brach beim ersten Treffer ab; `GLM_IMAGE_ASSISTANT_ID`
+kollidiert als **Präfix**. Ein Fehler meiner eigenen Warnung.
+
+Ein S-15-Test hatte den Fall nicht erwischt, weil er nur die Liste der
+Warnungen prüfte, nicht die Gültigkeit der Keys. Jetzt wird gegen die
+tatsächlich gültigen Keys getestet (15 Stück aus dem Betrieb).
+
+Zweite Meldung aus derselben Konfigurationsprüfung: `GLM_MAX_CONCURRENCY=100`
+in der `.env` — der Code begrenzt auf 3, der Wert tut also nichts. Nicht
+geändert (Betriebsentscheidung), aber dokumentiert.
+
+**Die 88 Chat-Leichen sind gelöscht** (Liste danach: 0). Befund zur
+Ursache, ehrlich eingeordnet:
+
+| Messung | Wert |
+|---|---|
+| `Skipping GLM conversation deletion` | **0** — der Fall „keine id bekommen" wurde nie protokolliert |
+| `Deleted GLM conversation` | 21 in den vorhandenen Logsegmenten |
+| Requests mit leerer `conversation_id` | 30 |
+
+Die Löschung liegt in `finally` (Stream- und Non-Stream-Pfad) und greift
+also auch bei Fehlern. Sie konnte aber nur 21-mal greifen, weil **30
+Requests keine Conversation-ID lieferten** — das Upstream bricht vor dem
+ersten Event ab (Rate-Limit 429/10061), es gibt keine ID zum Löschen.
+
+Damit ist die Kette, die der Nutzer vermutet hat, bestätigt und ergänzt:
+eine Session pro Request erzeugt viele Einträge, und die fehlschlagenden
+Requests hinterlassen zusätzlich Einträge, die niemand mehr löschen kann.
+Die bisherige Diagnose „der Proxy legt 88 Chats an" stimmt, aber der
+Rest entsteht in einem Pfad, den die Löschung nicht erreichen kann.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

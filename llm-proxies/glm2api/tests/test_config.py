@@ -481,3 +481,41 @@ def test_output_token_budget_allows_deep_reasoning_runs():
     logger = _logging.getLogger("glm2api.config.test_budget")
     assert _config_int({}, "GLM_MAX_OUTPUT_TOKENS", 32768, 1024, 131072, logger) == 32768
     assert _config_int({"GLM_MAX_OUTPUT_TOKENS": "32768"}, "GLM_MAX_OUTPUT_TOKENS", 32768, 1024, 131072, logger) == 32768
+
+
+def test_valid_keys_are_never_reported_as_typos(tmp_path):
+    """Regression 2026-09-26: `GLM_IMAGE_ASSISTANT_ID` ist ein GUELTIGER
+    key, wurde aber als tippfehler von `GLM_ASSISTANT_ID` gemeldet — die
+    schleife verglich der reihe nach und brach beim ersten treffer ab
+    (praefix-kollision). Eine sicherheitswarnung, die immer brennt, wird
+    vom betreiber ignoriert; dann schuetzt sie nicht mehr.
+
+    Gepruft wird gegen die tatsaechlich gueltigen keys aus der
+    `.env`/`.env.example` des betriebs."""
+    import logging as _logging
+
+    from glm2api.config import _warn_unknown_config_keys
+
+    records: list[str] = []
+
+    class _Capture(_logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    logger = _logging.getLogger("glm2api.config.test_valid_keys_2")
+    logger.handlers = [_Capture()]
+    logger.propagate = False
+    logger.setLevel(_logging.WARNING)
+
+    valid_keys = {
+        "GLM_IMAGE_ASSISTANT_ID": "x", "GLM_ASSISTANT_ID": "y",
+        "CORS_ALLOW_ORIGIN": "*", "PORT": "8001", "HOST": "127.0.0.1",
+        "GLM_MAX_CONCURRENCY": "3", "GLM2API_LOG_DIR": "log",
+        "GLM_BASE_URL": "https://chatglm.cn/chatglm", "SERVER_API_KEYS": "k",
+        "GLM_REFRESH_TOKEN": "t", "GLM_MAX_OUTPUT_TOKENS": "16384",
+        "GLM2API_LOG_MAX_BYTES": "104857600", "GLM2API_LOG_BACKUP_COUNT": "3",
+        "GLM_USE_GUEST_REFRESH_TOKEN": "false", "LOG_LEVEL": "INFO",
+    }
+    _warn_unknown_config_keys(valid_keys, logger)
+
+    assert records == [], f"gueltige keys wurden faelschlich gemeldet: {records}"
