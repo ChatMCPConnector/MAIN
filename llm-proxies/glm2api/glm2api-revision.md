@@ -843,6 +843,30 @@ das war der blinde Fleck, den die unabhängige Prüfrunde aufgedeckt hat.
 | **S-07** | **Tatsächlich offen.** Die Eingabevalidierung war pro Endpoint ad hoc. Live gemessen: `max_tokens: "viel"` → **200** (still verworfen, die globale Grenze galt — der Client glaubte, sein Limit sei aktiv), `tools: "keine"` → 200, `messages` ohne `role` → 200. | `validate_openai_request()` an der Request-Grenze: Integer-/Number-/Listenfelder und Nachrichtenobjekte werden geprüft. `null` bleibt gültig (heißt „nicht gesetzt"). Live nach Restart: ungültige Typen → **400**, gültige Requests unverändert **200**. |
 | **C-17** | **Teilweise offen.** `Authorization` und Query-Secrets waren redigiert — aber `X-Sign` (die HMAC-Signatur der Anfrage, mit dem geheimen Schlüssel gebildet) und `set-cookie` (Upstream-Session) lagen im Klartext im Debug-Log. | Beide in die Redaktionsliste aufgenommen. `x-nonce`/`X-Timestamp` bleiben bewichtlich lesbar (keine Zugangsdaten). Der Inhalt bleibt unverändert 1:1 — das ist die bewusste Debug-Entscheidung. |
 
+### F-5t S-02 vollständig (2026-09-25)
+
+Der DNS-Rebinding-Guard aus F-5q schloss nur **eine** Hälfte des Befunds.
+Die andere Hälfte blieb offen und ist jetzt geschlossen:
+
+| Angriffspfad | Vorher | Jetzt (live gemessen) |
+|---|---|---|
+| DNS-Rebinding (`Host: evil.example`) | 200 | **403** |
+| Direkter Cross-Origin-Read (`Origin: https://evil.example`) | `Access-Control-Allow-Origin: *` → die Seite liest die Antwort | **kein ACAO-Header** → der Browser blockt |
+
+Der Rebinding-Guard allein hätte nicht gereicht: beim Rebinding ist die
+Anfrage aus Browsersicht same-origin, es findet kein Preflight statt —
+und beim *normalen* Cross-Origin-Zugriff ist der `Host`-header
+`127.0.0.1`, der Guard greift also nicht, sondern erst der Wildcard-CORS.
+
+- `CORS_ALLOW_ORIGIN` hat jetzt den Default **leer**. Der Dienst ist eine
+  API für CLI-Clients; Browserzugriff war kein Feature, sondern das Loch.
+- `*` bleibt ausdrücklich setzbar (Komfort) und bleibt auf
+  Nicht-Loopback-Bindings verboten.
+- `.env` und `.env.example` auf leer umgestellt; ein Test verhindert, dass
+  die Beispieldatei das Loch wieder aufmacht.
+- Live gegengeprüft: `health`/`models`/`chat` weiterhin 200 bzw. korrekte
+  Antwort — kein Client bricht.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

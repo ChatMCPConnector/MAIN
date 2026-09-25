@@ -412,3 +412,52 @@ def test_no_env_file_is_created_in_a_foreign_directory(tmp_path, monkeypatch):
     ensure_env_file(Path(".env"))
 
     assert not (tmp_path / ".env").exists()
+
+
+# --- S-02: CORS-default -----------------------------------------------
+
+
+def test_cors_is_disabled_by_default(tmp_path, monkeypatch):
+    """S-02: der default war `*`. Damit durfte JEDE website im browser
+    des nutzers den loopback-dienst unter `http://127.0.0.1:8001`
+    ansprechen und die antworten lesen — der `Host`-header ist dabei
+    `127.0.0.1`, der rebinding-guard greift also nicht, und genau der
+    wildcard erlaubt das lesen."""
+    env_path = tmp_path / ".env"
+    env_path.write_text("GLM_REFRESH_TOKEN=t\nGLM_ASSISTANT_ID=1\n", encoding="utf-8")
+    monkeypatch.delenv("CORS_ALLOW_ORIGIN", raising=False)
+    monkeypatch.delenv("SERVER_API_KEYS", raising=False)
+
+    assert load_config(str(env_path)).cors_allow_origin == ""
+
+
+def test_cors_wildcard_still_possible_when_explicitly_requested(tmp_path, monkeypatch):
+    """Gegenprobe zum Komfort: wer browserzugriff wirklich braucht,
+    kann ihn ausdruecklich einschalten — es wird nicht verboten, nur
+    nicht mehr voreingestellt."""
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "GLM_REFRESH_TOKEN=t\nGLM_ASSISTANT_ID=1\nCORS_ALLOW_ORIGIN=*\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("CORS_ALLOW_ORIGIN", raising=False)
+    monkeypatch.delenv("SERVER_API_KEYS", raising=False)
+
+    assert load_config(str(env_path)).cors_allow_origin == "*"
+
+
+def test_env_files_do_not_reintroduce_the_cors_wildcard():
+    """Die ausgelieferte Beispielkonfiguration darf das Loch nicht
+    wieder aufmachen — sonst waere die Umstellung in `.env.example`
+    nach dem naechsten deploy wieder rueckgaengig."""
+    from pathlib import Path as _P
+
+    example = _P(__file__).resolve().parent.parent / ".env.example"
+    if not example.exists():
+        pytest.skip("keine .env.example im repo")
+    for line in example.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("CORS_ALLOW_ORIGIN="):
+            value = line.split("=", 1)[1].strip()
+            assert value != "*", "die beispielkonfiguration darf CORS nicht auf '*' setzen"
+            return
+    pytest.fail("CORS_ALLOW_ORIGIN fehlt in .env.example")

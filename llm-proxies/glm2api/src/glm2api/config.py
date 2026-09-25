@@ -752,7 +752,14 @@ def load_config(env_file: str = ".env") -> AppConfig:
         logger,
     )
     server_api_keys = parse_list(values.get("SERVER_API_KEYS"))
-    cors_allow_origin = values.get("CORS_ALLOW_ORIGIN", "*").strip()
+    # S-02: der default war `*`. Damit durfte JEDE website im browser des
+    # nutzers den loopback-dienst unter `http://127.0.0.1:8001` ansprechen
+    # und die antworten lesen — der `Host`-header ist dabei `127.0.0.1`, der
+    # rebinding-guard greift also nicht, und genau der wildcard erlaubt das
+    # lesen. Der dienst ist eine API fuer cli-clients (opencode, curl);
+    # browserzugriff ist kein feature, sondern nur ein loch. Default ist
+    # deshalb KEIN cors. Wer ihn wirklich braucht, setzt ihn ausdruecklich.
+    cors_allow_origin = values.get("CORS_ALLOW_ORIGIN", "").strip()
     glm_base_url = values.get("GLM_BASE_URL", DEFAULT_GLM_BASE_URL).rstrip("/")
 
     config = AppConfig(
