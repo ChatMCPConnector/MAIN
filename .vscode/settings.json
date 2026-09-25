@@ -1,0 +1,26 @@
+{
+  "terminal.integrated.defaultProfile.linux": "bash",
+  "files.eol": "\n",
+  "remote.autoForwardPorts": false,
+  "remote.otherPortsAttributes": {
+    "onAutoForward": "ignore"
+  },
+  "remote.portsAttributes": {
+    "4096": {
+      "label": "opencode-Server",
+      "onAutoForward": "silent"
+    },
+    "6082": {
+      "label": "noVNC (Browser)",
+      "onAutoForward": "notify"
+    },
+    "8001": {
+      "label": "glm2api",
+      "onAutoForward": "silent"
+    },
+    "9878": {
+      "label": "antigravity-proxy",
+      "onAutoForward": "silent"
+    }
+  }
+}
