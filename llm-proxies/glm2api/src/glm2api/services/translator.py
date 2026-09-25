@@ -406,6 +406,75 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
     return None
 
 
+# Kein ':' und kein ';': damit endet auch ein rollen-praefix (`user:`),
+# und die part-verkettung haette mitten im echo-präfix umgebrochen.
+_SENTENCE_END_CHARS = ".!?\u2026\u3002\"')\u00bb"
+# Eine part, die mit einem dieser zeichen beginnt, eroeffnet einen neuen
+# block (markdown-tabelle, liste, ueberschrift, zitat) und ist damit KEINE
+# fortsetzung — auch wenn die vorherige mitten im satz endete.
+_BLOCK_START_RE = re.compile(r"\A[ \t]*(?:\||#|>|[-*+][ \t]|\d+[.)][ \t]|```|~~~)")
+
+
+def _starts_new_block(part: str) -> bool:
+    return bool(_BLOCK_START_RE.match(part))
+
+
+# Nackter call-objekt-anfang: {"name": … / {"arguments": … / {"filePath": …
+_BARE_CALL_OPENER_RE = re.compile(r'\{\s*"(?:name|arguments|filePath|command|content)"\s*:')
+
+# P-07/D-03: tool-markup, das nie geschlossen wurde. Der stream-pfad
+# haelt es ueber den markup-holdback zurueck; der final-/non-stream-pfad
+# tat das nicht und lieferte rohes DSML als antwort (gemessen in 12 von
+# 12 chunk-groessen).
+_UNTERMINATED_MARKUP_RE = re.compile(
+    r"(?i)(?:<\|\s*dsml|<\/\|\s*dsml|<ml_|<tool_call|<tool_calls|<invoke|<parameter)"
+)
+
+
+def strip_unterminated_markup(text: str) -> tuple[str, int]:
+    """Entfernt tool-markup, das nie geschlossen wurde (P-07/D-03).
+
+    Ein abgeschnittenes DSML/XML ist keine antwort. **Vollstaendiges**
+    markup wird nicht angefasst — es ist eine gueltige darstellung und der
+    parser extrahiert daraus den call. Entfernt wird nur, was der parser
+    NICHT zuordnen konnte, also ein opfer ohne passenden schliesser.
+
+    Gibt (bereinigter_text, anzahl_fragmente) zurueck."""
+    if not text:
+        return text, 0
+    residue = _markup_residue_after_parsing(text)
+    if residue is None:
+        return text, 0
+    return text[: residue[1]].rstrip(), 1
+
+
+def _markup_residue_after_parsing(text: str) -> tuple[str, int] | None:
+    """(rest_text, startindex) des ersten unterminierten markup-uecks."""
+    match = _UNTERMINATED_MARKUP_RE.search(text)
+    if match is None:
+        return None
+    start = match.start()
+    tail = text[start:]
+    # ein passender schliesser irgendwo danach -> vollstaendig
+    closer = re.search(r"(?i)</\|\s*dsml|</ml_|<\/tool_call|</invoke|</parameter", tail)
+    if closer is not None and closer.start() > 0:
+        return None
+    return tail, start
+
+
+def _ends_sentence(text: str) -> bool:
+    """Endet der text mit einem satzzeichen (ohne absatztrenner)?
+
+    Trennt 'mitten im satz' (fortsetzung) von 'ganzer absatz' (neuer
+    absatz). Ein fragment, das mit `.` endet, ist ein satzende — dort ist
+    ein absatzumbruch plausibel und wird gesetzt. Alles andere ist eine
+    mitten im satz abgeschnittene part und wird direkt angehaengt."""
+    stripped = text.rstrip()
+    if not stripped:
+        return True
+    return stripped[-1] in _SENTENCE_END_CHARS
+
+
 def normalize_file_path(raw_path: str) -> str:
     """T-16: `filePath` ohne URI-/Root-Kontext umzuschreiben war fehlerhaft.
 
@@ -1759,10 +1828,18 @@ class GLMEventAccumulator:
             # tool_calls=1 UND text_len=1630 gleichzeitig) koennen am
             # parser vorbei fragmente enthalten. Parken im deferred buffer —
             # dort greift das finalize-safety-net (parse + cleanup).
+            # T-09/D-03: der midstream-guard pruefte nur auf den
+            # `{"tool_calls"`-wrapper. Die NACKTE objektform
+            # (`sieh {"name":"bash","arguments":{…`)Contains keinen
+            # wrapper und lief dadurch als sichtbarer text heraus
+            # (gemessen in 7 von 12 chunk-groessen). Beide opnerformen
+            # gehoeren in denselben holdback — der finalize-safety-net
+            # entfernt sie anschliessend.
             protocol_fragment = self.allowed_tool_names is not None and (
                 '{"tool_calls"' in visible_text_delta
                 or "<ml_tool_call" in visible_text_delta
                 or "<|DSML|tool_call" in visible_text_delta
+                or _BARE_CALL_OPENER_RE.search(visible_text_delta) is not None
             )
             # T-07: sobald dieser turn einen tool-call enthaelt, darf bereits
             # gesendeter text nicht als antwort stehen bleiben. Solange
@@ -2252,6 +2329,18 @@ class GLMEventAccumulator:
                 if stop_index != -1:
                     full_text = full_text[:stop_index]
                     break
+        # P-07/D-03: unterminiertes tool-markup vor dem parser entfernen.
+        # Der stream-pfad haelt es ueber den markup-holdback zurueck, der
+        # finalpfad tat das nicht und lieferte rohes DSML als antwort
+        # (gemessen in 12 von 12 chunk-groessen).
+        full_text, markup_fragments = strip_unterminated_markup(full_text)
+        if markup_fragments:
+            self.truncated_turn = True
+            log = self.logger or _LOGGER
+            log.warning(
+                "Stripped %s unterminated tool-markup fragment(s) from non-streaming text",
+                markup_fragments,
+            )
         clean_content, xml_tool_calls = parse_tool_calls_from_text(
             full_text.strip(),
             allowed_tool_names=self.allowed_tool_names,
@@ -2431,8 +2520,17 @@ class GLMEventAccumulator:
                     # eingefuegtes `\n\n` mitten im json-protokoll liess den
                     # parser den call verlieren und den rest als text
                     # ausliefern.
-                    if (text_delta_parts or self._part_text_sent) and not text_continues_protocol(
-                        self._emitted_text_prefix
+                    # T-20: dieselbe verkettungsregel wie im finalpfad —
+                    # ein `\n\n` an jeder part-grenze zerreiss jede zeile,
+                    # wenn der upstream einen text ueber viele logic_ids
+                    # verteilt (live: 166 ids in einem turn).
+                    if (
+                        (text_delta_parts or self._part_text_sent)
+                        and not text_continues_protocol(self._emitted_text_prefix)
+                        and (
+                            _ends_sentence(self._emitted_text_prefix)
+                            or _starts_new_block(rendered_text)
+                        )
                     ):
                         text_delta_parts.append("\n\n")
                     text_delta_parts.append(rendered_text)
@@ -2448,8 +2546,13 @@ class GLMEventAccumulator:
                     # siehe text-zweig: gleiche regel fuer den
                     # reasoning-kanal (dort landen die protocol-fragmenten).
                     if (
-                        reasoning_delta_parts or self._part_reasoning_sent
-                    ) and not text_continues_protocol(self._emitted_reasoning_prefix):
+                        (reasoning_delta_parts or self._part_reasoning_sent)
+                        and not text_continues_protocol(self._emitted_reasoning_prefix)
+                        and (
+                            _ends_sentence(self._emitted_reasoning_prefix)
+                            or _starts_new_block(rendered_reasoning)
+                        )
+                    ):
                         reasoning_delta_parts.append("\n\n")
                     reasoning_delta_parts.append(rendered_reasoning)
                 elif len(rendered_reasoning) > prev_len:
@@ -2499,8 +2602,13 @@ class GLMEventAccumulator:
                             if isinstance(image, dict) and image.get("image_url"):
                                 part_text.append(f"![image]({image['image_url']})")
 
-            rendered_text = "\n".join(filter(None, part_text)).strip()
-            rendered_reasoning = "\n".join(filter(None, part_reasoning)).strip()
+            # T-20: KEIN `.strip()` pro part. Ein part, der nur aus einem
+            # leerzeichen besteht, war dadurch komplett verloren — bei
+            # zeichenweiser zustellung ('Die Datei') fehlte der space
+            # komplett und ergab 'DieDatei'. Getrimmt wird erst am
+            # fertigen ergebnis, wo es nichts mehr zerstoert.
+            rendered_text = "\n".join(item for item in part_text if item)
+            rendered_reasoning = "\n".join(item for item in part_reasoning if item)
             if rendered_text:
                 text_parts.append(rendered_text)
                 self._cached_part_texts[logic_id] = rendered_text
@@ -2517,16 +2625,30 @@ class GLMEventAccumulator:
         # angebrochenen protokoll-struktur weiter, wird es deshalb OHNE
         # trenner angehaengt.
         def _join_with_protocol_continuation(parts: list[str]) -> str:
+            """T-20: chatglm zerlegt einen einzigen logischen text ueber
+            viele logic_ids (live: 166 ids in einem turn). Ein `\n\n` an
+            jeder part-grenze zerreiss daher nicht nur protokoll, sondern
+            JEDE ZEILE — der text wird zu `u\n\ns\n\ne\n\nr`. Ein
+            absatzumbruch wird nur eingesetzt, wenn die vorherige part
+            tatsaechlich mit einem zeilenende schliesst; endet sie
+            mitten in einer zeile, ist die naechste part deren
+            fortsetzung. Das gilt fuer gewöhnlichen text genauso wie
+            fuer ein angebrochenes protokoll."""
             joined = ""
             for part in parts:
-                if joined and text_continues_protocol(joined):
+                if not joined:
+                    joined = part
+                    continue
+                if text_continues_protocol(joined) or (
+                    not _ends_sentence(joined) and not _starts_new_block(part)
+                ):
                     joined += part
                 else:
-                    joined = f"{joined}\n\n{part}" if joined else part
+                    joined = f"{joined}\n\n{part}"
             return joined
 
-        self._cached_full_text = _join_with_protocol_continuation(text_parts)
-        self._cached_full_reasoning = _join_with_protocol_continuation(reasoning_parts)
+        self._cached_full_text = _join_with_protocol_continuation(text_parts).strip()
+        self._cached_full_reasoning = _join_with_protocol_continuation(reasoning_parts).strip()
         self._render_cache_dirty = False
         return self._cached_full_text, self._cached_full_reasoning
 

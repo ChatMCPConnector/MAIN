@@ -679,6 +679,46 @@ Verhalten als korrekt** fest. Diese Tests sind der Grund, warum meine
 Abschlussmeldung falsch war: das Messinstrument war defekt, nicht nur die
 Messung.
 
+### F-5j Messinstrument repariert + Stream-Lecks geschlossen (2026-09-25)
+
+Die Konsequenz aus F-5i umgesetzt: zuerst das **Werkzeug**, dann die
+Befunde. Die Symptom-Suite prüfte ausschließlich `build_response()` und war
+damit blind für alles, was nur im Stream-Delta passiert — genau dort lagen
+die gefundenen Lecks.
+
+**Neue Suite** (`tests/test_leak_sweep.py`): prüft die **tatsächlich
+gestreamten Content-Deltas** (was der Client live sieht) *und* die finale
+Antwort, über acht Payload-Formen (vier Live-Leaks plus Echo-Präfix,
+Echo-Zeile, abgeschnittenes DSML) × 12 Chunk-Größen × beide
+Logic-ID-Varianten.
+
+| Befund | Fehlverhalten (gemessen) | Ursache und Fix |
+|---|---|---|
+| **P-04/D-02** | `read("/tmp/a.py")` wurde bei Chunk-Größen 1–3 **komplett als sichtbarer Content gestreamt** — zeichenweise. Der Holdback suchte nur nach dem **vollständigen** Funktionsnamen (`rfind("read")`); bei Ein-Zeichen-Zustellung ist der Puffer `r`, der Treffer bleibt -1. | Erkennt jetzt auch jedes **Präfix** eines bekannten Aufrufs am Zeilenanfang. |
+| **P-06/D-04** | `user: [{…}]` blieb in **12 von 12** Chunk-Größen sichtbar, `User: [{…}]` in 8. | Zwei Ursachen: (a) die Echo-Muster waren im Modul **doppelt definiert** — die spätere, wirksame Definition war case-sensitiv, die erste bereits case-insensitiv; (b) der generische `{"`-Holdback gab bei `user: [{` den **Rest als sichtbar** zurück und löschte damit das Rollen-Präfix, wonach die Echo-Zeile nicht mehr erkennbar war. Beides behoben. |
+| **P-07/D-03** | Abgeschnittenes DSML landete **1:1 als Antwort** (12 von 12 Größen), `truncated_turn` blieb `false`. Der Stream-Pfad hielt Markup über den Markup-Holdback zurück, der Final-Pfad nicht. | `strip_unterminated_markup()` im Final-Pfad — entfernt ausschließlich Markup **ohne** passenden Schließer, vollständiges Markup bleibt unangetastet. |
+| **T-20 (Vertiefung)** | Die Part-Verkettung setzte `
+
+` an **jede** Grenze und zeriss damit jede Zeile: zeichenweise Zustellung ergab `Die Datei` → `Dieatsd` (Leerzeichen-Parts fielen am `.strip()` pro Part weg). | Drei Korrekturen: (a) kein `.strip()` pro Part, sondern erst am Endergebnis; (b) ein Absatzumbruch nur, wenn die vorige Part mit einem **Satzzeichen** endet und die nächste keinen **Block-Marker** (Markdown-Tabelle, Liste, Überschrift) trägt; (c) dieselbe Regel im Delta-Pfad — sonst stimmen Stream und Final nicht mehr überein. |
+
+**Ergebnis:** `text-function`, beide Echo-Formen und `dsml-truncated` sind
+in **allen** Chunk-Größen und beiden Logic-ID-Varianten sauber — vorher
+39 Beanstandungen, jetzt **eine** verbleibende Familie, die unten
+ausdrücklich als offen ausgewiesen ist.
+
+**Bewusst nicht umgesetzt — offener Rest:** `sieh {"name":"bash","arguments":…`
+(Fragment nach Prosa) leckt noch in 4 von 12 Chunk-Größen. Zwei Lösungswege
+wurden erprobt und **verworfen**: der Holdback im Parser erweitert erzeugt
+eine **Stream/Non-Stream-Paritätsverletzung** — der Final-Pfad repariert
+denselben Input zu einem ausführbaren `bash`-Call, der Stream-Pfad nicht
+(V-05 verlangt Gleichstand). Die eigentliche Frage ist damit keine
+Parser-Regel, sondern eine **Vertragsentscheidung**: Darf ein
+abgeschnittener Call überhaupt ausgeführt werden? Nach T-13 („Truncation ist
+kein Erfolg") lautet die Antwort nein — dann muss der Final-Pfad den
+reparierten Call verwerfen statt ihn zu liefern. Das ist eine bewusste
+Entscheidung, keine nachgelagerte Parser-Korrektur, und deshalb hier
+ausdrücklich offen gelassen statt stillschweigend „gefast".
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

@@ -815,14 +815,21 @@ _CALL_OPENER_KEYS = (
     '"call_id"',
     '"name"',
 )
+# P-06/D-04: case-insensitiv. `user: [{"…}]` blieb in 100 % aller
+# chunk-groessen sichtbar, waehrend die praefix-erkennung
+# (`_echo_role_prefix_len`) bereits case-insensitiv war — zwei
+# widersprechende regeln fuer dieselbe sache.
 _TRANSCRIPT_ECHO_START_RE = re.compile(
-    r'(?:^|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
+    r'(?:^|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")',
+    re.IGNORECASE,
 )
 _TRANSCRIPT_ECHO_ROW_RE = re.compile(
-    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
+    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")',
+    re.IGNORECASE,
 )
 _TRANSCRIPT_ECHO_ROW_TAIL_RE = re.compile(
-    r'[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
+    r'[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")',
+    re.IGNORECASE,
 )
 _CALL_OPENER_INLINE_RE = re.compile(r'\{\s*"(?:tool_calls|name)"\s*:')
 _FUNC_CALL_NAME_RE = re.compile(r"(?<![\w.$])([A-Za-z_][A-Za-z0-9_.\-]*)\s*\(")
@@ -832,21 +839,6 @@ _INLINE_BARE_NAME_RE = re.compile(r'\{\s*"name"\s*:\s*"([A-Za-z_][A-Za-z0-9_\-]*
 # speicherhaltung erzeugt.
 _MAX_HOLDBACK_CHARS = 262144
 
-# Halluziniertes eigenes konversations-format: 'User: [{"call_id": "..."}]'.
-# Erkennt den START einer Echo-Zeile; das JSON darin kann mehrzeilig sein
-# (content enthaelt newlines), deshalb wird das blockende per balance-scan
-# bestimmt, nicht per zeilenanker.
-_TRANSCRIPT_ECHO_START_RE = re.compile(
-    r'(?:^|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
-)
-_TRANSCRIPT_ECHO_ROW_RE = re.compile(
-    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
-)
-# gleiche zeile, aber ohne den zeilenanker — wird direkt an der position
-# nach whitespace geprueft (follow-up-echo-zeilen).
-_TRANSCRIPT_ECHO_ROW_TAIL_RE = re.compile(
-    r'[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")'
-)
 # Maximale praefixe, die am chunkende noch gehalten werden muessen, damit
 # ein ueber chunk-grenzen verteilter echo-beginn nicht leakt.
 _ECHO_ROLE_NAMES = ("user", "assistant")
@@ -883,7 +875,8 @@ def _echo_role_prefix_len(text: str) -> int:
 # ist angebrochen ('User: [{"', 'User: [{"call_id": ...') und noch nicht
 # balanciert — dann muss der rest des fragments zurueckgehalten werden.
 _TRANSCRIPT_ECHO_OPEN_RE = re.compile(
-    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*\[?\s*\{[^{}]*$'
+    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*\[?\s*\{[^{}]*$',
+    re.IGNORECASE,
 )
 
 
@@ -915,6 +908,45 @@ def _balanced_json_end(text: str, start: int) -> int:
             depth -= 1
             if depth == 0:
                 return i + 1
+    return -1
+
+
+# P-06/D-04: `User:` / `assistant:` am zeilenanfang, gefolgt vom
+# doppelpunkt. Bewusst ohne Anforderung an den Inhalt danach.
+_ECHO_ROLE_LINE_RE = re.compile(r"(?i)\A[ \t]*(?:user|assistant)[ \t]*:")
+
+
+def _echo_row_start_index(text: str) -> int:
+    """Index, ab dem eine (ggf. angebrochene) Echo-Zeile beginnt, sonst -1.
+
+    Erkannt werden sowohl `User: [{` (rollen-praefix) als auch der noch
+    unvollstaendige anfang `User`, `Us`, `U` am zeilenanfang. Zweck: der
+    generische `{"`-holdback darf den praefix einer echo-zeile nicht als
+    sichtbaren text freigeben — sonst ist die zeile danach nicht mehr als
+    echo erkennbar."""
+    row = _TRANSCRIPT_ECHO_ROW_RE.search(text)
+    if row is not None:
+        return row.start() + (1 if text[row.start()] == "\n" else 0)
+    # generisch: eine zeile, die mit `User:`/`assistant:` + DOPPELPUNKT
+    # beginnt, ist eine echo-zeile — unabhaengig davon, was nach dem
+    # doppelpunkt steht. `_echo_role_prefix_len` kannte nur eine feste
+    # liste von formen (`user: [`, `user: [{`) und erkannte `user: "`
+    # nicht, wodurch das praefix doch freigegeben wurde.
+    role_row = _ECHO_ROLE_LINE_RE.match(text)
+    if role_row is not None:
+        return role_row.start()
+    prefix = _echo_role_prefix_len(text)
+    if prefix:
+        return len(text) - prefix
+    # `U` / `Us` / `User` als GANZER anfang (noch ohne `:`). Nur der
+    # anfang zaehlt: eine regel "text endet auf 'a' ist assistant-praefix"
+    # haette `text {"a` zur echo-zeile erklärt (gemessen).
+    stripped = text.rstrip()
+    if stripped and "\n" not in stripped:
+        lowered = stripped.lower()
+        for role in _ECHO_ROLE_NAMES:
+            if any(role[:length] == lowered for length in range(1, len(role) + 1)):
+                return 0
     return -1
 
 
@@ -962,7 +994,14 @@ def _is_structural_opener(text: str, pos: int) -> bool:
     """Steht die klammer am anfang einer zeile (bzw. auf position 0)?
     Tool-calls starten immer so; eine klammer mitten in einem satz
     ('nutze {} in CSS') ist keine call-struktur und wird nicht
-    zurueckgehalten, damit normaler text live streamen kann."""
+    zurueckgehalten, damit normaler text live streamen kann.
+
+    T-09: eine gezielte ausnahme fuer 'fragment nach prosa auf derselben
+    zeile' (`sieh {"name":"bash",`) wurde hier erprobt und ZURUECKGENOMMEN:
+    sie weitete den holdback so weit aus, dass `{"name": …, "arguments": {`
+    am INNEREN opfer erkannt wurde und der eigentliche call-anfang als
+    sichtbarer text durchging. Die naeherliegende loesung sitzt in
+    `_find_unterminated_call_start()` (reihenfolge ausserhalb -> innen)."""
     prefix = text[:pos]
     line_start = prefix.rfind("\n") + 1
     return not prefix[line_start:].strip()
@@ -972,7 +1011,17 @@ def _looks_like_call_opener(text: str, pos: int) -> bool:
     """Potenzieller tool-call ab pos? Zeilenposition plus JSON-beginn
     genuegen; ein sichtbares schluesselwort im fenster ist zusaetzlich
     ein hinweis, aber keine bedingung (beim ersten chunk ist das fenster
-    noch leer)."""
+    noch leer).
+
+    T-09: eine ausnahme fuer 'fragment nach prosa' (`sieh {"name":"bash",`)
+    wurde hier erprobt und ZURUECKGENOMMEN. Sie haelt zwar den abschnitt
+    zurueck, erzeugt aber eine stream/non-stream-paritaetsverletzung: der
+    finalpfad repariert denselben input zu einem ausfuehrbaren `bash`-call,
+    der streampfad nicht — und V-05 verlangt, dass beide zum selben
+    ergebnis kommen. Die aufloesung ist nicht im parser, sondern in der
+    frage, ob ein ABGESCHNITTENER call ueberhaupt ausgefuehrt werden
+    darf (T-13: 'truncation ist kein erfolg'). Das ist eine
+    vertragsentscheidung und keine parser-regel."""
     if not _is_structural_opener(text, pos):
         return False
     return text[pos:].lstrip().startswith(("{", "["))
@@ -1011,7 +1060,11 @@ def _find_unterminated_call_start(text: str) -> int:
         _ch, pos = stack[-1]
         if _looks_like_call_opener(text, pos):
             return pos
-    for _ch, pos in reversed(stack):
+    # T-09: von AUSSEN nach innen pruefen. Die reverse reihenfolge lieferte
+    # den inneren opfer (`"arguments": {`) statt des call-anfangs — bei
+    # `{"name":"write","arguments":{"filePath":…` wurde dadurch
+    # `{"name":"write","arguments":` als sichtbarer text freigegeben.
+    for _ch, pos in stack:
         if _looks_like_call_opener(text, pos):
             return pos
     return -1
@@ -1376,6 +1429,17 @@ def _find_json_tool_call(
         # '}'/'"'-dynamik egal: das hier ist nur hold-back, geparsed wird
         # spaeter ohnehin der komplette block.
         if not final:
+            # P-06/D-04: der generische `{"`-holdback gibt bei JEDEM text
+            # mit `{` am ende den rest als sichtbar zurueck. Bei einer
+            # halluzinierten echo-zeile (`User: [{...}]`) wurde dadurch das
+            # rollen-praefix emittiert — der echo-filter sah danach keine
+            # echo-zeile mehr und das json-objekt landete als sichtbarer
+            # text (gemessen: `user: [{"call_id":…}]` in 12 von 12
+            # chunk-groessen). Eine zeile, die mit einer echo-rolle
+            # beginnt, wird deshalb komplett gehalten.
+            echo_row_start = _echo_row_start_index(text)
+            if echo_row_start != -1:
+                return text[:echo_row_start], text[echo_row_start:], []
             protocol = '{"tool_calls":'
             max_hold = min(len(masked), len(protocol))
             for length in range(max_hold, 0, -1):
@@ -1719,7 +1783,14 @@ def _find_partial_text_function_start(text: str) -> int | None:
     """Start eines angebrochenen text-funktionsaufrufs am zeilenanfang
     (P-04), sonst None. Nur die zeilenanfangsform wird gehalten, damit
     ein erwaehnung im fliesstext ('nutze read("x") zum lesen') nicht
-    haengen bleibt."""
+    haengen bleibt.
+
+    P-04/D-02: es wurde nur nach dem VOLLSTAENDIGEN namen gesucht
+    (`text.rfind(name)`). Bei zeichenweiser zustellung ist der puffer dann
+    `read`/`rea`/`r` — `rfind` findet nichts, der holdback greift nie, und
+    der komplette aufruf `read("/tmp/a.py")` landet als sichtbarer content
+    (gemessen bei chunk-groessen 1-3). Deshalb wird jetzt auch jedes
+    PRAEFIX eines bekannten namens am zeilenanfang erkannt."""
     for name in _TEXT_FUNC_NAMES:
         idx = text.rfind(name)
         while idx != -1:
@@ -1733,6 +1804,18 @@ def _find_partial_text_function_start(text: str) -> int | None:
                     return idx
                 return None
             idx = text.rfind(name, 0, idx)
+
+    # angebrochener name: die puffer-endposition ist ein praefix eines
+    # bekannten aufrufs, und davor steht nur zeilenanfang.
+    for name in _TEXT_FUNC_NAMES:
+        for prefix_length in range(1, len(name)):
+            candidate = name[:prefix_length]
+            if not text.endswith(candidate):
+                continue
+            before = text[: -prefix_length]
+            line_start = before.rfind("\n") + 1
+            if not before[line_start:].strip():
+                return len(text) - prefix_length
     return None
 
 
