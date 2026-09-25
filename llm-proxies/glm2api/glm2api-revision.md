@@ -793,6 +793,15 @@ Beide Fehler waren **stream-only** — die finale Antwort war in beiden Fällen
 korrekt. Ein Test, der nur `build_response()` prüft, sieht sie nicht; genau
 das war der blinde Fleck, den die unabhängige Prüfrunde aufgedeckt hat.
 
+### F-5o T-11, P-12/P-14, P-13 (2026-09-25)
+
+| Befund | Fehlverhalten (gemessen) | Umsetzung |
+|---|---|---|
+| **T-11** | `tool_calls` kommt auch als **Liste** vor; der Dict-Zweig ignorierte sie — der native Call kam nie an, der Agent blieb stehen. | Die Listenform wird ausgewertet — mit **denselben Wächtern** wie der Dict-Zweig. Das war nicht selbstverständlich: mein erster Entwurf hängte die Einträge direkt an `_server_side_tool_calls` und umging damit Blockliste, Allowlist und das Policy-Mapping. Selbst gemessen (`open_url` ausführbar, `read` ohne deklarierte Tools ausführbar) und korrigiert. |
+| **P-14** | Der Holdback war **außerhalb** des DSML-Pfades unbegrenzt: ein nie geschlossenes `{"name":"read","arguments":{"filePath":"` ließ den Puffer unbegrenzt wachsen (12.000 Zeichen nach 300 Stücken). Ein Speicherpfad bei abgeschnittenem Upstream-Strom. | Obergrenze gilt jetzt für den gesamten Holdback. Wird sie erreicht, wird der Rest als sichtbarer Text freigegeben — besser ein Fragment als unbegrenzter Speicher. |
+| **P-12** | Die Strukturerkennung lief für **jedes** Chunk über den gesamten Puffer. 360 k Zeichen kosteten **286 Sekunden** — ein abgeschnittener Strom pinnt einen Kern. | Der Scan ist inkrementell (nur das neue Fragment), das Zwischenergebnis wird pro Stapelzustand gecacht, und die Auswertung ist auf die ersten 64 Stapel-Einträge begrenzt (der Holdback beginnt beim **äußersten** call-artigen Öffner). **Ehrlich offen:** der Extremfall ist damit von 286 s auf ~200 s gefallen, nicht auf Sekunden. Eine echte Lösung braucht einen ereignisbasierten Puffer statt Textanhängung — ein Umbau. Was bleibt, ist durch die Obergrenze aus P-14 gedeckelt. |
+| **P-13** | Der `[]`-Terminator nach einem Aufruf kommt als eigenes Fragment und wurde bei zeichenweiser Zustellung **als sichtbarer Text ausgegeben** — der Client sah am Ende jeder Tool-Runde ein `[]` (gemessen bei Chunk-Größen 1–3, sowohl im Rohparser als auch im Accumulator, also beim Client). | Der Parser hält den Terminator nach einem ausgelieferten Call zurück. Das ist die seit dem Audit dokumentierte „kosmetische" Restzeile — sie war keine Kosmetik, sie landete im sichtbaren Text. |
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

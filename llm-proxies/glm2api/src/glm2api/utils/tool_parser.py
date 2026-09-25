@@ -839,6 +839,25 @@ _INLINE_BARE_NAME_RE = re.compile(r'\{\s*"name"\s*:\s*"([A-Za-z_][A-Za-z0-9_\-]*
 # speicherhaltung erzeugt.
 _MAX_HOLDBACK_CHARS = 262144
 
+# P-12: wie viele stapel-eintraege bei der auswertung geprueft werden. Der
+# hold-back beginnt beim AEUERSTEN call-artigen opfer, die ersten N
+# genuegen; ohne diese begrenzung waechst der aufwand mit dem puffer (bei
+# einem abgeschnittenen strom mit 24k offenen klammern: hunderte mio
+# pruefungen, gemessen 195 s fuer 360k zeichen).
+_SCAN_EVAL_LIMIT = 64
+
+# T-22/P-13: angebrochene terminatoren, auf die der parser warten muss,
+# statt den rest schon auszugeben.
+_PARTIAL_TERMINATORS = ("]", ".[]", ".", " ")
+
+# T-22/P-13: ein puffer, der nur aus terminator-zeichen besteht
+_TERMINATOR_ONLY_RE = re.compile(r"\A[\[\];,.\s]*\Z")
+
+# P-12: zeichen, die eine JSON-/XML-Struktur oeffnen oder schliessen
+# koennen. Ohne eines davon kann ein neues fragment weder eine struktur
+# eroeffnen noch eine bestehende schliessen.
+_STRUCTURE_CHARS = frozenset('{}[]"\\<>`\'')
+
 # Maximale praefixe, die am chunkende noch gehalten werden muessen, damit
 # ein ueber chunk-grenzen verteilter echo-beginn nicht leakt.
 _ECHO_ROLE_NAMES = ("user", "assistant")
@@ -1495,8 +1514,13 @@ def _find_json_tool_call(
             break
     if consumed:
         rest = rest[consumed:]
-    elif not final and rest_stripped == "":
-        # warte noch auf den terminator
+    elif not final and (rest_stripped == "" or rest_stripped in _PARTIAL_TERMINATORS):
+        # T-22/P-13: noch auf den terminator warten. Bei zeichenweiser
+        # zustellung steht zwischen dem json-ende und dem vollstaendigen
+        # `[]` momentan nur `]` (oder `.[]`) im rest — das wurde nicht
+        # als "warte noch" erkannt, der rest wurde ausgegeben und der
+        # terminator blieb als sichtbarer text stehen
+        # (gemessen: '[]' im client-text bei chunk-groessen 1-3).
         return text[:start], text[start:], []
     try:
         parsed = json.loads(candidate)
@@ -1636,6 +1660,7 @@ def _split_stream_text(
     final: bool,
     *,
     detect_all: bool = False,
+    open_call: int | None = None,
 ) -> tuple[str, str, list[dict[str, object]]]:
     # 0) Halluziniertes eigenes konversations-format (V-01/THEMA 5):
     #    'User: [{"call_id": ...}]' ist nie eine echte antwort.
@@ -1654,7 +1679,8 @@ def _split_stream_text(
         # hold-back leitet sich aus derselben JSON-struktur ab wie die
         # vollstaendige erkennung und ist dadurch ueber jede chunk-grenze
         # hinweg stabil (V-01).
-        open_call = _find_unterminated_call_start(text)
+        if open_call is None:
+            open_call = _find_unterminated_call_start(text)
         if open_call != -1:
             return text[:open_call], text[open_call:], []
         echo_prefix = _echo_role_prefix_len(text)
@@ -2067,6 +2093,12 @@ class StreamingToolParser:
     # klammern 288 mio iterationen).
     _scan_opener_index: int | None = None
     _scan_cached_position: int | None = None
+    _scan_eval_version: tuple[int, int, bool] = (-1, -1, False)
+    _scan_eval_result: int | None = None
+    # T-22/P-13: nach einem ausgelieferten call kommt der `[]`-terminator
+    # als eigenes fragment. Solange er aussteht, wird er zurueckgehalten,
+    # damit er nicht als sichtbarer text beim client landet.
+    _awaiting_terminator: bool = False
 
     def logger_warning_once(self, message: str) -> None:
         """Warnung genau einmal pro parser (P-14: puffer-grenzen-warnung)."""
@@ -2079,6 +2111,14 @@ class StreamingToolParser:
         if not chunk:
             return ""
         self.pending_text += chunk
+        # T-22/P-13: der `[]`-terminator nach einem call wird als eigenes
+        # fragment zugestellt. Solange er aussteht, zurueckhalten.
+        if self._awaiting_terminator:
+            if _TERMINATOR_ONLY_RE.match(self.pending_text):
+                self._awaiting_terminator = False
+                self.pending_text = ""
+                return ""
+            self._awaiting_terminator = False
         # T-06: merken, ob ein vollstaendiges call-protokoll im puffer lag.
         # Wird es danach konsumiert, ohne dass ein ausfuehrbarer call
         # entsteht (`read` ohne filePath, `bash` ohne command), hat das
@@ -2161,6 +2201,12 @@ class StreamingToolParser:
                 if jrem == self.pending_text:
                     break
                 self.pending_text = jrem
+            # T-22/P-13: nach dem aufruf kommt der `[]`-terminator als
+            # eigenes fragment. Ohne ihn hier zurueckzuhalten landete er
+            # als sichtbarer text beim client (gemessen: '[]' im
+            # client-text bei chunk-groessen 1-3).
+            if self.tool_calls:
+                self._awaiting_terminator = True
             return "".join(emitted_vis)
 
         # P-12: die struktur-pruefungen unten sind O(len(puffer)) und
@@ -2237,10 +2283,13 @@ class StreamingToolParser:
         if jrem:
             self.pending_text = jrem
             return jvis
+        # P-12: das inkrementell ermittelte ergebnis mitgeben, damit hier
+        # nicht noch einmal ueber den gesamten puffer gescannt wird.
         visible, remainder, parsed_calls = _split_stream_text(
             self.pending_text,
             allowed_tool_names=self.allowed_tool_names,
             final=False,
+            open_call=self._scan_unterminated_incremental(),
         )
         self.pending_text = remainder
         self.tool_calls.extend(parsed_calls)
@@ -2277,19 +2326,37 @@ class StreamingToolParser:
                 stack.pop()
             index += 1
         self._scan_state = (index, stack, in_string, escaped, None)
-        # P-12: zwischenergebnis nur bei stapel-veraenderung neu bewerten
-        cached = self._scan_opener_index
-        if cached is not None and cached < len(stack):
-            if stack[cached][1] == self._scan_cached_position:
-                return self._scan_cached_position
-        self._scan_opener_index = None
+        # P-12: die auswertung haengt ausschliesslich an stapel-inhalt und
+        # string-zustand ab. Solange sich beides nicht aendert, kann sich
+        # das ergebnis nicht aendern — auch nicht das negative. Ohne diesen
+        # cache wurde der komplette stapel pro chunk neu durchlaufen; bei
+        # einem abgeschnittenen strom mit 24k offenen klammern sind das
+        # hunderte mio iterationen (gemessen: 202 s fuer 360k zeichen).
+        version = (
+            len(stack),
+            stack[-1][1] if stack else -1,
+            in_string,
+        )
+        if version == self._scan_eval_version:
+            return self._scan_eval_result
         if in_string and stack:
             _char, position_of = stack[-1]
             if _looks_like_call_opener(text, position_of):
-                return self._remember_opener(len(stack) - 1, position_of)
-        for offset, (_char, position_of) in enumerate(stack):
+                self._scan_eval_version = version
+                self._scan_eval_result = position_of
+                return position_of
+        # Der hold-back beginnt beim AEUERSTEN call-artigen opfer, also
+        # genuegen die ersten `_SCAN_EVAL_LIMIT` stapel-eintraege. Ohne
+        # diese begrenzung waechst der aufwand mit dem puffer — bei einem
+        # abgeschnittenen strom mit 24k offenen klammern sind das hunderte
+        # mio pruefungen (gemessen: 195 s fuer 360k zeichen).
+        for _char, position_of in stack[:_SCAN_EVAL_LIMIT]:
             if _looks_like_call_opener(text, position_of):
-                return self._remember_opener(offset, position_of)
+                self._scan_eval_version = version
+                self._scan_eval_result = position_of
+                return position_of
+        self._scan_eval_version = version
+        self._scan_eval_result = None
         return None
 
     def _remember_opener(self, stack_index: int, position: int) -> int:

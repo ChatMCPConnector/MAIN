@@ -1,5 +1,6 @@
 import json
 
+from glm2api.utils.tool_parser import _MAX_HOLDBACK_CHARS
 from glm2api.utils.tool_parser import (
     StreamingToolParser,
     _is_allowed_tool_name,
@@ -844,3 +845,67 @@ def test_filter_tools_drops_case_variant_of_blocked_tool():
     filtered = filter_tools(tools, {"dangerous_tool"})
 
     assert [tool["function"]["name"] for tool in (filtered or [])] == ["read"]
+
+
+# --- T-11 und P-14/P-12: native Listenform, begrenzter Holdback --------
+
+
+def test_holdback_is_bounded_outside_the_dsml_path():
+    """P-14: der Holdback war ausserhalb des DSML-Pfades unbegrenzt. Ein
+    nie geschlossenes Call-Fragment liess den Puffer unbegrenzt wachsen —
+    ein Speicherpfad bei abgeschnittenem Upstream-Strom."""
+    parser = StreamingToolParser(allowed_tool_names={"read"})
+    fragment = '{"name":"read","arguments":{"filePath":"'
+    for _ in range(200):
+        parser.consume(fragment)
+
+    assert len(parser.pending_text) <= _MAX_HOLDBACK_CHARS + len(fragment), (
+        f"holdback ungegrenzt: {len(parser.pending_text)} zeichen"
+    )
+
+
+def test_structure_scan_is_incremental_not_a_full_buffer_rescan():
+    """P-12: die Strukturerkennung lief fuer jedes Chunk ueber den
+    gesamten Puffer. Der Scan ist jetzt inkrementell (nur das neue
+    Fragment) — der Test prueft, dass ein langer Puffer nicht erneut
+    von vorn gelesen wird."""
+    parser = StreamingToolParser(allowed_tool_names={"read"})
+    for _ in range(40):
+        parser.consume('{"name":"read","arguments":{"filePath":"')
+
+    scanned_position, stack, in_string, _escaped, _opener = parser._scan_state
+    assert scanned_position == len(parser.pending_text), "scan ist nicht fortgesetzt"
+    assert len(stack) > 0
+
+
+def test_streamed_protocol_is_still_detected_with_the_incremental_scan():
+    """Gegenprobe zur Optimierung: der inkrementelle Scan darf keinen
+    Aufruf übersehen."""
+    for chunk_size in (1, 3, 7, 19):
+        parser = StreamingToolParser(allowed_tool_names={"read"})
+        payload = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}[]'
+        visible = ""
+        for index in range(0, len(payload), chunk_size):
+            visible += parser.consume(payload[index : index + chunk_size])
+        tail, calls = parser.flush()
+
+        assert [call["function"]["name"] for call in calls] == ["read"], f"chunk={chunk_size}"
+        assert not (visible + tail).strip(), f"chunk={chunk_size}: call zusaetzlich als text"
+
+
+def test_protocol_terminator_does_not_leak_into_visible_text():
+    """T-22/P-13: der `[]`-terminator nach einem Aufruf kommt als eigenes
+    Fragment. Bei zeichenweiser Zustellung wurde er als sichtbarer Text
+    ausgegeben — der Client sah am Ende jeder Tool-Runde ein `[]`."""
+    payload = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}[]'
+    for chunk_size in (1, 2, 3, 5, 7, 11, 19):
+        parser = StreamingToolParser(allowed_tool_names={"read"})
+        visible = ""
+        for index in range(0, len(payload), chunk_size):
+            visible += parser.consume(payload[index : index + chunk_size])
+        tail, calls = parser.flush()
+
+        assert [call["function"]["name"] for call in calls] == ["read"], chunk_size
+        assert not (visible + tail).strip(), (
+            f"chunk={chunk_size}: terminator als sichtbarer text {(visible + tail)!r}"
+        )

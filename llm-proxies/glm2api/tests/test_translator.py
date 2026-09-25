@@ -2982,3 +2982,45 @@ def test_preamble_is_suppressed_when_a_call_follows(preamble):
 
     assert [call["function"]["name"] for call in (message.get("tool_calls") or [])] == ["read"]
     assert not (message.get("content") or "").strip(), "praeambel steht als antwort vor dem call"
+
+
+def test_native_tool_call_as_list_is_parsed_with_all_guards():
+    """T-11: `tool_calls` kommt auch als LISTE vor; der Dict-Zweig
+    ignorierte sie — der native Call kam nie an."""
+    protocol = {"name": "read", "id": "a", "arguments": {"filePath": "/a.py"}}
+
+    allowed = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    allowed.consume_event(
+        {
+            "conversation_id": "c",
+            "status": "finish",
+            "parts": [
+                {"logic_id": "p", "status": "finish", "content": [{"type": "tool_calls", "tool_calls": [protocol]}]}
+            ],
+        }
+    )
+    allowed.finalize("finish")
+    calls = allowed.build_response()["choices"][0]["message"].get("tool_calls") or []
+    assert [call["function"]["name"] for call in calls] == ["read"]
+
+    # die Wächter der Listenform gelten genauso
+    for tools, entry, label in (
+        (None, protocol, "keine Tools deklariert"),
+        ({"bash"}, protocol, "Tool nicht erlaubt"),
+        ({"read"}, {"name": "open_url", "id": "b", "arguments": {"url": "https://x"}}, "gesperrtes native tool"),
+    ):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names=tools)
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "status": "finish",
+                "parts": [
+                    {"logic_id": "p", "status": "finish", "content": [{"type": "tool_calls", "tool_calls": [entry]}]}
+                ],
+            }
+        )
+        accumulator.finalize("finish")
+        response = accumulator.build_response()
+
+        assert not (response["choices"][0]["message"].get("tool_calls") or []), label
+        assert response["choices"][0]["finish_reason"] == "error", label
