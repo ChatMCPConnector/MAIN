@@ -1,6 +1,11 @@
 import json
 
-from glm2api.utils.tool_parser import StreamingToolParser, parse_tool_calls_from_text
+from glm2api.utils.tool_parser import (
+    StreamingToolParser,
+    _is_allowed_tool_name,
+    parse_tool_calls_from_text,
+)
+from glm2api.utils.tool_protocol import filter_tools, is_blocked_tool_name
 
 
 def test_streaming_json_tool_call_with_terminator_in_same_token():
@@ -791,3 +796,51 @@ def test_unparseable_truncated_call_fragment_is_stripped():
     # normaler text bleibt unangetastet
     plain = "Ein ganz normaler Satz ohne Calls."
     assert strip_unparseable_call_fragments(plain) == (plain, 0)
+
+
+# --- A-13: blocklisten-vergleiche case-/schreibweisen-tolerant ----------
+
+
+def test_native_blocklist_rejects_case_and_separator_variants():
+    """A-13: `OPEN_URL`, `Browser.Open`, `Execute_Sandbox_Code` und
+    `web.run_v2` umgingen die native sperre, sobald der client genau diese
+    schreibweise deklariert hatte. Vergleiche laufen ueber einen
+    kanonischen schluessel (NFKC + casefold + Trennzeichen + Version)."""
+    for variant in (
+        "OPEN_URL",
+        "Browser.Open",
+        "WEB.SEARCH",
+        "Execute_Sandbox_Code",
+        "web.run_v2",
+        "open_url-2",
+        "browse v1",
+        "Open_Url_2024",
+    ):
+        assert is_blocked_tool_name(variant, None) is True, variant
+        # und die Deklaration des clients darf sie nicht freischalten
+        assert _is_allowed_tool_name(variant, {variant}) is False, variant
+
+
+def test_legitimate_tools_are_not_blocked_by_canonicalization():
+    """Gegenprobe: `read`, `Write` und `bash` bleiben normal nutzbar —
+    die kanonisierung darf keine echten tools treffen."""
+    for name in ("read", "Write", "bash", "mcp__CherryFetch__fetchJson"):
+        assert is_blocked_tool_name(name, None) is False, name
+        assert _is_allowed_tool_name(name, {name}) is True, name
+
+
+def test_configured_blocklist_is_case_insensitive():
+    assert is_blocked_tool_name("DANGEROUS_TOOL", {"dangerous_tool"}) is True
+    assert is_blocked_tool_name("dangerous_tool", {"DANGEROUS_TOOL"}) is True
+
+
+def test_filter_tools_drops_case_variant_of_blocked_tool():
+    """Der client-Tool-Vertrag selbst: eine abweichende schreibweise eines
+    gesperrten tools darf nicht in die prompt-tools gelangen."""
+    tools = [
+        {"type": "function", "function": {"name": "DANGEROUS_TOOL"}},
+        {"type": "function", "function": {"name": "read"}},
+    ]
+    filtered = filter_tools(tools, {"dangerous_tool"})
+
+    assert [tool["function"]["name"] for tool in (filtered or [])] == ["read"]

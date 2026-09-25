@@ -7,7 +7,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-from .tool_protocol import BLOCKED_NATIVE_TOOL_NAMES
+from .tool_protocol import BLOCKED_NATIVE_TOOL_NAMES, is_blocked_tool_name
 
 CODE_FENCE_PATTERN = re.compile(r"(?:```|~~~)[\s\S]*?(?:```|~~~)")
 
@@ -189,8 +189,12 @@ def _is_allowed_tool_name(tool_name: str, allowed_tool_names: set[str] | None) -
 
     `allowed_tool_names=None` bedeutet 'keine Tools deklariert' und damit
     'nie einen Call erzeugen' — nicht mehr 'alles erlaubt'. Fuer die interne
-    diagnose (blockierte Versuche sammeln) gibt es `detect_all=True`."""
-    if tool_name in BLOCKED_NATIVE_TOOL_NAMES:
+    diagnose (blockierte Versuche sammeln) gibt es `detect_all=True`.
+
+    A-13: die native sperre wird ueber die kanonische policy verglichen,
+    sonst umgingen `OPEN_URL`/`Browser.Open`/`web.run_v2` die sperre,
+    sobald der client genau diese schreibweise deklariert hatte."""
+    if is_blocked_tool_name(tool_name, None):
         return False
     if allowed_tool_names is None:
         return False
@@ -1232,7 +1236,7 @@ def _find_bare_tool_call_array(
         # P-02: auch im Recovery-Modus bleibt die native Denylist bindend —
         # vorher liess das `or allowed_tool_names is None` jedes blockierte
         # native tool wieder durch.
-        if name not in BLOCKED_NATIVE_TOOL_NAMES and (
+        if not is_blocked_tool_name(name, None) and (
             detect_all or _is_allowed_tool_name(name, allowed_tool_names)
         ):
             args_str = _extract_call_arguments(item)

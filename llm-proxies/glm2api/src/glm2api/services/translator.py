@@ -24,6 +24,7 @@ from ..utils.tool_parser import (
 )
 from ..utils.tool_protocol import (
     BLOCKED_NATIVE_TOOL_NAMES,
+    is_blocked_tool_name,
     CANONICAL_TOOL_CALL_EXAMPLE,
     TOOL_FORMAT_REMINDER,
     build_tool_call_instructions as _protocol_build_tool_call_instructions,
@@ -969,7 +970,7 @@ def convert_messages(
                 # Die frueher implizite 'kein filter' aus `available and ...`
                 # liess historische calls ungeprueft durch — sie wurden
                 # als ausfuehrbarer kontext zurueck ins prompt geschrieben.
-                if tool_name in BLOCKED_NATIVE_TOOL_NAMES:
+                if is_blocked_tool_name(tool_name, None):
                     continue
                 if tool_name not in available_tool_names:
                     continue
@@ -1303,7 +1304,7 @@ class GLMEventAccumulator:
                     tool_call_name = str(extra.get("tool_call_name", "")).strip()
                     if tool_call_name.lower() in {"finish", "intervene", "cancel", "none", "open", "execute_sandbox_code", "code_interpreter", "sandbox", "run_code"}:
                         pass
-                    elif tool_call_name in BLOCKED_NATIVE_TOOL_NAMES:
+                    elif is_blocked_tool_name(tool_call_name, None):
                         if tool_call_name not in self.blocked_tool_attempt_names:
                             self.blocked_tool_attempt_names.append(tool_call_name)
                         if self.logger:
@@ -1373,7 +1374,7 @@ class GLMEventAccumulator:
                             if self.allowed_tool_names is not None and tool_name not in self.allowed_tool_names:
                                 if tool_name not in self.blocked_tool_attempt_names:
                                     self.blocked_tool_attempt_names.append(tool_name)
-                                if tool_name in BLOCKED_NATIVE_TOOL_NAMES:
+                                if is_blocked_tool_name(tool_name, None):
                                     if self.logger:
                                         self.logger.warning(
                                             "Intercepted blocked native tool call tool=%s, triggering immediate intervene",
@@ -1914,6 +1915,34 @@ class GLMEventAccumulator:
         chunks.append("data: [DONE]\n\n")
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE finalize output", chunks)
         return chunks
+
+    def prepend_blocked_notice(
+        self, blocked_names_text: str, finalize_chunks: list[str]
+    ) -> list[str]:
+        """T-10 (live 2026-09-25): die negativ-follow-up-runden sind
+        erschoepft, das modell behauptet aber trotzdem, es habe den
+        blockierten call ausgefuehrt. Diese notice geht VOR der antwort
+        raus, damit der client die erfindung nicht als erfolg liest.
+
+        Wichtig: NICHT erneut finalizen — `finalize()` ist nicht
+        idempotent und wuerde den bereits erzeugten prose-chunk verlieren.
+        Stattdessen wird genau ein zusaetzlicher content-delta vorangestellt."""
+        notice = (
+            f"[blocked_tool_notice] The tool(s) {blocked_names_text} are not available in "
+            "this environment and were NOT executed. Do not claim to have called them "
+            "or to have seen any result from them."
+        )
+        self.blocked_tool_attempt_names.extend(
+            name.strip() for name in blocked_names_text.split(",") if name.strip()
+        )
+        delta: dict[str, object] = {"content": notice}
+        if not self.emitted_role:
+            delta = {"role": "assistant", "content": notice}
+            self.emitted_role = True
+        notice_chunk = self._chunk_json(
+            {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
+        )
+        return [notice_chunk, *finalize_chunks]
 
     def build_response(self) -> dict[str, object]:
         full_text, full_reasoning = self._render_full_output()

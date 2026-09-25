@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 
 
 BLOCKED_NATIVE_TOOL_NAMES = {
@@ -25,13 +26,47 @@ CANONICAL_TOOL_CALL_EXAMPLE = (
     '{"tool_calls":[{"name":"TOOL_NAME","arguments":{"actual_parameter_name":"value"}}]}[]'
 )
 
-
 def safe_json_dumps(payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def normalize_tool_name(name: object) -> str:
     return str(name).strip()
+
+
+def policy_tool_key(name: object) -> str:
+    """Kanonischer Schluessel fuer ALLE sicherheits-/sperr-vergleiche (A-13).
+
+    Vorher wurde nur `strip()` verglichen — dadurch umgingen `OPEN_URL`,
+    `Browser.Open`, `Execute_Sandbox_Code` und `web.run_v2` die native
+    sperre, sobald ein client eine abweichende schreibweise deklariert hat.
+
+    Kanonisiert werden: unicode-NFKC, casefold, punkte/Leerzeichen zu `_`
+    und Versions-/Trailing-Suffixe. Der ORIGINAL-API-name bleibt unberuehrt:
+    `normalize_tool_name()` wird weiterhin fuer den wire-format verwendet."""
+    text = unicodedata.normalize("NFKC", str(name)).strip().casefold()
+    text = re.sub(r"[\s.\-]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    # `web.run_v2`, `open_url-2`, `browse_v1` sind dieselbe faehigkeit.
+    return re.sub(r"_(?:v\d+|version\d+|\d+)$", "", text)
+
+
+# Vorberechnete kanonische schluessel der nativen sperre (A-13).
+_NATIVE_BLOCK_KEYS = frozenset(policy_tool_key(name) for name in BLOCKED_NATIVE_TOOL_NAMES)
+
+
+def is_blocked_tool_name(name: object, blocked_tool_names: set[str] | None) -> bool:
+    """Trifft der (normalisierte) Name die native sperre oder eine
+    konfigurierte blockliste? Beide Seiten werden ueber `policy_tool_key`
+    verglichen, damit schreibweise und version keine umgehung sind."""
+    if name in BLOCKED_NATIVE_TOOL_NAMES:
+        return True
+    key = policy_tool_key(name)
+    if key in _NATIVE_BLOCK_KEYS:
+        return True
+    if not blocked_tool_names:
+        return False
+    return any(policy_tool_key(blocked) == key for blocked in blocked_tool_names)
 
 
 def filter_tools(tools: list[dict[str, object]] | None, blocked_tool_names: set[str]) -> list[dict[str, object]] | None:
@@ -42,7 +77,7 @@ def filter_tools(tools: list[dict[str, object]] | None, blocked_tool_names: set[
     for tool in tools:
         fn = tool.get("function", {})
         tool_name = normalize_tool_name(fn.get("name", ""))  # type: ignore[union-attr]
-        if not tool_name or tool_name in blocked_tool_names:
+        if not tool_name or is_blocked_tool_name(tool_name, blocked_tool_names):
             continue
         filtered_tools.append(tool)
 
@@ -157,7 +192,7 @@ def tools_to_prompt(
         name = str(fn.get("name", "unknown"))  # type: ignore[union-attr]
         description = str(fn.get("description", "") or "")  # type: ignore[union-attr]
         parameters = fn.get("parameters", {})  # type: ignore[union-attr]
-        if blocked_tool_names and name in blocked_tool_names:
+        if blocked_tool_names and is_blocked_tool_name(name, blocked_tool_names):
             continue
         tool_names.append(name)
         tool_schemas.append(

@@ -341,8 +341,9 @@ Methode: read-only SQLite auf `~/.local/share/opencode/opencode.db` und Auswertu
 T-01, T-03, T-05, T-06, T-09, T-10, T-12, T-15 · C-07, C-09, C-10, C-12 · S-10, S-11 · A-01, A-04, A-09, A-11, A-13
 → Umsetzung: F-5 (2026-09-24) und F-5c (2026-09-25). Keine offenen P1-Befunde.
 
-### P2 — Betriebssicherheit
+### P2 — Betriebssicherheit — **ABGESCHLOSSEN 2026-09-25**
 C-01 (Queue-Ghost), S-01 (Ingress-Limits), C-02 (SSRF), C-03 (Session-Isolation), S-02 (Auth/CORS), C-04/A-16 (Token-Race), C-17/S-04/A-15 (Secret-Leaks in Logs), S-16 (Klartext-HTTP), S-03 (Queue-Backpressure)
+→ Umsetzung und Nachweise: F-5d. Keine offenen P2-Befunde.
 
 ### P3 — Semantik und Konsistenz
 T-14, T-16, T-17, T-18 · C-18/A-06 (Parameter) · A-05, A-07, A-08, A-10, A-12, A-14 · S-05 bis S-07, S-09, S-12, S-13, S-15
@@ -477,6 +478,41 @@ empirisch nachgewiesen und mit Regressionstests festgeschrieben, statt sie
 | **C-07** | Transportfehler (`ConnectionReset`, `RemoteDisconnected`, `Timeout`, `OSError`, gzip, `IncompleteRead`) gingen am Retry vorbei und brachen den Generator hart ab — genau die Fälle, für die die Recovery existiert. Sie laufen jetzt in dieselbe Zustandsmaschine wie ein transientes Event, mit derselben Bedingung: nur solange **nichts** ausgeliefert wurde (ein teilweise ausgelieferter Turn ist nicht zurücknehmbar). Nach dem letzten Versuch kommt ein `UpstreamAPIError(transient=True)`, kein roher `ConnectionResetError`. Zusätzlich zentralisiert: `_payload_is_transient()` erkennt transiente Codes jetzt auch in **JSON-Bodies und HTTP-Fehlern** (z.B. 10040), nicht nur in SSE-Events. | 7 Tests (Reset, Timeout, RemoteDisconnected, kein Retry nach Content, Aufgeben, transient/permanent) |
 
 **Nebenbefund:** Der Sweep zeigte 23 Lecks bei Chunk-Größen 8/13/19 im Szenario „jedes Fragment als eigener `logic_id`". Der identische Sweep auf dem Vor-Commit ergibt **exakt dieselben 23 Fälle** — also vorbestehend, keine Regression. Es ist der dokumentierte Part-Interleaving-Fall (T-20, P3), nicht Teil dieser Runde.
+
+### F-5d P2 abgeschlossen + A-13 nachgeholt (2026-09-25)
+
+**A-13 (P1, bei der Gegenprobe aufgefallen):** `filter_tools`, `tools_to_prompt`,
+`_is_allowed_tool_name` und die History-Filter verglichen die Sperrlisten
+case-sensitiv. Ein Client, der `OPEN_URL` statt `open_url` deklarierte, schaltete
+die native Browser-/Sandbox-Sperre aus — genau die Lücke, die das Audit
+festgehalten hatte. Neu: `policy_tool_key()` (NFKC + casefold + Trennzeichen +
+Versionssuffix) und `is_blocked_tool_name()` als **einzige** Vergleichsstelle.
+Die Allowlist bleibt bewusst exakt: die API-Funktions-ID ist ein Vertrag, eine
+abweichende Schreibweise darf keinen Call erzeugen, den der Client nicht hat.
+
+**P2-Bestandsaufnahme:** neun Befunde einzeln empirisch geprüft statt blind
+neu gebaut — sieben waren bereits abgesichert und sind jetzt durch Tests oder
+Nachweis festgeschrieben:
+
+| Befund | Status |
+|---|---|
+| **C-01** Queue-Ghost | **war behoben** (`_abandon_ticket`); die exakte Reproduktion aus dem Befund (Timeout-Ticket, danach Release, Folge-Ticket) läuft jetzt als Test. |
+| **S-01** Ingress-Limits | behoben (Body-/Header-/Socket-Limits, `Transfer-Encoding` abgelehnt, 411/413/501). |
+| **S-02** Auth/CORS | behoben (Authpflicht bei Nicht-Loopback, CORS-Wildcard nur lokal, constant-time Vergleich). |
+| **S-03** Backpressure | behoben (bounded Queue `maxsize=16`, Cancellation-Event, `finally` schließt den Upstream-Iterator). |
+| **S-16** Klartext-HTTP | behoben (`http` nur für Loopback-Upstreams). |
+| **C-02** SSRF | behoben; mit echten Angriffspfaden geprüft: `file:`, `ftp:`, `127.0.0.1`, `localhost`, `169.254.169.254`, `10.x`, `192.168.x` werden alle abgewiesen, Redirects werden erneut geprüft. |
+| **C-04/A-16** Token-Race | behoben (pro-Account `refresh_lock` mit Doppelcheck, atomare Persistenz via Tempfile + `fsync` + `os.replace`). |
+| **C-03** Session-Isolation | **war offen, behoben.** Die persistierte Conversation war *ein globaler String* für alle Requests. Jetzt: an das erzeugende Konto gebunden (Kontowechsel verwirft die Historie), pro Runde exklusiv reserviert (`exclusive_conversation`, damit parallele Runden sich nicht dieselbe Upstream-Historie teilen), und eine **clientgelieferte `conversation_id` gilt nicht mehr als Eigentumsnachweis** — sie wird nur akzeptiert, wenn sie genau die Conversation ist, die dieser Proxy für dieses Konto selbst führt. |
+| **C-17/S-04/A-15** Secret-Leaks | **teilweise offen, Lücke geschlossen.** Header- und Feldredaktion existierten; **Query-Secrets signierter URLs nicht** (`?signature=…`, `?X-Amz-Signature=…`, `?token=…`, `?password=…` landeten vollständig im Debug-Log). Harmlose Query-Parameter bleiben lesbar. Das bewusst vollständige 1:1-Logging der *Inhalte* bleibt Nutzerentscheidung; die Dateien sind 0600 im Verzeichnis 0700. |
+
+**Live gefundene Restlücke (T-10, im selben Durchgang behoben):** Der Proxy erkannte
+den blockierten Versuch und fuhr zwei Negativ-Runden. Die *letzte* Runde behauptete
+dann, die Seite sei geöffnet worden, und zitierte den Seiteninhalt — der Aufruf
+hatte nie stattgefunden. Der Client las die Erfindung als Erfolg. Jetzt geht nach
+erschöpftem Follow-up-Budget eine ehrliche Notice voraus
+(`[blocked_tool_notice] … were NOT executed`), Position vor der Antwort. Endet die
+Folge mit einem gültigen Call, gibt es keine Notice.
 
 ### F-6 Bewusst nicht umgesetzt
 

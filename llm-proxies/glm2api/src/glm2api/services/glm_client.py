@@ -15,11 +15,12 @@ import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from email.generator import _make_boundary # type: ignore
 from io import BufferedReader, BytesIO
 from logging import Logger
-from typing import Callable
+from typing import Callable, Iterator
 
 from ..config import AppConfig
 from ..logging_utils import debug_dump
@@ -260,17 +261,35 @@ class GLMWebClient:
             max_concurrency=config.glm_max_concurrency,
         )
         self._persistent_conversation_id: str = getattr(config, "glm_conversation_id", "")
+        # C-03: die persistierte conversation war EIN globaler string fuer
+        # alle requests. Zwei parallele runden teilten sich dadurch dieselbe
+        # upstream-historie (last-writer-wins), und ein kontowechsel
+        # erzeugte kontext im falschen account. Deshalb:
+        #   * die id ist an das konto gebunden, das sie erzeugt hat,
+        #   * ein kontowechsel verwirft sie (kein kontextuebergang),
+        #   * eine runde haelt sie fuer ihre dauer exklusiv.
+        self._persistent_conversation_account: int | None = None
         self._conversation_lock = threading.Lock()
+        # Wird nur gehalten, solange eine runde die conversation nutzt.
+        self._conversation_use_lock = threading.RLock()
 
     def get_active_conversation_id(self) -> str:
         with self._conversation_lock:
             return self._persistent_conversation_id
 
-    def set_active_conversation_id(self, conv_id: str) -> None:
+    def set_active_conversation_id(self, conv_id: str, account_index: int | None = None) -> None:
         with self._conversation_lock:
             if self._persistent_conversation_id != conv_id:
                 self._persistent_conversation_id = conv_id
-                self.logger.info("Persisted active GLM conversation_id: %s", conv_id)
+                # C-03: die id gehoert zu genau einem konto. Ein wechsel
+                # startet mit frischer historie, statt sie in ein anderes
+                # konto zu tragen.
+                self._persistent_conversation_account = account_index
+                self.logger.info(
+                    "Persisted active GLM conversation_id: %s (account=%s)",
+                    conv_id,
+                    account_index,
+                )
                 conversation_file = getattr(self.config, "glm_conversation_file", None)
                 if conversation_file:
                     try:
@@ -280,6 +299,34 @@ class GLMWebClient:
                             conversation_file.unlink(missing_ok=True)
                     except Exception as exc:
                         self.logger.warning("Failed to write GLM conversation_file: %s", exc)
+
+    def conversation_for_account(self, account_index: int) -> str:
+        """Conversation-id fuer ein konto; bei kontowechsel wird verworfen."""
+        with self._conversation_lock:
+            if (
+                self._persistent_conversation_id
+                and self._persistent_conversation_account is not None
+                and self._persistent_conversation_account != account_index
+            ):
+                self.logger.info(
+                    "Dropping persistent GLM conversation on account change %s -> %s",
+                    self._persistent_conversation_account,
+                    account_index,
+                )
+                self._persistent_conversation_id = ""
+                self._persistent_conversation_account = None
+            return self._persistent_conversation_id
+
+    @contextmanager
+    def exclusive_conversation(self, account_index: int) -> Iterator[str]:
+        """C-03: reserviert die persistierte conversation fuer exakt eine
+        runde. Ohne diese exklusion laufen zwei parallele runden in
+        derselben upstream-historie und die letzte gewinnt."""
+        if not getattr(self.config, "glm_persistent_conversation", False):
+            yield ""
+            return
+        with self._conversation_use_lock:
+            yield self.conversation_for_account(account_index)
 
     def reset_active_conversation(self) -> None:
         self.set_active_conversation_id("")
@@ -322,9 +369,18 @@ class GLMWebClient:
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
         lease = self.request_queue.acquire(f"chat:{payload.get('model', 'unknown')}")
+        account_index = self._get_preferred_account_index(lease.ticket)
+        # C-03: die persistierte conversation gehoert fuer die dauer dieser
+        # runde exklusiv zu dieser runde — sonst teilen sich parallele
+        # runden dieselbe upstream-historie.
+        conversation_slot = self.exclusive_conversation(
+            account_index if account_index is not None else 0
+        )
+        conversation_slot.__enter__()
         try:
-            response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+            response, assistant_id = self._open_chat_stream(payload, preferred_account_index=account_index, filtered_tools=filtered_tools)
         except Exception:
+            conversation_slot.__exit__(None, None, None)
             lease.release()
             raise
 
@@ -507,8 +563,9 @@ class GLMWebClient:
         finally:
             response.close() # type: ignore
             if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
-                self.set_active_conversation_id(accumulator.conversation_id)
+                self.set_active_conversation_id(accumulator.conversation_id, account_index)
             self.delete_conversation(accumulator.conversation_id, assistant_id=assistant_id)
+            conversation_slot.__exit__(None, None, None)
             lease.release()
         return accumulator.build_response(), accumulator.conversation_id
 
@@ -577,9 +634,19 @@ class GLMWebClient:
             )
 
         lease = self.request_queue.acquire(f"stream:{payload.get('model', 'unknown')}")
+        stream_account_index = self._get_preferred_account_index(lease.ticket)
+        # C-03: siehe chat_completion() — die conversation wird fuer die
+        # dauer des streams exklusiv reserviert. Wichtig fuer SSE: der
+        # generator darf die conversation nicht beim ersten chunk
+        # freigeben, sonst laeuft der naechste request mitten hinein.
+        conversation_slot = self.exclusive_conversation(
+            stream_account_index if stream_account_index is not None else 0
+        )
+        conversation_slot.__enter__()
         try:
-            response, assistant_id = self._open_chat_stream(payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
+            response, assistant_id = self._open_chat_stream(payload, preferred_account_index=stream_account_index, filtered_tools=filtered_tools)
         except Exception:
+            conversation_slot.__exit__(None, None, None)
             lease.release()
             raise
 
@@ -595,6 +662,11 @@ class GLMWebClient:
             active_payload = payload
             attempt = 0
             blocked_follow_ups = 0
+            # Namen, die in IRGEND EINER runde dieses turns blockiert
+            # wurden. Die negative follow-up-runde setzt den namen nicht
+            # zurueck — ohne diese merkung wuerde die letzte runde eine
+            # erfundene erfolgsmeldung als antwort durchlassen.
+            turn_blocked_names: list[str] = []
             while True:
                 served_content = False
                 retry_exc: UpstreamAPIError | None = None
@@ -645,6 +717,9 @@ class GLMWebClient:
                                 last_error=event.get("last_error") if isinstance(event.get("last_error"), dict) else None,
                             )
                             blocked = list(accumulator.blocked_tool_attempt_names)
+                            for blocked_name in blocked:
+                                if blocked_name not in turn_blocked_names:
+                                    turn_blocked_names.append(blocked_name)
                             break
                 except UpstreamAPIError:
                     raise
@@ -761,6 +836,23 @@ class GLMWebClient:
                         accumulator = new_accumulator()
                         response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
+                    # Ist die negativ-follow-up-runde erschoepft (oder war von
+                    # anfang an keine moeglich) und hat die LETZTE runde selbst
+                    # nichts blockiert, steht hier nur noch die antwort des
+                    # modells. Live beobachtet (2026-09-25): sie behauptete
+                    # "ich habe die seite geoeffnet" und zitierte sogar den
+                    # seiteninhalt — der call hatte nie stattgefunden. Ohne
+                    # diese notice liest der client die erfindung als erfolg
+                    # und beendet den tool-loop.
+                    if turn_blocked_names and not turn_has_valid_calls and not blocked:
+                        blocked_names_text = ", ".join(sorted(set(turn_blocked_names)))
+                        self.logger.warning(
+                            "Blocked tool(s) %s were never executed; prepending honesty notice",
+                            blocked_names_text,
+                        )
+                        for chunk in accumulator.prepend_blocked_notice(blocked_names_text, finalize_chunks):
+                            yield chunk.encode("utf-8")
+                        return
                     for chunk in finalize_chunks:
                         yield chunk.encode("utf-8")
                     return
@@ -793,8 +885,9 @@ class GLMWebClient:
                 except Exception:
                     pass
                 if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
-                    self.set_active_conversation_id(accumulator.conversation_id)
+                    self.set_active_conversation_id(accumulator.conversation_id, stream_account_index)
                 self.delete_conversation(accumulator.conversation_id, assistant_id=assistant_id)
+                conversation_slot.__exit__(None, None, None)
                 lease.release()
 
         return wrapped()
@@ -950,6 +1043,43 @@ class GLMWebClient:
                 exc,
             )
 
+    def _resolve_target_conversation_id(
+        self, openai_payload: dict[str, object], preferred_account_index: int | None
+    ) -> str:
+        """C-03: welche upstream-conversation darf diese runde verwenden?
+
+        Eine clientgelieferte id ist KEIN eigentumsnachweis. Sie wird nur
+        akzeptiert, wenn sie genau die conversation ist, die dieser proxy
+        fuer dieses konto selbst fuehrt. Alles andere (fremde oder geratene
+        id) wird ignoriert und startet eine eigene runde — sonst koennte ein
+        client die upstream-historie eines anderen fortsetzen. Ohne
+        persistenz bleibt es beim expliziten `new_session`/`reset`."""
+        client_conv_id = openai_payload.get("conversation_id")
+        if client_conv_id and isinstance(client_conv_id, str):
+            requested_conv_id = client_conv_id.strip()
+            owned_conv_id = (
+                self.conversation_for_account(preferred_account_index)
+                if preferred_account_index is not None
+                else self.get_active_conversation_id()
+            )
+            if not requested_conv_id:
+                return ""
+            if requested_conv_id == owned_conv_id:
+                return requested_conv_id
+            self.logger.info(
+                "Ignoring unverified client conversation_id (not owned by this proxy/account)"
+            )
+            return ""
+        if bool(openai_payload.get("new_session")) or bool(openai_payload.get("reset_conversation")):
+            return ""
+        if getattr(self.config, "glm_persistent_conversation", False):
+            return (
+                self.conversation_for_account(preferred_account_index)
+                if preferred_account_index is not None
+                else self.get_active_conversation_id()
+            )
+        return ""
+
     def _open_chat_stream(self, openai_payload: dict[str, object], preferred_account_index: int | None = None, filtered_tools: list[dict[str, object]] | None = None):
         requested_model = str(openai_payload.get("model", "glm-4"))
         upstream_model, assistant_id = resolve_upstream_model(requested_model, self.config)
@@ -1002,14 +1132,9 @@ class GLMWebClient:
             web_search=openai_payload.get("web_search"),
         )
 
-        target_conv_id = ""
-        client_conv_id = openai_payload.get("conversation_id")
-        if client_conv_id and isinstance(client_conv_id, str):
-            target_conv_id = client_conv_id.strip()
-        elif bool(openai_payload.get("new_session")) or bool(openai_payload.get("reset_conversation")):
-            target_conv_id = ""
-        elif getattr(self.config, "glm_persistent_conversation", False):
-            target_conv_id = self.get_active_conversation_id()
+        target_conv_id = self._resolve_target_conversation_id(
+            openai_payload, preferred_account_index
+        )
 
         request_body = json.dumps(
             {

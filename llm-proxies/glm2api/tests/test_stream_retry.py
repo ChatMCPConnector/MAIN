@@ -305,7 +305,11 @@ def test_blocked_tool_triggers_follow_up_round_stream():
     assert any("do NOT exist" in str(m.get("content", "")) for m in follow_up_messages)
     text = "".join(chunks)
     assert "Alles erledigt." in text
-    assert "open_url" not in text
+    # T-10: der blockierte name darf ausschliesslich in der expliziten
+    # notice stehen, die dem client sagt "nie ausgefuehrt". Er darf weder
+    # als tool-call noch als teil der antort des modells durchgehen.
+    assert "NOT executed" in text
+    assert '"tool_calls"' not in text or "open_url" not in text.split('"tool_calls"')[1][:200]
 
 
 def test_blocked_tool_triggers_follow_up_round_stream_with_served_content():
@@ -681,3 +685,139 @@ def test_permanent_json_body_error_is_not_transient():
     with pytest.raises(UpstreamAPIError) as excinfo:
         client._prepare_chat_response(SimpleNamespace(headers={"Content-Type": "application/json"}, close=lambda: None))
     assert excinfo.value.transient is False
+
+
+# --- T-10 live: erfundene erfolgsmeldung nach blockiertem call -----------
+
+
+def _make_always_blocked_client(config):
+    """Jede runde versucht denselben blockierten call — das Budget der
+    negativ-follow-ups laeuft dadurch zwangslaeufig leer."""
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = config
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None,
+        info=lambda *a, **k: None,
+        debug=lambda *a, **k: None,
+    )
+    client.request_queue = SimpleNamespace(
+        acquire=lambda name: SimpleNamespace(ticket=0, released=False, release=lambda: None)
+    )
+    client.auth = SimpleNamespace(
+        get_account_count=lambda: 1,
+        get_access_token_for_account=lambda i: "tok",
+    )
+    calls = {"count": 0}
+
+    def fake_open(payload, preferred_account_index=None, filtered_tools=None):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return _FakeResponse(_blocked_tool_events()), "assistant-1"
+        # letzte runde: das modell gibt auf und behauptet trotzdem erfolg
+        return _FakeResponse(_hallucinated_success_events()), "assistant-1"
+
+    client._open_chat_stream = fake_open
+    client.delete_conversation = lambda cid, assistant_id=None: None
+    client._iter_sse_events = lambda response: iter(response._events)
+    return client, calls
+
+
+def _hallucinated_success_events():
+    return [
+        {
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Alles erledigt. Ich habe die Seite geoeffnet: Example Domain.",
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+
+def test_hallucinated_success_after_exhausted_follow_ups_gets_honesty_notice():
+    """Live-Fall 2026-09-25: nach zwei negativen follow-up-runden behauptete
+    das modell, es habe die seite geoeffnet, und zitierte den inhalt. Der
+    call hatte nie stattgefunden. Ohne notice liest der client die
+    erfindung als erfolg und beendet den tool-loop."""
+    client, calls = _make_always_blocked_client(_FollowUpConfig())
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "oeffne die seite"}],
+        "tools": [
+            {"type": "function", "function": {"name": "bash", "parameters": {"type": "object"}}}
+        ],
+    }
+
+    text = "".join(chunk.decode("utf-8") for chunk in client.stream_chat_completion(dict(payload)))
+
+    assert calls["count"] == 3, "ursprungsversuch + zwei follow-ups"
+    assert "[blocked_tool_notice]" in text
+    assert "were NOT executed" in text
+    # die notice steht VOR der erfundenen antwort
+    assert text.index("[blocked_tool_notice]") < text.index("Alles erledigt.")
+
+
+def test_no_notice_when_follow_up_ends_with_a_valid_call():
+    """Gegenprobe: endet die folge mit einem gueltigen call, gibt es keine
+    notice — der aufruf war dann ja nicht blockiert."""
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = _FollowUpConfig()
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None
+    )
+    client.request_queue = SimpleNamespace(
+        acquire=lambda name: SimpleNamespace(ticket=0, released=False, release=lambda: None)
+    )
+    client.auth = SimpleNamespace(
+        get_account_count=lambda: 1, get_access_token_for_account=lambda i: "tok"
+    )
+    calls = {"count": 0}
+
+    def valid_bash_call_events():
+        return [
+            {
+                "status": "finish",
+                "parts": [
+                    {
+                        "logic_id": "p1",
+                        "status": "finish",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": '{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}]}[]',
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+
+    def fake_open(payload, preferred_account_index=None, filtered_tools=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _FakeResponse(_blocked_tool_events()), "assistant-1"
+        return _FakeResponse(valid_bash_call_events()), "assistant-1"
+
+    client._open_chat_stream = fake_open
+    client.delete_conversation = lambda cid, assistant_id=None: None
+    client._iter_sse_events = lambda response: iter(response._events)
+
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "mach was"}],
+        "tools": [
+            {"type": "function", "function": {"name": "bash", "parameters": {"type": "object"}}}
+        ],
+    }
+    text = "".join(chunk.decode("utf-8") for chunk in client.stream_chat_completion(dict(payload)))
+
+    assert '"bash"' in text, "der gueltige call muss durchkommen"
+    assert "[blocked_tool_notice]" not in text

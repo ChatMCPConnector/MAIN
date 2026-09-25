@@ -96,6 +96,35 @@ _SENSITIVE_HEADER_RE = re.compile(
 _SENSITIVE_QUOTED_RE = re.compile(
     r"(?i)(['\"])(authorization|x[-_]api[-_]key|cookie|api[-_]key|access[-_]token|refresh[-_]token)\1(\s*:\s*)(['\"])(.*?)\4"
 )
+# C-17: signierte URLs tragen ihre berechtigung im QUERY-STRING
+# (`?signature=…&expires=…&X-Amz-Signature=…`). Die feld-basierte Redaktion
+# greift dort nicht, weil der name in einer URL und nicht in einem key
+# steht — der token landete vollstaendig im Debug-Log.
+_SENSITIVE_QUERY_KEYS = (
+    "signature",
+    "sig",
+    "token",
+    "access_token",
+    "refresh_token",
+    "secret",
+    "password",
+    "passwd",
+    "apikey",
+    "api_key",
+    "key",
+    "auth",
+    "authorization",
+    "session",
+    "sessionid",
+    "credential",
+    "x-amz-signature",
+    "x-amz-credential",
+    "x-amz-security-token",
+    "x-goog-signature",
+)
+_SENSITIVE_QUERY_RE = re.compile(
+    r"(?i)([?&](?:" + "|".join(re.escape(key) for key in _SENSITIVE_QUERY_KEYS) + r")=)[^&\s\"'\\]+"
+)
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -132,7 +161,10 @@ def redact_sensitive_text(value: str) -> str:
         return f"{match.group(1)}{match.group(2)}{replacement}"
 
     value = _SENSITIVE_QUOTED_RE.sub(replace_quoted, value)
-    return _SENSITIVE_HEADER_RE.sub(replace_unquoted, value)
+    value = _SENSITIVE_HEADER_RE.sub(replace_unquoted, value)
+    # C-17: query-secrets signierter URLs zuletzt redigieren (der header- und
+    # feld-pass greift fuer `?signature=…` nicht).
+    return _SENSITIVE_QUERY_RE.sub(lambda match: f"{match.group(1)}{_REDACTED_VALUE}", value)
 
 
 def redact_sensitive_data(value: Any) -> Any:
