@@ -22,6 +22,7 @@ from ..utils.tool_parser import (
     detect_tool_call_names,
     parse_tool_calls_from_text,
     strip_unparseable_call_fragments,
+    text_continues_protocol,
 )
 from ..utils.tool_protocol import (
     BLOCKED_NATIVE_TOOL_NAMES,
@@ -2330,7 +2331,16 @@ class GLMEventAccumulator:
                 is_new = logic_id not in self._known_logic_ids_for_text
                 if is_new:
                     self._known_logic_ids_for_text.append(logic_id)
-                    if text_delta_parts or self._part_text_sent:
+                    # T-20 (interleaving): derselbe trenner-schutz wie in
+                    # `_render_full_output()`. Hier ist er sogar wichtiger:
+                    # dieser pfad IST der stream, den der client sieht. Ein
+                    # eingefuegtes `\n\n` mitten im json-protokoll liess den
+                    # parser den call verlieren und den rest als text
+                    # ausliefern.
+                    emitted_so_far = "".join(text_delta_parts)
+                    if (text_delta_parts or self._part_text_sent) and not text_continues_protocol(
+                        emitted_so_far
+                    ):
                         text_delta_parts.append("\n\n")
                     text_delta_parts.append(rendered_text)
                 elif len(rendered_text) > prev_len:
@@ -2342,7 +2352,12 @@ class GLMEventAccumulator:
                 is_new = logic_id not in self._known_logic_ids_for_reasoning
                 if is_new:
                     self._known_logic_ids_for_reasoning.append(logic_id)
-                    if reasoning_delta_parts or self._part_reasoning_sent:
+                    # siehe text-zweig: gleiche regel fuer den
+                    # reasoning-kanal (dort landen die protocol-fragmenten).
+                    emitted_reasoning = "".join(reasoning_delta_parts)
+                    if (
+                        reasoning_delta_parts or self._part_reasoning_sent
+                    ) and not text_continues_protocol(emitted_reasoning):
                         reasoning_delta_parts.append("\n\n")
                     reasoning_delta_parts.append(rendered_reasoning)
                 elif len(rendered_reasoning) > prev_len:
@@ -2397,8 +2412,25 @@ class GLMEventAccumulator:
                 reasoning_parts.append(rendered_reasoning)
                 self._cached_part_reasonings[logic_id] = rendered_reasoning
 
-        self._cached_full_text = "\n\n".join(text_parts)
-        self._cached_full_reasoning = "\n\n".join(reasoning_parts)
+        # T-20 (interleaving): chatglm zerlegt einen logischen text ueber
+        # viele logic_ids. Ein `\n\n` zwischen zwei solchen parts zerreisst
+        # ein JSON-protokoll, das ueber die part-grenze laeuft — der string
+        # bricht mitten im `content` ab, der parser findet keinen call
+        # mehr und der rest landet als sichtbarer text (23 leak-faelle im
+        # chunk-sweep, vorher). Laeuft ein part mitten in einer
+        # angebrochenen protokoll-struktur weiter, wird es deshalb OHNE
+        # trenner angehaengt.
+        def _join_with_protocol_continuation(parts: list[str]) -> str:
+            joined = ""
+            for part in parts:
+                if joined and text_continues_protocol(joined):
+                    joined += part
+                else:
+                    joined = f"{joined}\n\n{part}" if joined else part
+            return joined
+
+        self._cached_full_text = _join_with_protocol_continuation(text_parts)
+        self._cached_full_reasoning = _join_with_protocol_continuation(reasoning_parts)
         self._render_cache_dirty = False
         return self._cached_full_text, self._cached_full_reasoning
 

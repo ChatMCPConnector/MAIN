@@ -992,6 +992,52 @@ def _find_unterminated_call_start(text: str) -> int:
     return -1
 
 
+def text_continues_protocol(text: str) -> bool:
+    """T-20 (interleaving): endet der text mitten in einer angebrochenen
+    tool-call-struktur?
+
+    ChatGLM zerlegt einen einzigen logischen text ueber **viele**
+    `logic_id`s (live: 166 ids in einem turn). Der accumulator haengt die
+    part-texte mit `\\n\\n` zusammen — genau dieser trenner zerreisst ein
+    JSON-protokoll, das ueber zwei parts laeuft: der string wird mitten
+    im `content` abgeschnitten, der parser erkennt keinen call mehr und
+    der rest landet als sichtbarer text.
+
+    Anders als `_find_unterminated_call_start()` (das fuer den
+    streaming-hold-back absichtlich keine prosa zurueckhaelt) fragt diese
+    funktion NUR nach der struktur am textende: steht dort eine offene
+    klammer an oder laeuft ein string noch, ist das naechste part eine
+    fortsetzung. Zugeschnitten auf echte call-strukturen, damit normale
+    prosas mit einer klammer am ende nicht unbeabsichtigt mitverschmolzen
+    wird."""
+    if not text:
+        return False
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char in "}]" and stack:
+            stack.pop()
+    if not stack and not in_string:
+        return False
+    # nur als protokoll-fortsetzung werten, wenn es nach einem call aussieht
+    if "tool_calls" in text or '"name"' in text or '"arguments"' in text:
+        return True
+    return False
+
+
 def strip_unparseable_call_fragments(text: str) -> tuple[str, int]:
     """Entfernt tool-call-Fragmente, die NICHT parsebar sind (typisch: der
     upstream-stream brach mitten im JSON ab). Sie sind nie eine echte antwort
