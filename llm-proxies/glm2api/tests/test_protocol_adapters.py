@@ -1247,3 +1247,22 @@ def test_valid_openai_requests_pass_validation(payload):
     from glm2api.server import validate_openai_request
 
     assert validate_openai_request(payload) == ""
+
+
+# --- S-05: upstream-timeout war ein client-abbruch ----------------------
+
+
+def test_upstream_timeout_is_not_classified_as_client_disconnect():
+    """S-05: `TimeoutError` stand in BEIDEN Fehlertupeln, und der
+    Downstream-Handler stand zuerst. Ein Upstream-Timeout galt damit als
+    Client-Abbruch: der Log meldete 'Client disconnected early', und der
+    Client bekam gar keine Antwort — sein eigener Timeout lief ab, ohne
+    dass der Proxy den Grund nannte."""
+    from glm2api.server import _DOWNSTREAM_DISCONNECTED, _UPSTREAM_TRANSPORT_ERRORS
+
+    overlap = set(_DOWNSTREAM_DISCONNECTED) & set(_UPSTREAM_TRANSPORT_ERRORS)
+    assert overlap == set(), f"mehrdeutige fehlerklassen: {overlap}"
+    assert TimeoutError in _UPSTREAM_TRANSPORT_ERRORS
+    # ein echter client-abbruch ist ein schreibfehler, kein timeout
+    assert BrokenPipeError in _DOWNSTREAM_DISCONNECTED
+    assert TimeoutError not in _DOWNSTREAM_DISCONNECTED

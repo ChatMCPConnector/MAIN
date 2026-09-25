@@ -48,8 +48,15 @@ from .services.responses_adapter import (
 )
 
 
+# S-05: `TimeoutError` stand in BEIDEN tupeln, und der downstream-handler
+# stand zuerst. Ein UPSTREAM-timeout galt damit als client-abbruch: der
+# log meldete "Client disconnected early", und der client bekam gar keine
+# antwort — sein eigener timeout lief ab, ohne dass der proxy den grund
+# nannte. Ein timeout ist nie ein sauberer client-abbruch; der tritt beim
+# schreiben in einen geschlossenen socket als `BrokenPipeError`/
+# `ConnectionResetError` auf. Die beiden klassen sind jetzt disjunkt.
 _CLIENT_DISCONNECTED = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
-_DOWNSTREAM_DISCONNECTED = (*_CLIENT_DISCONNECTED, TimeoutError)
+_DOWNSTREAM_DISCONNECTED = _CLIENT_DISCONNECTED
 _UPSTREAM_TRANSPORT_ERRORS = (socket.timeout, TimeoutError, ConnectionError, OSError)
 STREAM_HEARTBEAT_SECONDS = 5.0
 _TOOL_PROTOCOL_ERROR_CODE = "tool_protocol_error"

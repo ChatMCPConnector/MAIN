@@ -867,6 +867,22 @@ und beim *normalen* Cross-Origin-Zugriff ist der `Host`-header
 - Live gegengeprüft: `health`/`models`/`chat` weiterhin 200 bzw. korrekte
   Antwort — kein Client bricht.
 
+### F-5u Rest der S-Gruppe: S-01, S-03, S-05, S-09, S-11, S-14, S-16, S-17 (2026-09-25)
+
+Die vollständige S-Gruppe wurde gegen den Rohbericht nachgeprüft, nicht
+gegen die Doku.
+
+| Befund | Status | Beleg / Umsetzung |
+|---|---|---|
+| **S-05** | **Tatsächlich offen.** `TimeoutError` stand in **beiden** Fehlertupeln (`_DOWNSTREAM_DISCONNECTED` *und* `_UPSTREAM_TRANSPORT_ERRORS`), und der Downstream-Handler stand zuerst. Ein Upstream-Timeout wurde als „Client disconnected early" geloggt und der Client bekam **gar keine** Antwort. | Die Klassen sind jetzt disjunkt: ein Timeout ist nie ein sauberer Client-Abbruch — der tritt als `BrokenPipeError`/`ConnectionResetError` auf. Upstream-Timeouts enden als 504 mit benanntem Grund. |
+| **S-01** | Bereits behoben. | Body-Limit 32 MiB (max 128 MiB), Request-Zeile 8 KiB (max 64 KiB), Header/Verbindungen begrenzt. |
+| **S-03** | Bereits behoben. | SSE-Queue `maxsize=16`, `reader_cancelled`-Event plus `stream_iter.close()` im `finally`, Daemon-Thread — die Reader-Pipeline ist abbrechbar. |
+| **S-09** | Bereits behoben. | `_write_error_json` und `send_error` setzen `close_connection`; live geprüft: POST auf unbekannten Pfad → 404, Folge-Request 200, kein Desync; Keep-alive-Pipeline nutzt 1 Verbindung. |
+| **S-11** | Bereits behoben. | Empirisch: `previous_response_id` + `function_call_output` erhält Tools, `tool_choice`, den vorigen Call und das Ergebnis in der Reihenfolge `function_call → function_call_output`. |
+| **S-14** | Bereits behoben. | Alle 23 Budget-Zuweisungen geprüft (ungültig / out of range / negativ): jeder Wert wird begrenzt oder mit `ConfigError` abgelehnt. `0` ist bei den Retry-/Follow-up-Budgets die deklarierte Mindestgrenze — „keine Retries" ist eine gültige Wahl. |
+| **S-16** | Bereits behoben. | `GLM_BASE_URL` darf `http` nur für Loopback-Hosts; eingebettete Credentials werden abgelehnt. Deployment nutzt `https://chatglm.cn`. |
+| **S-17** | Bereits behoben. | `sys_version = ""` — die Python-Laufzeitversion wird nicht ausgeliefert. |
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.
