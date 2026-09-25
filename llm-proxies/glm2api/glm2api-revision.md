@@ -1010,6 +1010,57 @@ ohne Grenze gibt es keine Frühabbrüche, an denen man aufhören könnte.
 **Ausgabe byte-identisch**: sha256 des 500-Part-Ergebnisses ist vor wie
 nach allen drei Fixes `d55fc1f51fc865b3` (29 497 Zeichen).
 
+### F-5z Abschlussregister: alle 107 Befunde, geprüfter Stand (2026-09-25)
+
+Geprüft wurde gegen `glm2api-revision-anhang/` (die Rohbefunde), nicht
+gegen dieses Register. Jede Zeile unten ist entweder gemessen (Wert
+angegeben) oder als bewusste Entscheidung begründet.
+
+**In dieser Runde am Anhang entdeckt und behoben** (die unabhängige
+Zweitrunde hatte diese offen gelassen):
+
+| Befund | Art des Fehlers |
+|---|---|
+| **D-01** | Echter Bug: rohes Tool-Protokoll im Final-Pfad, gemeldet als `stop` |
+| **A-02, A-07, A-10, A-13, A-14** | Adapter: Denkkette verloren, Verlauf verschluckt, Native-Tools als Client-Funktionen, 5 Blocklisten-Umgehungen, erfundene Parameter |
+| **S-02** | Sicherheit: DNS-Rebinding **und** Cross-Origin-Read über CORS-Wildcard |
+| **S-05, S-07, S-10, S-12, S-13, S-15** | Upstream-Timeout als Client-Abbruch, stille Semantikänderungen, fehlende Notice, `tool_choice: none` ignoriert, Pfaddrift, Tippfehler lautlos |
+| **C-15, C-16, C-17, C-18** | Cleanup am falschen Konto, undichteter SSE-Socket, Signatur/Cookie im Klartext, stumm verworfene Sampling-Parameter |
+| **D-10, D-11, D-12** | Verifier ohne Selbsttest, Log-Pfade aus `.env` wirkungslos, pytest nicht gepinnt |
+| **T-20, P-12** | Performance: 64k Parts 28,9 s → 1,97 s; Parser 280x schneller, linear statt quadratisch |
+| `trunc-bare-after-prose` | 4/12 → **0/12** |
+
+**Bewusst offen, mit Begründung:**
+
+| Punkt | Warum |
+|---|---|
+| **D-12** Coverage-Schwelle | Eine erzwungene Abdeckung bräuchte `pytest-cov` und damit eine Fremdabhängigkeit. Das Projekt ist stdlib-only. Entscheidung, kein Versehen. |
+| **D-12** Quadratische Verkettung ohne Ausgabegrenze | 2 000 Parts 0,38 s → 8 000 Parts 2,58 s. Ohne `max_tokens` gibt es keine Frühabbrüche, an denen man aufhören könnte. Mit der Grenze (der reale Fall) ist es linear. |
+| **Debug-Logging 1:1** | Nutzerentscheidung. Nur Zugangsdaten werden redigiert (Authorization, `X-Sign`, `set-cookie`, Query-Secrets). |
+
+**Geprüft und bereits erfüllt** (A-01/03/04/05/06/08/09/11/12/15–19,
+C-01–C-14, P-01–P-11/P-13/P-14, S-01/03/04/06/08/09/11/14/16/17,
+T-01–T-19/T-21–T-24, D-02–D-09): gegen den Rohbericht nachgemessen,
+nicht aus der Doku übernommen. Beispiele der Prüfung:
+
+- **T-02**: ohne deklarierte Tools verschwinden historische Calls samt
+  Ergebnis aus dem Prompt; mit Deklaration bleiben beide. `None` ist
+  keine Wildcard.
+- **T-14**: eine Multi-Call-Runde wird **als Ganzes** komprimiert oder
+  gar nicht; Aufruf + alle Ergebnisse bleiben paarweise zusammen.
+- **T-12**: ein Call ohne Pflichtargument wird nicht ausgeliefert
+  (`finish_reason=error`).
+- **T-08**: Fenced-Calls, Stream und Non-Stream, identisches Ergebnis
+  und identischer `finish_reason`.
+- **S-16**: `GLM_BASE_URL` nur mit `https` außer gegen Loopback.
+- **S-17**: `sys_version = ""` — keine Python-Laufzeitversion im Header.
+
+**Selbsttest des Verifiers** (`infra/scripts/verify-verifier-selftest.sh`):
+baut eine kontrollierte Regression ein, erwartet `exit != 0` **mit**
+`FAILED` in der Symptom-Suite, stellt wieder her und erwartet `exit 0`.
+Ohne diesen Test ist „der Verifier sagt immer grün" nicht unterscheidbar
+von „der Verifier prüft wirklich".
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.
