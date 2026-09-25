@@ -299,3 +299,71 @@ def test_d08_blocked_attempt_is_never_a_successful_answer(build):
     assert choice["finish_reason"] == "error"
     assert not choice["message"].get("tool_calls")
     assert "unavailable tool" in (choice["message"].get("content") or "")
+
+
+@pytest.mark.parametrize("chunk_size", sorted(CHUNK_SIZES))
+@pytest.mark.parametrize("split_logic_ids", [False, True], ids=["single-logic-id", "split-logic-ids"])
+def test_truncated_call_after_prose_never_reaches_the_client(chunk_size, split_logic_ids):
+    """`trunc-bare-after-prose` war als bewusst offen dokumentiert (4 von
+    12 chunk-groessen). Mit dem D-01-Fix ist es 0 von 12.
+
+    Der gefaehrliche fall ist nicht der fehlende `[]`-terminator — die
+    argument-daten sind dann vollstaendig und der call ist verstaendlich.
+    Gefaehrlich sind ABGESCHNITTENE ARGUMENTE: der client wuerde einen
+    call mit halbem pfad oder halbem befehl ausfuehren. Genau das wird
+    jetzt verweigert, die prosa bleibt sichtbar."""
+    prose = "Hier ist die Antwort fuer dich. "
+    truncated = '{"tool_calls":[{"name":"bash","arguments":{"command":"ls -'
+    text = prose + truncated
+
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    streamed: list[str] = []
+    for index in range(0, len(text), chunk_size):
+        chunks, _ = accumulator.consume_event({
+            "conversation_id": "c",
+            "parts": [{
+                "logic_id": f"p{index}" if split_logic_ids else "p1",
+                "content": [{"type": "text", "text": text[index : index + chunk_size]}],
+            }],
+        })
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+    accumulator.finalize("finish")
+    choice = accumulator.build_response()["choices"][0]
+    message = choice["message"]
+    visible = "".join(streamed) + (message.get("content") or "")
+
+    assert not message.get("tool_calls"), "ein abgeschnittener aufruf darf NICHT ausgeliefert werden"
+    assert choice["finish_reason"] == "error"
+    # die prosa ist eine echte antwort und bleibt erhalten
+    assert "Hier ist die Antwort fuer dich." in visible
+    for marker in ('{"tool_calls"', '"name":', '"command":'):
+        assert marker not in visible, f"rohes protokoll im sichtbaren text: {marker}"
+
+
+def test_missing_terminator_alone_still_yields_the_call():
+    """Gegenprobe zur scharzen regel: fehlt NUR der `[]`-terminator,
+    sind die argument-daten vollstaendig. Das ist kein beschnittener
+    aufruf, sondern ein vollstaendiger ohne markierung — er wird
+    zu Recht ausgeliefert. Zu aggressives abschneiden wuerde hier
+    echte aufrufe zerstoeren."""
+    prose = "Hier ist die Antwort fuer dich. "
+    text = prose + '{"tool_calls":[{"name":"bash","arguments":{"command":"ls"}}]}'
+
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    for index in range(0, len(text), 7):
+        accumulator.consume_event({
+            "conversation_id": "c",
+            "parts": [{"logic_id": "p1", "content": [{"type": "text", "text": text[index : index + 7]}]}],
+        })
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    assert [call["function"]["name"] for call in (message.get("tool_calls") or [])] == ["bash"]

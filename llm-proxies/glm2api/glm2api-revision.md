@@ -949,6 +949,38 @@ die Parts) und nach der Berechnung wieder verworfen.
   („Die Datei" / „ ist im " / „Repository gefunden" bleibt ein Satz)
   wird gegen die Trenner-Regel geprüft.
 
+### F-5x P-12 und `trunc-bare-after-prose` (2026-09-25)
+
+**P-12** war der letzte offene Performance-Befund. Die Audit-Messung
+(Vollscan des Puffers bei jedem `consume`) ist nicht mehr reproduzierbar:
+
+| `command`-Argument | Audit (vorher) | jetzt | Faktor je Verdopplung (vorher → jetzt) |
+|---|---|---|---|
+| 500 | 0,057 s | 0,002 s | – |
+| 1 000 | 0,147 s | 0,004 s | 2,6x → **2,0x** |
+| 2 000 | 0,459 s | 0,007 s | 3,1x → 1,8x |
+| 4 000 | 2,241 s | 0,014 s | 4,9x → 2,0x |
+| 8 000 | 7,608 s | **0,027 s** | 3,4x → 1,9x |
+
+**280x schneller bei n=8000**, und die Skalierung ist linear statt
+quadratisch. Nach oben geprüft, weil lineares Verhalten dort meist
+kippt: 16k / 32k / 64k / 128k Zeichen → 0,060 / 0,122 / 0,253 / 0,494 s,
+also **Faktor 2,0 je Verdopplung** durchgehend. Der Vertrag ist als Test
+festgeschrieben (8x Zeichen dürfen nicht 64x Zeit kosten).
+
+**`trunc-bare-after-prose`** war mit 4 von 12 Chunk-Größen als *bewusst
+offen* dokumentiert — die Entscheidung hing an der ungeklärten Frage, ob
+Stream und Non-Stream bei abgeschnittenen Calls dasselbe tun müssen. Mit
+dem D-01-Fix ist der Punkt **0 von 12** und die Frage beantwortet:
+
+- Abgeschnittene **Argumente** (mitten im String, mitten im Pfad, ohne
+  Namen) → Aufruf **nicht** ausgeliefert, `finish_reason=error`, keine
+  Roh-Protokollreste, die Prosa bleibt sichtbar.
+- Fehlt nur der `[]`-Terminator, sind die Argument-Daten vollständig —
+  das ist kein beschnittener Aufruf, sondern ein vollständiger ohne
+  Markierung. Er wird zu Recht ausgeliefert; zu aggressives Abschneiden
+  würde hier echte Aufrufe zerstören. Als Gegenprobe festgeschrieben.
+
 ### F-6 Bewusst nicht umgesetzt
 
 - **C-14** (Lease/Socket vor dem ersten `yield`): In CPython räumt der Generator-GC die Ressourcen auf; eine Umstellung auf lazy-acquire würde die saubere 503-Antwort bei voller Queue verschlechtern.

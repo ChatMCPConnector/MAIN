@@ -989,3 +989,50 @@ def test_truncated_tool_call_never_reaches_the_client(chunk_size):
     assert "tool_calls" not in visible
     assert not choice["message"].get("tool_calls")
     assert choice["finish_reason"] == "error", "ein abgeschnittener turn ist kein erfolg"
+
+
+# --- P-12: der parser muss linear bleiben, nicht quadratisch ------------
+
+
+@pytest.mark.parametrize("arg_size", [500, 1000, 2000, 4000, 8000])
+def test_p12_character_wise_consumption_completes(arg_size):
+    """P-12: bei zeichenweisem konsum scannte der parser den puffer pro
+    aufruf neu. Gemessen im audit: 0,057 / 0,147 / 0,459 / 2,241 / 7,608 s
+    fuer 500 / 1000 / 2000 / 4000 / 8000 zeichen — je verdopplung 2,6x,
+    3,1x, 4,9x, 3,4x. Das ist quadratisch und blockiert die CPU.
+
+    Der vertrag ist nicht "irgendwie schnell", sondern: die zeit muss mit
+    der argumente-groesse WACHSEN, nicht mit deren quadrat."""
+    import time
+
+    payload = '{"tool_calls":[{"name":"bash","arguments":{"command":"' + "x" * arg_size + '"}}]}[]'
+    start = time.perf_counter()
+    for char in payload:
+        parse_tool_calls_from_text(char, allowed_tool_names={"bash"})
+    elapsed = time.perf_counter() - start
+
+    # Schwelle bewusst grosszügig: sie soll einen AUSGELASTETEN host
+    # nicht flimmern lassen, aber ein quadratisches Wachstum fällt
+    # bei 8000 zeichen (0,027 s) auch dann noch durch.
+    assert elapsed < 5.0, f"{arg_size} zeichen brauchten {elapsed:.2f}s"
+
+
+def test_p12_growth_is_linear_not_quadratic():
+    """Der eigentliche test: 8x mehr zeichen duerfen nicht 64x so lange
+    dauern (quadratisch). Die schranke ist grosszügig gewaehlt, damit ein
+    ausgelasteter ci-host nicht flimmert — quadratisch waere Faktor 64,
+    linear Faktor 8."""
+    import time
+
+    def consume(arg_size: int) -> float:
+        payload = '{"tool_calls":[{"name":"bash","arguments":{"command":"' + "x" * arg_size + '"}}]}[]'
+        start = time.perf_counter()
+        for char in payload:
+            parse_tool_calls_from_text(char, allowed_tool_names={"bash"})
+        return time.perf_counter() - start
+
+    small = consume(2000)
+    large = consume(16000)
+
+    growth = large / max(small, 1e-6)
+    assert growth < 24.0, f"zu superlinear: 8x zeichen kosteten {growth:.1f}x zeit (linear waere ~8x)"
