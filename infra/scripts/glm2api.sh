@@ -80,6 +80,28 @@ stop_server() {
       kill -9 "$pid" 2>/dev/null || true
       sleep 1
     fi
+    # Die PID-Datei zeigt auf den `uv run`-wrapper. Das python-kind bleibt
+    # davon unberuehrt und behaelt den port — nach dem stoppen ist es eine
+    # verwaiste instanz, die beim naechsten start als konflikt auffaellt.
+    # Auch Weg 1 raeumt deshalb verbliebene, pfad-verankerte prozesse ab.
+    remaining="$(managed_pids)"
+    if [ -n "$remaining" ]; then
+      echo "  Verwaiste Kindprozesse werden beendet: $remaining"
+      for pid in $remaining; do
+        kill "$pid" 2>/dev/null || true
+      done
+      for _ in $(seq 1 20); do
+        [ -n "$(managed_pids)" ] || break
+        sleep 0.5
+      done
+      remaining="$(managed_pids)"
+      if [ -n "$remaining" ]; then
+        for pid in $remaining; do
+          kill -9 "$pid" 2>/dev/null || true
+        done
+        sleep 1
+      fi
+    fi
   else
     # Weg 2 (Fallback): Muster-Suche MIT Pfad-Anker (/proc/<pid>/cwd)
     pids="$(managed_pids)"
@@ -88,7 +110,24 @@ stop_server() {
         echo "Stoppe PID $pid (main.py in $GLM2API_DIR)..."
         kill "$pid" 2>/dev/null || true
       done
-      sleep 2
+      # `uv run main.py` ist ein WRAPPER: er startet den echten python-prozess
+      # als kind. Ein TERM an den wrapper beendet das kind nicht — der
+      # python-prozess haelt weiter den port und wird danach beim erneuten
+      # start als "konnte nicht gestoppt werden" gemeldet (2026-09-25
+      # beobachtet). Deshalb: beide prozesse treffen und mit eskalation
+      # warten, bis wirklich nichts mehr da ist.
+      for _ in $(seq 1 20); do
+        [ -n "$(managed_pids)" ] || break
+        sleep 0.5
+      done
+      remaining="$(managed_pids)"
+      if [ -n "$remaining" ]; then
+        echo "  Restprozesse reagieren nicht auf TERM — sende KILL."
+        for pid in $remaining; do
+          kill -9 "$pid" 2>/dev/null || true
+        done
+        sleep 1
+      fi
     else
       echo "Kein laufender glm2api-Prozess gefunden (weiter zum Start)."
     fi

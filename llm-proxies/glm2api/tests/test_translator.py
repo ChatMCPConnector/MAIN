@@ -2073,3 +2073,128 @@ def test_history_compression_keeps_multi_tool_round_atomic():
             assert result_id in call_ids, f"verwaistes result {result_id} bei budget={budget}"
         if call_ids:
             assert sorted(result_ids) == sorted(call_ids), f"call ohne result bei budget={budget}"
+
+
+# --- P4: T-19, T-20, T-21, T-22 -------------------------------------------
+
+
+def test_part_order_follows_arrival_not_lexicographic_sort():
+    """T-20: `insort` sortierte die logic-ids als strings — ab zehn parts
+    kam `p10` zwischen `p1` und `p2`, der sichtbare text wurde zerwuerfelt."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+    for index in range(1, 13):
+        accumulator.consume_event(_event("c", f"p{index}", text=f"[{index}]"))
+    text, _reasoning = accumulator.render_full_output()
+
+    assert text.replace("\n", "") == "".join(f"[{index}]" for index in range(1, 13))
+
+
+def test_part_merge_writes_status_and_does_not_duplicate_non_text():
+    """T-19: der berechnete eingangs-status wurde nie geschrieben (das part
+    behielt sein 'init'), und non-text-items wurden bei jedem update erneut
+    angehaengt — ein bild stand nach fuenf updates fuenfmal im content."""
+    from glm2api.services.translator import _merge_part_texts
+
+    image = {"type": "image", "url": "x.png"}
+    existing = {"logic_id": "p1", "status": "init", "content": [{"type": "text", "text": "A"}, image]}
+
+    for _ in range(5):
+        merged = _merge_part_texts(
+            existing, {"status": "init", "content": [{"type": "text", "text": "B"}, image]}, "init"
+        )
+    assert sum(1 for item in merged["content"] if item.get("type") == "image") == 1
+    assert merged["content"][0]["text"] == "AB"
+
+    finished = _merge_part_texts(existing, {"status": "finish", "content": [{"type": "text", "text": "AB"}]}, "finish")
+    assert finished["status"] == "finish", "der finish-status muss im part landen"
+
+
+def test_finalize_is_idempotent():
+    """T-22: ein zweiter `finalize()` spulte den parser erneut und gab
+    dieselben tool_calls ein zweites mal aus — in einer kette aus
+    finalize/retry/prepend-notice entstehen doppelte calls beim client."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(
+        _event("c", "p1", text='{"tool_calls":[{"name":"read","arguments":{"filePath":"/a"}}]}', status="finish")
+    )
+    first = accumulator.finalize("finish")
+    second = accumulator.finalize("finish")
+    third = accumulator.finalize("stop")
+
+    assert any('"tool_calls"' in chunk for chunk in first)
+    assert second == []
+    assert third == []
+
+
+def test_bare_domain_is_mapped_as_url_not_as_file():
+    """T-21: `example.com` fiel durch den punkt-check in die
+    datei-erkennung und wurde als read auf einen nicht existierenden
+    namen abgebildet."""
+    from glm2api.services.translator import map_native_open_tool_call
+
+    mapped = map_native_open_tool_call({"url": "example.com"}, allowed_tool_names={"webfetch", "read"})
+
+    assert mapped == ("webfetch", {"url": "https://example.com"})
+
+
+def test_native_open_multiple_targets_are_not_silently_dropped():
+    """T-21: nur `open[0]` wurde abgearbeitet, der rest verschwand ohne
+    spur. Der erste mappbare gewinnt, der rest wird protokolliert."""
+    from glm2api.services.translator import map_native_open_tool_call
+
+    mapped = map_native_open_tool_call(
+        {"open": [{"url": "https://a.com"}, {"url": "https://b.com"}]},
+        allowed_tool_names={"webfetch"},
+    )
+
+    assert mapped is not None and mapped[0] == "webfetch"
+
+
+def test_native_call_without_id_is_not_silently_dropped():
+    """C-13: der echo-filter verlangte eine `tool_id`. Serverseitige calls
+    OHNE id fielen ersatzlos weg — auch dann, wenn sie sich von jedem
+    historischen call unterschieden. Empirisch kam ein `read` auf einen
+    NEUEN pfad nicht an, der agent las die runde als abgeschlossen."""
+    history = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "read", "arguments": '{"filePath":"/a.py"}'}}
+            ],
+        }
+    ]
+    signatures = extract_history_tool_call_signatures(history)
+
+    def build(file_path):
+        accumulator = GLMEventAccumulator(
+            model="m", allowed_tool_names={"read"}, history_tool_call_signatures=signatures
+        )
+        accumulator = GLMEventAccumulator(
+            model="m", allowed_tool_names={"read"}, history_tool_call_signatures=signatures
+        )
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "status": "finish",
+                "parts": [
+                    {
+                        "logic_id": "p1",
+                        "status": "finish",
+                        "content": [
+                            {
+                                "type": "tool_calls",
+                                "tool_calls": {"name": "read", "arguments": {"filePath": file_path}},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        accumulator.finalize("finish")
+        return accumulator.build_response()
+
+    # echtes echo (identische signatur aus der historie) bleibt unterdrueckt
+    assert (build("/a.py")["choices"][0]["message"].get("tool_calls") or []) == []
+    # eine gewollte wiederholung mit neuem ziel kommt an
+    calls = build("/neu.py")["choices"][0]["message"].get("tool_calls") or []
+    assert [call["function"]["name"] for call in calls] == ["read"]

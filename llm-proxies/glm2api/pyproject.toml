@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+# D-12: Build-Abhaengigkeiten sind exakt gepinnt. Mit `>=` haengt der
+# Build an der Laune des Tages; der Bund ist reproduzierbar nur mit
+# festen Versionen.
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -21,3 +24,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+# D-13: config-tests teilen prozess- und logging-globalzustand. Der
+# autouse-fixture in tests/conftest.py sichert os.environ und die
+# konfigurations-Keys fuer jeden test, damit die reihenfolge nicht das
+# ergebnis bestimmt.
+addopts = "-ra"

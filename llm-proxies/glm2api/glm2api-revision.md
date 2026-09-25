@@ -349,8 +349,9 @@ C-01 (Queue-Ghost), S-01 (Ingress-Limits), C-02 (SSRF), C-03 (Session-Isolation)
 T-14, T-16, T-17, T-18 · C-18/A-06 (Parameter) · A-05, A-07, A-08, A-10, A-12, A-14 · S-05 bis S-07, S-09, S-12, S-13, S-15
 → Umsetzung und Nachweise: F-5e. Keine offenen P3-Befunde.
 
-### P4 — Hygiene
+### P4 — Hygiene — **ABGESCHLOSSEN 2026-09-25**
 T-19 bis T-22 · C-08, C-13, C-15, C-19, C-20 · S-17 · D-10 bis D-13
+→ Umsetzung und Nachweise: F-5f. Keine offenen Befunde.
 
 ---
 
@@ -542,6 +543,34 @@ internen Details nach außen), S-07 (ein gemeinsamer Validierungspfad für alle
 vier POST-Endpoints), S-09 (`_write_error_json` setzt `close_connection`, bevor
 sie antwortet — kein Body-Rest auf der Keep-alive-Verbindung), S-15 (der
 Config-Parser warnt bei ungültigen Werten und nutzt sichere Defaults).
+
+### F-5f P4 abgeschlossen (2026-09-25)
+
+Elf Code-Befunde, vier Build-/Doku-Befunde. Zehn waren echt offen:
+
+| Befund | Umsetzung | Verifikation |
+|---|---|---|
+| **T-20** | Der Schlimmste des ganzen Audits: die Logic-IDs wurden mit `insort` **lexikografisch** sortiert. Ab zehn Parts kam `p10` zwischen `p1` und `p2` — der sichtbare Text wurde **zerwürfelt**. Jetzt wird die Eingangsreihenfolge des Upstreams verwendet. | 1 Test über 12 Parts |
+| **C-13** | Der Echo-Filter verlangte eine `tool_id`. Serverseitige Calls **ohne** ID fielen ersatzlos weg — auch dann, wenn sie sich von jedem historischen Call unterschieden. Empirisch: ein `read` auf einen **neuen** Pfad kam nicht an, der Agent las die Runde als abgeschlossen. Jetzt wird eine stabile ID vergeben; echte Signatur-Echos bleiben über die Historie ausgeschlossen. | 1 Test mit beiden Fällen |
+| **C-08** | `served_content` erkannte einen Chunk nur dann als sichtbar, wenn er `"content"` **ohne** `"reasoning_content"` enthielt. Da der Accumulator Reasoning als sichtbaren SSE-Delta streamt, löste ein transientes Ereignis nach bereits gesendetem Reasoning einen Retry aus und **verdoppelte** den Turn. Zwei Signale getrennt: für den Transport-Retry zählt Reasoning als ausgeliefert, für den Leer-Retry nicht (ein Turn mit nur Reasoning ist für den Client wertlos und wird mit eigenem Budget erneut versucht). | 2 Tests |
+| **C-20** | `error.read()` war **unbegrenzt**, die gzip-Dekompression ebenfalls. Ein fehlerhaftes Upstream konnte Speicher und CPU erschöpfen. Jetzt begrenzt gelesen und die dekomprimierte Ausgabe begrenzt (Gzip-Bomb: 50 MB Body → 256 KB gespeichert). | 1 Test mit 5-MB-Body und Gzip-Bomb |
+| **C-15** | Bei Transient-/Leer-Retry und Follow-up-Runde wird ein neuer Accumulator erzeugt. Die bis dahin erhaltene `conversation_id` wurde verworfen — **ohne** `delete_conversation` blieb sie beim Upstream liegen: eine Conversation pro Versuch. Jetzt werden alle IDs im Lauf gesammelt und im `finally` abgeräumt. | 1 Test |
+| **C-19** | `_open_chat_stream()` rief den Attachment-Upload bei **jedem** Versuch erneut auf — dieselbe Datei wurde mehrfach hochgeladen (Bandbreite, Upstream-Speicher, Account-Failover pro Upload). Jetzt pro Request zwischengespeichert, bounded auf 64 Einträge. | 2 Tests |
+| **T-19** | `incoming_status` wurde im Part-Merge berechnet, aber **nie geschrieben** — ein Part behielt nach dem Finish-Fragment sein `init`. Und Non-Text-Items wurden bei jedem Update erneut angehängt: ein Bild stand nach fünf Updates fünfmal im Content. | 1 Test |
+| **T-22** | Ein zweiter `finalize()` spulte den Parser erneut und gab dieselben Tool-Calls ein zweites Mal aus — in einer Kette aus `finalize`/Retry/Prepend-Notice entstehen doppelte Calls beim Client. Der Turn wird jetzt genau einmal abgeschlossen. | 1 Test |
+| **T-21** | `example.com` ohne Schema fiel durch den Punkt-Check in die Datei-Erkennung und wurde als `read` auf einen nicht existierenden Namen abgebildet. Jetzt als URL. Und: bei `open` mit mehreren Zielen verschwand der Rest **ohne Spur** — der erste mappable gewinnt, der Rest wird protokolliert. | 2 Tests |
+| **D-11** | 16 Betriebs-Keys der AppConfig fehlten in `.env.example` — sie waren nur implizit über die Standardwerte sichtbar. Ergänzt, plus `GLM2API_LOG_DIR`. Der Test liest die tatsächlich gelesenen Keys aus dem Quelltext (nicht die Feldnamen, die abweichen: `GLM_TOKEN_FILE` → `token_file_path`), damit er ohne Pflegeliste korrekt bleibt. | 1 Test |
+| **D-12** | Build-Abhängigkeiten waren mit `>=` unpinned — der Bund war nicht reproduzierbar. Jetzt exakt gepinnt (`setuptools==80.9.0`, `wheel==0.45.1`). | pyproject |
+| **D-13** | Config-Tests teilten Prozess- und Logging-Globalzustand, das Ergebnis konnte von der Ausführungsreihenfolge abhängen. Autouse-Fixture in `tests/conftest.py` stellt `os.environ` für jeden Test wieder her. | conftest |
+| **S-17** | Bereits behoben — der Server-Header nennt `glm2api/0.1.0` ohne Python-Laufzeitversion (live geprüft). | Live-Header |
+
+**Betriebsskript dabei mitkorrigiert:** `glm2api.sh restart` schlug seit einiger
+Zeit mit „Prozess(e) … konnten nicht gestoppt werden" fehl und ließ den Server
+auf altem Code weiterlaufen. Ursache: Die PID-Datei zeigt auf den `uv run`-Wrapper.
+Ein TERM an den Wrapper beendet das Python-Kind nicht — es hält weiter den Port
+und wird beim nächsten Start als Konflikt gemeldet. Jetzt räumt **beide** Wege
+verwaiste Kindprozesse mit Warte-Schleife und KILL-Eskalation ab; nach dem Fix
+läuft der Restart wieder durch und der Server hat wieder eine PID-Datei.
 
 ### F-6 Bewusst nicht umgesetzt
 

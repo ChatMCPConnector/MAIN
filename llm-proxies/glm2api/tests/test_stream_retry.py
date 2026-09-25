@@ -32,17 +32,13 @@ def _error_event(code=10025, message="stream request error"):
     }
 
 
-def _thinking_process_event(text="denke"):
-    return {
-        "status": "process",
-        "parts": [
-            {
-                "logic_id": "p1",
-                "status": "process",
-                "content": [{"type": "think", "think": text}],
-            }
-        ],
-    }
+def _silent_process_event():
+    """Ein process-event OHNE sichtbare ausgabe.
+
+    C-08: auch gesendetes reasoning gilt als ausgeliefert — ein retry
+    wuerde den turn verdoppeln. Fuer die C-07-transporttests brauchen wir
+    deshalb ein event, das wirklich nichts ausliefert."""
+    return {"status": "process", "parts": []}
 
 
 def _finish_event(text="hello"):
@@ -583,7 +579,7 @@ def test_connection_reset_mid_stream_triggers_retry():
     """C-07: ein ConnectionReset mitten im stream brach den generator vorher
     hart ab — ohne retry, obwohl noch nichts ausgeliefert war."""
     client, calls = _make_client_with_failing_iter(
-        [[_thinking_process_event()], [_finish_event("recovered")]],
+        [[_silent_process_event()], [_finish_event("recovered")]],
         [ConnectionResetError("peer closed")],
     )
 
@@ -598,7 +594,7 @@ def test_connection_reset_mid_stream_triggers_retry():
 
 def test_timeout_mid_stream_triggers_retry():
     client, calls = _make_client_with_failing_iter(
-        [[_thinking_process_event()], [_finish_event("ok")]],
+        [[_silent_process_event()], [_finish_event("ok")]],
         [TimeoutError("read timed out")],
     )
     stream = client.stream_chat_completion(
@@ -821,3 +817,137 @@ def test_no_notice_when_follow_up_ends_with_a_valid_call():
 
     assert '"bash"' in text, "der gueltige call muss durchkommen"
     assert "[blocked_tool_notice]" not in text
+
+
+# --- P4: C-08, C-15, C-19, C-20 ------------------------------------------
+
+
+def test_reasoning_counts_as_served_content_for_transport_retry():
+    """C-08: die byte-heuristik erkannte einen chunk nur dann als sichtbar,
+    wenn er `"content"` OHNE `"reasoning_content"` enthielt. Ein transientes
+    ereignis nach bereits gesendetem reasoning loeste dadurch einen retry
+    aus und verdoppelte den turn."""
+    client, calls = _make_client_with_failing_iter(
+        [[_reasoning_process_event("denke nach")], [_finish_event("ok")]],
+        [ConnectionResetError("reset")],
+    )
+
+    stream = client.stream_chat_completion(
+        {"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]}
+    )
+    emitted = []
+    with pytest.raises(UpstreamAPIError):
+        for chunk in stream:
+            emitted.append(chunk.decode("utf-8"))
+
+    assert calls["count"] == 1, "kein retry — das reasoning ist bereits beim client"
+    assert "denke nach" in "".join(emitted)
+
+
+def _reasoning_process_event(text):
+    return {
+        "status": "process",
+        "parts": [
+            {"logic_id": "p1", "status": "process", "content": [{"type": "think", "think": text}]}
+        ],
+    }
+
+
+def test_error_body_read_is_bounded():
+    """C-20: `error.read()` war unbegrenzt und wurde bei gzip ohne
+    dekompressionslimit entpackt — ein fehlerhaftes upstream konnte damit
+    speicher und cpu erschoepfen."""
+    import gzip
+    import json as json_module
+    import logging
+    import urllib.error
+
+    from glm2api.services.glm_client import ERROR_BODY_MAX_BYTES, GLMWebClient
+
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.logger = logging.getLogger("test.error_body")
+    client.logger.addHandler(logging.NullHandler())
+
+    class _Error:
+        def __init__(self, body, headers=None):
+            self._body = body
+            self.headers = headers or {}
+
+        def read(self, size=-1):
+            return self._body if size < 0 else self._body[:size]
+
+    oversized = json_module.dumps({"message": "X" * (5 * 1024 * 1024)}).encode()
+    payload = client._read_error_payload(_Error(oversized))
+    assert len(payload["message"]) <= ERROR_BODY_MAX_BYTES
+
+    bomb = gzip.compress(b"Y" * (50 * 1024 * 1024))
+    payload = client._read_error_payload(_Error(bomb, {"Content-Encoding": "gzip"}))
+    assert len(payload["message"]) <= ERROR_BODY_MAX_BYTES
+
+
+def test_conversations_from_superseded_attempts_are_cleaned_up():
+    """C-15: bei transient-retry/empty-retry/follow-up wurde ein neuer
+    accumulator erzeugt; die bis dahin erhaltene conversation_id blieb beim
+    upstream liegen (pro versuch eine conversation)."""
+    client, calls = _make_client([[_error_event()], [_finish_event("recovered")]])
+    deleted: list[str] = []
+    client.delete_conversation = lambda cid, assistant_id=None: deleted.append(cid)
+
+    list(
+        client.stream_chat_completion(
+            {"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]}
+        )
+    )
+
+    assert calls["count"] == 2, "ein transienter fehler hat einen zweiten versuch ausgeloest"
+    # die conversation des verworfen zwischenstands wird mit abgeraeumt
+    assert len(set(deleted)) == len(deleted), "keine conversation doppelt loeschen"
+
+
+def test_attachment_upload_is_not_repeated_for_every_retry():
+    """C-19: `_open_chat_stream()` rief den upload bei jedem versuch erneut
+    auf — dieselbe datei wurde mehrfach hochgeladen (bandbreite,
+    upstream-speicher, account-failover pro upload). Der cache sitszt in
+    `_upload_referenced_files`, also wird er hier direkt geprueft."""
+    import logging
+
+    from glm2api.services.glm_client import GLMWebClient
+
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.logger = logging.getLogger("test.upload_cache")
+    client.logger.addHandler(logging.NullHandler())
+    client._upload_reference_cache = {}
+
+    uploads: list[str] = []
+
+    def fake_upload(file_url, is_image=False):
+        uploads.append(file_url)
+        return {"type": "file_upload", "file_id": "f1"}
+
+    client._upload_file_reference = fake_upload
+    messages = [
+        {"role": "user", "content": [{"type": "file", "file_url": {"url": "https://x/a.pdf"}}]}
+    ]
+
+    first = client._upload_referenced_files(messages)
+    second = client._upload_referenced_files(messages)
+
+    assert uploads == ["https://x/a.pdf"], f"upload {len(uploads)}x ausgefuehrt"
+    assert first == second, "beide runden sehen dieselbe referenz"
+
+
+def test_upload_cache_does_not_grow_unbounded():
+    import logging
+
+    from glm2api.services.glm_client import _UPLOAD_CACHE_MAX_ENTRIES, GLMWebClient
+
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.logger = logging.getLogger("test.upload_cache2")
+    client.logger.addHandler(logging.NullHandler())
+    client._upload_reference_cache = {}
+    client._upload_file_reference = lambda url, is_image=False: {"type": "file_upload", "file_id": url}
+
+    for index in range(_UPLOAD_CACHE_MAX_ENTRIES + 20):
+        client._cached_upload_reference(f"https://x/{index}.bin", is_image=False)
+
+    assert len(client._upload_reference_cache) <= _UPLOAD_CACHE_MAX_ENTRIES

@@ -222,10 +222,18 @@ def _merge_part_texts(existing: dict[str, object], incoming: dict[str, object], 
     if new_text_total:
         content.append({"type": "text", "text": new_text_total})
     merged["content"] = content + non_text_old
-    # auch non-text-items des incoming uebernehmen (bilder etc.)
+    # T-19: non-text-items des incoming uebernehmen (bilder etc.) — aber
+    # NUR, wenn sie nicht schon vorhanden sind. Vorher wurden sie bei
+    # jedem update erneut angehaengt: ein bild-im-part nach fuenf
+    # updates stand fuenfmal im content.
     for item in inc_content:
-        if isinstance(item, dict) and item.get("type") != "text":
+        if isinstance(item, dict) and item.get("type") != "text" and item not in non_text_old:
             merged["content"].append(item)
+    # T-19: der berechnete eingangs-status wurde nie geschrieben — ein part
+    # behielt nach dem finish-fragment sein 'init'. Das pruefte downstream
+    # auf den volltext (bei "finish" notwendig, sonst "update").
+    if incoming_status:
+        merged["status"] = incoming_status
     return merged
 
 
@@ -502,11 +510,16 @@ def map_native_open_tool_call(
     command = ""
     target = ""
     open_list = parsed.get("open")
+    extra_targets = 0
     if isinstance(open_list, list) and open_list:
         first = open_list[0]
         if isinstance(first, dict):
             command = str(first.get("command", "") or first.get("cmd", "") or "").strip()
             target = str(first.get("ref_id", "") or first.get("url", "") or first.get("path", "")).strip()
+        # T-21: weitere ziele wurden stillschweigend verworfen. Der erste
+        # MAPPBARE gewinnt; die uebrigen werden wenigstens protokolliert,
+        # damit der aufruf nicht als vollstaendig verarbeitet gilt.
+        extra_targets = max(0, len(open_list) - 1)
     if not command:
         command = str(parsed.get("command", "") or parsed.get("cmd", "") or "").strip()
     if command:
@@ -521,7 +534,24 @@ def map_native_open_tool_call(
 
     if target.startswith("http://") or target.startswith("https://"):
         if allowed_tool_names is None or "webfetch" in allowed_tool_names:
+            if extra_targets:
+                _LOGGER.warning(
+                    "Native open call carried %s target(s); only the first was mapped",
+                    extra_targets + 1,
+                )
             return "webfetch", {"url": target}
+
+    # T-21: `example.com` ohne schema fiel durch den punkt-check in die
+    # datei-erkennung und wurde als read auf einen nicht existierenden
+    # dateinamen abgebildet. Eine bare domain ist eine URL.
+    if "://" not in target and re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", target):
+        if allowed_tool_names is None or "webfetch" in allowed_tool_names:
+            if extra_targets:
+                _LOGGER.warning(
+                    "Native open call carried %s target(s); only the first was mapped",
+                    extra_targets + 1,
+                )
+            return "webfetch", {"url": f"https://{target}"}
 
     if not target.startswith("turn") and ("/" in target or target.startswith(".") or "." in target):
         if _looks_like_tool_invocable(target):
@@ -1253,6 +1283,8 @@ class GLMEventAccumulator:
     tool_choice_mode: str = "auto"
     tool_choice_name: str | None = None
     required_tool_missing: bool = False
+    # T-22: ein turn wird genau einmal abgeschlossen
+    _finalized: bool = False
     # C-18: stop-sequenzen kann der upstream nicht, der proxy schon.
     stop_sequences: tuple[str, ...] = ()
 
@@ -1362,7 +1394,13 @@ class GLMEventAccumulator:
             if isinstance(part, dict) and part.get("logic_id"):
                 logic_id = str(part["logic_id"])
                 if logic_id not in self.parts_by_logic_id:
-                    insort(self.ordered_logic_ids, logic_id)
+                    # T-20: REIHENFOLGE DES EINGANGS, nicht lexikografisch.
+                    # `insort` sortierte die ids als strings — ab zehn
+                    # parts kam `p10` zwischen `p1` und `p2`, der
+                    # sichtbare text wurde consequently zerwuerfelt.
+                    # Die reihenfolge, in der der upstream die parts
+                    # sendet, ist die gemeinte.
+                    self.ordered_logic_ids.append(logic_id)
                     self.parts_by_logic_id[logic_id] = part
                 else:
                     # Der Upstream sendet bei init-Events TOKEN-Schnipsel (nicht den
@@ -1460,6 +1498,16 @@ class GLMEventAccumulator:
                                     return [], "intervene"
                                 continue
                             if tool_name and tool_id and tool_id not in self._server_side_tool_call_ids:
+                                # C-13: die id-losen serverseitigen calls
+                                # gingen voellig ungeprueft in den parser
+                                # weiter — bzw. wurden an anderen stellen
+                                # still verworfen. Ein call OHNE id ist aber
+                                # kein belegtes echo: er kann ein gewollter
+                                # aufruf sein. Er wird deshalb wie ein
+                                # normaler call aufgenommen; nur ECHTE
+                                # signatur-treffer aus der historie und
+                                # doppelte ids im selben turn werden
+                                # unterdrueckt.
                                 # Echo-Filter: der Upstream spiegelt bereits
                                 # ausgefuehrte Assistant-Tool-Calls der Historie
                                 # als native Parts zurueck (bis zu Dutzende pro
@@ -1500,6 +1548,39 @@ class GLMEventAccumulator:
                                         "function": {
                                             "name": tool_name,
                                             "arguments": str(arguments) if isinstance(arguments, str) else safe_json_dumps(arguments),
+                                        },
+                                    }
+                                )
+                            elif tool_name and not tool_id:
+                                # C-13: ohne id gibt es keinen beleg des
+                                # echos. Frueher fielen solche calls ersatzlos
+                                # weg — auch dann, wenn sie sich von jedem
+                                # historischen call unterschieden (empirisch:
+                                # ein `read` auf einen NEUEN pfad kam nicht
+                                # an). Jetzt wird eine stabile id vergeben und
+                                # der call ausgeliefert; echte signatur-echos
+                                # bleiben ueber `history_tool_call_signatures`
+                                # ausgeschlossen.
+                                local_id = f"native-{len(self._server_side_tool_calls)}-{self.created}"
+                                arguments_text = (
+                                    arguments if isinstance(arguments, str) else safe_json_dumps(arguments)
+                                )
+                                local_signature = f"{tool_name}:{arguments_text}"
+                                if local_signature in self.history_tool_call_signatures:
+                                    if self.logger:
+                                        self.logger.info(
+                                            "Dropped echoed native tool_call without id (history signature match) tool=%s",
+                                            tool_name,
+                                        )
+                                    continue
+                                self._server_side_tool_calls.append(
+                                    {
+                                        "id": local_id,
+                                        "type": "function",
+                                        "index": len(self._server_side_tool_calls),
+                                        "function": {
+                                            "name": tool_name,
+                                            "arguments": arguments_text,
                                         },
                                     }
                                 )
@@ -1671,6 +1752,17 @@ class GLMEventAccumulator:
         return None
 
     def finalize(self, status: str | None, last_error: dict[str, object] | None = None) -> list[str]:
+        # T-22: finalisierung war nicht idempotent. Ein zweiter aufruf
+        # spulte denselben parser erneut (`tool_parser.flush()`) und gab
+        # dieselben serverseitigen/gespeicherten calls ein zweites mal
+        # aus. In einer kette aus finalize/retry/prepend-notice entstehen
+        # dadurch doppelte tool_calls beim client. Der turn wird jetzt
+        # genau einmal abgeschlossen.
+        if self._finalized:
+            log = self.logger or _LOGGER
+            log.debug("Ignoring repeated finalize() call; turn was already finalized")
+            return []
+        self._finalized = True
         tail_text, xml_tool_calls = self.tool_parser.flush()
         xml_tool_calls = sanitize_tool_calls(xml_tool_calls, fallback_url=self.fallback_tool_url)
         # T-05: zurueckgehaltenes reasoning (protokoll-verdacht) zuerst

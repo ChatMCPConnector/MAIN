@@ -12,6 +12,7 @@ import socket
 import threading
 import time
 import uuid
+import zlib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +42,10 @@ from .translator import (
 
 
 FILE_UPLOAD_URL_SUFFIX = "/backend-api/assistant/file_upload"
+# C-20: fehler-bodies werden begrenzt gelesen — auch nach dekompression.
+ERROR_BODY_MAX_BYTES = 256 * 1024
+# C-19: cache fuer attachment-uploads innerhalb eines requests
+_UPLOAD_CACHE_MAX_ENTRIES = 64
 FILE_SIZE_LIMIT = 100 * 1024 * 1024
 IMAGE_SIZE_TO_ASPECT_RATIO = {
     "1024x1024": "1:1",
@@ -261,6 +266,7 @@ class GLMWebClient:
             wait_timeout=config.glm_queue_wait_timeout,
             max_concurrency=config.glm_max_concurrency,
         )
+        self._upload_reference_cache: dict[tuple[str, bool], dict[str, object] | None] = {}
         self._persistent_conversation_id: str = getattr(config, "glm_conversation_id", "")
         # C-03: die persistierte conversation war EIN globaler string fuer
         # alle requests. Zwei parallele runden teilten sich dadurch dieselbe
@@ -432,6 +438,12 @@ class GLMWebClient:
                 stop_sequences=stop_sequences,
             )
 
+        # C-15: bei transient-retry, leer-retry und follow-up wird ein neuer
+        # accumulator erzeugt. Die bis dahin erhaltene conversation_id
+        # wurde dabei verworfen — ohne delete_conversation blieb sie beim
+        # upstream liegen (pro versuch eine conversation). Alle im lauf
+        # gesammelten ids werden im finally abgeraeumt.
+        created_conversations: set[str] = set()
         accumulator = new_accumulator()
         # C-12: retries der non-stream-runde verwenden das payload der
         # aktuellen runde; nach einer follow-up-runde ist das deren payload
@@ -523,6 +535,8 @@ class GLMWebClient:
                             max_empty_response_retries,
                         )
                         time.sleep(self.config.glm_stream_error_retry_interval)
+                        if accumulator.conversation_id:
+                            created_conversations.add(accumulator.conversation_id)
                         accumulator = new_accumulator()
                         response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
@@ -552,6 +566,8 @@ class GLMWebClient:
                             max_blocked_follow_ups,
                         )
                         response.close() # type: ignore
+                        if accumulator.conversation_id:
+                            created_conversations.add(accumulator.conversation_id)
                         accumulator = new_accumulator()
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         # C-12: follow-up-runde wird zur aktiven runde
@@ -583,13 +599,18 @@ class GLMWebClient:
                 if retry_exc is not None:
                     history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
+                if accumulator.conversation_id:
+                    created_conversations.add(accumulator.conversation_id)
                 accumulator = new_accumulator()
                 response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
         finally:
             response.close() # type: ignore
             if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
                 self.set_active_conversation_id(accumulator.conversation_id, account_index)
-            self.delete_conversation(accumulator.conversation_id, assistant_id=assistant_id)
+            if accumulator.conversation_id:
+                created_conversations.add(accumulator.conversation_id)
+            for conversation_id in sorted(created_conversations):
+                self.delete_conversation(conversation_id, assistant_id=assistant_id)
             conversation_slot.__exit__(None, None, None)
             lease.release()
         return accumulator.build_response(), accumulator.conversation_id
@@ -685,6 +706,9 @@ class GLMWebClient:
             lease.release()
             raise
 
+        # C-15: siehe chat_completion() — jede im lauf erhaltene
+        # conversation-id wird im finally abgeraeumt, nicht nur die letzte.
+        created_conversations: set[str] = set()
         accumulator = new_accumulator()
 
         def generate():
@@ -703,7 +727,16 @@ class GLMWebClient:
             # erfundene erfolgsmeldung als antwort durchlassen.
             turn_blocked_names: list[str] = []
             while True:
+                # C-08: zwei getrennte signale.
+                #   served_content        = fuer den TRANSPORT-retry. Auch
+                #     gesendetes reasoning zaehlt: ein retry wuerde den
+                #     sichtbaren turn verdoppeln.
+                #   served_visible_text   = fuer den LEER-retry. Ein turn, der
+                #     nur reasoning lieferte, ist fuer den client wertlos —
+                #     er beendet den agenten — und wird deshalb mit einem
+                #     eigenen, begrenzten budget erneut versucht.
                 served_content = False
+                served_visible_text = False
                 retry_exc: UpstreamAPIError | None = None
                 finalize_chunks: list[str] | None = None
                 blocked: list[str] = []
@@ -731,17 +764,30 @@ class GLMWebClient:
                         chunks, status = accumulator.consume_event(event)
                         for chunk in chunks:
                             encoded = chunk.encode("utf-8")
-                            if not served_content and b'"content"' in encoded and b'"reasoning_content"' not in encoded:
+                            if not served_content and (b'"content"' in encoded or b'"reasoning_content"' in encoded):
                                 # trivial protocol residue ("[]") does not count
                                 # as served content — it must not block recovery
                                 # rounds (blocked-tool follow-up, transient retry)
+                                # C-08: die alte byte-heuristik erkannte einen
+                                # chunk nur dann als sichtbar, wenn er
+                                # `"content"` OHNE `"reasoning_content"` enthielt.
+                                # Der accumulator streamt reasoning aber als
+                                # sichtbaren SSE-delta — ein transientes
+                                # ereignis nach bereits gesendetem reasoning
+                                # loeste dadurch einen retry aus und verdoppelte
+                                # den turn. Jetzt wird der chunk ausgewertet.
                                 try:
                                     delta = json.loads(
                                         encoded.decode("utf-8").removeprefix("data: ").strip()
                                     )["choices"][0]["delta"]
                                     content_value = delta.get("content")
+                                    reasoning_value = delta.get("reasoning_content")
+                                    for value in (content_value, reasoning_value):
+                                        if value and str(value).strip() not in ("", "[]"):
+                                            served_content = True
+                                            break
                                     if content_value and str(content_value).strip() not in ("", "[]"):
-                                        served_content = True
+                                        served_visible_text = True
                                 except (json.JSONDecodeError, KeyError, IndexError, ValueError):
                                     served_content = True
                             yield encoded
@@ -840,6 +886,8 @@ class GLMWebClient:
                             served_content,
                         )
                         response.close() # type: ignore
+                        if accumulator.conversation_id:
+                            created_conversations.add(accumulator.conversation_id)
                         accumulator = new_accumulator()
                         if served_content:
                             accumulator.emitted_role = True
@@ -856,7 +904,7 @@ class GLMWebClient:
                     # retry mit frischer conversation sauber moeglich — der
                     # agent laeuft autonom weiter, ohne externen resume-schubser.
                     if (
-                        not served_content
+                        not served_visible_text
                         and accumulator.is_empty_response()
                         and empty_retries < max_empty_response_retries
                     ):
@@ -868,6 +916,8 @@ class GLMWebClient:
                             max_empty_response_retries,
                         )
                         time.sleep(self.config.glm_stream_error_retry_interval)
+                        if accumulator.conversation_id:
+                            created_conversations.add(accumulator.conversation_id)
                         accumulator = new_accumulator()
                         response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         continue
@@ -908,6 +958,8 @@ class GLMWebClient:
                 if retry_exc is not None:
                     history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
+                if accumulator.conversation_id:
+                    created_conversations.add(accumulator.conversation_id)
                 accumulator = new_accumulator()
                 response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
 
@@ -921,7 +973,10 @@ class GLMWebClient:
                     pass
                 if getattr(self.config, "glm_persistent_conversation", False) and accumulator.conversation_id:
                     self.set_active_conversation_id(accumulator.conversation_id, stream_account_index)
-                self.delete_conversation(accumulator.conversation_id, assistant_id=assistant_id)
+                if accumulator.conversation_id:
+                    created_conversations.add(accumulator.conversation_id)
+                for conversation_id in sorted(created_conversations):
+                    self.delete_conversation(conversation_id, assistant_id=assistant_id)
                 conversation_slot.__exit__(None, None, None)
                 lease.release()
 
@@ -1563,6 +1618,11 @@ class GLMWebClient:
             )
 
     def _upload_referenced_files(self, messages: list[dict[str, object]]) -> list[dict[str, object]]:
+        """C-19: der upload lief bei JEDEM versuch erneut — transient-retry,
+        leer-retry und negative follow-up-runde rufen `_open_chat_stream()`
+        erneut auf, dieselbe datei wurde also mehrfach hochgeladen
+        (bandbreite, upstream-speicher, und der account-failover pro
+        upload). Die refs werden deshalb pro request zwischengespeichert."""
         refs: list[dict[str, object]] = []
         for message in messages:
             content = message.get("content")
@@ -1575,18 +1635,31 @@ class GLMWebClient:
                 if item_type == "image_url":
                     url = item.get("image_url", {}).get("url")
                     if isinstance(url, str) and url:
-                        ref = self._upload_file_reference(url, is_image=True)
+                        ref = self._cached_upload_reference(url, is_image=True)
                         if ref:
                             refs.append(ref)
                 elif item_type == "file":
                     url = item.get("file_url", {}).get("url")
                     if isinstance(url, str) and url:
-                        ref = self._upload_file_reference(url, is_image=False)
+                        ref = self._cached_upload_reference(url, is_image=False)
                         if ref:
                             refs.append(ref)
         if refs:
             self.logger.info("Attachment upload completed success_count=%s", len(refs))
         return refs
+
+    def _cached_upload_reference(self, file_url: str, is_image: bool) -> dict[str, object] | None:
+        """Ein und dieselbe URL wird pro request genau einmal hochgeladen."""
+        cache_key = (file_url, is_image)
+        if cache_key in self._upload_reference_cache:
+            return self._upload_reference_cache[cache_key]
+        ref = self._upload_file_reference(file_url, is_image=is_image)
+        # Bounded: ein request kann viele attachments haben, aber der cache
+        # darf nicht unbegrenzt wachsen.
+        if len(self._upload_reference_cache) >= _UPLOAD_CACHE_MAX_ENTRIES:
+            self._upload_reference_cache.clear()
+        self._upload_reference_cache[cache_key] = ref
+        return ref
 
     def _upload_file_reference(self, file_url: str, is_image: bool) -> dict[str, object] | None:
         try:
@@ -1737,16 +1810,30 @@ class GLMWebClient:
         return response
 
     def _read_error_payload(self, error: urllib.error.HTTPError) -> dict[str, object]:
+        # C-20: der fehler-body war unbegrenzt (`error.read()`) und wurde
+        # bei gzip ohne dekompressionslimit entpackt. Ein fehlerhaftes oder
+        # boesartiges upstream kann damit speicher und cpu erschoepfen.
+        # Begrenzt lesen und die dekompression ebenfalls begrenzen.
         try:
-            raw_body = error.read()
+            raw_body = error.read(ERROR_BODY_MAX_BYTES + 1)
+            if len(raw_body) > ERROR_BODY_MAX_BYTES:
+                self.logger.warning(
+                    "Upstream error body exceeds %s bytes — truncated for diagnostics",
+                    ERROR_BODY_MAX_BYTES,
+                )
+                raw_body = raw_body[:ERROR_BODY_MAX_BYTES]
             content_encoding = error.headers.get("Content-Encoding", "").lower()
 
             if content_encoding == "gzip":
-                raw_body = gzip.decompress(raw_body)
+                # NUR die dekomprimierte Ausgabe begrenzen: ein gzip-bomb
+                # mit kleinem body und riesiger ausgabe wird abgeschnitten
+                # statt den speicher zu fressen.
+                decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                raw_body = decompressor.decompress(raw_body, ERROR_BODY_MAX_BYTES)
 
             text = raw_body.decode("utf-8", errors="ignore")
         except Exception as exc:
-            return {"message": f"Failed to read upstream error response: {exc}"}
+            return {"message": f"Failed to read upstream error response: {type(exc).__name__}"}
         try:
             payload = json.loads(text)
             if isinstance(payload, dict):

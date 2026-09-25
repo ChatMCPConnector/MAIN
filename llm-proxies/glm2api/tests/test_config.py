@@ -232,3 +232,41 @@ def test_env_example_port_matches_code_default():
     ]
 
     assert port_lines == ["PORT=8001"]
+
+
+def test_env_example_documents_every_operational_config_key():
+    """D-11: 16 Betriebs-Keys der AppConfig fehlten in `.env.example` — sie
+    waren nur implizit über die Standardwerte sichtbar.
+
+    Geprüft werden die Keys, die `load_config` TATSÄCHLICH liest (nicht die
+    Feldnamen des Dataclass — die weichen ab: `GLM_TOKEN_FILE` →
+    `token_file_path`, `GLM_BUSY_RETRY_INTERVAL_SECONDS` →
+    `glm_busy_retry_interval`). So bleibt der Test ohne Pflegeliste
+    korrekt."""
+    import inspect
+    import pathlib
+    import re
+
+    import glm2api.config as config_module
+
+    source = inspect.getsource(config_module)
+    read_keys: set[str] = set()
+    for match in re.finditer(
+        r'(?:_config_int|_config_float|_config_bool|_config_str|_config_limit)\(\s*"([A-Z][A-Z0-9_]+)"', source
+    ):
+        read_keys.add(match.group(1))
+    for match in re.finditer(r'values\.get\("([A-Z][A-Z0-9_]+)"', source):
+        read_keys.add(match.group(1))
+    # abgeleitete/sonstige schluessel, die bewusst nicht env-gesteuert sind
+    not_env_keys = {"ENV_FILE_PATH", "ENV_FILE_CREATED", "LOG_LEVEL_FORMAT", "LOG_DATE_FORMAT", "LOG_STREAM_LOG_LEVEL"}
+    read_keys -= not_env_keys
+
+    example_text = (pathlib.Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+    documented = {
+        line.split("=", 1)[0].strip()
+        for line in example_text.splitlines()
+        if "=" in line and not line.strip().startswith("#")
+    }
+    missing = sorted(key for key in read_keys if key not in documented)
+
+    assert not missing, f"in .env.example nicht dokumentiert: {missing}"

@@ -266,6 +266,8 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
+- 2026-09-25: **`glm2api.sh restart` repariert.** Die PID-Datei zeigt auf den `uv run`-Wrapper; ein TERM an den Wrapper beendet das Python-Kind nicht. Es hielt weiter Port 8001, der Restart brach mit „konnten nicht gestoppt werden" ab und der Server lief auf altem Code weiter. Beide Stop-Wege räumen jetzt verwaiste Kindprozesse mit Warte-Schleife und KILL-Eskalation ab; danach startet der Server wieder sauber und die PID-Datei wird wieder gesetzt.
+
 - 2026-09-25: **glm2api-Port vereinheitlicht auf 8001.** Code-Default und `.env.example` sagten 8000, während der Betrieb (Start-/Restart-Skript, openode-Provider, Doku) auf 8001 lief — ein frisch geklonter Workspace wäre auf 8000 gestartet und hätte jeden Client und jedes Betriebsscript gebrochen. Default und Beispiel sind jetzt 8001, mit Test gegen beide.
 
 - 2026-09-25: glm2api-Betriebsverträge: **Ausgabegrenze** `GLM_MAX_OUTPUT_TOKENS` (Default 16384, Cap 131072) — der Client-Wunsch `max_tokens` gilt, nie darüber hinaus; bei Erreichen `finish_reason: length`, unvollständige Tool-Calls werden verworfen. **Kein Gastkonto im Normalbetrieb:** ohne konfiguriertes Konto verweigert der Server den Start (Gastmodus nur noch als ausdrückliche Wahl, mit Warnung). **Debug-Log bleibt vollständig (1:1)** und rotiert erst bei 100 MB je Generation (3 Generationen, überschreibbar über `GLM2API_LOG_MAX_BYTES`/`GLM2API_LOG_BACKUP_COUNT`) — Vorrang hat Nachvollziehbarkeit für Patches. `GLM_MAX_CONCURRENCY` in `.env.example` auf 3 korrigiert (100 lag über dem Cap 32).
