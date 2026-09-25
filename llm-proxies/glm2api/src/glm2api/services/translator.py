@@ -1618,6 +1618,16 @@ class GLMEventAccumulator:
     # der komplette text aus allen parts neu zusammengesetzt (quadratisch:
     # 2000 parts kosteten 16,9 s).
     _dirty_logic_ids: set[str] = field(default_factory=set)
+    _logic_id_rank: dict[str, int] = field(default_factory=dict)
+    # T-20 (perf): die im LETZTEN aufbau tatsaechlich neu aufbereiteten
+    # parts. `_render_full_output()` leert `_dirty_logic_ids`, bevor
+    # `_compute_deltas()` iteriert — ohne diesen schnappschuss lief die
+    # delta-berechnung ueber ALLE bekannten parts, bei 1000 parts also
+    # 1.000.000 dict-zugriffe (gemessen 3,5 s / 1000 parts, 20,7 s /
+    # 2000 parts, je verdopplung 4-7x). Unveraenderte parts koennen
+    # nichts beitragen: ihr zwischengespeicherter text ist gleich und
+    # `_part_text_sent` steht schon darauf.
+    _last_rendered_dirty: set[str] = field(default_factory=set)
 
     # wird erhoeht, wenn eine BEREITS zusammengefuegte part geaendert wird;
     # der inkrementelle aufbau wird dann verworfen und neu gebaut.
@@ -1770,6 +1780,7 @@ class GLMEventAccumulator:
                     # Die reihenfolge, in der der upstream die parts
                     # sendet, ist die gemeinte.
                     self.ordered_logic_ids.append(logic_id)
+                    self._logic_id_rank[logic_id] = len(self._logic_id_rank)
                     self.parts_by_logic_id[logic_id] = part
                     self._dirty_logic_ids.add(logic_id)
                 else:
@@ -3096,7 +3107,14 @@ class GLMEventAccumulator:
         text_delta_parts: list[str] = []
         reasoning_delta_parts: list[str] = []
 
-        for logic_id in self.ordered_logic_ids:
+        # T-20 (perf): siehe `_last_rendered_dirty`. Reihenfolge wie beim
+        # vollen durchlauf — die deltas entstehen sonst in anderer
+        # reihenfolge als die parts.
+        ranked = sorted(
+            self._last_rendered_dirty,
+            key=lambda item: self._logic_id_rank.get(item, 0),
+        )
+        for logic_id in ranked:
             rendered_text = self._cached_part_texts.get(logic_id, "")
             rendered_reasoning = self._cached_part_reasonings.get(logic_id, "")
 
@@ -3150,6 +3168,7 @@ class GLMEventAccumulator:
                     reasoning_delta_parts.append(rendered_reasoning[prev_len:])
                 self._part_reasoning_sent[logic_id] = len(rendered_reasoning)
 
+        self._last_rendered_dirty.clear()
         text_delta = "".join(text_delta_parts)
         reasoning_delta = "".join(reasoning_delta_parts)
         # T-20: nur das NEUE fragment betrachten, nicht den gesamten
@@ -3281,6 +3300,7 @@ class GLMEventAccumulator:
         # chunk-sweep, vorher). Laeuft ein part mitten in einer
         # angebrochenen protokoll-struktur weiter, wird es deshalb OHNE
         # trenner angehaengt.
+        self._last_rendered_dirty = set(dirty)
         self._dirty_logic_ids.clear()
         self._cached_full_text = self._join_parts_incremental(
             text_parts, "text"

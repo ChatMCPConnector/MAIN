@@ -3091,3 +3091,72 @@ def test_tool_choice_none_still_allows_plain_text():
     assert not message.get("tool_calls")
     assert "Hier ist die Antwort." in (message.get("content") or "")
     assert "tool_choice_violation" not in (message.get("content") or "")
+
+
+# --- T-20: die delta-berechnung muss nicht ueber alle parts laufen -------
+
+
+def test_t20_delta_computation_scales_linearly():
+    """T-20: `_compute_deltas()` lief pro event ueber ALLE bekannten
+    parts — 1000 parts x 1000 events = 1.000.000 dict-zugriffe.
+    Gemessen superlinear: 3,5 s / 1000 parts, 20,7 s / 2000 parts, je
+    verdopplung 4-7x. Das ist am accumulator messbar, ohne die zeit zu
+    messen: der aufbau arbeitet nur noch die tatsaechlich geaenderten
+    parts ab."""
+    import time
+
+    text = "hier ist ein text. " * 3
+    durations = {}
+    for count in (500, 2000):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+        start = time.perf_counter()
+        for index in range(count):
+            accumulator.consume_event({
+                "conversation_id": "c",
+                "parts": [{"logic_id": f"p{index}", "content": [{"type": "text", "text": text}]}],
+            })
+        accumulator.finalize("finish")
+        durations[count] = time.perf_counter() - start
+        if count == 2000:
+            content = accumulator.build_response()["choices"][0]["message"].get("content") or ""
+            # jeder part kommt genau einmal vor, sonst ging inhalt verloren
+            assert content.count("hier ist ein text.") == count * 3
+
+    # 4x mehr parts duerfen nicht 16x so lange dauern (quadratisch).
+    growth = durations[2000] / max(durations[500], 1e-6)
+    assert growth < 8.0, f"zu superlinear: 4x parts kosteten {growth:.1f}x zeit"
+
+
+def test_t20_optimisation_keeps_the_output_identical():
+    """Gegenprobe zur Optimierung: es darf kein inhalt verloren gehen."""
+    text = "hier ist ein text. " * 3
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    for index in range(200):
+        accumulator.consume_event({
+            "conversation_id": "c",
+            "parts": [{"logic_id": f"p{index}", "content": [{"type": "text", "text": text}]}],
+        })
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+
+    content = message.get("content") or ""
+    assert content.count("hier ist ein text.") == 200 * 3
+
+
+def test_t20_continuing_parts_are_not_separated():
+    """Die eigentliche T-20-symptomatik, gegenprobe zur optimierung:
+    ein text, der MITTEN IM SATZ ueber mehrere parts verteilt ist
+    ("Die Datei" / "DieDatei"), darf an der part-grenze nicht
+    zerrissen werden. Hier ist der satz nicht beendet, also darf
+    kein absatzumbruch entstehen."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+    for index, piece in enumerate(["Die Datei", " ist im ", "Repository gefunden"]):
+        accumulator.consume_event({
+            "conversation_id": "c",
+            "parts": [{"logic_id": f"p{index}", "content": [{"type": "text", "text": piece}]}],
+        })
+    accumulator.finalize("finish")
+    content = accumulator.build_response()["choices"][0]["message"].get("content") or ""
+
+    assert "Die Datei ist im Repository gefunden" in content
+    assert "\n\n" not in content
