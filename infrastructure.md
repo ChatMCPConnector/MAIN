@@ -182,6 +182,7 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
 - **Kanonisch ist:** gepinnte Version im Repo + reproduzierbares Skript.
   PID-/Port-Ausgaben sind ephemeral — vor Wiederverwendung einmal prüfen
   (`pgrep`, `ss`, `curl`), nie als Blocker oder Dauerzustand dokumentieren.
+- **Kanonische Codespace-Ports (4 Dienste):** Port `4096` (opencode-Server), Port `6082` (noVNC Browser), Port `8001` (glm2api-Proxy), Port `9878` (antigravity-proxy). In `.devcontainer/devcontainer.json` fest via `forwardPorts` + `portsAttributes` + `otherPortsAttributes: { onAutoForward: "ignore" }` und `remote.autoForwardPorts: false` verdrahtet, damit temporäre/interne Sockets (5900, 5920, 8080, 8083, 8931) nicht auto-geforwarded werden.
 - **Browser-Runtime:** **Firefox** (Mozilla-Tarball, Version gepinnt in
   `infra/scripts/firefox-install.sh`, Install nach `.runtime/firefox`, gitignored)
   → `./infra/scripts/browser-start.sh [URL]` (Xvfb, x11vnc, noVNC; idempotent).
@@ -264,6 +265,9 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-25: Codespace Port-Forwarding gehärtet: In `.devcontainer/devcontainer.json` wurden `forwardPorts: [4096, 6082, 8001, 9878]` und `otherPortsAttributes: { onAutoForward: "ignore" }` sowie `remote.autoForwardPorts: false` hinterlegt. Dadurch werden künftig ausschließlich die 4 kanonischen Dienste weitergeleitet und keine temporären Test-/Benchmark-Ports (8080, 8083, 8931) oder internen Sockets (5900, 5920) mehr persistiert.
+- 2026-09-25: glm2api stdout/stderr-Spiegel rotierend: `infra/scripts/glm2api.sh` kürzt `log/glm2api_output.log` beim Start und über einen Größenwächter alle 5 Minuten per Copy-Truncate auf 20 MiB (Historie in `glm2api_output.log.1`, 2 Generationen, `0600`). Grund: ohne Rotation wuchs die Datei bei `LOG_LEVEL=DEBUG` auf ~3,4 GB/Tag (1,4 GB in 6 h beobachtet). Copy-Truncate statt Rename, weil der Server die Datei über einen offenen Deskriptor weiterbeschreibt — ein Rename ließe ihn auf die Alt-Generation schreiben. Die Größenprüfung läuft gegen den Plattenverbrauch (`du`), nicht gegen `stat`, weil der nach dem Kürzen versetzte Deskriptor eine Sparse-Lücke erzeugt. Der Wächter wird beim Stop mitgebeendet; ein Kill erfolgt nur, wenn die PID wirklich zum Skript gehört (Schutz gegen PID-Wiederverwendung).
 
 - 2026-09-24: glm2api-Sicherheits-/Ingress-Verträge gehärtet: nicht-Loopback-Bindungen verlangen API-Keys, CORS-Wildcards und Klartext-Upstream werden begrenzt, Request-/Header-/Body-/Socket-/Verbindungslimits sind hart begrenzt, Upstream-Timeouts werden von Client-Disconnects getrennt, interne Fehler bleiben generisch und Debug-Logs werden mit `0700`-Verzeichnis/`0600`-Dateien sowie Header-Redaktion betrieben. Raw-HTTP-Smoke-Checks für `411`/`400`/`413`/`501`, `Connection: close`, generische `504`-Upstream-Fehler und die Version ohne Python-Laufzeit wurden ausgeführt.
 

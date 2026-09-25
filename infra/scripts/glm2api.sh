@@ -8,6 +8,12 @@ GLM2API_DIR="/workspaces/MAIN/llm-proxies/glm2api"
 PID_FILE="$GLM2API_DIR/glm2api.pid"
 LOG_DIR="$GLM2API_DIR/log"
 OUTPUT_LOG="$LOG_DIR/glm2api_output.log"
+# stdout/stderr-Spiegel wuchs unbegrenzt (1,4 GB in 6 h bei DEBUG). Wird
+# jetzt beim Start rotiert und zur Laufzeit von einem Größenwächter
+# gekappt — es gibt im Container weder logrotate noch systemd.
+OUTPUT_LOG_MAX_BYTES=20971520   # 20 MiB
+OUTPUT_LOG_GENERATIONS=2
+GUARD_PID_FILE="$LOG_DIR/.output_log_guard.pid"
 HOST="127.0.0.1"
 PORT=8001
 HEALTH_URL="http://$HOST:$PORT/health"
@@ -59,6 +65,8 @@ health_ok() {
 
 stop_server() {
   local pid pids
+  # Größenwächter zuerst beenden, damit er nicht nach dem Server weiterläuft
+  stop_log_guard
   # Weg 1: gezielt über PID-Datei (nur diese eine PID)
   if pid="$(pid_file_pid)"; then
     echo "Stoppe PID $pid (aus PID-Datei)..."
@@ -95,14 +103,71 @@ stop_server() {
   echo "✓ Prozess gestoppt"
 }
 
+# --- stdout/stderr-Spiegel: Rotation statt unbegrenztem Wachstum -----------
+# Der Server schreibt stdout+stderr per Shell-Redirection in OUTPUT_LOG. Ohne
+# Rotation wuchs die Datei bei LOG_LEVEL=DEBUG auf ~3,4 GB/Tag. Da weder
+# logrotate noch systemd im Container laufen, rotieren wir selbst: beim Start
+# und danach von einem kleinen Größenwächter.
+
+rotate_output_log() {
+  [ -f "$OUTPUT_LOG" ] || return 0
+  # WICHTIG: nach Grösse auf der PLATTE prüfen, nicht nach der scheingrösse.
+  # Copy-Truncate lässt den Dateideskriptor des Servers gültig — er schreibt
+  # danach weiter in dieselbe inode, lediglich versetzt. Dieser Versatz
+  # erzeugt eine Sparse-Lücke, die keinen Plattenplatz kostet, aber die
+  # stat-Angabe verfälscht.
+  local size
+  size=$(du -sk "$OUTPUT_LOG" 2>/dev/null | cut -f1)
+  size="${size:-0}"
+  [ "$size" -gt "$((OUTPUT_LOG_MAX_BYTES / 1024))" ] || return 0
+  # die letzten OUTPUT_LOG_MAX_BYTES sichern, dann in-place kürzen
+  tail -c "$OUTPUT_LOG_MAX_BYTES" "$OUTPUT_LOG" > "$OUTPUT_LOG.1.tmp" 2>/dev/null || return 0
+  chmod 600 "$OUTPUT_LOG.1.tmp" 2>/dev/null || true
+  mv -f "$OUTPUT_LOG.1.tmp" "$OUTPUT_LOG.1"
+  : > "$OUTPUT_LOG"
+  echo "  ↻ stdout-Log rotiert (war ${size} KiB auf der Platte)"
+}
+
+start_log_guard() {
+  local server_pid="$1"
+  (
+    while kill -0 "$server_pid" 2>/dev/null; do
+      sleep 300
+      kill -0 "$server_pid" 2>/dev/null || exit 0
+      rotate_output_log
+    done
+  ) >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$GUARD_PID_FILE.tmp" 2>/dev/null && mv -f "$GUARD_PID_FILE.tmp" "$GUARD_PID_FILE" 2>/dev/null
+}
+
+stop_log_guard() {
+  [ -f "$GUARD_PID_FILE" ] || return 0
+  local guard_pid cmdline
+  guard_pid="$(cat "$GUARD_PID_FILE" 2>/dev/null)"
+  if [ -n "$guard_pid" ] && kill -0 "$guard_pid" 2>/dev/null; then
+    # Nur killen, wenn es WIRKLICH unser Wächter ist. Nach einem Reboot kann
+    # eine veraltete PID-Datei auf einen fremden Prozess zeigen — der Guard
+    # ist ein Fork dieses Skripts, sein cmdline enthält daher den Pfad.
+    cmdline="$(tr '\0' ' ' < "/proc/$guard_pid/cmdline" 2>/dev/null || true)"
+    case "$cmdline" in
+      *glm2api.sh*) kill "$guard_pid" 2>/dev/null || true ;;
+      *) : ;;  # fremde PID — nicht anfassen
+    esac
+  fi
+  rm -f "$GUARD_PID_FILE"
+}
+
 start_server() {
   mkdir -p "$LOG_DIR"
   cd "$GLM2API_DIR" || exit 1
+  stop_log_guard
+  rotate_output_log
   # venv-Python statt System-Python: App requires >=3.14, System hat nur 3.12
   nohup "$GLM2API_DIR/.venv/bin/python3" main.py >> "$OUTPUT_LOG" 2>&1 &
   local pid=$!
   # PID atomar in Datei schreiben (gleiche Partition → rename ist atomar)
   printf '%s\n' "$pid" > "$PID_FILE.tmp" && mv -f "$PID_FILE.tmp" "$PID_FILE"
+  start_log_guard "$pid"
   echo "✓ Server gestartet (PID: $pid)"
 
   echo "Warte auf Start..."
