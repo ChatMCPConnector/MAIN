@@ -3660,6 +3660,43 @@ def test_self_steering_never_cuts_a_stream_delta_mid_sentence():
     )
 
 
+def test_invented_limit_claim_is_also_filtered_in_the_stream():
+    """S-08: der limit-filter sass nur im finalize-pfad. Mid-run-text wird
+    aber direkt gestreamt und sieht ihn nie — live stand genau diese zeile
+    als assistant-nachricht im client:
+    '**Analyse abgebrochen** — das Tool-Limit (8/8) ist erreicht; ich
+     musste `open` stoppen.'"""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    narration = (
+        "**Analyse abgebrochen** — das Tool-Limit (8/8) ist erreicht; ich musste "
+        "`open` stoppen. Ergebnis aus den bisherigen Aufrufen: 8 Dateien."
+    )
+    chunks, _ = accumulator.consume_event(
+        {
+            "conversation_id": "c",
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "c0",
+                    "status": "finish",
+                    "content": [
+                        {"type": "tool_calls", "tool_calls": [{"name": "read", "id": "a", "arguments": {"filePath": "/a.py"}}]}
+                    ],
+                },
+                {"logic_id": "t0", "content": [{"type": "text", "text": narration}]},
+            ],
+        }
+    )
+    streamed = "".join(
+        json.loads(chunk[6:].strip())["choices"][0]["delta"].get("content") or ""
+        for chunk in chunks
+        if chunk.startswith("data: ") and "[DONE]" not in chunk
+    )
+    assert "Tool-Limit" not in streamed, streamed
+    assert "abgebrochen" not in streamed, streamed
+    assert "8 Dateien" in streamed, streamed
+
+
 
 @pytest.mark.parametrize("keep", [
     "Ich habe 8 Dateien gelesen und die Werte geprueft.",

@@ -1365,14 +1365,23 @@ def strip_self_steering(text: str, *, require_complete_sentence: bool = False) -
     return re.sub(r"[ \t]{2,}", " ", "".join(result)).strip()
 
 
-def strip_invented_limit_claim(text: str) -> str:
-    """Entfernt die erfundene 'Tool-Limit erreicht'-Meldung samt Satz (S-08)."""
+def strip_invented_limit_claim(text: str, *, require_complete_sentence: bool = False) -> str:
+    """Entfernt die erfundene 'Tool-Limit erreicht'-Meldung samt Satz (S-08).
+
+    `require_complete_sentence=True` (stream-pfad): nur entfernen, was
+    vollstaendig im uebergebenen stueck liegt — ein stream-delta beginnt
+    mitten im satz, ein satzweiter schnitt darauf erzeugt ein halbwort."""
     if not text or not _LIMIT_CLAIM_RE.search(text):
         return text
     kept: list[tuple[int, int]] = []
     for match in _LIMIT_CLAIM_RE.finditer(text):
         start = _sentence_start_before(text, match.start())
         stop = _sentence_end_after(text, match.end())
+        if require_complete_sentence:
+            if not _SENTENCE_END_RE.search(text, match.end()):
+                continue
+            if start > 0 and text[start - 1] not in ".!?…\n":
+                continue
         sentence = text[start:stop]
         near_start = match.start() <= _LIMIT_LEAD_WINDOW
         if not (near_start or _STOP_WORD_RE.search(sentence)):
@@ -2741,15 +2750,37 @@ class GLMEventAccumulator:
         # protokoll-narration per definition kein antworttext — sie wird
         # hier still entfernt, genau wie `strip_meta_chatter` es im
         # finalize-pfad tut.
-        if visible_text_delta and (self._server_side_tool_calls or self.tool_parser.tool_calls):
+        if visible_text_delta:
+            # S-08: die drei selbst-bezogenen filter laufen BEDINGUNGSLOS
+            # im stream — nicht nur, wenn der turn bereits calls hat.
+            #
+            # Die bedingung 'turn hat calls' war falsch und liess genau die
+            # schlimmste form durch: die narration ueber `open` steht
+            # typischerweise in einem turn, in dem NUR VERWORFENE
+            # `open`-calls vorkamen. Verworfene calls landen in
+            # `blocked_tool_attempt_names`, nicht in `_server_side_tool_calls`
+            # — die bedingung war also genau dann falsch, wenn sie haette
+            # greifen muessen (live repro K: 'Der `open`-Aufruf
+            # funktioniert hier nicht fuer lokale Pfade' + 'Analyse-Abbruch:
+            # das `open`-Tool funktioniert nur fuer Web-URLs').
+            #
+            # Die filter selbst sind eng genug, dass ein FINALER bericht
+            # unbeschaedigt bleibt: sie verlangen erste-person-steuernde
+            # oder die `open`+faehigkeits-kombination, nie ein blosses
+            # nennen von `open`. Gedeckt durch
+            # `test_real_sentences_survive_the_self_steering_filter` und
+            # `test_legitimate_technical_mention_of_open_survives`.
+            #
+            # `require_complete_sentence=True` bleibt: ein stream-delta
+            # beginnt mitten im satz, ein satzweiter schnitt darauf erzeugt
+            # ein halbwort.
             visible_text_delta = strip_protocol_meta_narration(visible_text_delta)
-            # S-08: zusaetzlich die strukturelle selbst-steuerung. Nur
-            # hier — der turn ist mit einem call noch nicht fertig, es ist
-            # also der laufende self-talk, den der client als assistant-
-            # nachricht sieht. Der finale bericht (turn OHNE calls) bleibt
-            # unberuehrt, weil dort eine aussage ueber `open` echter
-            # inhalt sein kann (z. B. in einer analyse ueber den proxy).
             visible_text_delta = strip_self_steering(visible_text_delta, require_complete_sentence=True)
+            visible_text_delta = strip_invented_limit_claim(
+                visible_text_delta, require_complete_sentence=True
+            )
+            if not visible_text_delta.strip():
+                visible_text_delta = ""
         if visible_text_delta:
             # THEMA 3 (F2): C0-Steuerzeichen im gestreamten Content ersetzen
             visible_text_delta = self._sanitize_visible_text(visible_text_delta)
