@@ -101,15 +101,22 @@ cmd_status() {
 # Live-Test: 1 Token anfordern. Es werden Status UND Body ausgewertet, weil
 # "403" je nach Provider völlig unterschiedlich bedeutet: echter Auth-Fehler
 # (JSON) vs. Cloudflare-Bot-Challenge (HTML) — letzteres darf man nicht als
-# "Key kaputt" melden. Timeout 90s: NIM-Modelle brauchen beim Kaltstart gut
-# eine Minute (gemessen: 57s bis zum ersten Token).
+# "Key kaputt" melden.
+#
+# Timeout: NIM-Kaltstarts brauchen deutlich über eine Minute (gemessen 57s bis
+# zum ersten Token, später 91s — der Wert schwankt mit dem Upstream-Wärmestand).
+# 90s war deshalb zu knapp und meldete funktionierende Keys als
+# "TIMEOUT/KEIN KONTAKT". 180s ist bewusst großzügig: doctor ist ein
+# Diagnosewerkzeug, das im Fehlerfall nichts kostet, und ein Fehlalarm
+# ("Provider tot") ist teurer als ein paar Sekunden Warten.
 UA_BROWSER='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36'
+readonly PROBE_TIMEOUT_SECONDS=180
 
 probe() {
   local endpoint="$1" key="$2" model="$3" out code body
   out="$(mktemp)"
   if [ -z "$key" ]; then rm -f "$out"; echo "NO-KEY"; return; fi
-  code="$(curl -s -o "$out" -w '%{http_code}' -m 90 \
+  code="$(curl -s -o "$out" -w '%{http_code}' -m "$PROBE_TIMEOUT_SECONDS" \
     -H "Authorization: Bearer $key" -H "Content-Type: application/json" \
     -H "User-Agent: $UA_BROWSER" \
     -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" \
@@ -153,8 +160,9 @@ cmd_doctor() {
         # Cloudflare-Challenge ist KEIN Key-Problem: gut und schlecht bekommen
         # denselben 403. Das muss der Status-Report auch so sagen.
         if printf '%s' "$body" | grep -qiE 'just a moment|cf-chl|challenge-platform|cf-mitigated|cloudflare'; then
-          echo "CLOUDFLARE (403 HTML-Challenge) -> Key per curl nicht pruefbar;"
-          echo "                            Bot-Schutz blockt den Weg, den auch opencode nimmt."
+          echo "CLOUDFLARE (403 HTML-Challenge) -> Key per curl nicht pruefbar (Cloudflare"
+          echo "                            blockt den TLS-Fingerprint von curl, nicht opencode:"
+          echo "                            opencode run --model $provider/$model ist der echte Test."
         else
           echo "AUTH-FAIL (403) -> Key abgelehnt oder kein Zugriff auf $model"; failed=1
         fi
@@ -163,7 +171,7 @@ cmd_doctor() {
         echo "HTTP 404 -> Endpoint oder Modell $model stimmt nicht (Key evtl. ok)"; failed=1
         ;;
       000)
-        echo "TIMEOUT/KEIN KONTAKT -> $endpoint erreichbar, Antwort kam nicht (Kaltstart? 90s)"
+        echo "TIMEOUT/KEIN KONTAKT -> $endpoint erreichbar, Antwort kam nicht (Kaltstart? ${PROBE_TIMEOUT_SECONDS}s)"
         failed=1
         ;;
       *)

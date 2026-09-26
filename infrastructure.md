@@ -82,11 +82,21 @@ Secret-Schutz-Purismus:
   jedem Codespace, auch wenn der Unlock einmal scheitert. Ein 0-Byte-Platzhalter
   gilt beim Unlock und beim Lock als „fehlt": er überschreibt nie einen echten
   Key und landet nie im Bundle.
-  `./infra/scripts/keys.sh status|doctor|restore` (Aliase `keys`, `keys-doctor`,
-  `keys-restore`): `status` zeigt je Datei `OK/LEER/FEHLT`, `doctor` testet live
-  gegen die Provider (unterscheidet echt von Auth-Fehler, Cloudflare-Challenge
-  und Netz-Ausfall), `restore` holt fehlende Keys nach. `secrets.sh status`
-  prüft zusätzlich, ob das Bundle überhaupt entschlüsselbar ist.
+   `./infra/scripts/keys.sh status|doctor|restore` (Aliase `keys`, `keys-doctor`,
+   `keys-restore`): `status` zeigt je Datei `OK/LEER/FEHLT`, `doctor` testet live
+   gegen die Provider (unterscheidet echt von Auth-Fehler, Cloudflare-Challenge
+   und Netz-Ausfall), `restore` holt fehlende Keys nach. `secrets.sh status`
+   prüft zusätzlich, ob das Bundle überhaupt entschlüsselbar ist.
+   **Zwei bekannte Fehlalarme von `doctor`** (beide kein Key-Problem, live geprüft
+   2026-09-26): (a) **Cloudflare 403 HTML** bei `xinjianya` — der Bot-Schutz
+   filtert den TLS-Fingerprint von `curl`, nicht den von opencode; der Key
+   funktioniert, `opencode run --model xinjianya/gpt-5.6-sol` liefert Antwort
+   (2026-09-26 verifiziert). (b) **TIMEOUT bei `nvidia`** — NIM-Kaltstarts
+   schwanken (57 s bis 91 s gemessen), weshalb `PROBE_TIMEOUT_SECONDS` auf 180 s
+   steht; die Meldung `TIMEOUT/KEIN KONTAKT` bedeutet also "langsamer als 180 s",
+   nicht "tot". Im Zweifel `opencode run --model <provider>/<modell>` — nur das
+   beweist Nutzbarkeit.
+
 
 ## opencode-Konfiguration (`.opencode/`)
 
@@ -221,6 +231,16 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Profil `.runtime/firefox-profile/` enthält evtl. Logins — nie committen.
 - **Systempakete** via setup.sh (idempotent): nodejs, npm, xvfb, x11vnc, novnc,
   websockify, sqlite3, dbus-x11, build-essential, python3-* etc.
+- **opencode ist gepinnt:** `OPENCODE_VERSION` in `.devcontainer/setup.sh`
+  (aktuell 1.18.32), Installation via `opencode.ai/install --version`. Der
+  Versionspin muss mit dem `@opencode-ai/plugin`-Dep in `.opencode/package.json`
+  zusammenpassen — beide im selben Commit ändern. Vorher war die Installation
+  floating (`curl …/install | bash`), wodurch jeder neue Codespace eine andere
+  opencode-Version bekam und opencode beim Start den Plugin-Dep im Repo umschrieb
+  (dauerhafter uncommitteter Churn). Weicht die vorhandene Version vom Pin ab,
+  aktualisiert setup.sh; die laufende opencode-Server-Instanz nutzt die alte
+  Version bis zum nächsten Neustart. Rückweg: `OPENCODE_VERSION` in setup.sh
+  zurücksetzen.
 - **Go-Toolchain:** Go 1.25.7 (gepinnt, entspricht `mise.toml` im antigravity-proxy)
   nach `/usr/local/go` via setup.sh — das Proxy-Binary liegt nicht im Git und wird
   pro Codespace neu gebaut (`scripts/start.sh` baut automatisch nach, Fallback
@@ -316,6 +336,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **opencode war ungepinnt — Codespace bekam eine andere Version als das Repo; `keys.sh doctor` meldete funktionierende Keys als tot.** Befund aus dem Infra-Check eines **frischen Codespaces nach Account-Bann** (der neue Account ist Kollaborator mit Push auf `ChatMCPConnector/MAIN`, Bundle-PAT + `LANDSCAPE_PAT` gehören ihm, Push-/Secrets-/Proxy-/Backup-Pfad lief vollständig automatisch hoch). Zwei echte Mängel: (a) `setup.sh` installierte opencode mit `curl -fsSL https://opencode.ai/install | bash` — **floating, ohne Pin**, obwohl das Repo-Soll „gepinnte Version im Repo + reproduzierbares Skript" verlangt. Folge: Der frische Codespace bekam 1.18.32, das Repo pinnte im `@opencode-ai/plugin`-Dep noch 1.18.30, und opencode schrieb den Dep beim Start eigenmächtig auf 1.18.32 um — dauerhaft uncommitteter Churn in `.opencode/package.json` + Lock, den der Autosave-Daemon regelmäßig mitcommittete. Fix: `OPENCODE_VERSION="1.18.32"` in `setup.sh`, Installation via `--version`; das Skript ermittelt die vorhandene Version (auch über den schon umbenannten `opencode-bin`, weil der Multi-Client-Wrapper `opencode` ersetzt) und aktualisiert nur bei Abweichung vom Pin. Release + Asset verifiziert. **Die beiden Pins gehören im selben Commit geändert**, sonst schreibt opencode wieder um. (b) `keys.sh doctor` meldete **beide** Provider als unbrauchbar, obwohl beide funktionieren: nvidia mit `TIMEOUT/KEIN KONTAKT`, weil der 90-s-Timeout unter dem echten Kaltstart liegt (live gemessen: **91 s** bis zur Antwort, ein früherer Durchlauf 57 s — der Upstream-Wärmestand schwankt); xinjianya mit `CLOUDFLARE (403)`, was die Doku als bekannten Fehlalarm kannte, dessen Meldung aber selbst falsch war: sie behauptete, der Bot-Schutz blockiere „den Weg, den auch opencode nimmt" — live geprüft ist das Gegenteil, Cloudflare filtert den TLS-Fingerprint von `curl`, der Key funktioniert (`opencode run --model xinjianya/gpt-5.6-sol` → `OK`). Fix: `PROBE_TIMEOUT_SECONDS=180` als Konstante (doctor ist Diagnose, ein Fehlalarm „Provider tot" ist teurer als Warten), Timeout-Text nennt die echte Schwelle, und die Cloudflare-Meldung nennt `opencode run` als den einzigen beweisenden Test. Verifiziert: `doctor` meldet danach `nvidia OK (HTTP 200)`, Syntax beider Skripte ok, Pin-Vergleich in beide Richtungen getestet (Pin stimmt → kein Reinstall; Abweichung → Update-Zweig). **Gleich mitkorrigiert:** die Git-Identität stand nach dem Account-Wechsel noch auf dem alten Account (`tadeeussus1`/gmail) — Commits wurden dem neuen Profil nicht zugeordnet; jetzt `tadeuslol` + `334215299+tadeuslol@users.noreply.github.com`. **Hinweis für den Account-Wechsel (nicht automatisch lösbar):** das Codespaces-Secret `LANDSCAPE_PASSPHRASE` enthielt erneut den **PAT** statt des Passphrasen-Inhalts — genau der Fehler aus dem Changelog-Eintrag weiter unten. Harmlos geblieben, weil `secrets.sh` PAT-Kandidaten verwirft und `config/passphrase` (40 B, im Repo) entschlüsselt; das Secret muss trotzdem auf diesen Inhalt gesetzt werden. **Nebenbefund:** `glm2api.md` (Tracker „Offene Punkte", Status *beide Punkte geschlossen*) wurde am selben Tag über die GitHub-Web/API mit entfernt — die Changelog-Einträge verweisen noch darauf, der Inhalt liegt nur noch in der Historie (`git show 2952c2b:glm2api.md`).
 
 - 2026-09-26: **glm2api: der Loop-Guard war für das Modell unsichtbar — daher die erfundenen „Tool-Limit"-Abbruchgründe (T-25).** Aus der Session `ses_f21fbf23…`: das Modell rief **10× in einem Turn** `open` mit identischem Ziel `/workspaces/MAIN/glm2api` (Proxy-Log: 8× `Dropped identical native tool_call (loop guard) repeats=2`, 2× durchgelassen). Es sah 10 Calls und 2 Ergebnisse, schloss daraus auf **„Tool-Limit (8/8 Runden) erreicht"**, brach ab und verlangte einen Neustart. **Korrektur der früheren Diagnose:** `open` wird nicht verworfen — `map_native_open_tool_call` (`translator.py:804`) schreibt es auf `read`/`webfetch`/`bash` um (Pfad→`read`, URL→`webfetch`, `command`→`bash`); verworfen wird nur, was nicht abbildbar ist. Der Pfad war falsch (`llm-proxies/glm2api`, nicht `MAIN/glm2api`), opencode meldete „File not found" **mit** dem richtigen Vorschlag, und das Modell wiederholte denselben Call statt das Argument zu korrigieren. Der Kern: der Guard hat ohne jede Rückmeldung verworfen, das Modell hatte **kein Signal** und erfand eine Begründung. Fix: der Accumulator zählt die Drops (`loop_guard_dropped_count`/`_tools`, der **native** Name wird gemerkt, nicht der gemappte — sonst sucht das Modell den Fehler im falschen Werkzeug), und Client wie Antwortstrom erhalten eine `[loop_guard_notice]`: Anzahl, native Tool-Namen, explizit „there is NO tool limit or round limit", Hinweis auf das bereits vorliegende Ergebnis und auf das Korrigieren des Arguments. Der Non-Stream-Pfad hat **zwei** Returns (terminaler Status und abgeschnittener Turn) — beide werden injiziert, gerade der abgeschnittene Fall ist der, in dem die Erklärung am meisten fehlt. Dabei gefunden und behoben: der Guard-Notice fehlte zunächst an genau diesem zweiten Return. Agent-Prompt entsprechend korrigiert: `open` als nicht-deklariertes Werkzeug **mit** Remap-Hinweis (nicht als „existiert nicht" — das widersprach dem beobachteten Verhalten), „bei File-not-found den Pfad korrigieren, nicht wiederholen", und beide echten Rückmeldungen (`[blocked_tool_notice]`, `[loop_guard_notice]`) als Nicht-Limits benannt. Verifiziert: 532 Tests grün (12 neu in `tests/test_loop_guard_notice.py` — Guard-Verhalten, Notice-Text, Sichtbarkeit in Stream **und** Non-Stream, Gegenprobe ohne Drops), Live-Fall mit 10 Calls deterministisch nachgestellt (2 durch / 8 verworfen / Notice korrekt). Live über HTTP nicht erzwingbar: das Modell weigert sich, 10 identische Calls auf Kommando zu senden — der Guard ist genau dagegen.
 

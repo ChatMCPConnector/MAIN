@@ -9,11 +9,35 @@ sudo apt-get update -qq
 sudo apt-get install -y -qq curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential python3 python3-pip python3-venv ca-certificates gnupg nodejs npm xvfb x11vnc novnc websockify libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 inotify-tools > /dev/null
 sudo rm -rf /var/lib/apt/lists/*
 
-echo "==> [landscape] opencode installieren (falls fehlt)..."
-if ! command -v opencode >/dev/null 2>&1 && [ ! -x "$HOME/.opencode/bin/opencode" ]; then
-  curl -fsSL https://opencode.ai/install | bash
+# opencode ist GEPINNT (Kanonisch: Version hier + .opencode/package.json).
+# Vorher war die Installation floating ("curl …/install | bash"), wodurch ein
+# neuer Codespace eine andere opencode-Version als das Repo bekam — opencode
+# schrieb dann beim Start den @opencode-ai/plugin-Dep in .opencode/package.json
+# um, was dauerhaft uncommitteten Churn erzeugte. Beide Pins müssen zusammen
+# passen. Rückweg: OPENCODE_VERSION anpassen (inkl. Plugin-Dep im selben Commit).
+readonly OPENCODE_VERSION="1.18.32"
+echo "==> [landscape] opencode installieren (gepinnt auf $OPENCODE_VERSION)..."
+opencode_install() {
+  curl -fsSL https://opencode.ai/install | bash -s -- --version "$OPENCODE_VERSION"
+}
+#Vorhandene Version ermitteln: einmal das Binary, das der Wrapper ersetzt hat.
+installed_opencode_version() {
+  local bin="$HOME/.opencode/bin/opencode-bin"
+  command -v opencode >/dev/null 2>&1 && [ ! -x "$bin" ] && bin="$(command -v opencode)"
+  [ -x "$bin" ] || return 1
+  "$bin" --version 2>/dev/null | tr -d '[:space:]'
+}
+INSTALLED_OC="$(installed_opencode_version || true)"
+if [ -z "$INSTALLED_OC" ]; then
+  opencode_install && echo "    opencode $OPENCODE_VERSION installiert." \
+    || echo "    WARN: opencode-Install fehlgeschlagen, manuell: curl -fsSL https://opencode.ai/install | bash -s -- --version $OPENCODE_VERSION"
+elif [ "$INSTALLED_OC" != "$OPENCODE_VERSION" ]; then
+  echo "    opencode $INSTALLED_OC gefunden, Pin ist $OPENCODE_VERSION -> aktualisiere."
+  opencode_install && echo "    opencode auf $OPENCODE_VERSION aktualisiert." \
+    || echo "    WARN: opencode-Update fehlgeschlagen (bleibt $INSTALLED_OC)."
+  [ -f "$HOME/.opencode/bin/opencode-bin" ] || mv "$HOME/.opencode/bin/opencode" "$HOME/.opencode/bin/opencode-bin" 2>/dev/null || true
 else
-  echo "    opencode schon vorhanden."
+  echo "    opencode $INSTALLED_OC vorhanden (Pin stimmt)."
 fi
 export PATH="$HOME/.opencode/bin:$PATH"
 
