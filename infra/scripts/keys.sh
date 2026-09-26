@@ -31,6 +31,7 @@ KEYDIR="$HOME/.config/landscape"
 KEYS=(
   "nvidia-nim.key|nvidia|https://integrate.api.nvidia.com/v1|z-ai/glm-5.3"
   "xinjianya.key|xinjianya|https://xn--kiv260fv3i.cn/v1|gpt-5.6-sol"
+  "cline.key|cline|https://api.cline.bot/api/v1|stealth/pixel-canary"
 )
 
 # Dateien, die opencode.json per {file:...} referenziert. Muss synchron zu
@@ -103,6 +104,16 @@ cmd_status() {
 # (JSON) vs. Cloudflare-Bot-Challenge (HTML) — letzteres darf man nicht als
 # "Key kaputt" melden.
 #
+# max_tokens MUSS großzügig sein (2026-09-26): Reasoning-Modelle schreiben
+# zuerst in das Reasoning-Feld. Bei max_tokens=1 resp. 16 geht das gesamte
+# Budget fürs Denken drauf, der content bleibt leer, und Cline antwortet mit
+# HTTP 500 "empty response content". Gemessen an stealth/pixel-canary:
+#   max_tokens=1   -> HTTP 500
+#   max_tokens=16  -> HTTP 500
+#   max_tokens=200 -> HTTP 200 (content 49, reasoning 105 Zeichen)
+# Der alte Wert 1 meldete damit funktionierende Keys als "nicht nutzbar".
+# 256 kostet bei einem "hi" praktisch nichts und deckt Reasoning-Budget ab.
+#
 # Timeout: NIM-Kaltstarts brauchen deutlich über eine Minute (gemessen 57s bis
 # zum ersten Token, später 91s — der Wert schwankt mit dem Upstream-Wärmestand).
 # 90s war deshalb zu knapp und meldete funktionierende Keys als
@@ -119,7 +130,7 @@ probe() {
   code="$(curl -s -o "$out" -w '%{http_code}' -m "$PROBE_TIMEOUT_SECONDS" \
     -H "Authorization: Bearer $key" -H "Content-Type: application/json" \
     -H "User-Agent: $UA_BROWSER" \
-    -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" \
+    -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":256}" \
     "$endpoint/chat/completions" 2>/dev/null)"
   [ -n "$code" ] || code="000"
   body="$(head -c 400 "$out" 2>/dev/null | tr -d '\n\r')"

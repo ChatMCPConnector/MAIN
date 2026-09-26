@@ -148,6 +148,7 @@ cmd_lock() {
   [ -s "$HOME/.config/landscape/pat" ] && { cp "$HOME/.config/landscape/pat" "$stage/files/pat"; found=1; }
   [ -s "$HOME/.config/landscape/nvidia-nim.key" ] && { cp "$HOME/.config/landscape/nvidia-nim.key" "$stage/files/nvidia-nim-key"; found=1; }
   [ -s "$HOME/.config/landscape/xinjianya.key" ] && { cp "$HOME/.config/landscape/xinjianya.key" "$stage/files/xinjianya-key"; found=1; }
+  [ -s "$HOME/.config/landscape/cline.key" ] && { cp "$HOME/.config/landscape/cline.key" "$stage/files/cline-key"; found=1; }
   [ -s "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ] && { cp "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" "$stage/files/antigravity-oauth_creds.json"; found=1; }
   [ -s "$HOME/.config/landscape/chatglm-refresh-token" ] && { cp "$HOME/.config/landscape/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
   missing_or_empty "$HOME/.config/landscape/chatglm-refresh-token" && [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
@@ -206,6 +207,10 @@ cmd_unlock() {
   if [ -f "$stage/files/xinjianya-key" ] && missing_or_empty "$HOME/.config/landscape/xinjianya.key"; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/xinjianya-key" "$HOME/.config/landscape/xinjianya.key" && chmod 600 "$HOME/.config/landscape/xinjianya.key"
     echo "    XinJianYa-Key wiederhergestellt."
+  fi
+  if [ -f "$stage/files/cline-key" ] && missing_or_empty "$HOME/.config/landscape/cline.key"; then
+    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/cline-key" "$HOME/.config/landscape/cline.key" && chmod 600 "$HOME/.config/landscape/cline.key"
+    echo "    Cline-Key wiederhergestellt."
   fi
   if [ -f "$stage/files/chatglm-refresh-token" ] && missing_or_empty "$HOME/.config/landscape/chatglm-refresh-token"; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/chatglm-refresh-token" "$HOME/.config/landscape/chatglm-refresh-token" && chmod 600 "$HOME/.config/landscape/chatglm-refresh-token"

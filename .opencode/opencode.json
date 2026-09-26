@@ -191,6 +191,29 @@
         }
       }
     },
+    "cline": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Cline",
+      "whitelist": [
+        "stealth/pixel-canary",
+        "stealth/space-bunny-alpha"
+      ],
+      "options": {
+        "baseURL": "https://api.cline.bot/api/v1",
+        "apiKey": "{file:~/.config/landscape/cline.key}"
+      },
+      "models": {
+        "stealth/pixel-canary": {
+          "name": "Pixel Canary (free)",
+          "reasoning": true,
+          "tool_call": true
+        },
+        "stealth/space-bunny-alpha": {
+          "name": "Space Bunny Alpha (free)",
+          "tool_call": true
+        }
+      }
+    },
     "opencode": {
       "blacklist": [
         "big-pickle",
