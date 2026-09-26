@@ -100,7 +100,12 @@ ln -sf "$REPO_ROOT/infra/scripts/quota.sh" "$HOME/.local/bin/quota"
 
 echo "==> [landscape] Secrets entsperren (falls Bundle + Passphrase da)..."
 if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
-  UNLOCK_LOG="$(bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock 2>&1)" \
+  # SECRETS_NO_PROMPT + </dev/null: der Unlock darf den Codespace-Build NIE auf
+  # eine Eingabe warten lassen. Live am 2026-09-26 belegt: leeres
+  # LANDSCAPE_PASSPHRASE -> secrets.sh fragt interaktiv von /dev/tty -> Haenger
+  # (im Testblock reproduziert). Fehlt die Passphrase, soll der Build schnell
+  # mit WARN weiterlaufen — keys.sh ensure legt Platzhalter an, opencode startet.
+  UNLOCK_LOG="$(SECRETS_NO_PROMPT=1 bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock </dev/null 2>&1)" \
     && echo "    Secrets automatisch wiederhergestellt." \
     || { echo "    WARN: Auto-Unlock fehlgeschlagen — Keys fehlen, opencode startet nicht:"
          printf '%s\n' "$UNLOCK_LOG" | sed 's/^/      /'; }

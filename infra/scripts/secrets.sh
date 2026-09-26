@@ -91,12 +91,18 @@ DECRYPTED_TARBALL=""
 find_working_passphrase() {
   local stage p
   stage="$(mktemp -d)"
-  # "|| [ -n \"$p\" ]": letzte Zeile ohne Newline (config/passphrase) mitnehmen
+  # "|| [ -n \"$p\"]": letzte Zeile ohne Newline (config/passphrase) mitnehmen
   while IFS= read -r p || [ -n "$p" ]; do
     if try_passphrase "$p" "$stage"; then keep_decrypted "$stage"; return 0; fi
   done < <(passphrase_candidates)
-  if p="$(prompt_passphrase 2>/dev/null)"; then
-    if try_passphrase "$p" "$stage"; then keep_decrypted "$stage"; return 0; fi
+  # Interaktive Nachfrage NUR wenn wirklich ein Terminal da ist und der Aufrufer
+  # sie nicht abgewählt hat. Sonst wartet der Codespace-Build (postCreateCommand)
+  # auf eine Eingabe, die niemand tippt — live am 2026-09-26 im Testblock
+  # reproduziert: leeres LANDSCAPE_PASSPHRASE -> Haenger an /dev/tty.
+  if [ "${SECRETS_NO_PROMPT:-0}" != "1" ] && [ -t 0 ] && [ -r /dev/tty ]; then
+    if p="$(prompt_passphrase 2>/dev/null)"; then
+      if try_passphrase "$p" "$stage"; then keep_decrypted "$stage"; return 0; fi
+    fi
   fi
   rm -rf "$stage"
   if [ -n "${LANDSCAPE_PASSPHRASE:-}" ] && looks_like_pat "$LANDSCAPE_PASSPHRASE"; then
@@ -119,6 +125,12 @@ get_passphrase() {
     LANDSCAPE_PASSPHRASE="$(cat "config/passphrase")"
     export LANDSCAPE_PASSPHRASE
     return 0
+  fi
+  # Wie beim Unlock: keine TTY / Aufrufer will keine Nachfrage -> abbrechen statt
+  # auf eine Eingabe warten, die im Codespace-Build nie kommt.
+  if [ "${SECRETS_NO_PROMPT:-0}" = "1" ] || [ ! -t 0 ] || [ ! -r /dev/tty ]; then
+    echo "Abgebrochen: keine Passphrase (kein TTY bzw. SECRETS_NO_PROMPT=1)." >&2
+    exit 1
   fi
   read -rsp "Secrets-Passphrase: " LANDSCAPE_PASSPHRASE
   echo ""
