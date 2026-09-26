@@ -3113,21 +3113,42 @@ class GLMEventAccumulator:
 
         Gibt "" zurück (nicht whitespace), wenn nichts übrig bleibt, damit der
         aufrufer keinen leeren content-part an den client gibt (S-06).
+
+        Und noch eine falle, die diese hülle lösen muss: `require_complete_
+        sentence` entscheidet am LETZTEN zeichen, ob ein satz fertig ist. Die
+        rand-whitespace — genau das, was sie hier geschäftet werden soll —
+        zerstört diese entscheidung: '…`bash`:\n' endet nach einem strip auf
+        ':', der satz gilt als unvollständig, der schnitt wird verweigert und
+        die narration bleibt stehen. Also: endet der text an einer satzgrenze,
+        bekommt die kette zwischen den stufen einen satzabschluss dazu.
         """
         if not text:
             return text
+        lead = text[: len(text) - len(text.lstrip())]
+        trail = text[len(text.rstrip()) :]
         core = text.strip()
         if not core:
             return ""
-        filtered = strip_protocol_meta_narration(core)
-        filtered = strip_self_steering(filtered, require_complete_sentence=True)
-        filtered = strip_invented_limit_claim(filtered, require_complete_sentence=True)
+        ends_sentence = bool(trail) or core[-1] in ".!?"
+
+        def with_boundary(piece: str) -> str:
+            if ends_sentence and piece and piece[-1] not in ".!?\n":
+                return piece + "\n"
+            return piece
+
+        filtered = with_boundary(core)
+        for step in (
+            lambda piece: strip_self_steering(piece, require_complete_sentence=True),
+            lambda piece: strip_invented_limit_claim(piece, require_complete_sentence=True),
+            strip_protocol_meta_narration,
+        ):
+            filtered = with_boundary(step(with_boundary(filtered)))
+        if filtered.endswith("\n") and ends_sentence and not core.endswith("\n"):
+            filtered = filtered[:-1]
         if not filtered.strip():
             return ""
         if filtered == core:
             return text
-        lead = text[: len(text) - len(text.lstrip())]
-        trail = text[len(text.rstrip()) :]
         return lead + filtered + trail
 
     @staticmethod
