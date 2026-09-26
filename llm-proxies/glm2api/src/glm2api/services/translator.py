@@ -3317,7 +3317,7 @@ class GLMEventAccumulator:
             return chunks, "intervene"
         return chunks, str(payload.get("status")) if payload.get("status") is not None else None
 
-    def _strip_self_talk(self, text: str) -> str:
+    def _strip_self_talk(self, text: str, require_complete_sentence: bool = True) -> str:
         """S-08/S-09: die drei selbst-bezogenen filter auf EIN stück
         sichtbaren text (stream-delta ODER aufgegangener deferred-puffer).
 
@@ -3328,6 +3328,14 @@ class GLMEventAccumulator:
            satz enden kann. Ein satzweiter schnitt darauf erzeugt ein halbwort
            — live gemessen: '…fuer Dateisystem nutze ich jetzt `bash`:' wurde
            zu '`isystem nutze ich jetzt `bash`:'.
+
+           S-12: der abschluss gibt den beim aufruf-eintreffen
+           zurueckgehaltenen rest mit `False` frei. Dort ist der satz
+           namenslich vollstaendig — der aufruf ist da und der text nicht —
+           waehrend ein stream-delta auf einen fertigen satz warten MUSS.
+           Mit `True` blieb genau die S-09-narration stehen (sie endet auf
+           ':', der filter verweigert den schnitt), mit `False` fällt sie
+           ganz und ein antwort-rest wie 't' oder 'Punkt' bleibt unangetastet.
         2. die rand-whitespace bleibt erhalten. Alle drei filter enden auf
            `.strip()` (`strip_protocol_meta_narration` tut das sogar OHNE
            muster-treffer); bei kleinen deltas sind das führungszeichen und
@@ -3365,8 +3373,12 @@ class GLMEventAccumulator:
 
         filtered = with_boundary(core)
         for step in (
-            lambda piece: strip_self_steering(piece, require_complete_sentence=True),
-            lambda piece: strip_invented_limit_claim(piece, require_complete_sentence=True),
+            lambda piece: strip_self_steering(
+                piece, require_complete_sentence=require_complete_sentence
+            ),
+            lambda piece: strip_invented_limit_claim(
+                piece, require_complete_sentence=require_complete_sentence
+            ),
             strip_protocol_meta_narration,
         ):
             filtered = with_boundary(step(with_boundary(filtered)))
@@ -3494,10 +3506,37 @@ class GLMEventAccumulator:
         # S-07: der fruehwarn-carry muss noch an den parser, sonst geht
         # der text verloren (er war nie im parser und wird beim flush
         # nicht zurueckgegeben).
+        held_narration = bool(self._narration_carry)
         if self._narration_carry:
             self.tool_parser.pending_text += self._narration_carry
             self._narration_carry = ""
         tail_text, xml_tool_calls = self.tool_parser.flush()
+        # S-12: `tail_text` ist der anteil, den der stream beim eintreffen
+        # des aufrufs noch in der hand hatte — der narration-carry (S-07/S-09,
+        # `held_narration`) plus der `pending_text` des parsers (protokoll-
+        # verdacht, etwa der schliessende ``` eines fences). Im aufruf-turn
+        # ging er ersatzlos verloren, weil der abschluss leftover-text bei
+        # calls nicht herausgibt. Gemessen: '… Dritter Punk' statt '… Dritter
+        # Punkt' (chunk 1-3, ein buchstabe) bzw. 'Nachher\n```\nalpha\n'
+        # ohne den schliessenden fence.
+        #
+        # Freigegeben wird er NACH denselben filtern wie ein stream-delta
+        # (S-08/S-09) — mit einer unterscheidung, siehe `_strip_self_talk`:
+        # `require_complete_sentence=False`, weil am release-punkt der satz
+        # vollstaendig ist. Damit faellt die S-09-narration (endet auf ':')
+        # ganz weg, waehrend ein antwort-rest unangetastet durchgeht. Die
+        # bedingung `all_tool_calls` steht weiter unten, wenn sie feststeht.
+        #
+        # Die zweite bedingung ist die wichtige: freigegeben wird nur, was
+        # als FORTSETZUNG von bereits gesendetem text zuruecklag. Steht der
+        # rest am anfang eines turns, ist er die praeambel — und die
+        # verwirft T-07 grundsaetzlich, in jeder sprache, auch ohne dass
+        # das muster sie kennt. Genau das pint
+        # `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`
+        # ('我将创建文件。' vor einem DSML-aufruf: die T-07-muster kennen kein
+        # chinesisch, die regel "text vor dem ersten aufruf ist praeambel"
+        # trotzdem).
+        held_text = tail_text
         xml_tool_calls = sanitize_tool_calls(xml_tool_calls, fallback_url=self.fallback_tool_url)
         # T-05: zurueckgehaltenes reasoning (protokoll-verdacht) zuerst
         # auswerten — der reasoning-fallback lief bisher nur, wenn der
@@ -3873,6 +3912,11 @@ class GLMEventAccumulator:
         # S-10: der rand-links kommt zurueck (siehe oben) — er gehoert zu
         # dem text, der schon im stream steht. Ohne das wurde aus
         # 'Der Bericht' + ' ist fuer Sie.' ein 'Der Berichtist fuer Sie.'.
+        if all_tool_calls and held_text.strip() and self._emitted_visible_text:
+            released = self._strip_self_talk(held_text, require_complete_sentence=False)
+            stripped = released.strip()
+            if stripped and not _TERMINATOR_ONLY_RE.match(stripped):
+                chunks.append(self._visible_content_chunk(released))
         if final_text and not all_tool_calls:
             if lead_whitespace and self._emitted_visible_text:
                 final_text = lead_whitespace + final_text

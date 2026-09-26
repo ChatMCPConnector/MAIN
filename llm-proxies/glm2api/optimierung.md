@@ -687,16 +687,62 @@ schreibt. `'Absatz. Absatz'` (zwei getrennte Parts) und `'Punkte.Nichts'`
 dann an der Aufteilung des Upstreams. Der Regelfall — mit Trenner — ist
 abgedeckt.
 
-**Zweite Restklasse, bleibt bewusst stehen:** was der Stream beim Eintreffen
-des Calls **noch in der Hand hält**, geht im Aufruf-Turn verloren. Drei
-Behälter, alle gemessen: der Narration-Carry (S-07/S-09, 1–2 Zeichen:
-`'…Dritter Punk'`), der `pending_text` des Tool-Parsers (Protokollverdacht:
-schließender ```` ``` ````) und der S-05-Puffer, solange der Fence unausgeglichen
-ist. S-10 hat den *veröffentlichbaren* Puffer bereits aus dem Loch geholt; die
-beiden anderen brauchen eine Freigabe am Call-Event *nach* den Filtern — das
-kollidiert mit S-09 (Narration darf den Client nie sehen) und ist deshalb
-hier nicht angefasst. Betroffen sind 1–2 Zeichen am Textende, nicht der
-Text; der Cache-/Non-Stream-Pfad ist nie betroffen.
+**Zweite Restklasse (dann S-12, siehe dort):** was der Stream beim Eintreffen
+des Calls noch in der Hand hält, ging im Aufruf-Turn verloren — Narration-Carry
+(S-07/S-09, 1–2 Zeichen), `pending_text` des Parsers (schließender ```` ``` ````)
+und der S-05-Puffer bei unausgeglichenem Fence. S-10 hatte den
+*veröffentlichbaren* Puffer geholt, S-12 die beiden anderen.
+
+### S-12 — Der beim Call-Eintreffen zurückgehaltene Rest wird freigegeben
+
+**Behälter:** `tool_parser.flush()` liefert im `finalize` genau den Anteil, den
+der Stream beim Eintreffen des Calls noch in der Hand hatte — den
+Narration-Carry (S-07/S-09) und den `pending_text` des Parsers
+(Protokollverdacht). Der Abschluss gab ihn bei Calls nicht heraus, also ging
+er verloren. Gemessen mit `leftover_probe.py` (3 Texte × 8 Chunk-Größen):
+`… Dritter Punk` statt `… Dritter Punkt` (Carry, 1 Buchstabe),
+`Vorher\n```\nalpha\n` ohne den schließenden Fence (Parser),
+`'Nachher\n```\nalpha\n'`. **7 von 24 Messungen betroffen.**
+
+**Fix:** der Rest wird im Aufruf-Turn freigegeben — nach denselben Filtern
+wie ein Stream-Delta, mit zwei bewussten Unterschieden:
+
+1. **`require_complete_sentence=False`.** Im Stream *muss* ein Delta auf
+   einen fertigen Satz warten, sonst schneidet der Filter mitten hindurch
+   (S-08: `'…nutze ich jetzt \`bash\`:'` → `'…\`isystem nutze ich jetzt…'`). Am
+   Release-Punkt ist der Satz namenslich vollständig — der Aufruf ist da und
+   der Text nicht. Mit `True` blieb genau die S-09-Narration stehen (sie endet
+   auf `':'`, der Filter verweigert den Schnitt); mit `False` fällt sie ganz
+   (`''`), während ein Antwortrest (`'t'`, `'er'`, `'Punkt'`, ```` ``` ````)
+   unangetastet durchgeht.
+2. **Nur was als Fortsetzung von bereits Gesendetem zurücklag.** Steht der
+   Rest am *Anfang* eines Turns, ist er die Präambel — und die verwirft T-07
+   grundsätzlich, in jeder Sprache, auch ohne dass ein Muster sie kennt.
+   Das ist keine Feinheit: `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`
+   pint `'我将创建文件。'` vor einem DSML-Aufruf, und die T-07-Muster kennen
+   kein Chinesisch. Nur die Regel „Text vor dem ersten Aufruf ist Präambel"
+   trägt dort. Diese Bedingung stand als erstes rot — sie ist die eigentliche
+   Freigabeschranke, nicht der Filter.
+
+Der S-05-Puffer ist **nicht** Teil der Freigabe: den veröffentlicht S-10
+bereits am Call-Event, und der unausgeglichene Fence bleibt bewusst liegen
+(die Fence-Unwrapping-Arbeit des Abschlusses braucht den Schluss, und der
+Turn ist vorbei). Betroffen sind nur Zeichen am Textende, nie der Text; der
+Cache-/Non-Stream-Pfad war nie betroffen.
+
+**Ergebnis:** `leftover_probe` 24/24 exakt (vorher 17/24),
+`paragraph_probe` 12/14 → 0 bis auf den nicht-entscheidbaren Fall, `order_matrix`,
+`holdback_probe`, `sweep2`, `dsml_check` unverändert 0. **852 Tests grün** (4
+neu), davon schlagen **3** gegen `b040b73` fehl; die Präambel-Gegenprobe ist
+gegen beide Stände grün.
+
+**Merksatz:** Wer einen Holdback einführt, muss die Frage beantworten, was
+mit dem Zurückgehaltenen beim Turn-Ende passiert — und die Antwort darf nicht
+„wird schon irgendwo verworfen" sein. Ein Container ohne Ausgang ist kein
+Zwischenspeicher, sondern ein Loch; die Prüfung ist eine Zeile in der
+Abschluss-Behandlung und drei Zeilen Test.
+
+
 
 **Merksatz für die nächste Session:** Jede Formatierungsentscheidung an einer
 Transportgrenze (Part-Grenze, Chunk-Grenze) ist verdächtig. Fragen, die die
@@ -707,7 +753,8 @@ dann hängt das Ergebnis an einem Schnitt, den niemand kontrolliert.
 
 ### Verifikation
 
-- **839 Tests grün** (794 + 45 neue aus S-10), mit S-11 **848** (+ 9).
+- **839 Tests grün** (794 + 45 neue aus S-10), mit S-11 **848** (+ 9), mit S-12
+  **852** (+ 4).
 - S-11 gegen den Vorher-Stand (Positivkontrolle): **8** der 9 neuen Tests
   schlagen fehl — alle sechs Chunk-Unabhängigkeits-Fälle, der
   Doppelumbruch und der Regel-Test. Die Anti-Kleb-Gegenprobe
@@ -872,6 +919,7 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - Vier wirkungslose + sechs doppelte Betriebs-Keys, `parse_dotenv` warnt jetzt — DONE 2026-09-26
 - Reihenfolge-Invariante native Parts: Wortpräfix-Fehlmatch, verlorene Zwischenräume, Präambel über der Chunk-Grenze, gefenceter Text im Aufruf-Turn, `flush()`-Strip (S-10) — DONE 2026-09-27
 - Absatzumbrüche des Part-Merges hingen an der Part-Aufteilung (S-11) — DONE 2026-09-27
+- Beim Call-Eintreffen zurückgehaltener Rest (Carry/Parser) ging im Aufruf-Turn verloren (S-12) — DONE 2026-09-27
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).

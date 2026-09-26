@@ -4779,6 +4779,58 @@ def test_s11_no_second_break_behind_an_existing_newline():
     assert accumulator._render_full_output()[0] == "Vorher\n```\nalpha\n```"
 
 
+def test_s12_narration_holdback_does_not_lose_the_last_letters():
+    """S-12: der narration-carry haelt das ende des texts zurueck, und im
+    aufruf-turn verliess es der turn. Gemessen: '… Dritter Punk' statt
+    '… Dritter Punkt' (chunk 1-3), weil der abschluss leftover-text bei
+    calls nicht herausgab."""
+    text = "1. Erster Punkt\n2. Zweiter Punkt\n3. Dritter Punkt"
+    for chunk_size in (1, 2, 3):
+        streamed, _ = _s10_stream([text, _s10_native_event("c1")], chunk_size)
+        assert streamed == text, (chunk_size, streamed)
+
+
+def test_s12_tool_parser_holdback_does_not_swallow_the_closing_fence():
+    """S-12: derselbe verlust im zweiten behaelter — der `pending_text` des
+    parsers (protokollverdacht). Bei chunk 3 blieb der schliessende ``` des
+    fences liegen, der abschluss gibt ihn im aufruf-turn nicht heraus."""
+    text = "Nachher\n```\nalpha\n```"
+    for chunk_size in (1, 2, 3, 5):
+        streamed, _ = _s10_stream([text, _s10_native_event("c1")], chunk_size)
+        assert streamed == text, (chunk_size, streamed)
+
+
+def test_s12_release_still_drops_text_before_the_first_call():
+    """Die zweite haelfte der freigabe: was als ERSTES im turn zuruecklag,
+    ist die praeambel — und die verwirft T-07 in jeder sprache, auch ohne
+    dass ein muster sie kennt (`test_accumulator_drops_tool_preamble…` pint
+    das fuer chinesisch). Deshalb wird nur freigegeben, was als
+    fortsetzung von bereits gesendetem text zuruecklag."""
+    streamed, _ = _s10_stream([_S09_NARRATION, _s10_native_event("c1")], 4)
+    assert "only works for web URLs" not in streamed, streamed
+    assert "nur das `open`-Tool" not in streamed, streamed
+
+
+def test_s12_release_mode_cuts_narration_but_keeps_answer_text():
+    """S-12: am release-punkt ist der satz vollstaendig, darum
+    `require_complete_sentence=False`. Mit `True` (stream-delta) blieb die
+    narration stehen, weil sie auf ':' endet; mit `False` faellt sie ganz,
+    ein antwort-rest bleibt unangetastet."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    assert accumulator._strip_self_talk(
+        _S09_NARRATION, require_complete_sentence=False
+    ) == "", "narration muss am release-punkt ganz fallen"
+    for fragment in ("t", "er", "```", "Punkt", "Nachher"):
+        assert (
+            accumulator._strip_self_talk(fragment, require_complete_sentence=False)
+            == fragment
+        ), fragment
+    # und im stream bleibt es streng: ein halber satz wird nicht geschnitten
+    assert accumulator._strip_self_talk(
+        "fuer lokale Dateien nutze ich jetzt `read`"
+    ) == "fuer lokale Dateien nutze ich jetzt `read`"
+
+
 def test_s11_paragraph_break_rules_directly():
     """Die regel selbst, unabhaengig vom merge — inklusive der faelle, die
     nicht entscheidbar sind (kein trennzeichen im text)."""
