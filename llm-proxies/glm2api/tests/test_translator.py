@@ -4323,3 +4323,101 @@ def test_contains_tool_markup_leaves_prose_alone(text):
     from glm2api.utils.tool_protocol import contains_tool_markup
 
     assert contains_tool_markup(text) is False, text
+
+
+# --- Abschluss-Einstufung: chunkgroessen-unabhaengig (S-09-Nachtrag) ---------
+#
+# `dropped_call_count` zaehlt TEIL-PARSE-VERSUCHE, nicht unbrauchbare
+# aufrufe, und haengt deshalb an der zerschnittenheit des upstream-texts
+# (gemessen: derselbe gesperrte aufruf ergibt chunk=100 -> 1, chunk=3 -> 4,
+# chunk=1 -> 0). Folge war der schlimmste fehler der ganzen reihe: ein
+# GESPERRTER aufruf, der ueber mehrere deltas kam, endete als `error` — also
+# genau der fall, fuer den commit c8135d9 den `stop` eingefuehrt hatte. Der
+# echte client wertete das als stream-fehler und wiederholte den turn mit
+# 5-minuten-backoff endlos (agentenlauf 2026-09-26). Gemessen in 9 von 15
+# chunk-groessen, in BEIDEN abschluss-pfaden.
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 4, 5, 7, 9, 11, 13, 17, 21, 29, 37, 55, 100])
+def test_blocked_call_split_across_deltas_ends_with_stop(chunk_size):
+    """Ein gesperrter aufruf ist eine vollstaendige antwort — in jeder
+    zerschnittenheit. `error` hiesse: retry-schleife."""
+    payload = '{"tool_calls":[{"name":"open_url","arguments":{"url":"https://x"}}]}[]'
+    deltas = [payload[i : i + chunk_size] for i in range(0, len(payload), chunk_size)]
+
+    for path in ("stream", "non-stream"):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"bash"})
+        for index, text in enumerate(deltas):
+            accumulator.consume_event(_event("c", f"p{index}", text=text))
+        if path == "stream":
+            accumulator.finalize("finish")
+            finish = accumulator.build_response()["choices"][0]["finish_reason"]
+        else:
+            finish = accumulator.build_response("finish")["choices"][0]["finish_reason"]
+        assert finish == "stop", f"{path} / chunk={chunk_size} -> {finish}, erwartet stop"
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 19, 100])
+def test_unusable_call_split_across_deltas_ends_as_error(chunk_size):
+    """Gegenprobe: `read` ohne `filePath` ist ERLAUBT und fehlt dem client ->
+    `error` (T-06). In jeder zerschnittenheit, sonst sieht der agent einen
+    leeren, erfolgreichen turn und bleibt stehen."""
+    payload = '{"tool_calls":[{"name":"read","arguments":{}}]}[]'
+    deltas = [payload[i : i + chunk_size] for i in range(0, len(payload), chunk_size)]
+
+    for path in ("stream", "non-stream"):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+        for index, text in enumerate(deltas):
+            accumulator.consume_event(_event("c", f"p{index}", text=text))
+        if path == "stream":
+            accumulator.finalize("finish")
+            finish = accumulator.build_response()["choices"][0]["finish_reason"]
+        else:
+            finish = accumulator.build_response("finish")["choices"][0]["finish_reason"]
+        assert finish == "error", f"{path} / chunk={chunk_size} -> {finish}, erwartet error"
+
+
+@pytest.mark.parametrize("chunk_size", [1, 4, 12, 60])
+def test_valid_call_split_across_deltas_still_executes(chunk_size):
+    """Der gesperrte/unbrauchbare fall wird jetzt am TEXT entschieden. Der
+    normale fall darf davon unberuehrt bleiben: der aufruf muss laufen."""
+    payload = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}[]'
+    deltas = [payload[i : i + chunk_size] for i in range(0, len(payload), chunk_size)]
+
+    for path in ("stream", "non-stream"):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+        for index, text in enumerate(deltas):
+            accumulator.consume_event(_event("c", f"p{index}", text=text))
+        if path == "stream":
+            accumulator.finalize("finish")
+            message = accumulator.build_response()["choices"][0]["message"]
+        else:
+            message = accumulator.build_response("finish")["choices"][0]["message"]
+        names = [c["function"]["name"] for c in (message.get("tool_calls") or [])]
+        assert names == ["read"], f"{path} / chunk={chunk_size} -> {names}"
+
+
+def test_text_attempted_tools_separates_prose_from_protocol():
+    """Die entscheidungsgrundlage: protokoll im text und die namen, die
+    darin stehen. Prosa liefert (leer, False) — sonst wuerde jeder
+    erwaehnte werkzeugname den turn als fehlschlag einstufen."""
+    from glm2api.services.translator import GLMEventAccumulator
+
+    cases = [
+        ('{"tool_calls":[{"name":"read","arguments":{}}]}[]', {"read"}, True),
+        ('{"tool_calls":[{"name":"open_url","arguments":{}}]}[]', {"open_url"}, True),
+        # abgeschnitten, aber der NAME ist lesbar — genau deshalb kann die
+        # entscheidung fallen, ohne auf den parser-zustand zu schauen
+        ('{"tool_calls":[{"name":"read","arguments":{"filePa', {"read"}, True),
+        # abgeschnitten, und der name ist nicht lesbar: protokoll da,
+        # namen leer -> "dem client fehlt etwas" -> `error`
+        ('{"tool_calls":[{"nam', set(), True),
+        ("Ich nutze jetzt `read` fuer die Datei.", set(), False),
+        ("", set(), False),
+    ]
+    for text, expected_names, expected_protocol in cases:
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+        accumulator._cached_full_text = text
+        names, has_protocol = accumulator._text_attempted_tools()
+        assert names == expected_names, (text, names)
+        assert has_protocol is expected_protocol, (text, has_protocol)

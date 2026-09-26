@@ -81,8 +81,19 @@ class ConfigError(ValueError):
     pass
 
 
-def parse_dotenv(path: Path) -> dict[str, str]:
+def parse_dotenv(path: Path, logger: logging.Logger | None = None) -> dict[str, str]:
+    """Liest eine `.env`. Der LETZTE Eintrag eines Keys gewinnt.
+
+    Ein doppelter Key war still: gemessen am 2026-09-26 hat eine leere
+    zweite `GLM_REFRESH_TOKEN=` die echte aus Zeile 63 verdraengt, und der
+    Dienst startete nicht mehr („kein ChatGLM-Konto konfiguriert"). Genau
+    die Fehlerklasse, die hier teuer ist: die datei sieht korrekt aus, der
+    wert ist weg. Deshalb wird ein doppelter Key mit abweichendem Wert
+    gemeldet — inklusive Zeilennummern und ohne den Wert zu nennen (das
+    haette hier den refresh-token in das log geschrieben).
+    """
     values: dict[str, str] = {}
+    first_line: dict[str, int] = {}
     if not path.exists():
         return values
 
@@ -93,7 +104,7 @@ def parse_dotenv(path: Path) -> dict[str, str]:
     except OSError as exc:
         raise ConfigError(f"Failed to read config file: {path} error={exc}") from exc
 
-    for raw_line in lines:
+    for line_number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -101,7 +112,18 @@ def parse_dotenv(path: Path) -> dict[str, str]:
         value = raw_value.strip()
         if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
             value = value[1:-1]
-        values[key.strip()] = value
+        key = key.strip()
+        if key in values and values[key] != value and logger is not None:
+            logger.warning(
+                "Duplicate key %r in %s (line %d is overwritten by line %d); "
+                "the LAST value wins",
+                key,
+                path.name,
+                first_line[key],
+                line_number,
+            )
+        values[key] = value
+        first_line.setdefault(key, line_number)
     return values
 
 
@@ -414,6 +436,13 @@ _CONFIG_KEY_NEAR_MISSES = (
     ("GLM_MAX_CONCURRENCY", "behavior"),
     ("GLM_MAX_OUTPUT_TOKENS", "behavior"),
     ("GLM_REQUEST_DEADLINE_SECONDS", "behavior"),
+    # 2026-09-26: `REQUEST_TIMEOUT` und `REQUEST_SOCKET_TIMEOUT` (die
+    # kurzformen ohne `_SECONDS`) wurden in allen drei ausgelieferten
+    # .env mitgefuehrt und wirkten NIE — und wurden dabei nicht einmal
+    # gemeldet, weil sie nicht in dieser liste standen. Sie hatten zudem
+    # exakt den standardwert, deshalb fiel der unterschied nie auf.
+    ("REQUEST_TIMEOUT_SECONDS", "behavior"),
+    ("REQUEST_SOCKET_TIMEOUT_SECONDS", "behavior"),
     ("GLM_QUEUE_WAIT_TIMEOUT_SECONDS", "behavior"),
     ("GLM_BUSY_RETRY_INTERVAL_SECONDS", "behavior"),
     ("GLM_RATE_LIMIT_MAX_RETRIES", "behavior"),
@@ -424,6 +453,33 @@ _CONFIG_KEY_NEAR_MISSES = (
     ("PORT", "behavior"),
     ("HOST", "behavior"),
 )
+
+
+# 2026-09-26: key-schreibweisen, die es GAB und die NICHT wirkten. Sie sind
+# hier aufgeschluesselt, weil die unschaerfe (`get_close_matches`, cutoff
+# 0.82) sie nicht faengt: `REQUEST_TIMEOUT` gegen
+# `REQUEST_TIMEOUT_SECONDS` liegt bei 0.77 — ein echter tippfehler, aber
+# fuer die unschaerfe zu weit weg. Beide standen so in ALLEN drei
+# ausgelieferten .env und wurden stillschweigend ignoriert.
+_CONFIG_KEY_KNOWN_TYPOS = {
+    "REQUEST_TIMEOUT": "REQUEST_TIMEOUT_SECONDS",
+    "REQUEST_SOCKET_TIMEOUT": "REQUEST_SOCKET_TIMEOUT_SECONDS",
+    "GLM_REFRESH_TOKENS": "GLM_REFRESH_TOKEN",
+    "GLM_QUEUE_WAIT_TIMEOUT": "GLM_QUEUE_WAIT_TIMEOUT_SECONDS",
+}
+
+
+def _report_unknown_key(stripped: str, known: str, severity: str, logger: logging.Logger) -> None:
+    """Einmal die Meldung — zwei Wege (exakte Tot-Schreibweise, unscharfer
+    Nahbeirtung) sollen sich nicht in der Wortlautpflege duplizieren."""
+    message = (
+        f"Unknown config key {stripped!r} is IGNORED (did you mean {known!r}?). "
+        f"The setting has NO effect."
+    )
+    if severity == "security":
+        logger.error("SECURITY: %s", message)
+    else:
+        logger.warning("%s", message)
 
 
 def _warn_unknown_config_keys(values: dict[str, str], logger: logging.Logger) -> None:
@@ -448,17 +504,17 @@ def _warn_unknown_config_keys(values: dict[str, str], logger: logging.Logger) ->
             if stripped == known:
                 break
         else:
+            # bekannte tot-schreibweisen zuerst, exakt und ohne
+            # unschaerfe — die liegt bei einem praefix-key im prinzip nie
+            # nah genug am echten key
+            known_typo = _CONFIG_KEY_KNOWN_TYPOS.get(stripped)
+            if known_typo is not None:
+                _report_unknown_key(stripped, known_typo, "security", logger)
+                continue
             for known, severity in _CONFIG_KEY_NEAR_MISSES:
                 if not difflib.get_close_matches(stripped, [known], n=1, cutoff=0.82):
                     continue
-                message = (
-                    f"Unknown config key {stripped!r} is IGNORED (did you mean {known!r}?). "
-                    f"The setting has NO effect."
-                )
-                if severity == "security":
-                    logger.error("SECURITY: %s", message)
-                else:
-                    logger.warning("%s", message)
+                _report_unknown_key(stripped, known, severity, logger)
                 break
 
 
@@ -504,7 +560,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
     logger = logging.getLogger("glm2api.config")
     env_path = _resolve_env_file(env_file)
     env_file_created = ensure_env_file(env_path)
-    file_values = parse_dotenv(env_path)
+    file_values = parse_dotenv(env_path, logger)
     values = {**file_values, **os.environ}
     _warn_unknown_config_keys(values, logger)
 

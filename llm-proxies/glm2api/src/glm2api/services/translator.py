@@ -3348,7 +3348,7 @@ class GLMEventAccumulator:
         # der turn endet als fehler — der client wiederholt ihn dann
         # endlos (5 min backoff je versuch, gemessen 2026-09-26).
         if (
-            collected_raw_calls or self.tool_parser.dropped_call_count
+            self._unresolved_tool_attempt(collected_raw_calls)
         ) and not all_tool_calls and not self._unusable_calls_are_only_policy(
             list(collected_raw_calls), self.tool_parser.dropped_call_count
         ):
@@ -3950,7 +3950,7 @@ class GLMEventAccumulator:
         # stream-pfad.
         _ns_collected = list(self.tool_parser.tool_calls) + list(self._server_side_tool_calls)
         if (
-            _ns_collected or self.tool_parser.dropped_call_count
+            self._unresolved_tool_attempt(_ns_collected)
         ) and not all_tool_calls and not self._unusable_calls_are_only_policy(
             _ns_collected, self.tool_parser.dropped_call_count
         ):
@@ -4268,6 +4268,21 @@ class GLMEventAccumulator:
             or self.output_limit_reached
         )
 
+    def _unresolved_tool_attempt(self, collected: list[object]) -> bool:
+        """Hat der turn einen aufruf, der am ende NICHT ausgefuehrt wurde?
+
+        Der vorlauf war bisher `collected or dropped_call_count` — beides
+        PARSER-zustaende, und beides haengt an der delta-groesse des
+        upstream. Bei einem ueber viele deltas verteilten aufruf sind beide
+        leer (gemessen bei chunk-groesse 1: `collected=0`, `dropped=0`),
+        und die frage wurde gar nicht gestellt: der turn endete mit `stop`.
+        Der text beantwortet sie immer.
+        """
+        if collected or self.tool_parser.dropped_call_count:
+            return True
+        _attempted, has_protocol = self._text_attempted_tools()
+        return has_protocol
+
     def _unusable_calls_are_only_policy(self, collected: list[object], dropped: int) -> bool:
         """Sind die NICHT ausfuehrbaren calls ausschliesslich POLICY-drops?
 
@@ -4312,19 +4327,63 @@ class GLMEventAccumulator:
             if name and name in allowed_lower:
                 return False
 
-        # policy-drops gegen die als "nicht deklariert" erkannten namen
-        # herausrechnen — die stehen zu diesem zeitpunkt noch nicht in
-        # `blocked_tool_attempt_names` (das wird erst beim abschluss
-        # ermittelt), also direkt aus dem aufgebauten text nehmen.
-        policy_drops = 0
+        # S-09-NACHTRAG: bis hierhin hing die entscheidung an `dropped`
+        # (`dropped_call_count`), und der zaehlt KEINE unbrauchbaren
+        # aufrufe, sondern TEIL-PARSE-VERSUCHE. Er haengt damit an der
+        # zerschnittenheit des upstream-texts; derselbe gesperrte aufruf
+        # ergab gemessen bei chunk=100 `dropped=1`, bei chunk=3 `4` und bei
+        # chunk=1 `0`. Daraus kamen zwei echte fehler:
+        #
+        #   * gesperrter aufruf, der in mehreren deltas kam -> `error`. Das
+        #     ist genau die endlose 5-minuten-retry-schleife, die diese
+        #     unterscheidung verhindern sollte (commit c8135d9, agentenlauf
+        #     2026-09-26) — sie feuerte in 9 von 15 chunk-groessen und in
+        #     BEIDEN abschluss-pfaden.
+        #   * erlaubter aufruf ohne pflichtargument, der erst im
+        #     finalize-flush freikam -> `stop`, also der leere ERFOLG, den
+        #     T-06 abstellen soll.
+        #
+        # Die entscheidung kommt deshalb aus dem TEXT des turns. Der ist
+        # unabhaengig davon, wie der upstream ihn zerhackt hat.
+        attempted, has_protocol = self._text_attempted_tools()
+        if has_protocol:
+            if any(name in allowed_lower for name in attempted):
+                # ERLAUBT und trotzdem nicht ausfuehrbar: `error`.
+                return False
+            if attempted:
+                # NUR gesperrte namen: eine vollstaendige antwort
+                # ("dieses werkzeug gibt es nicht") -> regulaerer `stop`.
+                return True
+            # Protokoll da, aber kein name lesbar: der aufruf ist
+            # mitten im json abgeschnitten -> dem client fehlt etwas.
+            return False
+
+        # KEIN protokoll im text: dann kann nur ein NATIVER part einen
+        # aufruf verloren haben. Da bleibt die alte rechnung — sie stuetzt
+        # sich auf `_policy_dropped_call_count`, das beim nativen pfad
+        # gefuellt wird.
+        policy_drops = self._policy_dropped_call_count
+        return dropped - policy_drops <= 0
+
+    def _text_attempted_tools(self) -> tuple[set[str], bool]:
+        """(namen, protokoll_im_text) — chunkgroessen-unabhaengig.
+
+        `names` sind die werkzeugnamen, die im turn-text als aufruf
+        auftauchen (auch gesperrte, `detect_tool_call_names` filtert
+        nicht). `has_protocol` sagt, OB ueberhaupt protokoll im text
+        steht — das trennt "abgeschnittener aufruf" von "gar kein
+        aufruf, nur prosa".
+        """
+        names: set[str] = set()
+        has_protocol = False
         for source_text in (self._cached_full_text, self._cached_full_reasoning):
             if not source_text:
                 continue
             for name in detect_tool_call_names(source_text):
-                if name.lower() not in allowed_lower:
-                    policy_drops += 1
-        policy_drops = max(policy_drops, self._policy_dropped_call_count)
-        return dropped - policy_drops <= 0
+                if name and name.lower() not in {"finish", "intervene", "cancel", "none"}:
+                    names.add(name.lower())
+            has_protocol = has_protocol or contains_tool_markup(source_text)
+        return names, has_protocol
 
     def _render_full_output(self) -> tuple[str, str]:
         if not self._render_cache_dirty:

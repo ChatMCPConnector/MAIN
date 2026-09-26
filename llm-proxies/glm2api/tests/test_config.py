@@ -519,3 +519,147 @@ def test_valid_keys_are_never_reported_as_typos(tmp_path):
     _warn_unknown_config_keys(valid_keys, logger)
 
     assert records == [], f"gueltige keys wurden faelschlich gemeldet: {records}"
+
+
+# --- 2026-09-26: tote keys in den ausgelieferten .env --------------------
+
+# Diese vier standen in `.env`, `.env.example` und `llm-proxies/glm2api.env`
+# und wirkten nicht. Zwei wurden als Nahbeirrung gemeldet, zwei stillschweigend
+# ignoriert — und die beiden stillen hatten zudem exakt den Standardwert.
+_ENV_KEYS_THAT_NEVER_WORKED = (
+    ("GLM_REFRESH_TOKENS", "GLM_REFRESH_TOKEN"),
+    ("REQUEST_TIMEOUT", "REQUEST_TIMEOUT_SECONDS"),
+    ("REQUEST_SOCKET_TIMEOUT", "REQUEST_SOCKET_TIMEOUT_SECONDS"),
+    ("GLM_QUEUE_WAIT_TIMEOUT", "GLM_QUEUE_WAIT_TIMEOUT_SECONDS"),
+)
+
+
+@pytest.mark.parametrize("file_name", [".env.example", "../glm2api.env"])
+@pytest.mark.parametrize("dead,correct", _ENV_KEYS_THAT_NEVER_WORKED)
+def test_shipped_env_files_contain_no_dead_config_key(file_name, dead, correct):
+    """Ein key, den `load_config` nicht liest, sieht aus wie eine
+    konfiguration und ist keine. Bei `GLM_REFRESH_TOKENS=` waere der
+    inline-kommentar sogar als WERT gelandet.
+
+    Geprueft werden ALLE ausgelieferten dateien, nicht nur `.env.example`:
+    die drei sind handgepflegte kopien, und die drift ist genau das, was
+    hier passiert war.
+    """
+    import pathlib
+
+    import glm2api.config as config_module
+
+    path = pathlib.Path(__file__).resolve().parents[1] / file_name
+    if not path.exists():
+        pytest.skip(f"{file_name} nicht im repo")
+    values = config_module.parse_dotenv(path)
+
+    assert dead not in values, f"{path.name}: '{dead}' wird nicht gelesen (richtig waere {correct})"
+    # und der richtige key ist tatsaechlich dokumentiert
+    assert correct in values, f"{path.name}: '{correct}' fehlt, '{dead}' stand da"
+
+
+@pytest.mark.parametrize("dead,correct", [
+    ("REQUEST_TIMEOUT", "REQUEST_TIMEOUT_SECONDS"),
+    ("REQUEST_SOCKET_TIMEOUT", "REQUEST_SOCKET_TIMEOUT_SECONDS"),
+    ("GLM_REFRESH_TOKENS", "GLM_REFRESH_TOKEN"),
+])
+def test_silent_dead_keys_are_now_reported_as_near_misses(dead, correct, caplog):
+    """S-15 haette die beiden stillen tippfehler melden muessen. Vorher
+    standen sie nicht in der nahbeirrungs-liste, deshalb liefen sie
+    kommentarlos durch — der einzige grund, warum sie so lange
+    unentdeckt blieben."""
+    import logging as _logging
+
+    from glm2api.config import _warn_unknown_config_keys
+
+    logger = _logging.getLogger("glm2api.config.test_dead_keys")
+    with caplog.at_level(_logging.WARNING, logger=logger.name):
+        _warn_unknown_config_keys({dead: "x", correct: "y"}, logger)
+
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    assert dead in messages, f"{dead} wird nicht mehr gemeldet"
+    assert correct in messages
+    assert "NO effect" in messages
+
+
+# --- 2026-09-26: doppelte keys in der .env ---------------------------------
+
+# Live: eine leere zweite `GLM_REFRESH_TOKEN=` verdraengte den echten
+# token aus zeile 63 (`parse_dotenv` laesst den letzten gewinnen), und der
+# dienst startete nicht mehr — "kein ChatGLM-Konto konfiguriert". Die datei
+# sah korrekt aus. Genau deshalb wird der doppelte key jetzt gemeldet, mit
+# zeilennummern und ohne den wert zu nennen.
+
+
+def test_duplicate_key_with_different_value_is_reported(tmp_path, caplog):
+    import logging as _logging
+
+    from glm2api.config import parse_dotenv
+
+    env = tmp_path / ".env"
+    env.write_text(
+        "GLM_REFRESH_TOKEN=echtes-token\n"
+        "GLM_PORT=8001\n"
+        "\n"
+        "# ein kommentar\n"
+        "GLM_REFRESH_TOKEN=\n",
+        encoding="utf-8",
+    )
+    logger = _logging.getLogger("glm2api.config.test_dup")
+    with caplog.at_level(_logging.WARNING, logger=logger.name):
+        values = parse_dotenv(env, logger)
+
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    assert "GLM_REFRESH_TOKEN" in messages
+    assert "line 1" in messages and "line 5" in messages
+    # der wert selbst darf NIE im log stehen
+    assert "echtes-token" not in messages
+    # verhalten bleibt: letzter gewinnt (dokumentiert, nicht geaendert)
+    assert values["GLM_REFRESH_TOKEN"] == ""
+
+
+def test_duplicate_key_with_the_same_value_stays_quiet(tmp_path, caplog):
+    """Zweimal derselbe wert ist harmlos (z. B. eine kopie am ende der
+    datei) und darf keinen lärm machen."""
+    import logging as _logging
+
+    from glm2api.config import parse_dotenv
+
+    env = tmp_path / ".env"
+    env.write_text("GLM_TOKEN_FILE=token.txt\nGLM_TOKEN_FILE=token.txt\n", encoding="utf-8")
+    logger = _logging.getLogger("glm2api.config.test_dup_same")
+    with caplog.at_level(_logging.WARNING, logger=logger.name):
+        values = parse_dotenv(env, logger)
+
+    assert not caplog.records
+    assert values["GLM_TOKEN_FILE"] == "token.txt"
+
+
+@pytest.mark.parametrize("file_name", [".env.example", "../glm2api.env"])
+def test_shipped_env_files_have_no_duplicate_keys(file_name):
+    """Die handgepflegten kopien der betriebsdatei: ein doppelter key ist
+    dort immer ein merge-fehler, und die files werden nicht automatisch
+    aus einer quelle erzeugt."""
+    import pathlib
+
+    from glm2api.config import parse_dotenv
+
+    path = pathlib.Path(__file__).resolve().parents[1] / file_name
+    if not path.exists():
+        pytest.skip(f"{file_name} nicht im repo")
+
+    seen: dict[str, int] = {}
+    duplicates: list[str] = []
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in seen:
+            duplicates.append(f"{key} (Zeile {seen[key]} und {line_number})")
+        seen[key] = line_number
+
+    assert not duplicates, f"{path.name}: doppelte keys -> {duplicates}"
+    # parse_dotenv bleibt trotzdem aufrufbar (sanity, der pfad wird genutzt)
+    assert isinstance(parse_dotenv(path), dict)

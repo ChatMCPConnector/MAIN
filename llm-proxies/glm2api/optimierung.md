@@ -274,7 +274,7 @@ Status: **DONE — BEACHTEN** (Häufigkeit in kommenden Läufen über die
 
 ---
 
-## THEMA 8 — Live-Session-Test 2026-09-26: drei Stream-Bugs (DONE 2026-09-26)
+## THEMA 8 — Live-Session-Test 2026-09-26: fünf Fehlerbilder, ein Muster (DONE 2026-09-26)
 
 Drei Fehlerklassen, die ausschliesslich im **echten opencode-Betrieb**
 auftraten und von keinem bestehenden Test abgedeckt waren. Alle drei kamen
@@ -382,16 +382,153 @@ darf in Backticks stehen (live: „instead of \`open\`"). Das Tail-Muster ist
 an einer **Wortgrenze** verankert — ohne den Anker matchte das einzelne `r`
 aus „right…" mitten in jedem Text.
 
+### S-08 — `open` ist ein natives Modell-Werkzeug, kein Bug im Prompt
+
+**Symptom (live, session `glm2api-Ordner-Analyse`):** der allererste Aufruf
+war `open` mit `file:///workspaces/MAIN/glm2api`. Der Proxy konnte ihn nicht
+abbilden, verwarf ihn, und **ohne jede Rückmeldung** wiederholte das Modell
+den Aufruf ~30-mal. Danach zwei erfundene Aussagen:
+
+- „In dieser Umgebung steht mir nur das `open`-Tool zur Verfügung"
+- „**Analyse abgebrochen** — das Tool-Limit (8/8) ist erreicht; ich musste `open` stoppen"
+
+Das war eine Fehlerklasse („open gibt es nicht") **und** das erfundene
+Tool-Limit — dieselbe Ursache, nicht zwei.
+
+**Ursache:** GLM-5.3 ist ein ChatGLM-**Web-Agent**-Modell und hat `open` als
+natives Server-Werkzeug. In `map_native_open_tool_call` fiel der Pfad durch:
+`file://` ist kein http(s), also keine URL — und `://` im Ziel schlug auf den
+T-21-Pfad „das ist eine URL, kein Pfad" an, also `None`. Der verworfene Aufruf
+ohne Rückmeldung ist die eigentliche Fehlerklasse; das Tool-Limit hat das
+Modell erfunden, weil es nichts zurückbekam.
+
+**Fix:** `file://` auf den Pfad zurückfalten (Prozent-Decoding,
+`file://localhost`, fremder Host → `None`), plus drei Dinge, die den Fehler
+überhaupt nicht wiederholen lassen: ein Hinweistext, der die nicht
+auflösbaren ChatGLMs-eigenen Refs (`turn2search0`, `turn1fetch0`) erklärt und
+`read`/`glob`/`bash`/`webfetch` anbietet, strukturelle Filter gegen
+Selbst-Steuerung (`_SELF_STEERING_RE`) und gegen die erfundene Limit-Meldung
+(`_LIMIT_CLAIM_RE`) statt einer Phrasenliste.
+
+**Diagnose-Deadlock, der mit ausgebaut wurde:** die Logzeile „Dropped native
+open call" nannte das Argument nicht — man konnte nicht sehen, *was* nicht
+abbildbar war, und stand vor einem toten „nicht mappable". Erst als `args=`
+mitkam, war der Fall in zwei Minuten erklärt.
+
+### S-09 — Selbst-Narration über Delta-Grenzen
+
+**Symptom (live, repro M, 19:29, 20 Tool-Calls im Turn):** ein Text-Part
+mitten im Lauf enthielt drei Varianten desselben Selbstgesprächs,
+aneinandergeklebt:
+
+```
+Der `open`-Tool-Aufruf funktioniert in dieser Umgebung nicht zuverlässig für
+lokale Pfade – ich nutze stattdessen `read`/`bash`:The `open` tool only works
+for web URLs — for local files I need to use `read`/`bash`:Der `o…
+```
+
+**Ursache:** `_SELF_STEERING_RE` und `_LIMIT_CLAIM_RE` brauchen **beide**
+Hälften eines Satzes (Ich/Steuer-Verb **und** Werkzeugname) in *einem*
+String. Die Sätze liefen über mehrere Stream-Deltas, also traf kein Filter —
+und `finalize` kann nichts zurückholen, was schon beim Client steht. (Der
+Alternative-Ansatz „Filter im `finalize` auf `_deferred_visible_text`" greift
+für einen Turn mit Calls gar nicht: `finalize` gibt Content nur aus, wenn
+**keine** Calls da sind — `if final_text and not all_tool_calls`.)
+
+**Fix:** das S-07-Prinzip auf die Selbst-Narration übertragen —
+`_narration_carry` hält den Text **vor** dem Parser zurück, solange sein
+letzter Satz noch Narration werden *kann* (`_self_steering_holdback`). Der
+Auslöser ist bewusst billig (ein Werkzeug-/Limit-/Ich-Token im unvollständigen
+Satz): Was er zu viel zurückhält, kommt spätestens mit der nächsten
+Satzgrenze ungekürzt wieder raus — das ist Verzögerung, kein Textverlust.
+Entscheiden tun weiterhin ausschließlich die beiden Muster.
+
+### S-09-Nachtrag — der Holdback fraß das Werkzeug-Protokoll (2 rote Tests)
+
+**Symptom:** die Übergabe meldete „718 Tests grün", tatsächlich waren es
+**716 + 2 rot**: `test_turn_with_only_unusable_calls_is_a_failure_not_an_empty_success`
+und `test_blocked_only_turn_ends_cleanly_in_both_paths`. Der Commit, der sie
+kaputt gemacht hatte, war der S-09-Commit selbst (`4af494e`); `git bisect`
+über `c8135d9..HEAD` traf ihn als ersten schlechten Commit.
+
+**Ursache:** `_NARRATION_TOKEN_RE` enthält `tool_calls` — im Prosa-Fall richtig
+(das Modell *erzählt* über das Protokoll), im Markup-Fall ein Fehlalarm:
+`{"tool_calls":[…]}` hat kein Satzende und wird deshalb zurückgehalten. Der
+Parser sah den Aufruf erst im `finalize`, und die Einstufung „unbrauchbarer
+Aufruf" (T-06, `dropped_call_count` → `truncated_turn` → `error`) war da
+schon entschieden. Gemessen, gleicher Text, nur die Zerschnittenheit
+anders:
+
+```
+HEAD          {"tool_calls":[{"name":"read","arguments":{}}]}  → stop    parser_calls=0 dropped=0
+4af494e~1     dito                                              → error   parser_calls=0 dropped=1
+```
+
+Das ist genau der Fehler, den T-06 behoben hat („leerer ERFOLG": der Client
+bekommt eine leere, erfolgreiche Antwort und bleibt stehen).
+
+**Fix:** Markup wird vor dem Muster ausgeschlossen (`contains_tool_markup` in
+`tool_protocol.py`) — der Holdback fasst danach nur noch Prosa an. Der
+Parser hat mit D-01/D-03 ohnehin seinen eigenen Holdback für angebrochenes
+Markup; ein zweiter davor macht nur den Aufruf unsichtbar.
+
+### Gefunden beim selben Durchgang: die Abschluss-Einstufung hing an der Zerschnittenheit
+
+**Symptom:** ein **gesperrter** Aufruf, der über mehrere Deltas kam, endete als
+`finish_reason: error` — in **9 von 15** Chunk-Größen und in **beiden**
+Abschluss-Pfaden. Das ist exakt der Fall, für den `c8135d9` den `stop`
+eingeführt hatte; der echte Client wertete `error` als Stream-Fehler und
+wiederholte den Turn mit 5-Minuten-Backoff endlos (Agentenlauf 2026-09-26).
+Gleichzeitig blieb der umgekehrte Fall falsch: ein **erlaubter** Aufruf ohne
+Pflichtargument endete bei Chunk-Größe 1/2 als `stop` statt `error`.
+
+**Ursache:** die Einstufung stützte sich auf `dropped_call_count`. Der Zähler
+zählt **Teil-Parse-Versuche**, nicht unbrauchbare Aufrufe, und hängt damit an
+der Zerschnittenheit des Upstream-Texts (gemessen, derselbe gesperrte Aufruf:
+Chunk 100 → 1, Chunk 3 → 4, Chunk 1 → 0). Die Rechnung
+`dropped − policy_drops <= 0` kippte dadurch je nach Chunk-Größe. Und bei
+Chunk 1/2 waren `collected` **und** `dropped` leer — die Frage wurde gar nicht
+gestellt, weil der Vorlauf `collected or dropped_call_count` lautete.
+
+**Fix:** entschieden wird am **Text** des Turns, der unabhängig von der
+Zerschnittenheit ist (`_text_attempted_tools()`):
+
+| Text des Turns | Ergebnis |
+|---|---|
+| Protokoll, nur **erlaubte** Namen | `error` — dem Client fehlt etwas |
+| Protokoll, nur **gesperrte** Namen | `stop` — vollständige Antwort |
+| Protokoll, kein Name lesbar (abgeschnitten) | `error` |
+| kein Protokoll im Text (nur ein nativer Part ging verloren) | alte Rechnung über `_policy_dropped_call_count` |
+
+Der Vorlauf wurde auf `_unresolved_tool_attempt()` umgestellt, damit die
+Frage bei Chunk-Größe 1 überhaupt gestellt wird.
+
 ### Verifikation
 
-- **675 Tests grün** (532 vor diesem Arbeitsgang + 143 neue).
-- Jede neue Testklasse wurde gegen den **Vorher-Stand** laufen gelassen:
-  34 (S-05) bzw. 17 (S-07) schlagen ohne den Fix fehl, mit dem Fix grün.
+- **788 Tests grün** (718 vor dem Nachtrag + 70 neue; Basis der Übergabe
+  wiederum 532 + 143 aus S-05/06/07).
+- Jede neue Testklasse wurde gegen den **Vorher-Stand** laufen gelaufen, wie
+  schon bei S-05/S-07: gegen `4af494e~1` (ohne S-09) schlagen **20** der
+  neuen Tests fehl (6× Mid-Run-Narration, 14× gesperrter Aufruf über
+  Delta-Grenzen), gegen `4af494e` (S-09 ohne Nachtrag) **12** (die beiden
+  ursprünglich roten plus der Fall „unbrauchbarer Aufruf hinter Narration").
   Nichts davon war ein leerer Test.
-- Live: `smoke-test.sh` 8/8. Vier opencode-Sessions gegen den echten Proxy
-  (`glm2api verify 4/5/6/7`): eine finale Text-Part, **0** Whitespace-Parts,
-  13 Tool-Calls, 0 Fehler. Regressionslauf mit dem 7-Schritt-Stresstest
-  ebenfalls sauber.
+- Live gegen den echten Proxy (Neustart mit dem neuen Code, `health` ok,
+  Start ohne jede Warnung): Text-Antwort `stop`/„Ja"; Tool-Aufruf
+  **non-stream** `finish_reason: tool_calls`, `read {"filePath":"/etc/hostname"}`;
+  Tool-Aufruf **stream** `finish_reason: tool_calls`, gleicher Aufruf, kein
+  geleakter Content. Der Upstream liefert dabei Text in 4–8-Zeichen-Teilen —
+  genau die Zerschnittenheit, an der die beiden Fehler sichtbar wurden.
+- Ein Live-Lauf endete mit `error`, weil das Modell sein eigenes Protokoll
+  abgeschnitten hat (Roh-SSE: `{"tool_calls":[{"name":"read","arguments":{"filePath`).
+  Das ist Modellverhalten und wird korrekt als unbrauchbarer Aufruf
+  eingestuft — nicht Proxy-Seite.
+- `.env`-Korrektur (THEMA 9) live bestätigt: der Dienst startet wieder mit
+  `token_source=.env GLM_REFRESH_TOKEN` und ohne `IGNORED`-Warnung.
+- Historie: `smoke-test.sh` 8/8; vier opencode-Sessions gegen den echten
+  Proxy (`glm2api verify 4/5/6/7`): eine finale Text-Part, **0**
+  Whitespace-Parts, 13 Tool-Calls, 0 Fehler. Regressionslauf mit dem
+  7-Schritt-Stresstest ebenfalls sauber.
 
 ### Merkposten für die nächste Session
 
@@ -405,6 +542,89 @@ für reine Stream-Aussagen dort also nichts nachprüfbar.
 
 ---
 
+## THEMA 9 — Betriebs-Keys: vier wirkungslos, sechs doppelt (DONE 2026-09-26)
+
+Aus dem Rest der Übergabe, beim Ausführen von THEMA 8 aufgefallen und
+empirisch nachgewiesen (jeder Key einzeln gesetzt und die geladene Config
+gemessen, nicht aus dem Code gelesen).
+
+### Symptom
+
+Vier Keys standen in **allen drei** ausgelieferten Dateien (`.env`,
+`.env.example`, `llm-proxies/glm2api.env`) und wirkten nicht:
+
+| tot | richtig | gemeldet? |
+|---|---|---|
+| `GLM_REFRESH_TOKENS` | `GLM_REFRESH_TOKEN` | ja (SECURITY) |
+| `GLM_QUEUE_WAIT_TIMEOUT` | `GLM_QUEUE_WAIT_TIMEOUT_SECONDS` | ja |
+| `REQUEST_TIMEOUT` | `REQUEST_TIMEOUT_SECONDS` | **nein** |
+| `REQUEST_SOCKET_TIMEOUT` | `REQUEST_SOCKET_TIMEOUT_SECONDS` | **nein** |
+
+Die beiden stillen hatten zudem exakt den Standardwert — deshalb fiel der
+Unterschied nie auf. Bei `GLM_REFRESH_TOKENS=` wäre der Inline-Kommentar
+sogar als *Wert* eingelesen worden (`parse_dotenv` strippt den Wert, nicht
+den Kommentar).
+
+### Ursache
+
+Der „Betriebs-Keys"-Block (D-11) war als **Vollständigkeitsliste** gegen
+`AppConfig` geschrieben worden, ohne die Datei auf bereits gesetzte Keys zu
+prüfen. Ergebnis: alle vier Tot-Schreibweisen standen als Dublette neben dem
+echten Key, und `parse_dotenv` ließ still den letzten gewinnen.
+
+### Der teure Teil: derselbe Mechanismus hat den Dienst stillgelegt
+
+Beim Korrigieren entstand in der echten `.env` eine zweite, leere
+`GLM_REFRESH_TOKEN=` — der Token stand weiter oben in Zeile 63. Der Neustart
+sagte:
+
+```
+glm2api: kein ChatGLM-Konto konfiguriert.
+  Setze GLM_REFRESH_TOKEN in .env (oder hinterlege token.txt)
+```
+
+Die Datei sah korrekt aus, sie enthielt den Token, und trotzdem startete
+nichts. Genau diese Fehlerklasse ist teuer: ein stilles Überschreiben, das
+man erst bemerkt, wenn ein Dienst nicht mehr kommt.
+
+### Fix
+
+1. Die vier Tot-Schreibweisen aus allen drei Dateien entfernt bzw. auf den
+   richtigen Namen umgestellt; die Dubletten (`GLM_REFRESH_TOKEN`,
+   `GLM_TOKEN_FILE`, `GLM_BUSY_RETRY_INTERVAL_SECONDS`,
+   `GLM_RATE_LIMIT_MAX_RETRIES`, `GLM_RATE_LIMIT_RETRY_INTERVAL_SECONDS`,
+   `GLM_STREAM_ERROR_RETRY_INTERVAL_SECONDS`) raus — die Werte bleiben an
+   ihrer Stelle weiter oben.
+2. `_CONFIG_KEY_KNOWN_TYPOS`: die beiden stillen Fälle werden jetzt
+   **gelistet** statt über die Unschärfe erkannt. `get_close_matches` mit
+   `cutoff=0.82` liegt bei `REQUEST_TIMEOUT` gegen
+   `REQUEST_TIMEOUT_SECONDS` nur bei 0.77 — ein echter Tippfehler, aber für
+   die Heuristik zu weit weg. Ein Präfix-Key ist prinzipiell nie „nah" an
+   seinem echten Namen, deshalb gibt es für diese Klasse eine Liste.
+3. `parse_dotenv` meldet doppelte Keys mit **Zeilennummern** — und ohne den
+   Wert zu nennen, das hätte hier den Refresh-Token ins Log geschrieben.
+   Gleicher Wert zweimal bleibt still (harmlose Kopie am Dateiende).
+4. Tests: die vier Tot-Keys dürfen in keiner ausgelieferten Datei stehen,
+   die Dateien dürfen keine Dubletten haben, und die stillen Tippfehler
+   müssen gemeldet werden.
+
+### Verifikation
+
+- 788 Tests grün (davon 11 neue in `test_config.py`).
+- `GLM_REFRESH_TOKENS` / `REQUEST_TIMEOUT` / `REQUEST_SOCKET_TIMEOUT` einzeln
+  gesetzt → kein Effekt auf die geladene Config; die korrekten Schreibweisen
+  → `queue_wait=7`, `request_timeout=7` (vorher belegt).
+- Live: Neustart mit `token_source=.env GLM_REFRESH_TOKEN`, **keine**
+  `IGNORED`- und keine `Duplicate key`-Warnung mehr im Log.
+
+### Merkposten
+
+Ein `.env` ist eine Datei mit **Handpflege-Drift**, kein generiertes Artefakt.
+Drei Kopien derselben Vorlage sind drei Chancen auf einen stillen Fehler —
+deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
+
+---
+
 ## Erledigt-Historie (Kurzreferenz)
 
 - Echo/Duplikat-Loops (native Parts, 36/Turn) — DONE 3cd794e
@@ -415,6 +635,11 @@ für reine Stream-Aussagen dort also nichts nachprüfbar.
 - Stream-Reihenfolge umgestellt (S-05) — DONE 2026-09-26
 - Leerzeilen-Artefakt neben Tool-Calls (S-06) — DONE 2026-09-26
 - Protokoll-Narration im Client-Text (S-07) — DONE 2026-09-26
+- `file://` als nativer `open`-Aufruf + Selbst-Narration (S-08) — DONE 2026-09-26
+- Selbst-Narration über Delta-Grenzen (S-09) — DONE 2026-09-26
+- Holdback fraß das Werkzeug-Protokoll → T-06 ging verloren (S-09-Nachtrag) — DONE 2026-09-26
+- Abschluss-Einstufung hing an der Zerschnittenheit (`stop`/`error`) — DONE 2026-09-26
+- Vier wirkungslose + sechs doppelte Betriebs-Keys, `parse_dotenv` warnt jetzt — DONE 2026-09-26
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).
