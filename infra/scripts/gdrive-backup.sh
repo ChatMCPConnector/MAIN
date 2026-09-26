@@ -32,6 +32,21 @@ readonly BACKUP="${REMOTE_DIR}/MAIN.backup.bundle" # vorherige Generation
 readonly STATE_FILE=".runtime/gdrive-backup.last"
 readonly BUNDLE_LOCAL=".runtime/MAIN.bundle"
 
+# --- Drosselung ---------------------------------------------------------
+# Das Bundle enthält die KOMPLETTE Historie (aktuell ~111 MB). Es ändert sich
+# bei jedem Commit, also greift ein reiner Inhalts-Vergleich nicht: jeder
+# 30-Minuten-Autosave mit Änderungen würde erneut 111 MB hochladen
+# (gemessen: ~22 s, ~5 MB/s). Das ist für den Schutzzweck völlig überdimensioniert
+# — es geht um Account-Bann/Repo-Löschung, nicht um Sekundentakt.
+# Deshalb zeitbasiert drosseln: GitHub-Push bleibt bei jedem Save, das
+# Drive-Backup höchstens alle MIN_INTERVAL_MINUTEN.
+# Override: GDrive_MIN_INTERVAL_MINUTEN=0 (immer) oder "backup --force".
+readonly DEFAULT_MIN_INTERVAL_MINUTES=360   # 6 h
+min_interval() {
+  local v="${GDrive_MIN_INTERVAL_MINUTES:-$DEFAULT_MIN_INTERVAL_MINUTES}"
+  case "$v" in (*[!0-9]*|"") echo "$DEFAULT_MIN_INTERVAL_MINUTES" ;; (*) echo "$v" ;; esac
+}
+
 runc() {  # rclone mit Config-Pfad + Fehlertoleranz
   RCLONE_CONFIG="$RCLONE_CONF" rclone "$@"
 }
@@ -56,13 +71,31 @@ require_auth() {
 }
 
 cmd_backup() {
+  local force=0
+  [ "${1:-}" = "--force" ] && force=1
   require_auth || exit 0  # save.sh-Hook darf Push nie gefährden
   local head; head="$(git rev-parse HEAD 2>/dev/null)" || { echo "[gdrive] Kein Git-Repo?"; exit 1; }
 
   # Skip wenn kein neuer Commit seit letztem Backup UND Remote-Stand vorhanden
-  if [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "$head" ]; then
+  if [ "$force" -eq 0 ] && [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "$head" ]; then
     if runc lsjson "$CURRENT" >/dev/null 2>&1; then
       echo "[gdrive] Kein neuer Commit seit letztem Backup — übersprungen."
+      exit 0
+    fi
+  fi
+
+  # Zeit-Drosselung: nach einem erfolgreichen Backup nicht erneut hochladen,
+  # auch wenn Commits dazugekommen sind. GitHub hat sie bereits.
+  if [ "$force" -eq 0 ] && [ -f "$STATE_FILE" ]; then
+    local last_epoch now elapsed limit remaining
+    last_epoch="$(stat -c %Y "$STATE_FILE" 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    elapsed=$((now - last_epoch))
+    limit=$(( $(min_interval) * 60 ))
+    if [ "$limit" -gt 0 ] && [ "$elapsed" -lt "$limit" ]; then
+      remaining=$(( (limit - elapsed + 59) / 60 ))
+      echo "[gdrive] Drosselung: letztes Backup vor $((elapsed / 60)) min, frühestens in ${remaining} min wieder."
+      echo "[gdrive] Erzwingen: ./infra/scripts/gdrive-backup.sh backup --force"
       exit 0
     fi
   fi
@@ -103,7 +136,16 @@ cmd_status() {
   require_auth || exit 1
   echo "[gdrive] Remote: $REMOTE_DIR"
   runc lsl "$REMOTE_DIR" 2>/dev/null || echo "(leer oder kein Zugriff)"
-  if [ -f "$STATE_FILE" ]; then echo "[gdrive] Letztes Backup von Commit: $(cat "$STATE_FILE")"; fi
+  if [ -f "$STATE_FILE" ]; then
+    echo "[gdrive] Letztes Backup von Commit: $(cat "$STATE_FILE")"
+    local last_epoch elapsed limit
+    last_epoch="$(stat -c %Y "$STATE_FILE" 2>/dev/null || echo 0)"
+    elapsed=$(( $(date +%s) - last_epoch ))
+    limit=$(( $(min_interval) * 60 ))
+    if [ "$limit" -gt 0 ] && [ "$elapsed" -lt "$limit" ]; then
+      echo "[gdrive] Drosselung aktiv: vor $((elapsed / 60)) min, kein Upload vor $(( (limit - elapsed + 59) / 60 )) min."
+    fi
+  fi
 }
 
 cmd_restore() {
@@ -120,8 +162,8 @@ cmd_restore() {
 }
 
 case "${1:-backup}" in
-  backup)  cmd_backup ;;
+  backup)  cmd_backup "${2:-}" ;;
   status)  cmd_status ;;
   restore) shift; cmd_restore "${1:-}" ;;
-  *) echo "Usage: $0 {backup|status|restore [target-dir]}"; exit 1 ;;
+  *) echo "Usage: $0 {backup [--force]|status|restore [target-dir]}"; exit 1 ;;
 esac

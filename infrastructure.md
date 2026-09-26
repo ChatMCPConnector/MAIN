@@ -245,8 +245,19 @@ Bann nicht mehr, genau dann wird das Backup gebraucht.
   hochladen, (4) MD5-Verifikation remote vs. lokal. Bricht der Upload ab,
   bleibt die Backup-Generation intakt → immer mindestens eine
   funktionsfähige Kopie auf Drive. Restore: `gdrive restore` klont aus der
-  Backup-Generation (Fallback current). Skip wenn kein neuer Commit seit
-  letztem Backup (State-File `.runtime/gdrive-backup.last`).
+   Backup-Generation (Fallback current). Skip wenn kein neuer Commit seit
+   letztem Backup (State-File `.runtime/gdrive-backup.last`).
+- **Drosselung (Default 6 h):** das Bundle enthält die komplette Historie
+  (~111 MB) und ändert sich bei **jedem** Commit — ein Inhalts-Vergleich greift
+  also nicht. Ohne Drosselung läuft bei jedem 30-Minuten-Autosave mit Änderungen
+  ein 111-MB-Upload (gemessen ~22 s, ~5 MB/s ≈ 18 min/Tag, ~5 GB/Tag), obwohl
+  der Schutzzweck Account-Bann/Repo-Löschung ist und GitHub die Commits längst
+  hat. `gdrive-backup.sh` prüft deshalb die mtime des State-Files und überspringt
+  den Upload innerhalb des Intervalls. **GitHub-Push bleibt bei jedem Save
+  unberührt** — gedrosselt ist nur der teure Drive-Upload.
+  `backup --force` umgeht die Drosselung, `GDrive_MIN_INTERVAL_MINUTES=0`
+  schaltet sie ab, `gdrive status` zeigt „Drosselung aktiv: vor N min".
+  Das Intervall hängt an der mtime des State-Files, nicht an dessen Inhalt.
 - **Trigger:** `save.sh` ruft nach jedem erfolgreichen Push den Backup-Hook
   auf — damit sichert auch der Autosave-Daemon (alle 30 Min) automatisch nach
   Drive. Fehlt die rclone-Auth, überspringt sich der Hook selbst (Push-Erfolg
@@ -289,13 +300,15 @@ glm2api selbst kommt komplett mit (Code im Repo).
 | **Client-Reconnect** (Browser-Reconnect ohne Container-Restart) | **`proxy-watchdog.sh`** (Daemon, 30s-Intervall) | postStartCommand läuft NICHT bei Reconnect — der Watchdog hält den Proxy trotzdem am Leben (auch nach OOM-Kill). Start via start-on-boot.sh, Lockfile `/tmp/opencode/proxy-watchdog.lock`, Log `/tmp/opencode/watchdog.log` |
 | Laufzeit | `start-glm2api.sh` idempotent | Doppelstart-sicher, Port-Check |
 | **Idle-Schutz** (offene Commits vor Shutdown sichern) | **`autosave-daemon.sh`** (Daemon, 30-Min-Intervall) | Alle 30 Min: prüft auf uncommittete Änderungen oder ungepushte Commits → `save.sh` (add -A, commit, pull --rebase, push). Kein leerer Commit-Spam. Start via start-on-boot.sh + setup.sh, Lockfile `/tmp/opencode/autosave-daemon.lock`, Log `/tmp/opencode/autosave.log`. Shell: `autosave {status|start|stop|log}` |
-| **Config-Auto-Restart** (neue Modelle sofort verfügbar) | **`config-watchdog.sh`** (Daemon, inotify-Event-basiert) | Überwacht `.opencode/opencode.json` per `inotifywait` (close_write/moved_to); Debounce 8s + **Busy-Guard** (prüft `/session/status`, wartet bis alle Sessions idle sind vor Restart, kein Abbruch laufender Turns) + Pause-Mechanismus (`config-watchdog.pause`). Fallback auf Polling (10s md5sum) falls inotify-tools fehlt. Start via start-on-boot.sh + setup.sh, Lockfile `/tmp/opencode/config-watchdog.lock`, Log `/tmp/opencode/config-watchdog.log`. Shell: `config-watchdog {status|start|stop|pause|resume|log}` |
+| **Config-Auto-Restart** (neue Modelle sofort verfügbar) | **`config-watchdog.sh`** (Daemon, inotify-Event-basiert) | Überwacht `.opencode/opencode.json` per `inotifywait` (close_write/moved_to) auf dem **Verzeichnis**; **Hash-Vergleich** nach jedem Event, damit Schreibvorgänge auf anderen Dateien im Ordner (`tui.json`, `package-lock.json`, neue `agent/*.md`) keinen Restart auslösen; Debounce 8s + **Busy-Guard** (prüft `/session/status`, wartet bis alle Sessions idle sind vor Restart, kein Abbruch laufender Turns) + Pause-Mechanismus (`config-watchdog.pause`). Fallback auf Polling (10s md5sum) falls inotify-tools fehlt. Start via start-on-boot.sh + setup.sh, Lockfile `/tmp/opencode/config-watchdog.lock`, Log `/tmp/opencode/config-watchdog.log`. Shell: `config-watchdog {status|start|stop|pause|resume|log}` |
 
 **Proxy-Verhalten nach Stopp:** Prozesse sterben, `/tmp` (Logs) wird geleert —
 Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **Drei Optimierungen, alle gemessen statt geraten.** (a) *Drive-Backup gedrosselt:* das git-bundle enthält die volle Historie (111 MB) und ändert sich bei jedem Commit, ein Inhalts-Vergleich greift also nicht — jeder 30-Minuten-Autosave mit Änderungen lud 111 MB neu hoch (gemessen: 22 s, ~5 MB/s ≈ 18 min/Tag, ~5 GB/Tag), obwohl GitHub die Commits längst hat und der Schutzzweck Account-Bann ist. `gdrive-backup.sh` prüft jetzt die mtime des State-Files und überspringt den Upload innerhalb von 6 h (`GDrive_MIN_INTERVAL_MINUTES`, `backup --force`, `status` zeigt es an). Der GitHub-Push bei jedem Save bleibt unberührt. (b) *config-watchdog restartete zu oft:* `inotifywait` überwacht das **Verzeichnis** `.opencode/`, und der inotify-Pfad verglich — anders als der Polling-Fallback — **keinen Hash**. Jeder Write auf `tui.json`, `package-lock.json` oder eine neue `agent/*.md` löste 8 s Debounce plus opencode-Server-Neustart aus, mit Restsessions-Risiko. Jetzt Hash-Vergleich nach dem Event, wie im Polling-Pfad. (c) *`secrets.sh unlock` entschlüsselte das Bundle zweimal* — einmal beim Durchprobieren der Passphrase-Kandidaten, einmal für echt. `find_working_passphrase` hinterlässt das Tarball jetzt zur Wiederverwendung; `status` räumt es auf, damit kein Temp-Verzeichnis leakt. Nicht angefasst: `keys.sh ensure` im opencode-Wrapper (18 ms pro Start, unter der Messgrenze). Verifiziert: Drosselung greift und `--force` umgeht sie (Upload + MD5-Verifikation grün), `tui.json`-Write löst keinen Restart mehr (Server-PID unverändert), Guard in 5 Logikfällen korrekt, `unlock` stellt Key byte-identisch wieder her, keine Temp-Dirs danach.
 
 - 2026-09-26: **rclone-Installation repariert, Drive-Backup lief ins Leere.** `rclone-install.sh` lädt von `downloads.rclone.org/rclone-v<VER>-linux-amd64.zip`; rclone hat sein URL-Schema geändert, die Dateien liegen jetzt unter `downloads.rclone.org/v<VER>/`. Der alte flache Pfad liefert 404, das Skript bricht mit `set -e` ab, `setup.sh` schluckt den Fehler (`>/dev/null 2>&1`) — Ergebnis: `rclone` fehlt, und `gdrive-backup.sh` meldete dann irreführend „Remote 'gdrive' fehlt" statt „rclone fehlt". Der Pfad ist korrigiert, `gdrive-backup.sh` prüft das Binary jetzt getrennt vom Remote, Upload auf `gdrive:MAIN-backup/MAIN.bundle` verifiziert wieder. **Offen:** rclone warnt, dass der gemeinsam genutzte Google-Drive-`client_id` 2026 abgeschaltet wird — für den Drive-Backup braucht es einen eigenen `client_id` (siehe `https://rclone.org/drive/#making-your-own-client-id`, Token-Austausch über das eigene Konto).
 

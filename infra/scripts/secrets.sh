@@ -78,15 +78,25 @@ try_passphrase() {
   return 0
 }
 
+# Uebernimmt das entschluesselte Tarball aus dem Stage-Verzeichnis und
+# raeumt das Stage auf. Der Aufrufer ist fuer das Entfernen zustaendig.
+keep_decrypted() {
+  DECRYPTED_TARBALL="$1/bundle.tgz"
+}
+
+# Beim Erfolg bleibt das entschluesselte Tarball in DECRYPTED_TARBALL liegen,
+# damit cmd_unlock nicht ein zweites Mal entschluesseln muss.
+DECRYPTED_TARBALL=""
+
 find_working_passphrase() {
   local stage p
   stage="$(mktemp -d)"
   # "|| [ -n \"$p\" ]": letzte Zeile ohne Newline (config/passphrase) mitnehmen
   while IFS= read -r p || [ -n "$p" ]; do
-    if try_passphrase "$p" "$stage"; then rm -rf "$stage"; return 0; fi
+    if try_passphrase "$p" "$stage"; then keep_decrypted "$stage"; return 0; fi
   done < <(passphrase_candidates)
   if p="$(prompt_passphrase 2>/dev/null)"; then
-    if try_passphrase "$p" "$stage"; then rm -rf "$stage"; return 0; fi
+    if try_passphrase "$p" "$stage"; then keep_decrypted "$stage"; return 0; fi
   fi
   rm -rf "$stage"
   if [ -n "${LANDSCAPE_PASSPHRASE:-}" ] && looks_like_pat "$LANDSCAPE_PASSPHRASE"; then
@@ -155,9 +165,10 @@ cmd_unlock() {
     echo "       ODER im Repo hinterlegt lassen (dann tut der Fallback automatisch das Richtige)."
     exit 1
   fi
-  local stage; stage="$(mktemp -d)"
+  # Das Tarball liegt bereits entschluesselt vor (siehe find_working_passphrase)
+  local stage; stage="$(dirname "$DECRYPTED_TARBALL")"
   trap "rm -rf '$stage'" EXIT
-  if ! openssl enc -d -aes-256-cbc -pbkdf2 -pass env:LANDSCAPE_PASSPHRASE -in "$BUNDLE" -out "$stage/bundle.tgz" 2>/dev/null; then
+  if [ ! -s "$DECRYPTED_TARBALL" ]; then
     unset LANDSCAPE_PASSPHRASE
     echo "FEHLER: falsche Passphrase oder Bundle kaputt."
     exit 1
@@ -220,6 +231,10 @@ cmd_status() {
         echo "  Fix:   Inhalt von config/passphrase als Secret setzen (siehe infrastructure.md)."
       fi
     fi
+    # find_working_passphrase legt das entschlüsselte Tarball bewusst zur
+    # Wiederverwendung ab; hier wird es nur geprüft, also wieder aufräumen.
+    [ -n "$DECRYPTED_TARBALL" ] && rm -rf "$(dirname "$DECRYPTED_TARBALL")"
+    DECRYPTED_TARBALL=""
   else
     echo "Kein Bundle vorhanden. Mit './infra/scripts/secrets.sh lock' erstellen."
   fi

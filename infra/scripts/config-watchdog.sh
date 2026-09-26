@@ -84,9 +84,17 @@ if ! command -v inotifywait >/dev/null 2>&1; then
 fi
 
 # Hauptpfad: inotifywait
+# inotifywait überwacht das VERZEICHNIS, nicht die Datei: jeder Write in
+# .opencode/ (tui.json, package-lock.json, neue agent/*.md) löst ein Event aus.
+# Deshalb NACH dem Event den Inhalts-Hash vergleichen — sonst restartet der
+# Watchdog den opencode-Server für Änderungen, die opencode.json gar nicht
+# betreffen (8s Debounce + Restart, kann laufende Sessions stören).
+config_hash() { md5sum "$CONFIG" 2>/dev/null | cut -d' ' -f1; }
+LAST_HASH="$(config_hash)"
+
 while true; do
   # -e close_write: feuert wenn die Datei fertig geschrieben wurde
-  # -e moved_to: feuert wenn eine neue Datei an den Pfad verschoben wird (atomarer Write)
+  # -e moved_to: feuert wenn eine neue Datei auf den Pfad verschoben wird (atomarer Write)
   inotifywait -qq -e close_write -e moved_to "$(dirname "$CONFIG")" 2>/dev/null || {
     # inotifywait kann bei Verzeichnis-Löschung/Neuanlage fehlschlagen
     echo "$(date '+%H:%M:%S') [config-watchdog] inotifywait beendet, warte 10s und starte neu..." >> "$LOG"
@@ -94,10 +102,16 @@ while true; do
     continue
   }
 
-  # Nur reagieren wenn sich tatsächlich opencode.json geändert hat
+  # Nur reagieren wenn opencode.json wirklich existiert UND sich der Inhalt
+  # gegenüber dem letzten bekannten Hash geändert hat.
   if [ ! -f "$CONFIG" ]; then
     continue
   fi
+  CURRENT_HASH="$(config_hash)"
+  if [ "$CURRENT_HASH" = "$LAST_HASH" ]; then
+    continue
+  fi
+  LAST_HASH="$CURRENT_HASH"
 
   safe_restart
 done
