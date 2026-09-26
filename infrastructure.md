@@ -73,7 +73,18 @@ Secret-Schutz-Purismus:
 - Codespaces-Secrets pro Account: `LANDSCAPE_PAT` (Git-Auth), `LANDSCAPE_PASSPHRASE` (optional).
   `LANDSCAPE_PASSPHRASE` muss der **Inhalt von `config/passphrase`** sein, nicht
   der PAT. Ist das Secret nicht gesetzt, greift der Repo-Fallback automatisch —
-  das Secret ist also Komfort, keine Voraussetzung.
+  das Secret ist also Komfort, keine Voraussetzung. **Setzen per Skript statt Web-UI:**
+  `./infra/scripts/codespace-secret.sh set-passphrase` (Alias `csecret`) liest den
+  Wert aus `config/passphrase`, verschlüsselt ihn libsodium-sealed-box mit dem
+  Public Key aus `GET /user/codespaces/secrets/public-key` und legt ihn per
+  `PUT /user/codespaces/secrets/…` mit erhaltenem Repo-Scope ab. Das eliminiert den
+  Fehler, der zweimal passiert ist (2026-09-26 stand dort der PAT). Weitere
+  Befehle: `csecret list` (alle Secrets inkl. Scope), `csecret set NAME DATEI`,
+  `csecret delete NAME`. **Token-Rechte (live geprüft):** der ambient
+  Codespace-Token darf alles; der Bundle-PAT darf public-key und list, liefert für
+  `…/repositories` aber `total_count: 0` — deshalb wird der Ambient-Token bevorzugt
+  und ein nicht lesbarer Scope **nicht geraten**, sondern mit Fehler abgebrochen
+  (sonst würde der PUT den Scope stillschweigend auf ein Repo zurücksetzen).
 - NVIDIA-/XinJianYa-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` und kommen über das Bundle in jeden neuen Codespace. `glm2api` nutzt lokal `local` als Platzhalter; TokenRouter und Antigravity enthalten weiterhin getrackte Literalwerte (siehe `Revision.md`, `SEC-02`).
 - **Start-Garantie:** eine fehlende `{file:...}`-Referenz lässt opencode
   *komplett* nicht starten (`Configuration is invalid … bad file reference`).
@@ -337,8 +348,25 @@ Bann nicht mehr, genau dann wird das Backup gebraucht.
 Ein Codespace gehört zu Account+Repo+Branch, nicht übertragbar. Mitkommt 1:1
 alles gepushte. Im alten Codespace: `./infra/scripts/save.sh` (+ ggf.
 `./infra/scripts/secrets.sh lock`). Im neuen: Repo forken, Codespace bauen —
-Rest automatisch; einmalig `LANDSCAPE_PAT` (+ optional `LANDSCAPE_PASSPHRASE`)
-als Codespaces-Secrets. Nicht mitkommen, aber rekonstruierbar: Browser-Profil, Ports.
+Rest automatisch. Einmalig pro Account, **zwei Codespaces-Secrets**:
+
+```bash
+# 1) PAT als Secret (Web-UI: GitHub → Settings → Codespaces → Secrets, Repo MAIN)
+#    Danach ist die Git-Auth in jedem neuen Codespace automatisch verdrahtet.
+# 2) Passphrase als Secret — per Skript, damit der Wert sicher aus dem Repo
+#    kommt und nicht aus dem Kopf:
+./infra/scripts/codespace-secret.sh set-passphrase
+./infra/scripts/codespace-secret.sh list          # Kontrolle: Name + Repo-Scope
+```
+
+Schritt 2 ist optional (`config/passphrase` liegt im Repo und ist der Fallback),
+aber **wichtig als Gewohnheit**: der PAT ist keine Passphrase, und genau dieser
+Verwechslung sind 2026-09-26 schon zweimal passiert — einmal als Secret, einmal
+als `LANDSCAPE_PASSPHRASE`. Die Git-Identität des neuen Accounts entsteht
+automatisch aus dem PAT (`auth.sh setup`), der opencode-Pin ist im Repo
+(`ocver check`).
+
+Nicht mitkommen, aber rekonstruierbar: Browser-Profil, Ports.
 glm2api selbst kommt komplett mit (Code im Repo).
 
 ## Codespace-Lifecycle — wann welcher Mechanismus greift
@@ -357,6 +385,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **`LANDSCAPE_PASSPHRASE` auf den echten Passphrasen-Wert gesetzt — per API, mit reproduzierbarem Skript.** Der Secret enthielt erneut den PAT (derselbe Fehler wie im Changelog-Eintrag vom 2026-09-26 weiter unten, zweite Wiederholung). Funktional war und ist es harmlos: `secrets.sh` verwirft PAT-Kandidaten und entschlüsselt über `config/passphrase` (40 B, im Repo) — beide Zustände liefern dieselbe Ausgabe, live gegengeprüft. Behoben wurde es trotzdem, weil ein falsches Secret Warnungen erzeugt und verschleiert, ob der Auto-Unlock über den ersten Kandidaten läuft. **Die Codespaces-Secrets sind per REST-API schreibbar** (`PUT /user/codespaces/secrets/{name}`) — im UI wäre das ein Copy-Paste mit unsichtbarem Newline-Risiko gewesen. GitHub erwartet libsodium-**Sealed-Box** (X25519, 32 rohe Bytes aus `GET …/public-key`); umgesetzt mit `nacl.public.SealedBox` über `uv run --with pynacl`, ohne dauerhafte Installation. **Drei Dinge, die dabei nicht funktioniert haben wie erwartet und die deshalb im Skript kommentiert stehen:** (a) `lsjson`-Kompakt-JSON — hier nicht relevant, aber dieselbe Klasse Fehler wie im gdrive-Fix; (b) **der Bundle-PAT darf `…/secrets/{name}/repositories` nicht** (live: `total_count: 0`, während public-key und list gehen) — der Script nimmt daher den ambienten Codespace-Token zuerst; (c) ein leerer Scope wird **nicht geraten**, sondern mit Fehler abgebrochen, weil der PUT sonst den Scope stillschweigend auf ein Repo zurücksetzt. Neubau der Chiffre vor dem PUT verifiziert (Selbsttest-Roundtrip mit eigenem Schlüssel, Chiffre 88 B = 40 + 48 Overhead). Neu: `infra/scripts/codespace-secret.sh` (Alias `csecret`) mit `list|set-passphrase|set NAME DATEI|delete NAME`; der Wert kommt immer aus `config/passphrase`, nie aus dem Kopf. Damit ist der Account-Wechsel in `infrastructure.md` als Befehlsfolge dokumentiert statt als Web-UI-Erinnerung. Verifiziert: `set-passphrase` lief live durch, `updated_at` aktualisiert, `visibility=selected` und Repo-Scope `ChatMCPConnector/MAIN` unverändert.
 
 - 2026-09-26: **Drive-Backup meldete Erfolg, während `MAIN.bundle` auf Drive fehlte — und die „MD5-Verifikation" verifizierte nie etwas.** Beim Nachfassen des zweiten `save.sh`-Laufs fiel auf: `gdrive status` listete **kein `MAIN.bundle`**, nur `MAIN.backup.bundle` — das Skript hatte aber „OK: Drive-Stand = MAIN.bundle (verifiziert)" gemeldet. Rekonstruktion der Kausalkette über Zeitstempel, Drive-Hashes und Bundle-MD5s: Lauf 1 (17:02) ließ `moveto` **still** scheitern (stderr unterdrückt, kein Zustandscheck) und lud das frische Bundle als `current` hoch. Lauf 2 (17:18) löschte die Backup-Generation, verschob `current` → `backup` — **erfolgreich**, was der verwaiste Backup-Hash `0b557bf23dd4…` (= Bundle aus Lauf 1) belegt — meldete aber „noch kein vorhandenes current (Erst-Backup)", weil `moveto` trotz Erfolg nonzero lieferte. Der anschließende Upload **scheiterte**, und genau hier wurde es unsichtbar: `runc copy … | grep -v '^$'` gibt den Exitcode von `grep` zurück, die `||`-Fehlerbehandlung war toter Code. Die „Verifikation" prüfte dann nichts, weil `rclone lsjson` **ohne `--hash` kein Hash-Feld liefert** (remote_md5 leer) und der Vergleich `[ -n "$md5" ] && …` bei leerem Wert übersprungen wurde. Derselbe `lsjson`-Defekt im Skip-Check (`[]` mit Exit 0 = „Remote-Stand vorhanden") hätte den Zustand dauerhaft konserviert. **Drei Fehler, eine Ursache: Remote-Zustand wurde geglaubt statt geprüft.** Dazu kam, dass die alte Rotationsreihenfolge die Backup-Generation **vor** dem Move löschte — ein Move-Fehler hätte die letzte Kopie gekostet. Umbau: Upload als `MAIN.new.bundle` **vor** der Rotation, jede Mutation über den Zustand prüfen (Datei vorhanden? Größe? MD5?), `current` nach der Rotation fail-closed erneut prüfen, `status` nennt beide Generationen und warnt bei Fehlen, Skip verlangt **beide** Generationen, neu `backup --force` zur Reparatur. Drei eigene Fallstricke dabei (alle live nachgestellt und im Skript kommentiert): (a) `rclone copy <lokal> <nicht existierender Pfad>` legt ein **Verzeichnis** an (`MAIN.new.bundle/MAIN.bundle`) — Upload geht jetzt in `$REMOTE_DIR`; (b) Drive liefert den MD5 **asynchron**, die Prüfung muss die Größe als Primärnachweis nehmen und den Hash nur prüfen, **wenn** er da ist; (c) rclones Roh-JSON ist **kompakt** (`"IsDir":false`), ein Muster mit genau einem Leerzeichen lieferte ein Falsch-Negativ und meldete einen erfolgreichen Rename als Fehlschlag — alle Muster sind jetzt whitespace-tolerant. Zustand nach der Reparatur wieder 2 Generationen (je 116.636.960 Bytes, MD5 `cd378ce7f63f…` verifiziert), Restore-Test gefahren. **Lehre für die anderen Skripte:** `remote/prüfe-nicht-Exitcode` — überall dort, wo ein Fehlalarm teurer ist als eine zweite Anfrage.
 

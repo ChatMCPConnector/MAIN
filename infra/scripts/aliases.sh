@@ -14,6 +14,7 @@ alias st='git status -sb'
 alias ll='ls -lah'
 alias gdrive='bash /workspaces/MAIN/infra/scripts/gdrive-backup.sh'
 alias ocver='bash /workspaces/MAIN/infra/scripts/opencode-version.sh'
+alias csecret='bash /workspaces/MAIN/infra/scripts/codespace-secret.sh'
 
 # Autosave-Daemon: status / start / stop / log
 autosave() {
