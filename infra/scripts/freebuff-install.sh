@@ -33,6 +33,9 @@ FREEBUFF_VERSION="0.0.204"
 readonly APP_DIR="$HOME/.local/share/freebuff"
 readonly WRAPPER="$HOME/.local/bin/freebuff"
 readonly NATIVE_DIR="$HOME/.config/manicode"
+# Pfad wird in den Wrapper eingebacken: setup.sh ruft nur dieses Skript auf, der
+# Wrapper muss den Filter also ohne Repo-Umgebung finden.
+readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 installed_version() {
   [ -f "${APP_DIR}/node_modules/freebuff/package.json" ] || return 1
@@ -45,17 +48,28 @@ write_wrapper() {
   # Fest verdrahtet auf $HOME/.local/share/freebuff — steht hier im Klartext,
   # weil das Repo diesen Pfad nicht zur Laufzeit uebergibt (setup.sh ruft nur
   # das Skript auf).
-  cat > "$WRAPPER" <<'WRAPPER_EOF'
+  cat > "$WRAPPER" <<WRAPPER_EOF
 #!/usr/bin/env bash
 # Wird von infra/scripts/freebuff-install.sh erzeugt — nicht editieren.
 set -euo pipefail
-launcher="$HOME/.local/share/freebuff/node_modules/freebuff/index.js"
-if [ ! -f "$launcher" ]; then
-  echo "freebuff: npm-Paket fehlt ($launcher) — Installation unvollstaendig." >&2
+launcher="$APP_DIR/node_modules/freebuff/index.js"
+pty_filter="${REPO_ROOT}/infra/scripts/freebuff-pty.py"
+if [ ! -f "\$launcher" ]; then
+  echo "freebuff: npm-Paket fehlt (\$launcher) — Installation unvollstaendig." >&2
   echo "  Reparieren: bash ./infra/scripts/freebuff-install.sh   (im MAIN-Repo)" >&2
   exit 127
 fi
-exec node "$launcher" "$@"
+# Freebuff (opentui) schaltet Mouse-Reporting ein und killt damit die native
+# Textauswahl des Terminals. Einen Config-Kniff gibt es nicht (weder
+# settings.json noch Flag noch Env), also laeuft das TUI durch
+# freebuff-pty.py, das nur die Maus-Sequenzen aus dem Output entfernt —
+# derselbe Effekt wie opencodes 'mouse: false'. Bypass zum Debuggen:
+# FREEBUFF_NO_PTY_FILTER=1 freebuff
+if [ -t 0 ] && [ -t 1 ] && [ "\${FREEBUFF_NO_PTY_FILTER:-0}" != "1" ] \\
+   && command -v python3 >/dev/null 2>&1 && [ -f "\$pty_filter" ]; then
+  exec python3 "\$pty_filter" -- node "\$launcher" "\$@"
+fi
+exec node "\$launcher" "\$@"
 WRAPPER_EOF
   chmod +x "$WRAPPER"
 }
@@ -67,7 +81,11 @@ cleanup_partial_downloads() {
 }
 
 # --- Ab hier Idempotenz-Guard ---------------------------------------------------
+# write_wrapper laeuft auch im "schon da"-Fall: der Wrapper haelt Repo-Pfade
+# (pty-Filter) und wird bei jedem Build neu erzeugt, sonst driftet er still
+# weiter, wenn sich der Repo-Pfad aendert.
 if [ -x "$WRAPPER" ] && [ "$(installed_version || true)" = "$FREEBUFF_VERSION" ] && [ -s "${NATIVE_DIR}/freebuff" ]; then
+  write_wrapper
   cleanup_partial_downloads
   echo "[freebuff] v${FREEBUFF_VERSION} bereits installiert (${APP_DIR}); Wrapper: ${WRAPPER}"
   exit 0
