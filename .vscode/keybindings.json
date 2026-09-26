@@ -2,13 +2,17 @@
   {
     "key": "mousewheel up",
     "command": "workbench.action.terminal.sendSequence",
-    "args": { "text": "\u001b[5~" },
+    "args": {
+      "text": "\\u001b[5~\\u001b[5~\\u001b[5~"
+    },
     "when": "terminalFocus"
   },
   {
     "key": "mousewheel down",
     "command": "workbench.action.terminal.sendSequence",
-    "args": { "text": "\u001b[6~" },
+    "args": {
+      "text": "\\u001b[6~\\u001b[6~\\u001b[6~"
+    },
     "when": "terminalFocus"
   }
 ]
