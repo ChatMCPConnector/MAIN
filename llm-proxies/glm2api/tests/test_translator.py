@@ -2,6 +2,8 @@ import json
 from glm2api.services.translator import (
     BLOCKED_NATIVE_TOOL_NAMES,
     GLMEventAccumulator,
+    _PREAMBLE_NARRATION_RE,
+    _preamble_narration_undecided,
     compress_history_messages,
     convert_messages,
     extract_history_tool_call_signatures,
@@ -4512,3 +4514,194 @@ def test_markup_state_does_not_leak_into_prose():
         joined = accumulator._join_parts_incremental(parts, "text")
 
     assert "\n\n> Zitat aus der Anleitung" in joined, joined
+
+
+# S-10 (2026-09-27): Reihenfolge-/Verlust-Invariante fuer native parts.
+# Gemessen mit /tmp/glmtest/order_matrix.py (11 Szenarien x 10
+# chunk-groessen) und /tmp/glmtest/holdback_probe.py. Vor dem fix:
+#   - 'Der Bericht nennt drei Punkte.' + read-call -> bei chunk 7 kam
+#     'Der Ber' an, mitten im wort (`\bich` traf das 'icht' eines
+#     deltaanfangs), bei allen anderen groessen der volle text,
+#   - 'Zweiter Absatz mit Erkaerung.' nach einem call verlor die
+#     zwischenwort- leerzeichen (die self-talk-filter loeschten
+#     whitespace-only-deltas),
+#   - eine praeambel, die ueber eine chunk-grenze lief, wurde gar nicht
+#     erkannt (streamte als antwort) bzw. liess 'I'/'Ic' stehen,
+#   - ein kompletter text mit code-fence in EINEM part verschwand, sobald
+#     ein nativer call folgte (der S-05-puffer verliess den turn nicht),
+#   - 'Der Bericht' + ' ist fuer Sie.' kam als 'Der Berichtist ...' an
+#     (`tool_parser.flush()` strippt seinen anteil).
+_S10_PROSE_A = "Der Bericht nennt drei Punkte."
+_S10_PROSE_B = "Zweiter Absatz mit Erkaerung."
+_S10_PREAMBLE = "Ich lese die Datei jetzt."
+_S10_FENCED = "Hier der Aufruf:\n```bash\nls -la\n```\nDann weiter."
+
+
+def _s10_native_event(logic_id, name="read", file_path="/a.py"):
+    return {
+        "conversation_id": "c",
+        "parts": [
+            {
+                "logic_id": logic_id,
+                "content": [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": {
+                            "id": f"{logic_id}-id",
+                            "name": name,
+                            "arguments": json.dumps({"filePath": file_path, "command": "ls"}),
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def _s10_stream(parts, chunk_size):
+    """Sichtbarer stream inkl. finalize — `parts` ist eine liste aus
+    text-stuecken und nativen call-events (dict)."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    streamed: list[str] = []
+
+    def collect(chunks):
+        for chunk in chunks or ():
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+
+    for index, part in enumerate(parts):
+        if isinstance(part, str):
+            for offset in range(0, len(part), chunk_size):
+                chunks, _ = accumulator.consume_event(
+                    {
+                        "conversation_id": "c",
+                        "parts": [
+                            {
+                                "logic_id": f"p{index}-{offset}",
+                                "content": [
+                                    {"type": "text", "text": part[offset : offset + chunk_size]}
+                                ],
+                            }
+                        ],
+                    }
+                )
+                collect(chunks)
+        else:
+            chunks, _ = accumulator.consume_event(part)
+            collect(chunks)
+    collect(accumulator.finalize("finish"))
+    return "".join(streamed), accumulator
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 11, 13, 20, 1000])
+def test_s10_prose_before_a_native_call_is_never_cut_mid_word(chunk_size):
+    """S-10: der sichtbare text vor einem nativen call darf nicht
+    abgeschnitten werden. Vor dem fix kam bei chunk 7 'Der Ber' an."""
+    streamed, _ = _s10_stream([_S10_PROSE_A, _s10_native_event("c1")], chunk_size)
+    assert streamed.strip() == _S10_PROSE_A, streamed
+
+
+def test_s10_preamble_pattern_does_not_match_a_word_prefix():
+    """S-10: `ich` ohne abschliessende wortgrenze traf mitten im wort —
+    das fuehrte zur praeambel-einstufung und damit zum textverlust."""
+    for text in ("icht ne", "Sicher ist das", "Bericht ist da.", "Nichts weiter."):
+        assert not _PREAMBLE_NARRATION_RE.search(text), text
+    for text in ("Da. Ich lese die Datei.", "Ich.", "Now I will read it.", "Let me check."):
+        assert _PREAMBLE_NARRATION_RE.search(text), text
+
+
+def test_s10_undecided_preamble_prefix_is_held_back():
+    """S-10: solange der text auf einem unvollstaendigen
+    praeambel-anfang endet, muss er warten — sonst ist er schon draussen,
+    wenn die maschinerie die praeambel erkennt."""
+    assert _preamble_narration_undecided("Der Bericht ist fuer Sie. I")
+    assert _preamble_narration_undecided("Der Bericht ist fuer Sie. Ic")
+    assert not _preamble_narration_undecided("Der Bericht ist fuer Sie. Ich lese die Datei.")
+    assert not _preamble_narration_undecided("Der Bericht liegt in der Datei")
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 11, 20, 1000])
+def test_s10_preamble_is_discarded_without_a_remnant_at_every_chunk_size(chunk_size):
+    """S-10: die T-07-praeambel wird bei JEDER chunk-groesse verworfen —
+    auch wenn der upstream sie zerschneidet. Vor dem fix stand je nach
+    groesse 'I', 'Ic' oder 'Ich' als antwort im stream."""
+    streamed, _ = _s10_stream([_S10_PREAMBLE, _s10_native_event("c1")], chunk_size)
+    assert streamed.strip() == "", streamed
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 11, 20, 1000])
+def test_s10_interword_spaces_survive_a_native_call(chunk_size):
+    """S-10: die self-talk-filter loeschten whitespace-only-deltas, sobald
+    der turn aufrufe hatte — 'Zweiter Absatz mit' kam als
+    'ZweiterAbsatzmit' an."""
+    streamed, _ = _s10_stream(
+        [_S10_PROSE_A, _s10_native_event("c1"), _S10_PROSE_B], chunk_size
+    )
+    assert "ZweiterAbsatz" not in streamed, streamed
+    assert _S10_PROSE_B in streamed, streamed
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 11, 20, 1000])
+def test_s10_fenced_text_in_one_part_is_not_lost_before_a_native_call(chunk_size):
+    """S-10: der S-05-puffer verliess den aufruf-turn nie. Kam ein
+    kompletter text mit code-fence in EINEM part, war er danach weg
+    (chunk 1000: stream leer)."""
+    streamed, _ = _s10_stream([_S10_FENCED, _s10_native_event("c1")], chunk_size)
+    assert _S10_FENCED in streamed, streamed
+
+
+@pytest.mark.parametrize("chunk_size", [1, 5, 11, 20, 1000])
+def test_s10_space_between_streamed_text_and_finalize_tail_survives(chunk_size):
+    """S-10: `tool_parser.flush()` strippt den rand-links seines anteils —
+    genau das zwischenzeichen fiel dabei weg ('Der Berichtist ...')."""
+    text = "Der Bericht ist fuer Sie. Ich"
+    streamed, _ = _s10_stream([text], chunk_size)
+    assert " ".join(streamed.split()) == text, streamed
+
+
+_S10_LAYOUTS = {
+    "text-only": [(_S10_PROSE_A, None)],
+    "text-vor-call": [(_S10_PROSE_A, None), (None, "c1")],
+    "text-nach-call": [(None, "c1"), (_S10_PROSE_A, None)],
+    "text-vor-und-nach-call": [(_S10_PROSE_A, None), (None, "c1"), (_S10_PROSE_B, None)],
+    "text-zwischen-zwei-calls": [
+        (_S10_PROSE_A, None),
+        (None, "c1"),
+        (_S10_PROSE_B, None),
+        (None, "c2"),
+    ],
+}
+
+
+@pytest.mark.parametrize("layout", sorted(_S10_LAYOUTS))
+def test_s10_visible_text_around_native_calls_is_chunk_independent(layout):
+    """S-10: der sichtbare text darf nicht davon abhaengen, wo der upstream
+    seine teile schneidet — egal ob er vor, nach oder zwischen nativen
+    calls steht. Whitespace wird normalisiert, weil der part-merge um
+    calls absatzabstaende einfuegt (S-06, dokumentiert)."""
+    steps = _S10_LAYOUTS[layout]
+    parts: list = []
+    for index, (text, call) in enumerate(steps):
+        parts.append(text if text is not None else _s10_native_event(call or f"c{index}"))
+    seen = {
+        " ".join(_s10_stream(parts, size)[0].split())
+        for size in (1, 2, 3, 5, 7, 11, 20, 1000)
+    }
+    assert len(seen) == 1, seen
+    # und nichts davon darf abgeschnitten sein: der stream-text ist eine
+    # zeichen-subsequenz des turn-texts in originalreihenfolge.
+    turn_text = " ".join(
+        text for text, _call in steps if text is not None
+    )
+    stream_text = next(iter(seen))
+    iterator = iter(turn_text.replace(" ", ""))
+    assert all(char in iterator for char in stream_text.replace(" ", "")), (
+        stream_text,
+        turn_text,
+    )

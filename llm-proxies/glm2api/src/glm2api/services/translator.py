@@ -20,6 +20,7 @@ from ..utils.tool_parser import (
     CODE_FENCE_PATTERN,
     StreamingToolParser,
     _find_unterminated_call_start,
+    _TERMINATOR_ONLY_RE,
     detect_tool_call_names,
     parse_tool_calls_from_text,
     strip_unparseable_call_fragments,
@@ -3126,28 +3127,6 @@ class GLMEventAccumulator:
                 # zurueckhaltung.
                 visible_text_delta = self._strip_self_talk(visible_text_delta)
             whitespace_only = not visible_text_delta.strip()
-            # S-10: der S-05-puffer ist die einzige geordnete senke fuer
-            # sichtbaren text — und im aufruf-turn gab es danach keine
-            # mehr: was im abschluss noch zuruecklag, verliess den
-            # turn nicht (bei calls gab der abschluss leftover-text
-            # nicht heraus). Folge, gemessen: ein kompletter text mit
-            # code-fence, der in EINEM part ankam, war danach spurlos
-            # weg — chunk-groesse 1000: stream leer, 1-20: voller
-            # text. Der text war also nicht am falschen platz, er
-            # fehlte. Sobald der turn aufrufe hat, ist der puffer
-            # antwort-text und geht raus: in reihenfolge und durch
-            # dieselben filter wie jeder andere sichtbare text.
-            if (
-                not visible_text_delta
-                and self._deferred_visible_text.strip()
-                and turn_has_calls
-                and not self._preamble_pending
-                and self._deferred_text_is_publishable(self._deferred_visible_text)
-            ):
-                self._deferred_visible_text, visible_text_delta = (
-                    "",
-                    self._deferred_visible_text,
-                )
             if (
                 visible_text_delta
                 and not whitespace_only
@@ -3233,25 +3212,41 @@ class GLMEventAccumulator:
                             trail = merged[len(merged.rstrip()) :]
                             visible_text_delta = lead + filtered + trail
             if visible_text_delta:
-                if visible_text_delta.strip():
-                    self._emitted_visible_text = True
-                delta_payload: dict[str, object] = {"content": visible_text_delta}
-                if not self.emitted_role:
-                    delta_payload = {"role": "assistant", "content": visible_text_delta}
-                    self.emitted_role = True
-                chunks.append(
-                    self._chunk_json(
-                        {
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": delta_payload,
-                                    "finish_reason": None,
-                                }
-                            ]
-                        }
-                    )
-                )
+                chunks.append(self._visible_content_chunk(visible_text_delta))
+        # S-10: der S-05-puffer ist die einzige geordnete senke fuer
+        # sichtbaren text — und im aufruf-turn gab es danach keine mehr:
+        # was im abschluss noch zuruecklag, verliess den turn nicht (bei
+        # calls gab der abschluss leftover-text nicht heraus). Folge,
+        # gemessen: ein kompletter text mit code-fence, der in EINEM
+        # part ankam, war danach spurlos weg — chunk-groesse 1000: im
+        # stream gar nichts, 1-20: der volle text. Er war also nicht am
+        # falschen platz, er fehlte. Sobald der turn aufrufe hat, ist
+        # der puffer antwort-text und geht jetzt raus: in reihenfolge
+        # und durch dieselben filter wie jeder andere sichtbare text.
+        #
+        # Steht ausserhalb des `if visible_text_delta`-blocks, denn
+        # ausgeloest wird das genau von dem event, das den aufruf bringt —
+        # dort ist der sichtbare delta leer.
+        if (
+            not visible_text_delta
+            and self._deferred_visible_text.strip()
+            and (self._server_side_tool_calls or self.tool_parser.tool_calls)
+            and not self._preamble_pending
+            and self._deferred_text_is_publishable(self._deferred_visible_text)
+        ):
+            pending_text = self._deferred_visible_text
+            self._deferred_visible_text = ""
+            # derselbe guard wie im verlags-pfad: mit aufrufen ist der
+            # gepufferte anteil narration-verdacht (S-08/S-09), und der
+            # text darf nicht ungeprueft an den client.
+            pending_text = self._strip_self_talk(pending_text)
+            # und was uebrig bleibt, muss antwort sein. `[]` ist der
+            # protokoll-terminator, kein text: bei certainen
+            # chunk-grenzen landet er im sichtbaren puffer statt im
+            # parser (7 calls, chunk 7: `'\n\n\n\n\n[]\n'`), und genau
+            # das wollte S-06 unterbinden.
+            if pending_text.strip() and not _TERMINATOR_ONLY_RE.match(pending_text.strip()):
+                chunks.append(self._visible_content_chunk(pending_text))
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE generated delta chunks", chunks)
         # D-05: ein gesperrter nativer call beendet den durchlauf nicht mehr
         # (ein gueltiger call im selben event geht nicht verloren) — er wird
@@ -3321,6 +3316,32 @@ class GLMEventAccumulator:
         if filtered == core:
             return text
         return lead + filtered + trail
+
+    def _visible_content_chunk(self, text: str) -> str:
+        """S-10: ein sichtbarer text-delta als SSE-chunk (mit rollen-aufbau).
+
+        Ausgelagert, weil derselbe chunk an zwei stellen gebaut wird: fuer
+        den laufenden stream und fuer den S-05-puffer, der im aufruf-turn
+        veroeffentlicht wird (dort gibt es keinen sichtbaren delta, der den
+        gewohnten pfad nehmen koennte).
+        """
+        if text.strip():
+            self._emitted_visible_text = True
+        delta_payload: dict[str, object] = {"content": text}
+        if not self.emitted_role:
+            delta_payload = {"role": "assistant", "content": text}
+            self.emitted_role = True
+        return self._chunk_json(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": delta_payload,
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        )
 
     def _preamble_narration_probe(self, delta: str) -> str:
         """S-10: kontext fuer die praeambel-erkennung.
@@ -3397,6 +3418,18 @@ class GLMEventAccumulator:
             log.debug("Ignoring repeated finalize() call; turn was already finalized")
             return []
         self._finalized = True
+        # S-10: der rand-links des abschlusstexts gehoert zu dem, was
+        # schon draussen ist. Ohne ihn fiel genau das zwischenzeichen
+        # weg, das der narration-carry (S-07/S-09) und der S-05-puffer am
+        # anfang mit sich fuehren: 'Der Bericht' + ' ist fuer Sie.' kam
+        # als 'Der Berichtist fuer Sie.' an (gemessen bei
+        # chunk-groessen 11 und 20, ohne tool-calls). D-06 hatte denselben
+        # fehler fuer die zurueckhaltung schon einmal behoben, fuer
+        # diese beiden pfade nicht. `tool_parser.flush()` strippt seinen
+        # anteil selbst, deshalb wird der rand hier VOR dem flush
+        # gesichert und unten wieder angehaengt.
+        _lead_source = self._narration_carry + self._deferred_visible_text
+        lead_whitespace = _lead_source[: len(_lead_source) - len(_lead_source.lstrip())]
         # S-07: der fruehwarn-carry muss noch an den parser, sonst geht
         # der text verloren (er war nie im parser und wird beim flush
         # nicht zurueckgegeben).
@@ -3776,18 +3809,12 @@ class GLMEventAccumulator:
                 self.tool_choice_mode,
             )
 
-        # S-10: `final_text` ist per definition NOCH NICHT gesendet — er
-        # stand bis hierher im deferred-puffer oder im parser. Mit der
-        # bedingung `not all_tool_calls` fiel er im aufruf-turn ersatzlos
-        # weg, und zwar komplett: ein text mit code-fence, der in EINEM
-        # part ankam (der fence haelt den stream zurueck), war danach
-        # spurlos, waehrend derselbe text bei allen anderen
-        # chunk-groessen vollstaendig ankam (gemessen: chunk 1000 →
-        # stream leer, chunk 1-20 → voller text; non-stream ebenfalls
-        # leer, weil `content` bei calls auf None steht). Der text geht
-        # jetzt raus wie jeder andere sichtbare text — nach allem, was
-        # schon gestreamt wurde, und vor dem aufruf-delta.
+        # S-10: der rand-links kommt zurueck (siehe oben) — er gehoert zu
+        # dem text, der schon im stream steht. Ohne das wurde aus
+        # 'Der Bericht' + ' ist fuer Sie.' ein 'Der Berichtist fuer Sie.'.
         if final_text and not all_tool_calls:
+            if lead_whitespace and self._emitted_visible_text:
+                final_text = lead_whitespace + final_text
             delta_payload: dict[str, object] = {"content": final_text}
             if not self.emitted_role:
                 delta_payload = {"role": "assistant", "content": final_text}

@@ -565,8 +565,84 @@ die man einmal prüft und dann abhakt — sie ist eine **Invariante**, und sie
 gilt pro Achse (Zeichen, Parts) und pro Pfad. Die Messung kostet Sekunden
 und hat einen Fehler gefunden, den kein bestehender Test abgedeckt hat.
 
+### S-10 — Reihenfolge-Invariante für native Parts (Text vor/nach/zwischen Calls)
+
+Gefordert war die Invariante selbst: „Text vor, nach und zwischen nativen
+Calls bleibt unabhängig von der Zerschnittenheit". Gemessen mit zwei neuen
+Harnesses (`/tmp/glmtest/order_matrix.py`, `/tmp/glmtest/holdback_probe.py`):
+11 Layouts × 10 Chunk-Größen, Referenz ist der sichtbare Stream inklusive
+`finalize`. Vorher **23 Verstöße**, jetzt **0**. Fünf Fehlerklassen, alle
+unabhängig voneinander gefunden:
+
+**(1) `ich` traf mitten im Wort.** Das Präambel-Muster begann mit `\b(?:ich|…)`
+— an einem Stream-Delta ist der Anfang aber *immer* eine Wortgrenze, das `\b`
+war also bedeutungslos. Ein Delta, das mit `icht` begann (Rest von
+`Ber|icht`), war damit eine deutsche Selbst-Narration; die T-07-Maschinerie
+pufferte den Rest und verwarf ihn beim Aufruf. Gemessen bei Chunk 7: der
+Client sah `Der Ber` und sonst nichts, **mitten im Wort**, bei allen anderen
+Chunk-Größen den vollen Text.
+
+**(2) Zwischenwort-Leerzeichen fielen nach einem Call.** `_strip_self_talk`
+liefert für ein reines Whitespace-Delta `""` — im Aufruf-Turn fraß der Filter
+so jedes Zwischenzeichen: `Zweiter Absatz mit` kam als `ZweiterAbsatzmit` an
+(Chunk-Größen 1–5, vor dem Call war der Zwischenraum da). Dieselbe Folge hatte
+D-06 einmal für die Zurückhaltung.
+
+**(3) Präambel über der Chunk-Grenze.** Ein Delta allein kann eine Phrase nicht
+sehen, die der Upstream zerschnitten hat: `Ic` + `h lese die Datei` lief als
+**Antwort** durch. Mit Kontext erkannt (emittierter Schwanz + Delta) verschwindet
+sie wieder — dafür blieb vor dem Fix ein Fragment des ersten Wortes stehen
+(`I`, `Ic`, `Ich`, je nach Chunk-Größe), weil es schon raus war. Der Fix ist
+derselbe Trick wie bei S-07: **Vorhalte-Lookahead**. `_preamble_narration_undecided`
+gibt den Text zurück, solange er auf einem unvollständigen Präambel-Anfang endet
+(`_PREAMBLE_STEM_PREFIX_RE`, aus allen Präfixen der Stämme gebaut, mit
+Wortgrenze davor, damit `Datei` nicht am `i` hängen bleibt). Erst eine
+vollständige Marke entscheidet.
+
+**(4) Ein kompletter Text mit Code-Fence verschwand.** Der S-05-Puffer ist die
+einzige geordnete Senke, und im Aufruf-Turn gab es danach keine mehr: was im
+Abschluss noch zurücklag, verließ den Turn nicht (bei Calls gab `finalize`
+Leftover-Text nicht heraus). Kam ein kompletter gefenceter Text in **einem**
+Part — Chunk-Größe 1000 —, war er danach spurlos weg; bei 1–20 kam er
+vollständig an. Der Text war nicht am falschen Platz, er fehlte. Jetzt wird der
+Puffer veröffentlicht, sobald der Turn Aufrufe hat: in Reihenfolge, durch
+dieselben Filter, und `[]`-Protokollrest wird nicht mitgeliefert (S-06).
+
+**(5) `tool_parser.flush()` strippt seinen Anteil.** Der Rand links gehört zum
+zuvor gesendeten Text: `Der Bericht` + ` ist fuer Sie.` kam als
+`Der Berichtist fuer Sie.` an (Chunk 11 und 20, ganz ohne Calls). D-06 hatte
+denselben Fehler für die Zurückhaltung behoben, für Carry und Puffer nicht.
+
+**Gegenprobe zum Vorhalte:** Der Lookahead darf Text weder verschlucken noch
+ verzögern. `holdback_probe.py` prüft 13 Texte (deutsch/englisch, mit/ohne
+Call, Liste, Codeblock, Narration, Text auf `I`/`Ich`/`Jetzt`/`Datei`
+endend) — alle 13 liefern whitespace-normalisiert **genau ein** Ergebnis über
+alle Chunk-Größen. Übrig bleibt eine reine Whitespace-Klasse, die
+**vorbestehend** und dokumentiert ist: der Part-Merge fügt um native Calls
+Absatzabstände ein, deren Position bei künstlich zerschnittenen Parts
+schwankt (S-06).
+
+**Merksatz für die nächste Session:** Ein Wort-Muster, das auf einen
+Stream-Delta geprüft wird, braucht beides: eine **abschließende** Wortgrenze
+(sonst trifft es Wortanfänge) **und** den davorstehenden Text als Kontext
+(sonst ist das führende `\b` wertlos). Und: wenn der sichtbare Text
+zurückgehalten wird, braucht er *genau eine* Senke — ein Puffer, den der
+Abschluss nicht mehr ausleert, ist kein Puffer, sondern ein Loch.
+
 ### Verifikation
 
+- **839 Tests grün** (794 + 45 neue aus S-10).
+- S-10 gegen den Vorher-Stand `9054325` (**Positivkontrolle**): **13** der 45
+  neuen Tests schlagen fehl, und zwar je Fehlerklasse mindestens einer —
+  `prose … cut mid word[7]`, `preamble pattern … word prefix`,
+  `undecided preamble prefix`, `preamble … remnant[1,2]`,
+  `interword spaces[1]`, `fenced text …[1000]`,
+  `space … finalize tail[5,11,20]` und die drei Layouts mit Calls. Die
+  übrigen 32 sind gegen beide Stände grün (Gegenproben).
+- `order_matrix.py`: 11 Layouts × 10 Chunk-Größen → 0 Verstöße
+  (vorher 23). `holdback_probe.py` whitespace-normalisiert: 0 (vorher 10).
+- `sweep2.py` (31 Szenarien × 2 Pfade × 3 Achsen, 7818 Messungen) und die
+  794 Alt-Tests unverändert grün.
 - **794 Tests grün** (718 vor dem Nachtrag + 76 neue; Basis der Übergabe
   wiederum 532 + 143 aus S-05/06/07).
 - Jede neue Testklasse wurde gegen den **Vorher-Stand** laufen gelaufen, wie
@@ -714,6 +790,7 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - Abschluss-Einstufung hing an der Zerschnittenheit (`stop`/`error`) — DONE 2026-09-26
 - DSML-Aufruf an Part-Grenzen zerschnitten (latent seit Repo-Anfang) — DONE 2026-09-26
 - Vier wirkungslose + sechs doppelte Betriebs-Keys, `parse_dotenv` warnt jetzt — DONE 2026-09-26
+- Reihenfolge-Invariante native Parts: Wortpräfix-Fehlmatch, verlorene Zwischenräume, Präambel über der Chunk-Grenze, gefenceter Text im Aufruf-Turn, `flush()`-Strip (S-10) — DONE 2026-09-27
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).
