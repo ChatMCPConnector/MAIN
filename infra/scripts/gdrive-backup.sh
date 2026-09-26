@@ -89,6 +89,20 @@ require_auth() {
 
 cmd_backup() {
   require_auth || exit 0  # save.sh-Hook darf Push nie gefährden
+  # Lock: der Autosave-Daemon feuert alle 30 Min ungefragt, dazu kommt jeder
+  # manuelle 'gdrive backup'. Ohne Lock teilen sich zwei Läufe dieselbe Datei
+  # (.runtime/MAIN.new.bundle) — das 'rm -f' am Ende des einen löscht die Datei,
+  # die der andere gerade hochlädt. Live passiert am 2026-09-26 17:18:
+  # "Failed to calculate src hash: open .runtime/MAIN.bundle: no such file".
+  local lock="/tmp/opencode/gdrive-backup.lock"
+  mkdir -p "$(dirname "$lock")"
+  exec 9>"$lock" || true
+  if command -v flock >/dev/null 2>&1; then
+    if ! flock -n 9; then
+      echo "[gdrive] Ein Backup läuft bereits (Lock $lock) — dieser Lauf übersprungen."
+      exit 0
+    fi
+  fi
   local head force=0
   head="$(git rev-parse HEAD 2>/dev/null)" || { echo "[gdrive] Kein Git-Repo?"; exit 1; }
   [ "${1:-}" = "--force" ] && force=1
