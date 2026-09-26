@@ -3494,6 +3494,82 @@ def test_narration_stripped_from_text_only_answer():
     assert strip_meta_chatter(mixed) == "Fertig. Der Bericht liegt unter /tmp/bericht.md."
 
 
+# --- S-08 (file:// + unauflösbare native refs + erfundene Inventur) --------
+
+
+@pytest.mark.parametrize("ref_id,expected", [
+    # S-08, live: der allererste aufruf der session
+    # `glm2api-Ordner-Analyse` war `file:///workspaces/MAIN/glm2api`.
+    ("file:///workspaces/MAIN/glm2api", ("read", {"filePath": "/workspaces/MAIN/glm2api"})),
+    ("file:///workspaces/MAIN/llm-proxies/glm2api/", ("read", {"filePath": "/workspaces/MAIN/llm-proxies/glm2api/"})),
+    # prozent-encoding muss aufgeloest werden, sonst existiert die datei nicht
+    ("file:///workspaces/MAIN/mein%20ordner/a.md", ("read", {"filePath": "/workspaces/MAIN/mein ordner/a.md"})),
+    ("file://localhost/tmp/x.txt", ("read", {"filePath": "/tmp/x.txt"})),
+    # fremder host ist fuer uns nicht erreichbar
+    ("file://server/share/x", None),
+    # die CHATGLM-eigenen referenzen bleiben unauflösbar — das ist korrekt
+    # und wird durch den hinweistext (S-08) aufgefangen, nicht durch mapping
+    ("turn2search0", None),
+    ("turn1fetch0", None),
+    # Kontrollgruppe: die schon vorher funktionierenden formen
+    ("https://example.com", ("webfetch", {"url": "https://example.com"})),
+    ("/workspaces/MAIN/x", ("read", {"filePath": "/workspaces/MAIN/x"})),
+])
+def test_native_open_maps_file_urls(ref_id, expected):
+    """S-08: `file://` ist die natuerlichste form fuer 'oeffne dieses lokale
+    verzeichnis' und fiel vorher durch — kein http(s), also URL-pruefung
+    nein, und `://` im ziel also T-21 'das ist eine URL, kein pfad'."""
+    from glm2api.services.translator import map_native_open_tool_call
+
+    payload = json.dumps({"open": [{"ref_id": ref_id, "lineno": 1}]})
+    assert map_native_open_tool_call(payload, {"read", "webfetch", "bash"}) == expected
+
+
+def test_blocked_notice_says_what_to_do_instead():
+    """S-08: ein reines 'nein' laesst das modell raten. Live erklärte es
+    sich danach 'nur das open-tool stehe mir zur verfügung' und erfand ein
+    limit. Der hinweis muss den ausweg benennen."""
+    from glm2api.services.glm_client import _blocked_notice_text
+
+    notice = _blocked_notice_text(["open"])
+    assert "NOT executed" in notice
+    # der ausweg:
+    assert "turn1fetch0" in notice and "own web search" in notice.lower()
+    assert "Never call these IDs again" in notice
+    assert "read" in notice and "glob" in notice and "bash" in notice and "webfetch" in notice
+    assert "do not stop" in notice and "tool limit" in notice
+
+
+@pytest.mark.parametrize("narration", [
+    # live 2026-09-26, woertlich
+    "In dieser Umgebung steht mir nur das `open`-Tool zur Verfügung, das ausschließlich Web-URLs öffnen kann — der Zugriff auf lokale Dateisystem-Pfade schlägt fehl (Fehler: „open url failed, scrape failed\").",
+    "`open` funktioniert nur für Web-URLs, nicht für lokale Pfade.",
+    "Ursache war ein Tool-Fehler meinerseits: Ich habe wiederholt das Tool `open` aufgerufen.",
+    "Ich musste die Tool-Aufrufe jetzt stoppen.",
+    "Die Analyse konnte in dieser Sitzung nicht durchgeführt werden.",
+    "Ich kann den Ordner nicht analysieren: In dieser Umgebung steht mir nur das `open`-Tool zur Verfügung.",
+])
+def test_hallucinated_tool_inventory_is_stripped(narration):
+    """S-08: die erfundene werkzeug-inventur und die erfundene
+    abbruch-erklaerung sind keine antwort, sie standen sichtbar beim client."""
+    from glm2api.services.translator import strip_protocol_meta_narration
+
+    assert strip_protocol_meta_narration(narration) == "", repr(
+        strip_protocol_meta_narration(narration)
+    )
+
+
+@pytest.mark.parametrize("keep", [
+    "Ich habe 8 Dateien gelesen und die Werte geprueft.",
+    "Bericht erstellt: 8 Dateien, Muster wert-1 bis wert-8.",
+    "Die Analyse fand 3 Konfigurationsdateien und 12 Testdateien.",
+])
+def test_real_answers_survive_the_inventory_filter(keep):
+    from glm2api.services.translator import strip_protocol_meta_narration
+
+    assert strip_protocol_meta_narration(keep) == keep
+
+
 def test_native_tool_call_as_list_is_parsed_with_all_guards():
     protocol = {"name": "read", "id": "a", "arguments": {"filePath": "/a.py"}}
 

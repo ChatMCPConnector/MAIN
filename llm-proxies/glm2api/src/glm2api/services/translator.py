@@ -884,6 +884,30 @@ def map_native_open_tool_call(
                 )
             return "webfetch", {"url": target}
 
+    # S-08: `file://` ist die NATUERLICHSTE form, mit der das modell
+    # "mach dieses lokale verzeichnis auf" ausdrueckt — und sie fiel vorher
+    # einfach durch: kein http(s), also URL-pruefung nein; `://` im
+    # ziel, also T-21-pfad "das ist eine URL, kein pfad" -> None. Ergebnis:
+    # der verworfene aufruf, und weil danach nichts zurueckkam, wiederholte
+    # das modell ihn (live 2026-09-26, session `glm2api-Ordner-Analyse`:
+    # allererster aufruf `file:///workspaces/MAIN/glm2api`, danach ~30
+    # weitere `open`-aufrufe und eine erfundene tool-limit-meldung).
+    # `file://` ist hier KEIN fetch-ziel, sondern ein lokaler pfad in
+    # schreibweise — er wird auf den pfad zurueckgefaltet und wie jeder
+    # andere pfad behandelt.
+    if target.lower().startswith("file://"):
+        from urllib.parse import unquote
+
+        # `file:///a/b` -> `//a/b` -> `/a/b`; `file://host/a` -> `/a`
+        _split = urlsplit(target)
+        target = unquote(_split.path or "")
+        if _split.netloc and _split.netloc.lower() not in {"", "localhost"}:
+            # `file://host/...` ist ein UNC-artiger zielpfad; der host ist
+            # fuer uns nicht erreichbar -> nicht abbildbar.
+            return None
+        if not target:
+            return None
+
     # T-21: `example.com` ohne schema fiel durch den punkt-check in die
     # datei-erkennung und wurde als read auf einen nicht existierenden
     # dateinamen abgebildet. Eine bare domain ist eine URL.
@@ -1064,6 +1088,38 @@ _PROTOCOL_META_PHRASES = (
     "korrigiere auf die erlaubten tools",
     "korrigiere zu den erlaubten tools",
     "statt open",
+    # S-08: die selbst erfundene werkzeug-inventur + die erfundene
+    # abbruch-erklaerung. Live 2026-09-26 (session
+    # `glm2api-Ordner-Analyse` und repro C): nach ~30 verworfenen
+    # `open`-aufrufen schrieb das modell in die antwort
+    #   'In dieser Umgebung steht mir nur das `open`-Tool zur Verfügung,
+    #    das ausschließlich Web-URLs öffnen kann'
+    #   '`open` funktioniert nur für Web-URLs, nicht für lokale Pfade'
+    #   'Ursache war ein Tool-Fehler meinerseits: …'
+    #   'Ich musste die Tool-Aufrufe jetzt stoppen.'
+    #   'Die Analyse konnte in dieser Sitzung nicht durchgeführt werden.'
+    # und erfand ein tool-limit. Das ist KEINE antwort, sondern eine
+    # halluzinierte umgebung — sie stand sichtbar beim client.
+    # Umlaute in beiden schreibweisen: das modell wechselt je nach
+    # aufgaben-sprache zwischen "verfuegbar" und "verfügbar".
+    "steht mir nur das open tool",
+    "steht mir nur das open",
+    "steht mir nur ein open",
+    "in dieser umgebung steht mir nur",
+    "open funktioniert nur",
+    "open funktioniert nicht",
+    "open funktioniert ausschliesslich",
+    "open funktioniert ausschließlich",
+    "tool fehler meinerseits",
+    "musste ich die tool aufrufe stoppen",
+    "musste ich die tool aufrufe jetzt stoppen",
+    "musste die tool aufrufe stoppen",
+    "musste die tool aufrufe jetzt stoppen",
+    "muss ich die tool aufrufe stoppen",
+    "muss die tool aufrufe stoppen",
+    "konnte ich in dieser sitzung nicht",
+    "konnte in dieser sitzung nicht",
+    "analyse konnte in dieser sitzung nicht",
 )
 
 
@@ -2180,8 +2236,25 @@ class GLMEventAccumulator:
                                     # sanitize-stelle doch noch abgebildet.
                                     self.blocked_tool_attempt_names.append(tool_name)
                                     if self.logger:
+                                        # DIE ARGUMENTE MITLOGGEN. Ein
+                                        # verworfener aufruf, dessen
+                                        # argument man nicht sieht, ist eine
+                                        # sackgasse: live 2026-09-26 (session
+                                        # `glm2api-Ordner-Analyse`) verwarf der
+                                        # proxy ~30 `open`-aufrufe mit genau
+                                        # dieser meldung, OHNE dass erkennbar
+                                        # war, warum sie nicht abbildbar waren
+                                        # — und ohne dass sich die frage
+                                        # beantworten liess, welche
+                                        # argumentform das modell wirklich
+                                        # sendet. Das argument ist die
+                                        # einzige information, die hier etwas
+                                        # aendern kann.
                                         self.logger.info(
-                                            "Dropped native open call: not mappable under the declared tool contract"
+                                            "Dropped native open call: not mappable under the declared tool contract "
+                                            "allowed=%s args=%s",
+                                            sorted(self.allowed_tool_names or ()),
+                                            str(arguments)[:300],
                                         )
                                     continue
                                 else:

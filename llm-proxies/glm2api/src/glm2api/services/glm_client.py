@@ -275,7 +275,16 @@ def _blocked_notice_text(names: object) -> str:
     Das OpenAI-schema hat kein feld fuer abgelehnte aufrufe. Ohne
     signal bleibt der client bei 'alles gelaufen' stehen und beendet
     den tool-loop — oder behauptet gar, das ergebnis gesehen zu haben.
-    Der text geht deshalb VOR der inhaltlichen antwort raus."""
+    Der text geht deshalb VOR der inhaltlichen antwort raus.
+
+    S-08: der text sagt AUCH, was jetzt zu tun ist. Live 2026-09-26
+    (session `glm2api-Ordner-Analyse`): das modell rief ~30x `open` mit
+    `ref_id=turn*search*` auf (eine referenz aus dem EIGENEN web-search
+    des modells, fuer uns nicht aufloesbar), bekam nur 'nicht verfuegbar'
+    zurueck, erklaerte schliesslich 'mir steht nur das open-tool zur
+    verfuegung' und erfand ein tool-limit. Ein reines 'nein' ohne
+    ausweg laesst das modell raten; der ausweg muss im text stehen.
+    """
     if isinstance(names, str):
         cleaned = [part.strip() for part in names.split(",") if part.strip()]
     elif isinstance(names, (list, tuple, set)):
@@ -287,7 +296,14 @@ def _blocked_notice_text(names: object) -> str:
     return (
         f"[blocked_tool_notice] The tool(s) {', '.join(cleaned)} are not available in "
         "this environment and were NOT executed. Do not claim to have called them "
-        "or to have seen any result from them."
+        "or to have seen any result from them. "
+        "A reference like `turn1fetch0`/`turn2search0` is an ID from your OWN web "
+        "search and cannot be opened here — the content behind it does not exist "
+        "on this machine. Never call these IDs again. "
+        "Use instead: `read` with an absolute local path (files and directories "
+        "both work), `glob` to find files, `bash` to list or search, and `webfetch` "
+        "for an http(s) URL. Re-issue the task with those tools and continue; do not "
+        "stop and do not report a tool limit."
     )
 
 
