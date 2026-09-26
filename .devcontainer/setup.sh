@@ -149,8 +149,9 @@ bash "$REPO_ROOT/infra/scripts/rclone-install.sh" >/dev/null 2>&1 \
 echo "==> [landscape] Freebuff-CLI installieren (kostenloser Coding-Agent)..."
 # Steht bewusst NACH dem Secrets-Schritt: der Login (~/.config/manicode/
 # credentials.json) kommt aus dem Bundle, damit freebuff in jedem Codespace
-# eingeloggt startet. /workspaces/freebuff ist persistent, ~/.config/manicode
-# nicht — der Wrapper stellt das native Binary aus dem /workspaces-Cache her.
+# eingeloggt startet. Modell wie opencode — $HOME ist ephemer, das Skript baut
+# npm-Projekt ($HOME/.local/share/freebuff), Wrapper und das 136-MB-Binary
+# (~12-24 s) bei jedem neuen Codespace neu auf.
 bash "$REPO_ROOT/infra/scripts/freebuff-install.sh" \
   && echo "    freebuff bereit: $(freebuff --version 2>/dev/null | tail -1)" \
   || echo "    WARN: freebuff-Install fehlgeschlagen, manuell: ./infra/scripts/freebuff-install.sh"
