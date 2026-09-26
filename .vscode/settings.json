@@ -1,6 +1,8 @@
 {
   "terminal.integrated.defaultProfile.linux": "bash",
   "files.eol": "\n",
+  "python.defaultInterpreterPath": "/usr/bin/python3",
+  "python.terminal.activateEnvironment": false,
   "remote.autoForwardPorts": true,
   "remote.autoForwardPortsSource": "process",
   "remote.restoreForwardedPorts": false,
