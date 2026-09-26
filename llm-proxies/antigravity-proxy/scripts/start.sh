@@ -41,14 +41,24 @@ if [ ! -x "$DIR/antigravity-oauth-proxy" ]; then
   (cd "$DIR" && (command -v go >/dev/null 2>&1 && go build -o antigravity-oauth-proxy ./cmd/antigravity-oauth-proxy || /usr/local/go/bin/go build -o antigravity-oauth-proxy ./cmd/antigravity-oauth-proxy))
 fi
 
-echo "[antigravity-proxy] Starte antigravity-oauth-proxy auf Port ${PORT}..."
+echo "[antigravity-proxy] Starte antigravity-oauth-proxy auf ${HOST}:${PORT}..."
+# HOST explizit setzen: Upstream band hart auf alle Interfaces (":" + port).
+# Der Codespace leitet 9878 per Port-Forward weiter — das funktioniert über
+# Loopback genauso, ist aber nicht aus dem Netz erreichbar.
 (cd "$DIR" && ADMIN_API_KEY="antigravity-secret-6fe2eaa404e1c91bfa0fec01e74ddcc1" \
+  HOST="${HOST}" \
   setsid nohup ./antigravity-oauth-proxy --port "${PORT}" \
   >> "${LOGFILE}" 2>&1 & echo $! > "${PIDFILE}")
 
 for i in $(seq 1 30); do
   if curl -sf -m 2 "${HEALTH_URL}" >/dev/null 2>&1; then
-    echo "[antigravity-proxy] OK: Antwortet auf Port ${PORT}."
+    # Bindung prüfen: Health-Check allein beweist nichts über die Erreichbarkeit.
+    bound="$(ss -tln 2>/dev/null | awk -v p=":${PORT}\$" '$4 ~ p {print $4}' | head -1)"
+    case "${bound:-}" in
+      127.0.0.1:*|"[::1]:"*) echo "[antigravity-proxy] OK: Antwortet auf ${HOST}:${PORT} (gebunden: ${bound})." ;;
+      "") echo "[antigravity-proxy] WARN: Socket-Bindung auf Port ${PORT} nicht erkannt." ;;
+      *) echo "[antigravity-proxy] WARN: Bindung ist ${bound}, erwartet ${HOST}. Nicht aus dem Netz erreichbar machen ist sonst nicht gegeben." ;;
+    esac
     exit 0
   fi
   sleep 1

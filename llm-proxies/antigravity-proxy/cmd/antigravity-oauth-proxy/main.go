@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/dvcrn/antigravity-oauth-proxy/internal/antigravity"
 	"github.com/dvcrn/antigravity-oauth-proxy/internal/credentials"
@@ -13,6 +14,11 @@ import (
 
 func main() {
 	port := env.GetOrDefault("PORT", "9878")
+	// Upstream band fest auf ":" + port und damit auf ALLE Interfaces. Für
+	// einen lokalen Proxy mit Admin-API-Key ist Loopback die sichere Voreinstellung;
+	// ein leeres HOST (oder "*") bindet weiterhin bewusst auf 0.0.0.0.
+	host := env.GetOrDefault("HOST", "127.0.0.1")
+	addr := net.JoinHostPort(host, port)
 
 	// Create file provider
 	provider, err := credentials.NewFileProvider()
@@ -66,7 +72,8 @@ func main() {
 	srv := server.NewServer(provider, projectID)
 
 	// Start server
-	if err := srv.Start(":" + port); err != nil {
+	logger.Get().Info().Str("addr", addr).Msg("Starting server")
+	if err := srv.Start(addr); err != nil {
 		logger.Get().Fatal().Err(err).Msg("Failed to start server")
 	}
 }

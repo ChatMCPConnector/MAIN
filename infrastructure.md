@@ -205,6 +205,15 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   PID-/Port-Ausgaben sind ephemeral — vor Wiederverwendung einmal prüfen
   (`pgrep`, `ss`, `curl`), nie als Blocker oder Dauerzustand dokumentieren.
 - **Kanonische Codespace-Ports (4 Dienste):** Port `4096` (opencode-Server), Port `6082` (noVNC Browser), Port `8001` (glm2api-Proxy), Port `9878` (antigravity-proxy). In `.devcontainer/devcontainer.json` und `.vscode/settings.json` via `forwardPorts` + `portsAttributes` + `remote.autoForwardPorts: true` + `remote.autoForwardPortsSource: "process"` und `remote.restoreForwardedPorts: false` verdrahtet: Die 4 Dauer-Dienste bleiben permanent geforwarded; neue temporäre Dev-Server (z.B. Web-Apps auf 3000/5173) werden während ihrer aktiven Laufzeit automatisch erkannt und nach Prozessende sofort wieder sauber aus dem Ports-Panel entfernt. Interne Sockets (2000, 5900, 5920) werden ignoriert.
+- **Bindung der LLM-Proxies:** beide Proxys laufen **ausschließlich auf Loopback** —
+  glm2api auf `127.0.0.1:8001`, antigravity auf `127.0.0.1:9878`. Das Codespace-
+  Port-Forwarding funktioniert über Loopback genauso, aber die Proxys sind so
+  nicht aus dem Netz erreichbar. Upstream band der antigravity hardcoded auf
+  `":" + port` (alle Interfaces); `cmd/antigravity-oauth-proxy/main.go` liest
+  deshalb jetzt `HOST` (Default `127.0.0.1`, `*` bewusst wieder auf 0.0.0.0),
+  und `scripts/start.sh` setzt `HOST` explizit. `start.sh` prüft die tatsächliche
+  Bindung nach dem Health-Check per `ss` und warnt bei Abweichung — ein
+  erfolgreicher Health-Check beweist nichts über die Erreichbarkeit.
 - **Browser-Runtime:** **Firefox** (Mozilla-Tarball, Version gepinnt in
   `infra/scripts/firefox-install.sh`, Install nach `.runtime/firefox`, gitignored)
   → `./infra/scripts/browser-start.sh [URL]` (Xvfb, x11vnc, noVNC; idempotent).
@@ -287,6 +296,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **antigravity-proxy bindet jetzt auf Loopback statt auf alle Interfaces.** Upstream startet den Server fest mit `srv.Start(":" + port)`, also `0.0.0.0:9878` — im Codespace damit aus dem Netz erreichbar, obwohl das Token im Klartext in `opencode.json` steht und `infrastructure.md` für die Proxys durchgehend Loopback vorsieht. `cmd/antigravity-oauth-proxy/main.go` liest jetzt `HOST` (Default `127.0.0.1`, via `net.JoinHostPort`, `*` bewusst weiterhin 0.0.0.0) und loggt die Bind-Adresse; `scripts/start.sh` setzt `HOST` explizit und prüft die Bindung nach dem Health-Check per `ss` (der Health-Check allein beweist die Bindung nicht). glm2api war schon korrekt auf `127.0.0.1`. Verifiziert: von außen (`10.0.1.81:9878`) keine Verbindung, von loopback `/v1/models` 200 und `claude-opus-4-6` liefert „OK"; `go build` + `go test ./internal/...` grün. Das Binary liegt nicht im Git, nach dem Pull in einem bestehenden Codespace `scripts/stop.sh && scripts/start.sh` — der Proxy-Watchdog baut es sonst nicht neu.
 
 - 2026-09-26: **opencode startet in neuen Codespaces wieder — Ursache war ein falsch befülltes Secret, nicht die Config.** `LANDSCAPE_PASSPHRASE` enthielt in einem Account den GitHub-PAT statt der Passphrase. `secrets.sh`nahm die Env-Variable blind als Passphrase, das Entschlüsseln schlug fehl, `~/.config/landscape/{nvidia-nim,xinjianya}.key` blieben aus — und weil `opencode.json` die Keys per `{file:…}` referenziert, verweigerte opencode den **komplett** Start (`bad file reference: … does not exist`). Drei Ebenen Fix: (a) `unlock` probiert alle Kandidaten durch (`LANDSCAPE_PASSPHRASE` → `config/passphrase` → Abfrage), verwirft PAT-ähnliche Werte und meldet PAT-Verdacht explizit; (b) neu `infra/scripts/keys.sh` (`ensure|status|doctor|restore`) — `ensure` legt referenzierte Key-Dateien als leere Platzhalter an, eingehängt in `setup.sh`, `opencode-server.sh` und den `opencode`-Wrapper, damit ein Secret-Problem nie wieder den Editor blockiert; (c) 0-Byte-Dateien gelten beim Unlock als „fehlt" (echter Key wird wiederhergestellt) und beim Lock als „nicht sichern" (Platzhalter überschreibt keinen Key). Nebenbefund zweier Bash-Fallen: ein `[ -n "$X" ] && …`-Statement unter `set -e` brach die Kandidatenliste ab, und `read` verwirft eine letzte Zeile ohne Newline — `config/passphrase` hat keins, die Passphrase wäre nie angekommen. `doctor` unterscheidet echte Auth-Fehler von einer Cloudflare-Challenge (xinjianya liefert 403-HTML für gut *und* schlecht) und nutzt 90 s Timeout, weil NIM Kaltstarts ~57 s braucht.
 
