@@ -22,6 +22,11 @@ unveraendert zum Kind; SIGWINCH wird auf den pty durchgereicht.
 
 Nutzung: freebuff-pty.py -- <programm> [args...]
 Exit-Code = Exit-Code des Kindes.
+
+DEBUG: FREEBUFF_PTY_DEBUG=/pfad/debug.log schreibt zwei Dinge mit — was von der
+Tastatur zum Kind ging (das ist die Wirkung einer VS-Code-Keybinding) und welche
+Maus-Sequenzen der Filter entfernt hat (Beweis, dass er im Pfad ist). Nur zum
+Messen von „kommt die Taste ueberhaupt an"; normalerweise leer.
 """
 import errno
 import fcntl
@@ -33,11 +38,26 @@ import signal
 import struct
 import sys
 import termios
+import time
 import tty
 
 # Nur Maus Modi. 1004 (Fokus) und 2004 (bracketed Paste) fehlen bewusst.
 MOUSE_MODES = rb"(?:1000|1001|1002|1003|1005|1006|1015|1016)"
 MOUSE_RE = re.compile(rb"\x1b\[\?" + MOUSE_MODES + rb"[hl]")
+
+
+DEBUG_LOG = os.environ.get("FREEBUFF_PTY_DEBUG") or ""
+
+
+def debug(msg):
+    """Messkanal fuer die Keybinding-Frage: schreibt optional eine Zeile."""
+    if not DEBUG_LOG:
+        return
+    try:
+        with open(DEBUG_LOG, "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except OSError:
+        pass
 
 
 def window_size(fd):
@@ -104,6 +124,7 @@ def main(argv):
     except (OSError, ValueError):
         pass
 
+    debug(f"start argv={argv} pty={master}")
     out = sys.stdout.buffer
     stdin_open = True
     try:
@@ -134,6 +155,9 @@ def main(argv):
                     break
                 if not data:
                     break
+                stripped = MOUSE_RE.findall(data)
+                if stripped:
+                    debug(f" Maus entfernt: {[m.decode('latin1') for m in stripped]}")
                 out.write(MOUSE_RE.sub(b"", data))
                 out.flush()
 
@@ -144,6 +168,9 @@ def main(argv):
                     stdin_open = False
                     data = b""
                 if data:
+                    # Das ist die Sicht auf die Keybinding-Wirkung: was hier
+                    # landet, hat das Kind als Tastendruck gelesen.
+                    debug(f" -> {data!r}")
                     try:
                         os.write(master, data)
                     except OSError:
