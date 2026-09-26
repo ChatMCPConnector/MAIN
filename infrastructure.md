@@ -78,7 +78,9 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
   `Cline` = Cline-eigenes `created` (nur `space-bunny-alpha`), `erstmals` = von
   uns beim ersten Lauf notiert, also „seit wann wir es kennen", nicht „seit wann
   es existiert". **Anzeige-Default absichtlich eng:** nur was über die API
-  nutzbar ist und nicht älter als `--days` (Default 7) — die CLI-only-Modelle
+  nutzbar ist und nicht älter als `--days` (Default **14** — manche Promotions
+  laufen rund zwei Wochen, mit 7 wären sie aus der Anzeige gefallen, obwohl sie
+  noch laufen) — die CLI-only-Modelle
   sind für opencode per Definition irrelevant (403, unabhängig von Key und
   `opencode.json`), deshalb auch die schlanke Ausgabe ohne Status-/Cost-Spalte,
   die dort in jeder Zeile dasselbe gesagt hätten. `--all` stellt

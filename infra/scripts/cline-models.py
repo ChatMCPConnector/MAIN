@@ -48,7 +48,7 @@ first_seen ueberlebt bewusst das Verschwinden eines Modells (anders als die
 Probes), sonst waere die Angabe nach einer Rotation wertlos.
 
 Anzeige-Default ist absichtlich eng: NUR Modelle, die (a) ueber die API
-nutzbar sind und (b) nicht aelter als --days Tage (Default 7) sind. Die
+nutzbar sind und (b) nicht aelter als --days Tage (Default 14) sind. Die
 CLI-only-Modelle sind fuer opencode per Definition irrelevant — 403, egal
 welcher Key und egal was in opencode.json steht. Deshalb auch die
 schlanke Spaltenausgabe ohne Status/cost: in diesem Modus wuerden beide in
@@ -66,7 +66,7 @@ Free-Modelle rotieren und ein Cache sie tagelang unterschlaege.
 Key: $CLINE_API_KEY oder ~/.config/landscape/cline.key.
 
 Verwendung:
-  python3 infra/scripts/cline-models.py              # nutzbar + <= 7 Tage
+  python3 infra/scripts/cline-models.py              # nutzbar + <= 14 Tage
   python3 infra/scripts/cline-models.py --days 3     # nur neuere
   python3 infra/scripts/cline-models.py --days 0     # nur nutzbare, ohne Altersfilter
   python3 infra/scripts/cline-models.py --all        # alles, jede Quelle
@@ -306,9 +306,9 @@ STATUS_LABEL = {
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", "--top", type=int, default=40)
-    ap.add_argument("--days", type=float, default=7, metavar="TAGE",
+    ap.add_argument("--days", type=float, default=14, metavar="TAGE",
                     help="nur Modelle, die hoechstens TAGE Tage alt sind "
-                         "(Default: 7, 0 = alle)")
+                         "(Default: 14, 0 = alle)")
     ap.add_argument("--all", action="store_true",
                     help="keine Filter: alle Modelle, jedes Alter")
     ap.add_argument("--min-age", type=float, metavar="TAGE",
