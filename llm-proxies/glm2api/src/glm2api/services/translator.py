@@ -2751,37 +2751,6 @@ class GLMEventAccumulator:
         # hier still entfernt, genau wie `strip_meta_chatter` es im
         # finalize-pfad tut.
         if visible_text_delta:
-            # S-08: die drei selbst-bezogenen filter laufen BEDINGUNGSLOS
-            # im stream — nicht nur, wenn der turn bereits calls hat.
-            #
-            # Die bedingung 'turn hat calls' war falsch und liess genau die
-            # schlimmste form durch: die narration ueber `open` steht
-            # typischerweise in einem turn, in dem NUR VERWORFENE
-            # `open`-calls vorkamen. Verworfene calls landen in
-            # `blocked_tool_attempt_names`, nicht in `_server_side_tool_calls`
-            # — die bedingung war also genau dann falsch, wenn sie haette
-            # greifen muessen (live repro K: 'Der `open`-Aufruf
-            # funktioniert hier nicht fuer lokale Pfade' + 'Analyse-Abbruch:
-            # das `open`-Tool funktioniert nur fuer Web-URLs').
-            #
-            # Die filter selbst sind eng genug, dass ein FINALER bericht
-            # unbeschaedigt bleibt: sie verlangen erste-person-steuernde
-            # oder die `open`+faehigkeits-kombination, nie ein blosses
-            # nennen von `open`. Gedeckt durch
-            # `test_real_sentences_survive_the_self_steering_filter` und
-            # `test_legitimate_technical_mention_of_open_survives`.
-            #
-            # `require_complete_sentence=True` bleibt: ein stream-delta
-            # beginnt mitten im satz, ein satzweiter schnitt darauf erzeugt
-            # ein halbwort.
-            visible_text_delta = strip_protocol_meta_narration(visible_text_delta)
-            visible_text_delta = strip_self_steering(visible_text_delta, require_complete_sentence=True)
-            visible_text_delta = strip_invented_limit_claim(
-                visible_text_delta, require_complete_sentence=True
-            )
-            if not visible_text_delta.strip():
-                visible_text_delta = ""
-        if visible_text_delta:
             # THEMA 3 (F2): C0-Steuerzeichen im gestreamten Content ersetzen
             visible_text_delta = self._sanitize_visible_text(visible_text_delta)
             fence_pending = self._deferred_visible_text.count("```") % 2 == 1
@@ -2876,6 +2845,43 @@ class GLMEventAccumulator:
             # wieder auftaucht, FEHLTE ein zwischenzeichen im stream:
             # 'Hier ist die Anleitung.' kam als 'Hier ist dieAnleitung.'
             # an (gemessen bei chunk-groesse 2).
+            # S-08: die drei selbst-bezogenen filter. Die bedingung ist
+            # `gueltige calls ODER verworfene aufrufe`, und das ist der
+            # entscheidende punkt:
+            #
+            # 1. Mit GUELTIGEN calls greift die T-07-praeambel: sie puffert den
+            #    text und verwirft ihn, sobald der call erscheint. Hier NICHT
+            #    zusaetzlich schneiden — sonst wird die marke schon hier
+            #    entfernt, der gepufferte praeambel-rest bleibt uebrig und
+            #    der client sieht 'I must use `read`/`webfetch`/`bash`'.
+            # 2. Mit NUR VERWORFENEN aufrufen (`open` kam an, wurde nicht
+            #    abbildbar) gibt es keine gueltigen calls — die praeambel
+            #    greift nicht, und genau hier stand live die narration:
+            #    'Der `open`-Aufruf funktioniert hier nicht fuer lokale Pfade'.
+            #    Verworfene calls stehen in `blocked_tool_attempt_names`, nicht
+            #    in `_server_side_tool_calls` — die alte bedingung 'hat calls'
+            #    war also genau dann falsch, wenn sie haette greifen muessen.
+            # 3. Ohne jeden aufruf bleibt der text unangetastet; eine marke
+            #    faellt dann ueber die praeambel oder den finalize-pfad.
+            _filter_own_text = bool(
+                (self._server_side_tool_calls or self.tool_parser.tool_calls)
+                and not self._preamble_pending
+            ) or bool(self.blocked_tool_attempt_names)
+            if visible_text_delta and _filter_own_text:
+                # Die filter verlangen erste-person-steuernde oder die
+                # `open`+faehigkeits-kombination, nie ein blosses nennen von
+                # `open` — ein finaler bericht bleibt unbeschaedigt
+                # (`test_legitimate_technical_mention_of_open_survives`).
+                # `require_complete_sentence=True` bleibt: ein stream-delta
+                # beginnt mitten im satz, ein satzweiter schnitt darauf erzeugt
+                # ein halbwort.
+                visible_text_delta = strip_protocol_meta_narration(visible_text_delta)
+                visible_text_delta = strip_self_steering(visible_text_delta, require_complete_sentence=True)
+                visible_text_delta = strip_invented_limit_claim(
+                    visible_text_delta, require_complete_sentence=True
+                )
+                if not visible_text_delta.strip():
+                    visible_text_delta = ""
             whitespace_only = not visible_text_delta.strip()
             if (
                 visible_text_delta

@@ -201,9 +201,55 @@ start_server() {
   cd "$GLM2API_DIR" || exit 1
   stop_log_guard
   rotate_output_log
-  # venv-Python statt System-Python: App requires >=3.14, System hat nur 3.12
-  nohup "$GLM2API_DIR/.venv/bin/python3" main.py >> "$OUTPUT_LOG" 2>&1 &
-  local pid=$!
+
+  # Rennbedingung mit dem proxy-watchdog: der startet sofort neu, sobald
+  # /health nicht antwortet. Ohne diese adoption starten `restart` und der
+  # watchdog beide, und am ende steht einprozess, der nicht gestoppt
+  # werden kann (live 2026-09-26 nach dem setsid-fix beobachtet).
+  if health_ok; then
+    local running
+    running="$(managed_pids | head -1)"
+    if [ -n "$running" ]; then
+      printf '%s\n' "$running" > "$PID_FILE.tmp" && mv -f "$PID_FILE.tmp" "$PID_FILE"
+      echo "✓ Server läuft bereits (PID: $running, übernommen)"
+      return 0
+    fi
+  fi
+
+  # setsid + disown sind hier NICHT optional. Ohne sie bleibt der server in
+  # der prozessgruppe des aufrufenden shells; beendet sich dieses shell
+  # (agent-tool-call mit timeout, ctrl-c, terminal-schluss), schickt die
+  # prozessgruppe SIGTERM an den proxy — mitten in einer laufenden runde.
+  # Live am 2026-09-26 zweimal gemessen (17:47:15 und 19:25:19): SIGTERM
+  # mitten im stream, session abgerissen, und die upstream-conversation
+  # dieser runde blieb auf chatglm.cn liegen, weil der delete im `finally`
+  # des request-handlers nicht mehr ausgefuehrt wurde. `start-glm2api.sh`
+  # macht es seit jeher richtig — diese zwei startwege waren nicht
+  # gleichwertig.
+  #
+  # Das `bash -c` schreibt seine EIGENE pid: `setsid` liefert kein $!, das
+  # waere die pid des subshells. Durch `exec` wird genau diese pid der
+  # serverprozess — damit ist die PID-datei exakt und `stop` trifft
+  # zuverlaessig (ohne suchschleife, die einen watchdog-neustart mit
+  # einsammeln wuerde).
+  local pid
+  ( setsid bash -c "echo \$\$ > '$PID_FILE.tmp'; exec '$GLM2API_DIR/.venv/bin/python3' main.py" \
+      </dev/null >> "$OUTPUT_LOG" 2>&1 & disown )
+  # PID atomar in Datei schreiben (gleiche Partition → rename ist atomar)
+  for _ in $(seq 1 25); do
+    if [ -s "$PID_FILE.tmp" ]; then
+      mv -f "$PID_FILE.tmp" "$PID_FILE"
+      break
+    fi
+    sleep 0.2
+  done
+  if [ ! -s "$PID_FILE" ]; then
+    echo "✗ Keine PID erhalten (siehe $OUTPUT_LOG)"
+    return 1
+  fi
+  pid="$(cat "$PID_FILE")"
+  start_log_guard "$pid"
+  echo "✓ Server gestartet (PID: $pid)"
   # PID atomar in Datei schreiben (gleiche Partition → rename ist atomar)
   printf '%s\n' "$pid" > "$PID_FILE.tmp" && mv -f "$PID_FILE.tmp" "$PID_FILE"
   start_log_guard "$pid"
