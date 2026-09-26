@@ -1313,10 +1313,21 @@ _LIMIT_LEAD_WINDOW = 200
 # dort ist eine Aussage ueber `open` (z. B. in einer analyse ueber den
 # proxy) echter inhalt.
 _SELF_STEERING_RE = re.compile(
-    r"(?i)(?:\bich\b[^.!?\n]{0,60}?\b(?:nutze|verwende|wechsle|muss|beende|stoppe|"
-    r"abbreche|abbrechen|aufgeben|brauche|gehe|wechsle)\b[^.!?\n]{0,40}?"
+    # S-09: der erste-zweig deckt jetzt auch ENGLISCHE erster-person-
+    # steuerung ab. Live repro M (19:29) lieferte dieselbe narration in
+    # beiden sprachen direkt hintereinander, und das muster kannte nur
+    # `ich` — die englische hälfte war strukturell nicht erfassbar:
+    #   'The `open` tool only works for web URLs — for local files I need
+    #    to use `read`/`bash`'
+    # Die Gegenprobe-Liste bleibt gültig (`test_real_sentences_survive_the_
+    # self_steering_filter`): „habe" und „muss … abgeben" sind kein
+    # steuer-verb mit werkzeug-bezug.
+    r"(?i)(?:\b(?:ich|i|wir|we)\b[^.!?\n]{0,60}?\b(?:nutze|verwende|wechsle|muss|beende|stoppe|"
+    r"abbreche|abbrechen|aufgeben|brauche|gehe"
+    r"|use|using|need|switch|stop|abort|prefer|give\s+up)\b[^.!?\n]{0,40}?"
     r"(?:`?(?:open|open_url|read|write|edit|bash|webfetch|glob|grep)`?"
     r"|tool[- ]?calls?|werkzeug|aufr(?:u|ü)fen)"
+
     r"|\bich\s+(?:muss|beende|stoppe|breche)\b[^.!?\n]{0,50}?"
     r"(?:`?open`?|tool|aufr(?:u|ü)fen|vorgang|abbruch)"
     r"|`?open`?[^.!?\n]{0,30}?\b(?:ist\s+(?:nur|ein)|kann|koennte|funktioniert|arbeitet)\b"
@@ -1418,7 +1429,87 @@ def _sentence_end_after(text: str, position: int) -> int:
     return match.end() if text[match.start()] == "\n" else match.end()
 
 
+# --- S-09: HALTBAR-AUSLÖSER für Narration über Delta-Grenzen ----------------
+#
+# Die Muster oben (`_SELF_STEERING_RE`, `_LIMIT_CLAIM_RE`) brauchen BEIDE
+# hälfte eines satzes in EINEM string: erster-person/steuer-verb UND der
+# werkzeug-name. Der upstream schneidet aber mitten im satz — live repro M
+# (2026-09-26, 19:29, 20 tool-calls im turn) zeigte einen text-part mit drei
+# varianten desselben selbstgesprächs, aneinandergeklebt:
+#   'Der `open`-Tool-Aufruf funktioniert in dieser Umgebung nicht zuverlässig
+#    für lokale Pfade – ich nutze stattdessen `read`/`bash`:The `open` tool
+#    only works for web URLs — for local files I need to use `read`/`bash`:'
+# Kein einzelnes delta enthält beide hälfte -> traf KEIN filter, und der text
+# war bereits Gestreamt: `finalize` kann nichts zurückholen, was schon beim
+# client steht. (Ein finalize-seitiger filter greift hier außerdem gar
+# nicht — der gibt content nur aus, wenn der turn KEINE calls hat,
+# `if final_text and not all_tool_calls`.)
+#
+# Der ansatz ist deshalb derselbe, den S-07 für die protokoll-marke erfunden
+# hat (`_narration_carry`): den text VOR dem parser zurückhalten, solange
+# sein letzter satz noch narration werden KANN. Ist der satz fertig, gibt der
+# holdback frei und die ganze zeile geht in einem rutsch durch den parser —
+# die bestehenden filter sehen dann eine vollständige zeile und
+# `require_complete_sentence=True` kann greifen. Verloren geht nichts: beim
+# finalize wandert der carry nachweislich in `tool_parser.pending_text`.
+#
+# Der auslöser ist bewusst BILLIG (ein werkzeug-/limit-/ich-token im
+# unvollständigen satz) und bewusst NICHT das narration-muster selbst: alles,
+# was er zu viel zurückhält, kommt spätestens mit der nächsten satzgrenze
+# ungekürzt wieder raus — das ist verzögerung, kein textverlust. Entscheiden
+# tun weiterhin ausschließlich `_SELF_STEERING_RE`/`_LIMIT_CLAIM_RE`.
+_NARRATION_TOKEN_RE = re.compile(
+    r"(?i)(?:"
+    r"`(?:open|open_url|read|write|edit|bash|webfetch|glob|grep)`"
+    r"|\bopen[_-]?(?:url)?\b"
+    r"|\b(?:tool|werkzeug)[-_ ]*(?:calls?|aufrufe?|limit)?\b"
+    r"|\baufr(?:u|ü)f"
+    r"|\blimit\b"
+    r"|\b(?:web-?url|dateisystem|pfade?|dateien?|files?|filesystem)\b"
+    r"|\bich\b|\bstattdessen\b|\binstead\b"
+    r")"
+)
+
+# zeichen-deckel. ab dieser länge ist der „offene satz" so lang, dass es
+# keinen grund mehr gibt zu warten (der upstream setzt satzgrenzen weit
+# vorher). der wert ist zugleich die arbeitsgrenze: pro delta werden nur die
+# letzten N zeichen untersucht, damit ein langer text nicht O(n²) kostet.
+_SELF_STEERING_CARRY_LIMIT = 400
+
+
+def _pending_sentence(text: str) -> str:
+    """Der noch offene letzte satz von `text` (alles nach dem letzten
+    satzende). Leer, wenn nichts offen ist oder der offene satz länger als
+    `_SELF_STEERING_CARRY_LIMIT` ist — dann lohnt warten nicht mehr."""
+    if not text:
+        return ""
+    probe = text[-_SELF_STEERING_CARRY_LIMIT:]
+    boundary = 0
+    for match in _SENTENCE_END_RE.finditer(probe):
+        boundary = match.end()
+    if boundary == 0:
+        # kein satzende im fenster: entweder der komplette text ist ein
+        # einziger offener satz (dann ist ER der Wartekandidat) oder er ist
+        # länger als der deckel (dann nicht länger warten)
+        return "" if len(probe) >= _SELF_STEERING_CARRY_LIMIT else probe
+    return probe[boundary:]
+
+
+def _self_steering_holdback(text: str) -> bool:
+    """S-09: muss dieser text noch vor dem parser warten?
+
+    Ja, solange sein letzter satz unvollständig ist und ein token enthält,
+    das in einer selbst-narration vorkommt (`_NARRATION_TOKEN_RE`). Ein
+    text, der mit einem vollständigen satz endet, braucht nie zu warten.
+    """
+    pending = _pending_sentence(text)
+    if len(pending) < 2:
+        return False
+    return bool(_NARRATION_TOKEN_RE.search(pending))
+
+
 def strip_meta_chatter(text: str) -> str:
+
     """Strips self-apology and meta-commentary about failed/blocked tools and
     the model's own hallucinated conversation transcript.
 
@@ -2729,7 +2820,16 @@ class GLMEventAccumulator:
         # erkennbar etwas anderes ist, geht der ganze carry in einem
         # rutsch an den parser — die reihenfolge bleibt so erhalten.
         text_delta = self._narration_carry + text_delta
-        if text_delta and _PROTOCOL_META_NARRATION_TAIL_RE.search(text_delta):
+        # S-07: das ende ist noch präfix einer protokoll-marke -> warten.
+        # S-09: ODER der letzte satz ist noch offen und trägt ein
+        # werkzeug-/limit-token -> ebenfalls warten, bis der satz fertig
+        # ist. Erst dann können `_SELF_STEERING_RE`/`_LIMIT_CLAIM_RE` beide
+        # hälfte überhaupt in einem string sehen; bei delta-weiser-prüfung
+        # lief die narration komplett durch (repro M).
+        if text_delta and (
+            _PROTOCOL_META_NARRATION_TAIL_RE.search(text_delta)
+            or _self_steering_holdback(text_delta)
+        ):
             self._narration_carry = text_delta
             text_delta = ""
         else:
