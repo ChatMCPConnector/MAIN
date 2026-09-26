@@ -751,10 +751,71 @@ Antwort liefern: (a) Ist der Wert, den ich prüfe, *Inhalt* des Modells oder
 selbst — dann ist es aufteilungsunabhängig; liegt es in der Grenze selbst,
 dann hängt das Ergebnis an einem Schnitt, den niemand kontrolliert.
 
+### S-13 — Stream/Non-Stream-Parität bei Text neben Tool-Calls: entschieden, nicht geändert
+
+**Die Frage:** Der Stream liefert sichtbaren Text auch dann, wenn der Turn
+Tool-Calls ausliefert (S-05/S-09/S-10/S-12 pinnen das). Der Non-Stream-Body
+setzt `content` auf `None`, sobald Calls da sind — der Modelltext geht dort
+verloren. Zwei Pfade, zwei Antworten auf dieselbe Frage.
+
+**Messung, deterministisch** (`/tmp/glmtest/parity_probe.py`, ein Turn, beide
+Pfade, Prosa in 5-Zeichen-Teilen):
+
+| Turn | Stream | `message.content` | `tool_calls` |
+|---|---|---|---|
+| Prosa + Call | `'Die Datei enthaelt drei Zeilen.'` | **`None`** | `['read']` |
+| Präambel + Call | `''` (T-07 verwirft) | `None` | `['read']` |
+| nur Prosa (ohne Call) | `'Die Datei enthaelt drei Zeilen.'` | `'Die Datei enthaelt drei Zeilen.'` | `[]` |
+
+**Messung, live** gegen den echten Proxy (Prompt: „Sag in einem kurzen Satz
+welchen Pfad du liest, lies die Datei dann mit dem read-Tool …"; zwei Läufe —
+das Modell ist nicht deterministisch, die Läufe sind also *nicht* derselbe
+Turn):
+
+- **Non-Stream:** `finish_reason=error`, `content='Ich lese den Pfad
+  \`/workspaces/README.md\` mit dem read-Tool.'`, keine Calls — das Modell hat
+  den Call *erzählt* statt gemacht, T-06 stuft das korrekt als Fehlschlag
+  ein. Nebeneffekt: der Body zeigt den Präambel-Satz, den der Stream
+  verworfen hätte.
+- **Stream:** `finish_reason=tool_calls`, `content=''`, `read
+  {"filePath":"/workspaces/hello.txt"}` — der Aufruf, ohne Narration.
+
+**Entscheidung (Option B): die Asymmetrie bleibt und wird festgeschrieben.**
+
+1. Der Proxy ist eine **Kompatibilitätsschicht**. Der OpenAI-Vertrag sagt bei
+   `tool_calls`: `content` ist null. Ein Client, der darauf wartet, bekommt
+   keinen unerwarteten Text und keine leere Assistant-Nachricht in der TUI —
+   genau das war das S-06-Problem in seiner anderen Hälfte.
+2. Der sichtbare Text geht **nicht** verloren, sondern über den Stream — dort
+   ist er seit S-05/S-09/S-10/S-12 ordentlich geführt: in Reihenfolge, an
+   Wortgrenzen geschnitten, Präambel verworfen, chunk-unabhängig. Der Stream
+   ist damit der Textkanal, der Body der Aufrufkanal.
+3. Wer es umdrehen will, hat genau **eine** Stelle: `build_response`,
+   `"content": None if all_tool_calls or not final_content else final_content`.
+   Die drei Tests, die `content is None` pinnen, haben alle *keinen* Text im
+   Turn und bleiben dabei grün — die Umstellung wäre also kein Teststurm,
+   sondern eine bewusste Zeile plus Client-Prüfung.
+
+**Umsetzung:** zwei Tests, die den Vertrag in beide Richtungen festnageln
+(`s13_body_carries_no_content_next_to_tool_calls_while_the_stream_does`,
+`s13_body_still_carries_plain_text_for_text_only_turns`). Sie sind
+**bewusst gegen beide Stände grün** — S-13 ändert kein Verhalten, es macht
+die Asymmetrie explizit. Ein roter Test wäre hier ein Fehler: es gibt keinen
+Zustand, in dem es diese Asymmetrie nicht gab.
+
+**Nebenbefund, unabhängig davon** (an `02ceca2~1` gegengeprüft, also
+vorbestehend): bei einer in Teile geschnittenen Narration entkommt das
+**erste** Fragment, weil es noch keine Marke enthält — der S-09-Holdback
+erkennt erst den Rest. Gemessen: `narration + call` liefert `'The \`'` im
+Stream, vor wie nach S-12 identisch. Ein echter Leck, aber klein (ein
+Fragment), und die Reparatur wäre ein Holdback für „Satz noch offen plus
+Werkzeug-Token im Fragment" — das kostt Latenz auf *jedem* Satz mit
+Backtick und ist eine eigene Entscheidung, keine Nebenbei.
+
 ### Verifikation
 
 - **839 Tests grün** (794 + 45 neue aus S-10), mit S-11 **848** (+ 9), mit S-12
-  **852** (+ 4).
+  **852** (+ 4), mit S-13 **854** (+ 2, Verhaltens-neutral).
 - S-11 gegen den Vorher-Stand (Positivkontrolle): **8** der 9 neuen Tests
   schlagen fehl — alle sechs Chunk-Unabhängigkeits-Fälle, der
   Doppelumbruch und der Regel-Test. Die Anti-Kleb-Gegenprobe
@@ -814,7 +875,9 @@ aus `consume_event` **und** aus `finalize()` sammeln — `_stream_visible()`
 in `test_translator.py` tat das nicht und hat genau diese drei Bugs
 durchgelassen. Bei `allowed_tool_names` gesetzt ist `content` im
 Non-Stream-Response per OpenAI-Vertrag `None`, sobald Tool-Calls da sind:
-für reine Stream-Aussagen dort also nichts nachprüfbar.
+für reine Stream-Aussagen dort also nichts nachprüfbar. Das ist eine
+**bewusste Entscheidung** (S-13), mit zwei Tests festgenagelt — sie steht
+nicht zufällig da und soll auch nicht beim Aufräumen verschwinden.
 
 ---
 
@@ -919,6 +982,7 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - Vier wirkungslose + sechs doppelte Betriebs-Keys, `parse_dotenv` warnt jetzt — DONE 2026-09-26
 - Reihenfolge-Invariante native Parts: Wortpräfix-Fehlmatch, verlorene Zwischenräume, Präambel über der Chunk-Grenze, gefenceter Text im Aufruf-Turn, `flush()`-Strip (S-10) — DONE 2026-09-27
 - Absatzumbrüche des Part-Merges hingen an der Part-Aufteilung (S-11) — DONE 2026-09-27
+- Stream/Non-Stream-Parität bei Text neben Calls: Asymmetrie entschieden und gepinnt (S-13) — DONE 2026-09-27
 - Beim Call-Eintreffen zurückgehaltener Rest (Carry/Parser) ging im Aufruf-Turn verloren (S-12) — DONE 2026-09-27
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),

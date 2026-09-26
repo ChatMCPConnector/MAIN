@@ -4779,6 +4779,45 @@ def test_s11_no_second_break_behind_an_existing_newline():
     assert accumulator._render_full_output()[0] == "Vorher\n```\nalpha\n```"
 
 
+def test_s13_body_carries_no_content_next_to_tool_calls_while_the_stream_does():
+    """S-13: die stream/non-stream-asymmetrie ist ABSICHT und wird hier
+    festgeschrieben, damit sie nicht nebenbei driftet.
+
+    Gemessen an einem Turn (`prosa + call`, /tmp/glmtest/parity_probe.py):
+        stream            = 'Die Datei enthaelt drei Zeilen.'
+        message.content   = None
+        message.tool_calls= ['read']
+
+    Der Proxy ist eine Kompatibilitaetsschicht; der OpenAI-Vertrag sagt bei
+    `tool_calls`: `content` ist null. Das haelt Clients, die darauf
+    warten, unerwarteten Text. Der sichtbare Text geht darum nicht verloren,
+    sondern ueber den stream — dort wird er seit S-05/S-09/S-10/S-12
+    ordentlich gefuehrt (im reihenfolge, an wortgrenzen geschnitten,
+    praeambel verworfen).
+
+    Will das jemand umdrehen (option A aus S-13), ist DIESE stelle die
+    einzige: `build_response`, `"content": None if all_tool_calls …`.
+    """
+    streamed, accumulator = _s10_stream(
+        ["Die Datei enthaelt drei Zeilen.", _s10_native_event("c1")], 5
+    )
+    message = accumulator.build_response("finish")["choices"][0]["message"]
+
+    assert streamed == "Die Datei enthaelt drei Zeilen.", streamed
+    assert message["content"] is None, message["content"]
+    assert [call["function"]["name"] for call in message["tool_calls"]] == ["read"]
+
+
+def test_s13_body_still_carries_plain_text_for_text_only_turns():
+    """Gegenprobe zur anderen Richtung: ohne Calls gehoert der text in den
+    body. Ohne diese haette ein umgekehrter 'immer None'-fehler bestanden."""
+    streamed, accumulator = _s10_stream(["Die Datei enthaelt drei Zeilen."], 5)
+    message = accumulator.build_response("finish")["choices"][0]["message"]
+
+    assert message["content"] == "Die Datei enthaelt drei Zeilen.", message["content"]
+    assert not (message.get("tool_calls") or [])
+
+
 def test_s12_narration_holdback_does_not_lose_the_last_letters():
     """S-12: der narration-carry haelt das ende des texts zurueck, und im
     aufruf-turn verliess es der turn. Gemessen: '… Dritter Punk' statt
