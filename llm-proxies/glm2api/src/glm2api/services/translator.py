@@ -2975,13 +2975,7 @@ class GLMEventAccumulator:
                 # `require_complete_sentence=True` bleibt: ein stream-delta
                 # beginnt mitten im satz, ein satzweiter schnitt darauf erzeugt
                 # ein halbwort.
-                visible_text_delta = strip_protocol_meta_narration(visible_text_delta)
-                visible_text_delta = strip_self_steering(visible_text_delta, require_complete_sentence=True)
-                visible_text_delta = strip_invented_limit_claim(
-                    visible_text_delta, require_complete_sentence=True
-                )
-                if not visible_text_delta.strip():
-                    visible_text_delta = ""
+                visible_text_delta = self._strip_self_talk(visible_text_delta)
             whitespace_only = not visible_text_delta.strip()
             if (
                 visible_text_delta
@@ -3048,7 +3042,25 @@ class GLMEventAccumulator:
                     visible_text_delta = ""
                 else:
                     self._deferred_visible_text = ""
+                    # S-09: der gepufferte anteil stammt aus MEHREREN deltas
+                    # und wurde beim puffern nur delta-weise gefiltert —
+                    # genau dabei zerlegen die muster eine narration über
+                    # delta-grenzen nicht. HIER liegt der text zum ersten mal
+                    # vollständig vor, also noch einmal durch dieselben
+                    # filter. Derselbe guard wie oben: ohne gueltige oder
+                    # verworfene aufrufe bleibt der text unangetastet, sonst
+                    # überschreiben wir die T-07-praeambel (S-08-Falle 2).
                     visible_text_delta = merged
+                    if _filter_own_text and merged.strip():
+                        filtered = self._strip_self_talk(merged)
+                        if not filtered:
+                            visible_text_delta = ""
+                        elif filtered != merged:
+                            # die filter strippen rand-whitespace — im stream
+                            # ist das die absatz-formatierung, die bleibt
+                            lead = merged[: len(merged) - len(merged.lstrip())]
+                            trail = merged[len(merged.rstrip()) :]
+                            visible_text_delta = lead + filtered + trail
             if visible_text_delta:
                 if visible_text_delta.strip():
                     self._emitted_visible_text = True
@@ -3077,6 +3089,46 @@ class GLMEventAccumulator:
         if blocked_native_seen is not None and blocked_native_seen[0]:
             return chunks, "intervene"
         return chunks, str(payload.get("status")) if payload.get("status") is not None else None
+
+    def _strip_self_talk(self, text: str) -> str:
+        """S-08/S-09: die drei selbst-bezogenen filter auf EIN stück
+        sichtbaren text (stream-delta ODER aufgegangener deferred-puffer).
+
+        Zwei ecken, die diese kette erst sicher machen:
+
+        1. `require_complete_sentence=True` in beiden fällen: im stream ist
+           das stück ein delta, am publish-punkt ein puffer, der mitten im
+           satz enden kann. Ein satzweiter schnitt darauf erzeugt ein halbwort
+           — live gemessen: '…fuer Dateisystem nutze ich jetzt `bash`:' wurde
+           zu '`isystem nutze ich jetzt `bash`:'.
+        2. die rand-whitespace bleibt erhalten. Alle drei filter enden auf
+           `.strip()` (`strip_protocol_meta_narration` tut das sogar OHNE
+           muster-treffer); bei kleinen deltas sind das führungszeichen und
+           absatzumbrüche, die der client brauchte — derselbe fehler wie in
+           `test_self_steering_never_cuts_a_stream_delta_mid_sentence`
+           dokumentiert, nur dass die gegenprobe dort `stripped == stripped`
+           prüfte und ihn deshalb nie sah. Deshalb: kern filtern, ränder
+           zurückhängen, und wenn nichts getroffen hat den text UNVERÄNDERT
+           zurückgeben.
+
+        Gibt "" zurück (nicht whitespace), wenn nichts übrig bleibt, damit der
+        aufrufer keinen leeren content-part an den client gibt (S-06).
+        """
+        if not text:
+            return text
+        core = text.strip()
+        if not core:
+            return ""
+        filtered = strip_protocol_meta_narration(core)
+        filtered = strip_self_steering(filtered, require_complete_sentence=True)
+        filtered = strip_invented_limit_claim(filtered, require_complete_sentence=True)
+        if not filtered.strip():
+            return ""
+        if filtered == core:
+            return text
+        lead = text[: len(text) - len(text.lstrip())]
+        trail = text[len(text.rstrip()) :]
+        return lead + filtered + trail
 
     @staticmethod
     def _deferred_text_is_publishable(text: str) -> bool:
