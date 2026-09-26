@@ -1625,6 +1625,12 @@ class GLMEventAccumulator:
     _server_side_tool_call_signatures: set[str] = field(default_factory=set)
     # T-04: wie oft dieselbe signatur in diesem turn schon vorkam
     _server_side_signature_counts: dict[str, int] = field(default_factory=dict)
+    # T-25 (live 2026-09-26): der loop guard hat bisher OHNE rueckmeldung
+    # verworfen. Das modell zaehlte 10 calls und 2 ergebnisse und schloss
+    # daraus auf ein erfundenes "tool-limit (8/8 runden) erreicht" — dann
+    # aufgibt und verlangt einen neustart. Zaehler fuer die notice.
+    loop_guard_dropped_count: int = 0
+    loop_guard_dropped_tools: list[str] = field(default_factory=list)
     # T-20: laufender zustand des bereits gesendeten texts. Aus einem
     # wachsenden praefix-STRING wurde das: der originalansatz pruefte und
     # kopierte den GESAMTEN text bei jedem part (O(n) je part, also
@@ -2099,6 +2105,17 @@ class GLMEventAccumulator:
                                             tool_name,
                                             repeat,
                                         )
+                                    # T-25: der verworfene call muss fuer das
+                                    # modell sichtbar sein, sonst zaehlt es
+                                    # calls gegen ergebnisse und erfindet ein
+                                    # limit. Gezaehlt wird der NATIVE name
+                                    # (vor dem mapping), sonst meldet die
+                                    # notice "read" und das modell sucht den
+                                    # fehler im falschen werkzeug.
+                                    self.loop_guard_dropped_count += 1
+                                    native_name = str(tool_calls_data.get("name", "")).strip() or tool_name
+                                    if native_name not in self.loop_guard_dropped_tools:
+                                        self.loop_guard_dropped_tools.append(native_name)
                                     continue
                                 self._server_side_signature_counts[signature] = repeat + 1
                                 self._server_side_tool_call_signatures.add(signature)

@@ -291,6 +291,32 @@ def _blocked_notice_text(names: object) -> str:
     )
 
 
+def _loop_guard_notice_text(dropped_count: int, tool_names: object) -> str:
+    """T-25 (live 2026-09-26): sichtbarer hinweis auf LOOP-GUARD-DROPS.
+
+    Der Guard begrenzt bewusst identische native calls pro Turn (zwei
+    erlaubt, der Rest wird verworfen, damit keine Entartung 36 Ausfuehrungen
+    erzeugt). Ohne Rueckmeldung sieht das Modell nur weniger Ergebnisse als
+    Aufrufe und schliesst auf ein nicht existentes Limit — live gehaessert:
+    "Tool-Limit (8/8 Runden) erreicht", Aufgabe abgebrochen, Neustart
+    verlangt. Der Text nennt deshalb die WAHRE Begruendung und verbietet die
+    Limits-Narrative ausdruecklich."""
+    if dropped_count <= 0:
+        return ""
+    if isinstance(tool_names, (list, tuple, set)):
+        cleaned = [str(part).strip() for part in tool_names if str(part).strip()]
+    else:
+        cleaned = []
+    subject = ", ".join(cleaned) if cleaned else "tool"
+    return (
+        f"[loop_guard_notice] {dropped_count} identical {subject} call(s) in this turn were "
+        "dropped by a loop guard — they were NOT executed and there is NO tool limit or "
+        "round limit. The identical call already ran; read its result. If it failed, fix the "
+        "argument (for example the path) instead of repeating the same call, and never end "
+        "the task by claiming a limit was reached."
+    )
+
+
 # C-18: die GLM-Web-Chat-API kennt KEINE sampling-parameter. Ein
 # client, der `temperature`/`top_p` sendet, erwartet eine Wirkung, die es
 # technisch nicht geben kann. Statt den wunsch zu erfuellen (erfundene
@@ -696,6 +722,10 @@ class GLMWebClient:
                                 if isinstance(message, dict):
                                     existing = str(message.get("content") or "")
                                     message["content"] = f"{notice}\n{existing}" if existing else notice
+                    # T-25: auch der loop guard ist ein abgelehnter aufruf und
+                    # muss sichtbar sein — sonst zaehlt das modell calls
+                    # gegen ergebnisse und erfindet ein limit.
+                    self._inject_loop_guard_notice(result, accumulator)
                     return result, accumulator.conversation_id
                 if retry_exc is None:
                     break
@@ -738,7 +768,42 @@ class GLMWebClient:
                 )
             conversation_slot.__exit__(None, None, None)
             lease.release()
-        return accumulator.build_response(), accumulator.conversation_id
+        # T-25: der pfad fuer einen turn OHNE terminalen upstream-status
+        # (abgeschnitten, kein `finish`) hatte die notice vorher nicht —
+        # obwohl er der fall ist, in dem dem modell die erklaerung am
+        # meisten fehlt: es hat calls gesendet und keine ergebnisse
+        # gesehen. Also auch hier.
+        final_result = accumulator.build_response()
+        self._inject_loop_guard_notice(final_result, accumulator)
+        return final_result, accumulator.conversation_id
+
+    def _inject_loop_guard_notice(self, result: dict[str, object], accumulator: object) -> None:
+        """T-25: loop-guard-drops fuer das modell sichtbar machen (non-stream).
+
+        In-place am fertigen response-dict, damit beide non-stream-returns
+        (terminaler status und abgeschnittener turn) identisch behandelt
+        werden. Ohne Signal zaehlt das modell 10 calls gegen 2 ergebnisse
+        und schliesst auf ein erfundenes limit (live 2026-09-26)."""
+        dropped = int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0)
+        if dropped <= 0:
+            return
+        notice = _loop_guard_notice_text(
+            dropped, getattr(accumulator, "loop_guard_dropped_tools", [])
+        )
+        if not notice:
+            return
+        self.logger.warning(
+            "Turn dropped %s identical native call(s) via the loop guard; telling the model the real reason",
+            dropped,
+        )
+        choices = result.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if not isinstance(message, dict):
+            return
+        existing = str(message.get("content") or "")
+        message["content"] = f"{notice}\n{existing}" if existing else notice
 
     def generate_images(self, payload: dict[str, object]) -> dict[str, object]:
         lease = self.request_queue.acquire(f"image:{payload.get('model', self.config.glm_image_model_name)}")
@@ -1134,6 +1199,31 @@ class GLMWebClient:
                                 ),
                                 *finalize_chunks,
                             ]
+                    # T-25 (stream): der loop guard verwirft identische
+                    # native calls ohne rueckmeldung. Das modell zaehlt dann
+                    # calls gegen ergebnisse, erfindet ein limit und bricht
+                    # ab (live: "Tool-Limit (8/8 Runden) erreicht").
+                    # Also dieselbe behandlung wie ein abgelehnter call.
+                    loop_notice = _loop_guard_notice_text(
+                        accumulator.loop_guard_dropped_count,
+                        accumulator.loop_guard_dropped_tools,
+                    )
+                    if loop_notice and not blocked:
+                        self.logger.warning(
+                            "Stream turn dropped %s identical native call(s) via the loop guard; "
+                            "telling the model the real reason",
+                            accumulator.loop_guard_dropped_count,
+                        )
+                        loop_delta: dict[str, object] = {"content": loop_notice}
+                        if not accumulator.emitted_role:
+                            loop_delta = {"role": "assistant", "content": loop_notice}
+                            accumulator.emitted_role = True
+                        finalize_chunks = [
+                            accumulator._chunk_json(
+                                {"choices": [{"index": 0, "delta": loop_delta, "finish_reason": None}]}
+                            ),
+                            *finalize_chunks,
+                        ]
                     if turn_blocked_names and not turn_has_valid_calls and not blocked:
                         blocked_names_text = ", ".join(sorted(set(turn_blocked_names)))
                         self.logger.warning(
