@@ -116,8 +116,8 @@
           "name": "GLM-5.3",
           "reasoning": true,
           "limit": {
-            "context": 128000,
-            "output": 32768
+            "context": 1000000,
+            "output": 131072
           },
           "options": {
             "reasoningEffort": "max"
