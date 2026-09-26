@@ -15,12 +15,6 @@ alias ll='ls -lah'
 alias gdrive='bash /workspaces/MAIN/infra/scripts/gdrive-backup.sh'
 alias ocver='bash /workspaces/MAIN/infra/scripts/opencode-version.sh'
 alias csecret='bash /workspaces/MAIN/infra/scripts/codespace-secret.sh'
-# Modell-Index. free-models vereint Cline und NVIDIA NIM: zeigt nur kostenlose
-# Modelle der letzten 14 Tage, neueste zuerst. cline-only sagt je Modell, ob es
-# ueber die API (also in opencode) nutzbar ist oder nur in der Cline-CLI.
-alias free-models='python3 /workspaces/MAIN/infra/scripts/free-models.py'
-alias cline-models='python3 /workspaces/MAIN/infra/scripts/free-models.py cline'
-alias nvidia-models='python3 /workspaces/MAIN/infra/scripts/free-models.py nvidia'
 
 # Autosave-Daemon: status / start / stop / log
 autosave() {
@@ -131,7 +125,7 @@ config-watchdog() {
 # Praktisch beim Umzug: zeigt was NICHT im Git ist und damit verloren ginge
 landscape-diff() {
   echo "== Nur noch im Secrets-Bundle (config/secrets.enc), nicht im Git: =="
-  echo "   ~/.config/landscape/pat, nvidia-nim.key, xinjianya.key, cline.key, chatglm-refresh-token"
+  echo "   ~/.config/landscape/pat, xinjianya.key, chatglm-refresh-token"
   echo "   ~/.local/share/opencode/auth.json"
   echo "   .env"
   echo ""

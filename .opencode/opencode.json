@@ -17,50 +17,6 @@
         }
       }
     },
-    "nvidia": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "NVIDIA NIM",
-      "whitelist": [
-        "z-ai/glm-5.3"
-      ],
-      "options": {
-        "baseURL": "https://integrate.api.nvidia.com/v1",
-        "apiKey": "{file:~/.config/landscape/nvidia-nim.key}"
-      },
-      "models": {
-        "z-ai/glm-5.3": {
-          "name": "GLM-5.3",
-          "reasoning": true,
-          "tool_call": true,
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "options": {
-            "reasoningEffort": "max"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "max": {
-              "reasoningEffort": "max"
-            }
-          },
-          "limit": {
-            "context": 1048576,
-            "output": 131072
-          }
-        }
-      }
-    },
     "xinjianya": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "XinJianYa (newapi)",
@@ -188,52 +144,6 @@
             "context": 100000,
             "output": 16384
           }
-        }
-      }
-    },
-    "cline": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Cline",
-      "whitelist": [
-        "stealth/pixel-canary",
-        "stealth/space-bunny-alpha"
-      ],
-      "options": {
-        "baseURL": "https://api.cline.bot/api/v1",
-        "apiKey": "{file:~/.config/landscape/cline.key}"
-      },
-      "models": {
-        "stealth/pixel-canary": {
-          "name": "Pixel Canary (free)",
-          "reasoning": true,
-          "tool_call": true,
-          "options": {
-            "reasoningEffort": "xhigh"
-          },
-          "variants": {
-            "none": {
-              "reasoningEffort": "none"
-            },
-            "minimal": {
-              "reasoningEffort": "minimal"
-            },
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "xhigh": {
-              "reasoningEffort": "xhigh"
-            }
-          }
-        },
-        "stealth/space-bunny-alpha": {
-          "name": "Space Bunny Alpha (free)",
-          "tool_call": true
         }
       }
     },

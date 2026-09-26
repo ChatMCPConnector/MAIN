@@ -29,9 +29,7 @@ KEYDIR="$HOME/.config/landscape"
 
 # datei|provider|endpoint|modell  (Trenner "|" — URLs enthalten ":")
 KEYS=(
-  "nvidia-nim.key|nvidia|https://integrate.api.nvidia.com/v1|z-ai/glm-5.3"
   "xinjianya.key|xinjianya|https://xn--kiv260fv3i.cn/v1|gpt-5.6-sol"
-  "cline.key|cline|https://api.cline.bot/api/v1|stealth/pixel-canary"
 )
 
 # Dateien, die opencode.json per {file:...} referenziert. Muss synchron zu

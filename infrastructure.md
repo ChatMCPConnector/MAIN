@@ -21,7 +21,7 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau), autosave-daemon.sh (30-Min-Auto-Commit+Push), proxy-watchdog.sh |
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
-| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, free-models.py, validate-revision.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
+| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, validate-revision.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
 
 | `.env` `.runtime/` | GITIGNORED — Klartext-Secrets (.env), Browser-Profil, Runtime (nie committen) |
@@ -42,9 +42,7 @@ Autostart). Danach:
 Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 `secrets`, `keys` (status/doctor/restore), `ports`, `quota`, `st`, `ll`, `autosave` (status/start/stop/log),
 `config-watchdog` (status/start/stop/log), `landscape-diff`, `ocver`
-(opencode-Versionspin: check/latest/bump/install), `csecret` (Codespaces-Secrets),
-`free-models` (kostenlose Modelle von Cline + NVIDIA NIM, letzte 14 Tage),
-`cline-models`, `nvidia-models` (jeweils auf einen Anbieter festgelegt).
+(opencode-Versionspin: check/latest/bump/install), `csecret` (Codespaces-Secrets).
 
 ## Enthalten
 
@@ -71,61 +69,6 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
   Entweder-oder gegen Copy/Paste, umschaltbar mit
   `FREEBUFF_NO_PTY_FILTER=1 freebuff`. Details: „Maus, Copy/Paste & Scrollen
   in TUIs".
-- `infra/scripts/free-models.py`: kostenlose Modelle von **Cline und NVIDIA
-  NIM** in einem Skript, zentrale Funktion `fetch_models()`, Aliase
-  `free-models` (beide), `cline-models`, `nvidia-models`. Default: nur kostenlose
-  Modelle der **letzten 14 Tage**, neueste zuerst; `--all` hebt beide Filter auf,
-  `--days N` verstellt das Fenster (`--days 0` schaltet es ab). Aufruf
-  `free-models [alle|cline|nvidia]`.
-
-  Die beiden Anbieter haben völlig verschiedene Abrufwege — Cline ist eine
-  JSON-API, NVIDIA nur HTML-Scraping über `build.nvidia.com` (`models.md` +
-  `nimType`-Attribute, mit `updated` als einziger belastbarer Datumsquelle, weil
-  die integrate-API nur ein Dummy-`created` liefert). Beides in eine Funktion zu
-  zwingen hieße, den billigen JSON-Abruf mit dem teuren Scraping zu verheiraten;
-  deshalb ist nur die *Antwortform* normalisiert, nicht der Abruf. Getrennte
-  Caches mit unterschiedlichen Haltezeiten: `~/.cache/nvidia-models-cache.json`
-  (Modellseiten 24 h) und `~/.cache/cline-models-cache.json` (Probes 1 h,
-  `first_seen` ungekürzt). Beide Modelllisten werden immer frisch geholt, weil
-  Modelle rotieren und ein Cache neue Angebote tagelang unterschlüge.
-
-  **Cline — die Verfügbarkeitsfrage, die sonst niemand beantworten kann:**
-  `stealth/*` geht über die Cline-API (in opencode nutzbar), `cline-free/*`
-  antwortet `403 only available via Cline product surfaces` und ist auf
-  Cline-CLI/IDE beschränkt — in `opencode.json` nicht konfigurierbar, egal wie
-  man es einträgt. Namen ähnlich, Verfügbarkeit völlig verschieden. Der Probe
-  misst pro Modell API-Erreichbarkeit, Tool-Call und echte Kosten (`usage.cost`)
-  und gleicht mit der Whitelist in `opencode.json` ab. **Umfang bewusst nur der
-  Cline-Free-Block** (Promotions-Modelle, die in der CLI als FREE markiert sind)
-  — nicht die 17 `:free`-Modelle des Katalogs, die ebenfalls 0 USD kosten, aber
-  OpenRouter-Passthrough sind, bei praktisch jedem Anbieter als Nemotron-Version
-  dauerhaft verfügbar sind und sich deshalb nicht sinnvoll nach „neu" filtern
-  lassen.
-
-  Spalten `seit`/`Alter`/`Quelle` beantworten „wie lange gibt es das Modell
-  schon". Für NVIDIA ist das das `updated`-Datum aus dem Frontmatter, also ein
-  echtes Datum. Für Cline ist die Lage schlechter: Cline führt `created` nur für
-  **1 von 6** Free-Modellen (die `cline-free/*` stehen in keinem Katalog), also
-  hält das Skript eine `first_seen`-Registry, die im Gegensatz zu den Probes
-  nicht altert und das Verschwinden eines Modells übersteht. Quelle in der
-  Ausgabe unterscheidbar: `Cline`/`NVIDIA` = herstellerseitig belegt,
-  `erstmals` = von uns beim ersten Lauf notiert, also „seit wann **wir** es
-  kennen", nicht „seit wann es existiert". 14 statt 7 Tage, weil manche Promotions
-  rund zwei Wochen laufen — ein kürzeres Fenster blendet Modelle aus, die noch
-  aktiv sind. Im Default-Modus (nur nutzbar) entfallen Status- und Cost-Spalte,
-  weil sie dort in jeder Zeile dasselbe gesagt hätten. **`--emit-config` rechnet
-  bewusst auf dem Stand vor dem Altersfilter** — ein nutzbares, aber älteres
-  Modell ist in opencode weiterhin nutzbar und muss weiterhin vorgeschlagen
-  werden; der Altersfilter ist eine Lesehilfe, keine Nutzungsgrenze. Ohne Key
-  geht `--no-probe` (nur Liste, ohne LLM-Calls).
-
-  **`--api` bei NVIDIA ist der Abgleich gegen die integrate-API** und deckt eine
-  Lücke auf, die der Doku-Index nicht zeigt: von 41 als free markierten
-  NVIDIA-Modellen waren live nur **7** abrufbar, **34** stehen nur in der
-  Dokumentation. Das FREE-Flag aus dem Index sagt also nichts darüber aus, ob
-  ein Modell wirklich rufbar ist — deshalb ist die Spalte `live` per `--api`
-  zuschaltbar und bleibt im Default aus, um die Ausgabe nicht zu überladen.
-
 ## Secrets-Modell (bewusst: Komfort > Sicherheit)
 
 Repo ist shared für mehrere **eigene** Accounts. Automatik hat Vorrang vor
@@ -136,7 +79,7 @@ Secret-Schutz-Purismus:
   Entschlüsselungswort — nie ein Secret/PAT als Passphrase zweckentfremden
   (der alte PAT wurde dadurch geleakt und von GitHub revoked).
 - `config/secrets.enc` (+ Manifest): verschlüsseltes Bundle mit
-  `pat`, `nvidia-nim.key`, `xinjianya.key`, `cline.key`, `antigravity-oauth_creds.json`,
+  `pat`, `xinjianya.key`, `antigravity-oauth_creds.json`,
   `chatglm-refresh-token`, `env`, `opencode-auth.json`, `rclone.conf`,
   `freebuff-credentials.json` → landen beim Unlock unter
   `~/.config/landscape/`, `~/.local/share/opencode/auth.json`, `.env`,
@@ -174,7 +117,7 @@ Secret-Schutz-Purismus:
   deshalb wird der Ambient-Token bevorzugt und ein nicht lesbarer Scope **nicht
   geraten**, sondern mit Fehler abgebrochen (sonst würde der PUT den Scope
   stillschweigend auf ein Repo zurücksetzen).
-- NVIDIA-/XinJianYa-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` und kommen über das Bundle in jeden neuen Codespace. `glm2api` nutzt lokal `local` als Platzhalter; TokenRouter und Antigravity enthalten weiterhin getrackte Literalwerte (siehe `Revision.md`, `SEC-02`).
+- XinJianYa-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` und kommen über das Bundle in jeden neuen Codespace. `glm2api` nutzt lokal `local` als Platzhalter; TokenRouter und Antigravity enthalten weiterhin getrackte Literalwerte (siehe `Revision.md`, `SEC-02`).
 - **Start-Garantie:** eine fehlende `{file:...}`-Referenz lässt opencode
   *komplett* nicht starten (`Configuration is invalid … bad file reference`).
   Deshalb legt `infra/scripts/keys.sh ensure` jede referenzierte Key-Datei als
@@ -192,11 +135,8 @@ Secret-Schutz-Purismus:
    2026-09-26): (a) **Cloudflare 403 HTML** bei `xinjianya` — der Bot-Schutz
    filtert den TLS-Fingerprint von `curl`, nicht den von opencode; der Key
    funktioniert, `opencode run --model xinjianya/gpt-5.6-sol` liefert Antwort
-   (2026-09-26 verifiziert). (b) **TIMEOUT bei `nvidia`** — NIM-Kaltstarts
-   schwanken (57 s bis 91 s gemessen), weshalb `PROBE_TIMEOUT_SECONDS` auf 180 s
-   steht; die Meldung `TIMEOUT/KEIN KONTAKT` bedeutet also "langsamer als 180 s",
-   nicht "tot". Im Zweifel `opencode run --model <provider>/<modell>` — nur das
-   beweist Nutzbarkeit.
+    (2026-09-26 verifiziert). Im Zweifel `opencode run --model
+    <provider>/<modell>` — nur das beweist Nutzbarkeit.
 
 
 ## opencode-Konfiguration (`.opencode/`)
@@ -205,9 +145,7 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 
 | Provider | Modelle | Auth |
 |---|---|---|
-| nvidia | GLM 5.3 (1M/128K, Text, Reasoning) | nvidia-nim.key |
 | xinjianya | gpt-5.6-sol | xinjianya.key |
-| **cline** | stealth/pixel-canary, stealth/space-bunny-alpha (beide $0, Tool-Call verifiziert) | cline.key |
 | **glm2api** | glm-5.3 | lokal, Port 8001, kein Key |
 | **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
 
@@ -379,8 +317,8 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   - **Keine API für opencode:** es gibt keinen OpenAI-kompatiblen Endpoint und
     keinen Headless-Modus (einziges CLI-Kommando ist `login`); die interne
     `codebuff.com/api/v1/freebuff/session`-Admission wäre ein Shim, kein Weg.
-    Für gratis-Modelle in opencode bleiben die BYOK-Pools (Groq, OpenRouter
-    `:free`, NVIDIA NIM, Z.ai GLM-Flash, Cline-`stealth/*`).
+     Für gratis-Modelle in opencode bleiben die BYOK-Pools (Groq, OpenRouter
+     `:free`, Z.ai GLM-Flash).
   - **Copy/Paste wie opencode `mouse: false`:** Freebuff (opentui) schaltet beim
     Start Mouse-Reporting ein (`CSI ? 1000/1002/1003/1006/1015/1016 h`) — danach
     ist die native Textauswahl des Terminals tot, man kann nichts markieren und
@@ -698,6 +636,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.
 
 - 2026-09-26: **glm2api war im echten Betrieb kaputt: ein Tool-Call endete je nach Zerschnittenheit des Upstream-Texts als `stop` oder als `error` — und die Abschluss-Warnung dokumentierte das Gegenteil des Messwerts.** Anlass war die Übergabe aus der Debug-Session (`/workspaces/cline/handoff.md`), die „718 Tests grün" meldete; gemessen waren **716 + 2 rot**, und `git bisect` über `c8135d9..HEAD` traf den S-09-Commit `4af494e` selbst als ersten schlechten. **Befund 1:** der neue Narration-Holdback fraß auch das Werkzeug-Protokoll (`tool_calls` stand in seinem Auslöser-Muster), der Parser sah den Aufruf erst im `finalize`, und die Einstufung „unbrauchbarer Aufruf" (T-06) war da schon entschieden — `{"tool_calls":[{"name":"read","arguments":{}}]}` endete als leere, erfolgreiche Antwort (`stop`) statt als `error`. **Befund 2 (älter, schwerer):** die Abschluss-Einstufung stützte sich auf `dropped_call_count`, und der Zähler zählt *Teil-Parse-Versuche*, nicht unbrauchbare Aufrufe — er hängt an der Zerschnittenheit (gemessen: derselbe gesperrte Aufruf ergibt Chunk 100 → 1, Chunk 3 → 4, Chunk 1 → 0). Folge: ein **gesperrter** Aufruf, der über mehrere Deltas kam, endete in 9 von 15 Chunk-Größen und in **beiden** Abschluss-Pfaden als `error` — also als vermeintlicher Stream-Fehler, den der echte Client mit 5-Minuten-Backoff endlos wiederholt (der Fall, für den `c8135d9` den `stop` eingeführt hatte). Entscheidend ist, dass der Upstream-ChatGLM-Text live in **4–8-Zeichen-Teilen** ankommt; die Fehlerklasse ist im Normalbetrieb also der Regelfall, nicht die Ausnahme. **Fix:** Markup wird vor dem Narration-Muster ausgeschlossen (`contains_tool_markup`), und entschieden wird am **Text** des Turns statt am Parser-Zustand (`_text_attempted_tools`): erlaubter Name → `error`, nur gesperrte Namen → `stop`, kein Name lesbar (abgeschnitten) → `error`, kein Protokoll im Text → alte Rechnung über `_policy_dropped_call_count`. **Zweiter Fund im selben Durchgang, Betriebskonfiguration:** vier Keys in allen drei ausgelieferten `.env`-Dateien wirkten nicht (`GLM_REFRESH_TOKENS`, `GLM_QUEUE_WAIT_TIMEOUT`, `REQUEST_TIMEOUT`, `REQUEST_SOCKET_TIMEOUT` — die letzten beiden wurden nicht einmal gemeldet und hatten exakt den Standardwert), und sechs Keys standen doppelt. `parse_dotenv` ließ still den letzten Eintrag gewinnen; beim Korrigieren entstand dadurch in der echten `.env` eine leere zweite `GLM_REFRESH_TOKEN=`, die den echten Token verdrängte — **der Dienst startete nicht mehr** („kein ChatGLM-Konto konfiguriert"), bei intakter Datei. Dublette werden jetzt mit Zeilennummern gemeldet (ohne den Wert zu nennen, das hätte den Refresh-Token ins Log geschrieben), die vier Tot-Keys sind aus allen drei Dateien raus und über `_CONFIG_KEY_KNOWN_TYPOS` jetzt *laut* statt still. Verifiziert: **788 Tests grün** (70 neue in `test_translator.py`, 11 in `test_config.py`), Gegenprobe gegen den Vorher-Stand — 20 neue Tests schlagen gegen `4af494e~1` fehl, 12 gegen `4af494e` — und live gegen den echten Proxy: Neustart sauber (`health` ok, keine `IGNORED`-/Dublett-Warnung), Textantwort `stop`, Tool-Aufruf non-stream **und** stream mit `finish_reason: tool_calls` und `read {"filePath":"/etc/hostname"}`. Ein Live-Lauf endete mit `error`, weil das Modell sein eigenes Protokoll abgeschnitten hat (Roh-SSE `{"tool_calls":[{"name":"read","arguments":{"filePath`) — Modellverhalten, korrekt eingestuft. Doku in `llm-proxies/glm2api/optimierung.md` THEMA 8 (S-08/S-09/Nachtrag) und THEMA 9.
 - 2026-09-26: **`infra/scripts/glm2api.sh` ohne `setsid` — der Proxy bekam SIGTERM mitten im Stream, wenn ein Agent-Tool-Call in den Timeout lief.** Der Server blieb in der Prozessgruppe des aufrufenden Shells; lief ein Tool-Call in den Timeout, wurde er mitten in der Antwort beendet. Zweimal gemessen (17:47:15 und 19:25:19), jeweils Session abgerissen. **Das erklärt die hängengebliebenen ChatGLM-Conversations:** das Löschen sitzt im `finally` des Request-Handlers und lief nicht mehr mit — auf chatglm.cn blieben tote Gesprächshüllen zurück. `start-glm2api.sh` (Watchdog-Pfad) machte es seit jeher richtig, die zwei Startwege waren nicht gleichwertig. Fix: `setsid bash -c 'echo $$ > PID.tmp; exec python main.py' & disown` — `setsid` liefert kein `$!`, deshalb schreibt das `bash -c` seine **eigene** PID in eine Temp-Datei, die dann umbenannt wird; dazu **Adoption** eines bereits laufenden Servers, sonst starten `restart` und der `proxy-watchdog` beide. Verifiziert: `sid` des Servers == eigene PID, Tool-Call lief in den Timeout, Server lebte.
