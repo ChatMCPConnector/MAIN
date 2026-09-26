@@ -44,6 +44,24 @@ else
 fi
 export PATH="$HOME/.opencode/bin:$PATH"
 
+# opencode muss auch in INTERAKTIVEN Shells im PATH sein, nicht nur in diesem
+# Skriptprozess. Der opencode-Installer ergänzt die Zeile in ~/.bashrc zwar
+# normalerweise selbst, das ist aber nicht garantiert (live am 2026-09-26 in einem
+# frischen Codespace: Binary installiert, `opencode` im Terminal trotzdem
+# "command not found"). Deshalb wird die Zeile hier idempotent selbst gesetzt —
+# unabhängig davon, was der Installer tut.
+PATH_MARKER="# MAIN-landscape opencode-path"
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  [ -f "$rc" ] || continue
+  grep -qF "$PATH_MARKER" "$rc" 2>/dev/null && continue
+  {
+    echo ""
+    echo "$PATH_MARKER"
+    echo "export PATH=\"\$HOME/.opencode/bin:\$PATH\""
+  } >> "$rc"
+  echo "    opencode-PATH in $(basename "$rc") ergaenzt."
+done
+
 # opencode Multi-Client Wrapper aktivieren (verhindert Session-Crashes bei parallelen Terminals)
 if [ -f "$HOME/.opencode/bin/opencode" ] && [ ! -f "$HOME/.opencode/bin/opencode-bin" ]; then
   mv "$HOME/.opencode/bin/opencode" "$HOME/.opencode/bin/opencode-bin"

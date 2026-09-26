@@ -73,18 +73,29 @@ Secret-Schutz-Purismus:
 - Codespaces-Secrets pro Account: `LANDSCAPE_PAT` (Git-Auth), `LANDSCAPE_PASSPHRASE` (optional).
   `LANDSCAPE_PASSPHRASE` muss der **Inhalt von `config/passphrase`** sein, nicht
   der PAT. Ist das Secret nicht gesetzt, greift der Repo-Fallback automatisch —
-  das Secret ist also Komfort, keine Voraussetzung. **Setzen per Skript statt Web-UI:**
-  `./infra/scripts/codespace-secret.sh set-passphrase` (Alias `csecret`) liest den
+  das Secret ist also Komfort, keine Voraussetzung. **Codespaces-Secrets sind
+  repo-scoped** (`visibility=selected`) und werden nur in Codespaces **dieses**
+  Repos injiziert. Für den Account-Wechsel wird der Codespace aber aus dem
+  **Fork** erstellt — und der Fork ist im Scope standardmäßig **nicht**
+  enthalten: live am 2026-09-26 geprüft, im Fork-Codespace waren *beide*
+  Variablen leer (es lief über Token-Datei und Repo-Fallback, also unauffällig,
+  aber ohne Git-Auth aus dem Secret). Nach dem Fork daher einmalig im UI
+  `github.com/settings/codespaces` → Secret → *Selected repositories* → Fork
+  nachtragen. Per API nicht möglich: der ambient Codespace-Token bekommt 403
+  (`not accessible by integration`), der Bundle-PAT 404. `csecret scope NAME
+  owner/name` versucht es und sagt dir, wenn es nicht geht.
+  **Setzen per Skript statt Web-UI:** `./infra/scripts/codespace-secret.sh set-passphrase` (Alias `csecret`) liest den
   Wert aus `config/passphrase`, verschlüsselt ihn libsodium-sealed-box mit dem
   Public Key aus `GET /user/codespaces/secrets/public-key` und legt ihn per
   `PUT /user/codespaces/secrets/…` mit erhaltenem Repo-Scope ab. Das eliminiert den
   Fehler, der zweimal passiert ist (2026-09-26 stand dort der PAT). Weitere
   Befehle: `csecret list` (alle Secrets inkl. Scope), `csecret set NAME DATEI`,
-  `csecret delete NAME`. **Token-Rechte (live geprüft):** der ambient
-  Codespace-Token darf alles; der Bundle-PAT darf public-key und list, liefert für
-  `…/repositories` aber `total_count: 0` — deshalb wird der Ambient-Token bevorzugt
-  und ein nicht lesbarer Scope **nicht geraten**, sondern mit Fehler abgebrochen
-  (sonst würde der PUT den Scope stillschweigend auf ein Repo zurücksetzen).
+  `csecret scope NAME owner/name`, `csecret delete NAME`. **Token-Rechte (live geprüft):** der ambient
+  Codespace-Token darf public-key/list/scope-put nicht (403), der Bundle-PAT darf
+  public-key und list, liefert für `…/repositories` aber `total_count: 0` —
+  deshalb wird der Ambient-Token bevorzugt und ein nicht lesbarer Scope **nicht
+  geraten**, sondern mit Fehler abgebrochen (sonst würde der PUT den Scope
+  stillschweigend auf ein Repo zurücksetzen).
 - NVIDIA-/XinJianYa-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` und kommen über das Bundle in jeden neuen Codespace. `glm2api` nutzt lokal `local` als Platzhalter; TokenRouter und Antigravity enthalten weiterhin getrackte Literalwerte (siehe `Revision.md`, `SEC-02`).
 - **Start-Garantie:** eine fehlende `{file:...}`-Referenz lässt opencode
   *komplett* nicht starten (`Configuration is invalid … bad file reference`).
@@ -385,6 +396,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **Frischer Codespace verifiziert: 20/20 grün — und der Test fand zwei echte Lücken (Secrets repo-scoped, opencode nicht im PATH).** Erster echter Test der Kette auf einem leeren Container, ausgelöst durch die Frage nach einem Account-Bann. Voraussetzungen waren zwei Hürden, die beide in der Doku stehen: Ein **User-Repo** lässt nur den Besitzer Codespaces erstellen (Kollaborator bekommt `you cannot create codespaces with that repository`), und **weder ambient Codespace-Token noch Bundle-PAT dürfen einen Codespace per API erzeugen** (403 bzw. 404) — Codespace-Erstellung geht nur über die Web-UI, Repo muss geforkt sein. Der Test lief auf einem Codespace aus dem Fork `tadeuslol/MAIN` mit `./infra/scripts/verify-codespace.sh` (neu, 20 read-only Checks inkl. echter LLM-Calls auf beiden Proxys): **20 PASS, 0 FAIL** — Secrets entschlüsselt, opencode-Pin konsistent, Server auf 4096, glm2api *und* antigravity mit realer Antwort, alle drei Daemons, Firefox, beide Drive-Generationen, Testsuite grün. Zwei Befunde, die nur ein echter Container zeigen konnte: **(a) Codespaces-Secrets sind repo-scoped.** Im Fork-Codespace waren `LANDSCAPE_PAT` und `LANDSCAPE_PASSPHRASE` **beide leer**, weil ihr `visibility=selected` nur `ChatMCPConnector/MAIN` umfasst. Unauffällig geblieben ist es nur, weil `auth.sh` über die Token-Datei aus dem Bundle pushen kann und `secrets.sh` über `config/passphrase` entschlüsselt — der Git-Auth-Pfad aus dem Secret fehlte trotzdem. Nach dem Fork also einmalig das Fork-Repo in den Secret-Scope nachtragen (UI; der `…/repositories`-PUT scheitert mit beiden verfügbaren Tokens). **(b) `opencode` war installiert, aber nicht im PATH des interaktiven Terminals** (`command not found`), obwohl der Checker über `~/.opencode/bin/opencode` grün ging. Ursache: `setup.sh` exportiert sein PATH nur im eigenen Prozess und verlässt sich für interaktive Shells auf den Installer, der die rc-Zeile nicht garantiert schreibt. Fix: `setup.sh` ergänzt die Zeile jetzt selbst, idempotent über einen Marker (`# MAIN-landscape opencode-path`) in `.bashrc`/`.zshrc` — in isoliertem Test-HOME geprüft (wird genau einmal geschrieben). Damit ist der Ersteindruck im Terminal nicht mehr `command not found`, was den Nutzer sonst direkt zum manuellen Nachinstallieren verleitet.
 
 - 2026-09-26: **`LANDSCAPE_PASSPHRASE` auf den echten Passphrasen-Wert gesetzt — per API, mit reproduzierbarem Skript.** Der Secret enthielt erneut den PAT (derselbe Fehler wie im Changelog-Eintrag vom 2026-09-26 weiter unten, zweite Wiederholung). Funktional war und ist es harmlos: `secrets.sh` verwirft PAT-Kandidaten und entschlüsselt über `config/passphrase` (40 B, im Repo) — beide Zustände liefern dieselbe Ausgabe, live gegengeprüft. Behoben wurde es trotzdem, weil ein falsches Secret Warnungen erzeugt und verschleiert, ob der Auto-Unlock über den ersten Kandidaten läuft. **Die Codespaces-Secrets sind per REST-API schreibbar** (`PUT /user/codespaces/secrets/{name}`) — im UI wäre das ein Copy-Paste mit unsichtbarem Newline-Risiko gewesen. GitHub erwartet libsodium-**Sealed-Box** (X25519, 32 rohe Bytes aus `GET …/public-key`); umgesetzt mit `nacl.public.SealedBox` über `uv run --with pynacl`, ohne dauerhafte Installation. **Drei Dinge, die dabei nicht funktioniert haben wie erwartet und die deshalb im Skript kommentiert stehen:** (a) `lsjson`-Kompakt-JSON — hier nicht relevant, aber dieselbe Klasse Fehler wie im gdrive-Fix; (b) **der Bundle-PAT darf `…/secrets/{name}/repositories` nicht** (live: `total_count: 0`, während public-key und list gehen) — der Script nimmt daher den ambienten Codespace-Token zuerst; (c) ein leerer Scope wird **nicht geraten**, sondern mit Fehler abgebrochen, weil der PUT sonst den Scope stillschweigend auf ein Repo zurücksetzt. Neubau der Chiffre vor dem PUT verifiziert (Selbsttest-Roundtrip mit eigenem Schlüssel, Chiffre 88 B = 40 + 48 Overhead). Neu: `infra/scripts/codespace-secret.sh` (Alias `csecret`) mit `list|set-passphrase|set NAME DATEI|delete NAME`; der Wert kommt immer aus `config/passphrase`, nie aus dem Kopf. Damit ist der Account-Wechsel in `infrastructure.md` als Befehlsfolge dokumentiert statt als Web-UI-Erinnerung. Verifiziert: `set-passphrase` lief live durch, `updated_at` aktualisiert, `visibility=selected` und Repo-Scope `ChatMCPConnector/MAIN` unverändert.
 

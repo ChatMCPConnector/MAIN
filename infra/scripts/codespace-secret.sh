@@ -115,12 +115,37 @@ cmd_delete() {
   ghc api --method DELETE "$API/$1" >/dev/null && echo "$1 gelöscht."
 }
 
+# Repo zum Secret-Scope hinzufuegen. Wichtig fuer den Account-Wechsel: Codespaces
+# werden ueber den FORK erstellt, und Codespaces-Secrets sind repo-scoped
+# (visibility=selected). Ohne dieses Hinzufuegen bekommt der Codespace im Fork
+# WEDER LANDSCAPE_PAT NOCH LANDSCAPE_PASSPHRASE (live geprueft 2026-09-26) — es
+# laeuft dann nur ueber den Repo-Fallback bzw. die Token-Datei.
+cmd_scope() {
+  local name="$1" slug="${2:-}" rid
+  [ -n "$slug" ] || slug="$(origin_slug)"
+  [ -n "$slug" ] || { echo "FEHLER: kein Repo angegeben (owner/name)." >&2; exit 1; }
+  rid="$(resolve_repo_id "$slug")"
+  [ -n "$rid" ] || { echo "FEHLER: $slug nicht lesbar." >&2; exit 1; }
+  if ! ghc api --method PUT "$API/$name/repositories/$rid" >/dev/null 2>&1; then
+    echo "FEHLER: $name -> $slug nicht per API moeglich." >&2
+    echo "       Live-Befund 2026-09-26: der ambient Codespace-Token bekommt 403" >&2
+    echo "       ('not accessible by integration'), der Bundle-PAT 404 — dieser" >&2
+    echo "       Endpunkt braucht ein Token mit Codespaces-Verwaltung." >&2
+    echo "       Also einmalig im UI: github.com/settings/codespaces -> Secrets ->" >&2
+    echo "       $name -> Selected repositories -> $slug hinzufuegen." >&2
+    exit 1
+  fi
+  echo "$name: $slug zum Scope hinzugefuegt."
+  ghc api "$API/$name/repositories" --jq '"  Scope jetzt: " + ([.repositories[].full_name] | join(", "))'
+}
+
 case "${1:-list}" in
   list)            cmd_list ;;
   set-passphrase)  cmd_set "LANDSCAPE_PASSPHRASE" "$REPO_ROOT/config/passphrase" ;;
   set)             shift
                    [ $# -ge 2 ] || { echo "Usage: $0 set NAME DATEI [--repo owner/name]"; exit 1; }
                    case "${3:-}" in --repo) [ $# -ge 4 ] || { echo "--repo braucht owner/name"; exit 1; }; cmd_set "$1" "$2" "$4" ;; "") cmd_set "$1" "$2" ;; *) echo "Unbekanntes Flag: $3"; exit 1 ;; esac ;;
+  scope)           shift; [ $# -ge 1 ] || { echo "Usage: $0 scope NAME [owner/name]"; exit 1; }; cmd_scope "$1" "${2:-}" ;;
   delete)          shift; [ $# -eq 1 ] || { echo "Usage: $0 delete NAME"; exit 1; }; cmd_delete "$1" ;;
-  *)               echo "Usage: $0 {list|set-passphrase|set NAME DATEI [--repo owner/name]|delete NAME}"; exit 1 ;;
+  *)               echo "Usage: $0 {list|set-passphrase|set NAME DATEI [--repo owner/name]|scope NAME [owner/name]|delete NAME}"; exit 1 ;;
 esac
