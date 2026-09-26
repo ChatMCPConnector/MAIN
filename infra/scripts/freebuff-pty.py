@@ -23,10 +23,11 @@ unveraendert zum Kind; SIGWINCH wird auf den pty durchgereicht.
 Nutzung: freebuff-pty.py -- <programm> [args...]
 Exit-Code = Exit-Code des Kindes.
 
-DEBUG: FREEBUFF_PTY_DEBUG=/pfad/debug.log schreibt zwei Dinge mit — was von der
-Tastatur zum Kind ging (das ist die Wirkung einer VS-Code-Keybinding) und welche
-Maus-Sequenzen der Filter entfernt hat (Beweis, dass er im Pfad ist). Nur zum
-Messen von „kommt die Taste ueberhaupt an"; normalerweise leer.
+DEBUG: FREEBUFF_PTY_DEBUG=/pfad/debug.log schreibt mit, welche Steuer- und
+Esc-Sequenzen vom Kind gelesen werden (das ist die Wirkung einer VS-Code-
+Keybinding) und welche Maus-Sequenzen der Filter entfernt hat (Beweis, dass er im
+Pfad ist). **Getippter Text wird bewusst nicht protokolliert**, nur seine
+Byte-Laenge (`<12B text>`) — der Log ist eine Diagnose, kein Mitschnitt.
 """
 import errno
 import fcntl
@@ -46,7 +47,28 @@ MOUSE_MODES = rb"(?:1000|1001|1002|1003|1005|1006|1015|1016)"
 MOUSE_RE = re.compile(rb"\x1b\[\?" + MOUSE_MODES + rb"[hl]")
 
 
+# "off"/"0"/leer = kein Log. Ohne diese Pruefung wuerde ein "off" als Dateiname
+# im Arbeitsverzeichnis landen statt abzuschalten.
 DEBUG_LOG = os.environ.get("FREEBUFF_PTY_DEBUG") or ""
+if DEBUG_LOG.lower() in ("off", "0", "none", "false"):
+    DEBUG_LOG = ""
+
+
+def summarize(data):
+    """Nur Steuer-/Esc-Sequenzen fuer die Diagnose, NIEMALS getippten Text.
+
+    Der Log soll beweisen, welche Taste angekommen ist — nicht den Inhalt
+    speichern. Alles Druckbare wird deshalb zu Laengenangaben zusammengefasst.
+    """
+    parts, buf = [], bytearray()
+    for chunk in re.findall(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[\]P][^\x07\x1b]*[\x07\x1b\\]|[\x00-\x1f\x7f]", data):
+        if buf:
+            parts.append(f"<{len(buf)}B text>")
+            buf = bytearray()
+        parts.append(chunk.decode("latin1").replace("\x1b", "ESC"))
+    if buf:
+        parts.append(f"<{len(buf)}B text>")
+    return " ".join(parts) if parts else f"<{len(data)}B>"
 
 
 def debug(msg):
@@ -170,7 +192,7 @@ def main(argv):
                 if data:
                     # Das ist die Sicht auf die Keybinding-Wirkung: was hier
                     # landet, hat das Kind als Tastendruck gelesen.
-                    debug(f" -> {data!r}")
+                    debug(f" -> {summarize(data)}")
                     try:
                         os.write(master, data)
                     except OSError:

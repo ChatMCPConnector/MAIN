@@ -67,6 +67,11 @@ fi
 # FREEBUFF_NO_PTY_FILTER=1 freebuff
 if [ -t 0 ] && [ -t 1 ] && [ "\${FREEBUFF_NO_PTY_FILTER:-0}" != "1" ] \\
    && command -v python3 >/dev/null 2>&1 && [ -f "\$pty_filter" ]; then
+  # Standardmaessig protokolliert der Filter, welche Esc-Sequenzen das Kind
+  # liest. Das beantwortet die Frage "kommt die Keybinding-Taste ueberhaupt an"
+  # ohne weiteres Raten. Getippter Text wird NICHT protokolliert (nur Laenge).
+  # Abschalten: FREEBUFF_PTY_DEBUG=off
+  export FREEBUFF_PTY_DEBUG="\${FREEBUFF_PTY_DEBUG:-/tmp/opencode/freebuff-keys.log}"
   exec python3 "\$pty_filter" -- node "\$launcher" "\$@"
 fi
 exec node "\$launcher" "\$@"
