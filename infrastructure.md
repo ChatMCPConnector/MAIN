@@ -358,24 +358,45 @@ Bann nicht mehr, genau dann wird das Backup gebraucht.
 
 Ein Codespace gehört zu Account+Repo+Branch, nicht übertragbar. Mitkommt 1:1
 alles gepushte. Im alten Codespace: `./infra/scripts/save.sh` (+ ggf.
-`./infra/scripts/secrets.sh lock`). Im neuen: Repo forken, Codespace bauen —
-Rest automatisch. Einmalig pro Account, **zwei Codespaces-Secrets**:
+`./infra/scripts/secrets.sh lock`).
 
-```bash
-# 1) PAT als Secret (Web-UI: GitHub → Settings → Codespaces → Secrets, Repo MAIN)
-#    Danach ist die Git-Auth in jedem neuen Codespace automatisch verdrahtet.
-# 2) Passphrase als Secret — per Skript, damit der Wert sicher aus dem Repo
-#    kommt und nicht aus dem Kopf:
-./infra/scripts/codespace-secret.sh set-passphrase
-./infra/scripts/codespace-secret.sh list          # Kontrolle: Name + Repo-Scope
-```
+**Im neuen Account ist der Fork Pflicht, nicht Option.** `ChatMCPConnector/MAIN`
+ist ein **User-Repo** (kein Org): dort darf nur der Besitzer Codespaces
+erstellen, ein Kollaborator mit Push bekommt `you cannot create codespaces with
+that repository`. Für den neuen Account heißt das:
 
-Schritt 2 ist optional (`config/passphrase` liegt im Repo und ist der Fallback),
-aber **wichtig als Gewohnheit**: der PAT ist keine Passphrase, und genau dieser
-Verwechslung sind 2026-09-26 schon zweimal passiert — einmal als Secret, einmal
-als `LANDSCAPE_PASSPHRASE`. Die Git-Identität des neuen Accounts entsteht
-automatisch aus dem PAT (`auth.sh setup`), der opencode-Pin ist im Repo
-(`ocver check`).
+1. **Fork anlegen** (Web-UI, 1 Klick) — der Fork ist das Repo, aus dem der
+   Codespace entsteht. Ohne Fork ist **kein** Codespace baubar.
+2. **Codespace bauen** — ebenfalls nur über die Web-UI. Per API geht es mit
+   keinem der verfügbaren Tokens: der ambient Codespace-Token bekommt 403
+   (`not accessible by integration`), der Bundle-PAT 404 (keine
+   `codespace`-Scope). Wer das automatisieren will, gibt dem Fine-grained-PAT in
+   den Einstellungen **Codespaces: Read and write**; der Token-Wert bleibt dabei
+   gleich, Bundle und Secret bleiben gültig.
+3. **Fork in den Secret-Scope nachtragen** (Web-UI,
+   `github.com/settings/codespaces` → Secret → *Selected repositories*).
+   Codespaces-Secrets sind repo-scoped: ohne diesen Schritt sind `LANDSCAPE_PAT`
+   und `LANDSCAPE_PASSPHRASE` im Fork-Codespace **leer**. Der Codespace läuft
+   dann trotzdem (Repo-Fallback `config/passphrase` + Token-Datei aus dem
+   Bundle), aber ohne den Git-Auth-Pfad aus dem Secret. **Nach jedem neuen Fork
+   wiederholen.**
+4. **Passphrase als Secret setzen** (optional, aber als Gewohnheit):
+   `./infra/scripts/codespace-secret.sh set-passphrase` — nimmt den Wert sicher
+   aus `config/passphrase` statt aus dem Kopf. Der PAT ist keine Passphrase, und
+   diese Verwechslung ist am 2026-09-26 schon zweimal passiert (einmal als
+   Secret, einmal als `LANDSCAPE_PASSPHRASE`).
+
+Die Git-Identität des neuen Accounts entsteht automatisch aus dem PAT
+(`auth.sh setup`), der opencode-Pin ist im Repo (`ocver check`).
+
+**Nachweis, dass die Kette steht:** `./infra/scripts/verify-codespace.sh`
+(20 read-only Checks inkl. echter LLM-Calls auf beiden Proxys, `--live` zusätzlich
+`keys.sh doctor`). Am 2026-09-26 in einem wirklich frischen Codespace aus einem
+Fork: **20 PASS, 0 FAIL** — inklusive Nachweis, dass `setup.sh` venv, `.env`,
+rclone und beide Proxys selbst gebaut und gestartet hat (Artefakt-mtimes ≈
+Codespace-Erstellung, Prozesslaufzeiten ≈ Uptime). Zwei Befunde kamen nur
+dadurch heraus: Secrets sind repo-scoped (siehe Schritt 3) und `opencode` war im
+interaktiven Terminal nicht im PATH (jetzt von `setup.sh` selbst gesetzt).
 
 Nicht mitkommen, aber rekonstruierbar: Browser-Profil, Ports.
 glm2api selbst kommt komplett mit (Code im Repo).
