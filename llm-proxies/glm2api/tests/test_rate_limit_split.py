@@ -130,16 +130,20 @@ def test_classify_upstream_throttle(payload, expected):
 @pytest.mark.parametrize(
     "payload,expected",
     [
-        ({"status": 10025, "message": "stream request error"}, True),
-        ({"status": 10040, "message": "context exceeded"}, True),
-        ({"status": 10062, "message": "upstream busy"}, True),
+        ({"error_code": 10025, "err_msg": "stream request error"}, True),
+        ({"error_code": 10040, "err_msg": "context exceeded"}, True),
+        ({"error_code": 10062, "err_msg": "upstream busy"}, True),
+        # der busy-code kommt im 429-body als `status`, im SSE-event als
+        # `error_code` — beide formen muessen als transient gelten
         ({"status": 10061, "message": "请等待其他对话生成完毕"}, True),
+        ({"error_code": 10061, "err_msg": "请等待其他对话生成完毕"}, True),
         # F-6: die drosselung ist NICHT transient. Waere sie es, naeme der
         # stream-retry sie auf und produzierte genau die sekundenschnellen
         # versuche, die das hier verhindern soll.
         ({"status": 10061, "message": "请求过于频繁，请稍后再试"}, False),
+        ({"error_code": 10061, "err_msg": "请求过于频繁"}, False),
         ({"status": 10061}, False),
-        ({"status": 99999, "message": "boom"}, False),
+        ({"error_code": 99999, "err_msg": "boom"}, False),
         ("kein payload", False),
     ],
 )
@@ -162,11 +166,12 @@ def test_rate_limit_backoff_verdoppelt_und_ist_gedeckelt():
 
     assert waits[0] == pytest.approx(30.0, abs=3.0)
     assert waits[1] == pytest.approx(60.0, abs=6.0)
-    # gedeckelt beim 8-fachen der basis (240s) — danach waechst nichts mehr
-    assert waits[-1] <= 240.0 * 1.1 + 0.01
     assert waits[2] == pytest.approx(120.0, abs=12.0)
-    # monoton steigend
-    assert waits == sorted(waits)
+    # ab dem vierten versuch ist die schranke erreicht (8x basis = 240s) und
+    # die wartezeit waechst nicht weiter — sonst wuerde ein request mit
+    # maximalem budget stundenlang auf einem gedrosselten konto stehen.
+    for wait in waits[3:]:
+        assert 240.0 <= wait <= 240.0 * 1.1
 
 
 def test_rate_limit_backoff_hat_keinen_jitter_nach_unten():
