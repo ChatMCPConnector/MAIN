@@ -208,7 +208,7 @@
           "reasoning": true,
           "tool_call": true,
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           },
           "variants": {
             "none": {
@@ -228,9 +228,6 @@
             },
             "xhigh": {
               "reasoningEffort": "xhigh"
-            },
-            "max": {
-              "reasoningEffort": "max"
             }
           }
         },

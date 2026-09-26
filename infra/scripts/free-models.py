@@ -79,6 +79,7 @@ Verwendung:
   free-models --all                  # alles, auch bezahlte/CLI-only
   free-models nvidia --api           # NVIDIA: Live-Check gegen die integrate-API
   free-models --emit-config          # Cline: Snippet fuer .opencode/opencode.json
+  free-models --emit-config --reasoning   # + geprueffte Reasoning-Varianten
   free-models --no-cache             # Cache ignorieren
   free-models -v                     # Details/Fehler
 """
@@ -130,6 +131,57 @@ CLINE_PROBE_TOKENS = 1024
 CLINE_PROBE_TOKENS_RETRY = 2048
 CLINE_RETRY_ON = ("empty response content", "inference request failed")
 CLINE_PROBE_TIMEOUT = 120
+
+# --------------------------------------------------------------------------
+# Reasoning-Stufen: welche sind fuer ein Modell ECHT, welche werden geklemmt?
+# --------------------------------------------------------------------------
+# FRAGE (2026-09-26):Fuer ein neues Cline-Modell soll opencode sofort die
+# richtigen Varianten bekommen. Dazu muss man unterscheiden können zwischen
+# "diese Stufe wird unterstützt" und "diese Stufe wird akzeptiert, aber
+# ignoriert" — ein Modell, das xhigh nicht kennt, nimmt den Wert trotzdem
+# an und verhaelt sich wie low. Beides sieht man in einem 200-Response nicht.
+#
+# WIRKUNG: ein normaler Token-Vergleich braucht dieselbe Denkaufgabe N-fach
+# (gemessen pixel-canary: 30-90 s pro Lauf, xhigh 90 s), das ist als
+# Schnellcheck unbrauchbar.
+#
+# LOESUNG — Cap-Probe, ein Request pro Stufe, und er ist schnell, WEIL er
+# scheitert: das Budget wird absichtlich so knapp gesetzt, dass ein
+# denkwilliges Modell es reisst. Reasoning-Modelle schreiben zuerst ins
+# Reasoning-Feld (siehe CLINE_RETRY_ON), also bleibt der Content leer und
+# Cline antwortet mit 500. Der Fehlerbild-Unterschied ist entscheidend:
+#   "empty response content" / "inference request failed" = Budget gerissen,
+#       das Modell WILL mehr Reasoning als der Cap erlaubt => Stufe ist echt
+#   alles andere (z. B. "failed to send request ... from Vercel") = transienter
+#       Gateway-Flake, den Cline auch ohne jede Aenderung sporadisch liefert
+#       (gemessen: xhigh und max je einmal 500, danach 200) => nicht werten
+#
+# Also: alle Stufen mit DEMSELBEN Cap. Was den Cap reisst, ist staerker als
+# was ihn passt. Eine geklemmte Stufe verhaelt sich wie eine niedrigere und
+# passt deshalb -> genau daran erkennt man sie.
+CLINE_REASON_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+CLINE_REASON_CAP = 256
+# Vorpruefung "denkt dieses Modell ueberhaupt?". Grosszuegiges Budget, damit
+# ein 500 nicht einfach ein zu knapper Cap ist; entscheidend ist nur, ob
+# reasoning_tokens > 0 herauskommen.
+#
+# WARUM DAS VORNOETIG IST: die Cap-Leiter allein ist nicht verlaesslich. An
+# stealth/space-bunny-alpha (kein Reasoning-Modell, reasoning_tokens immer 0)
+# lieferte derselbe Aufruf in zwei Laeufen einmal 500 "inference request
+# failed" und einmal 200 mit 0 Tokens — die 500er-Meldung ist also KEIN
+# Beweis fuer "will mehr Reasoning", sie kommt bei Cline auch sporadisch aus
+# dem Gateway. Die Fehlermeldung allein zu lesen wuerde space-bunny-alpha
+# faelschlich sechs Reasoning-Stufen andichten. Der einzige stabile
+# Unterschied ist der gemessene Wert: ein denkendes Modell liefert bei
+# ausgewoogenem Budget > 0 Reasoning-Tokens, ein nicht-denkendes exakt 0.
+CLINE_REASON_PRESEEN = 2048
+CLINE_REASON_PRESEEN_LEVEL = "high"
+CLINE_REASON_TASK = (
+    "A snail climbs a 10 m well. It climbs 3 m per day and slips back 2 m per "
+    "night. On which day does it reach the top? Then count how many distinct "
+    "arrangements of the letters in BANANA exist. Think step by step, then "
+    "answer with 'day=D arrangements=N'."
+)
 TOOL_SPEC = [{
     "type": "function",
     "function": {
@@ -344,6 +396,100 @@ def cline_probe(model_id, key, max_tokens=CLINE_PROBE_TOKENS):
     msg = choices[0].get("message", {}) if choices else {}
     return {"status": "ok", "tool": bool(msg.get("tool_calls")),
             "cost": res.get("data", {}).get("usage", {}).get("cost")}
+
+
+def cline_reason_cap_probe(model_id, level, key, cap=CLINE_REASON_CAP,
+                           _try=0):
+    """Eine Stufe mit absichtlich zu knappem Token-Budget prüfen.
+
+    -> {"verdict": "stark"|"passt"|"geklemmt"|"unbekannt", ...}
+
+    "stark"   = Cap gerissen, das Modell will mehr Reasoning => Stufe echt
+    "passt"   = 200, kam unter dem Cap durch
+    "geklemmt" = wie eine niedrigere Stufe verhalten bzw. nicht abweichend
+    "unbekannt" = nach Retry immer noch kein verwertbares Signal (Timeout,
+                 transienter Gateway-Flake)
+    """
+    payload = json.dumps({
+        "model": model_id,
+        "messages": [{"role": "user", "content": CLINE_REASON_TASK}],
+        "max_tokens": cap,
+        "reasoning_effort": level,
+    }).encode()
+    headers = {"Authorization": "Bearer " + key,
+               "Content-Type": "application/json"}
+    try:
+        res = json_request(CLINE_CHAT_URL, data=payload, headers=headers,
+                           timeout=CLINE_PROBE_TIMEOUT)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore")
+        if e.code == 500 and any(s in body for s in CLINE_RETRY_ON):
+            return {"verdict": "stark", "http": 500}
+        if _try == 0:
+            return cline_reason_cap_probe(model_id, level, key, cap, 1)
+        return {"verdict": "unbekannt", "http": e.code, "err": body[:80]}
+    except Exception as e:
+        if _try == 0:
+            return cline_reason_cap_probe(model_id, level, key, cap, 1)
+        return {"verdict": "unbekannt", "err": repr(e)[:80]}
+    usage = (res.get("data", {}) or {}).get("usage", {}) or {}
+    rt = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+    return {"verdict": "passt", "reasoning_tokens": rt}
+
+
+def cline_reason_levels(model_id, key, cap=CLINE_REASON_CAP):
+    """Welche reasoning_effort-Stufen sind fuer dieses Modell angelegt?
+
+    Leiter von oben nach unten mit einem festen Cap: die oberste Stufe, die
+    den Cap noch reisst, ist die belegte Obergrenze. Alles darunter passt
+    per Konstruktion und ist damit angelegt; alles darueber wird nicht weiter
+    geprueft, weil eine Stufe, die sich wie eine schwachere verhaelt, nicht
+    staerker sein kann als die gefundene Obergrenze.
+
+    ACHTUNG, was das nicht beweist: ob eine mittlere Stufe von einer anderen
+    unterschieden wird. Eine geklemmte mittlere Stufe verhaelt sich wie eine
+    niedrigere, passt also und wird als "angelegt" gemeldet. Das ist der
+    unkritische Fehlerfall — sie verhaelt sich harmlos wie eine niedrigere,
+    im Gegensatz zu einer toten Variante. Fuer den Nachweis der Echtheit
+    einzelner Stufen braucht es den teuren Token-Vergleich (30-90 s/Stufe),
+    den --reasoning-probe nicht liefert.
+
+    -> {"ok": [...staerkste_zuerst...], "cap": cap, "per_level": {...}}
+    """
+    per_level = {}
+    pre = cline_reason_cap_probe(model_id, CLINE_REASON_PRESEEN_LEVEL, key,
+                                 CLINE_REASON_PRESEEN)
+    if pre["verdict"] == "passt" and not pre.get("reasoning_tokens"):
+        return {"ok": [], "cap": cap, "per_level": per_level,
+                "note": f"kein Reasoning-Modell (0 Reasoning-Tokens bei "
+                        f"{CLINE_REASON_PRESEEN_LEVEL}/"
+                        f"{CLINE_REASON_PRESEEN})"}
+    for level in reversed(CLINE_REASON_LEVELS):
+        r = cline_reason_cap_probe(model_id, level, key, cap)
+        per_level[level] = r
+        if r["verdict"] == "unbekannt":
+            return {"ok": [], "cap": cap, "per_level": per_level,
+                    "note": f"{level}: kein Signal ({r.get('err','')})"}
+        if r["verdict"] == "stark":
+            # Obergrenze gefunden: alles Schwachere passt per Konstruktion.
+            below = [lv for lv in CLINE_REASON_LEVELS
+                     if CLINE_REASON_LEVELS.index(lv)
+                     <= CLINE_REASON_LEVELS.index(level)]
+            if below == ["none"]:
+                # Genau das ist KEIN Reasoning-Modell: `none` reisst den Cap
+                # nur, weil ohne Reasoning das komplette Budget in den
+                # Content geht und die Antwort dann nicht passt. Die
+                # hoeheren Stufen passen mit 0 Reasoning-Tokens, weil sie
+                # gar nicht denken. Ohne diese Umdeutung wuerde der
+                # Config-Emitter faelschlich "reasoning": true und eine
+                # sinnlose `none`-Variante schreiben.
+                return {"ok": [], "cap": cap, "per_level": per_level,
+                        "note": "kein Reasoning-Modell (0 Reasoning-Tokens "
+                                "auf allen Stufen)"}
+            return {"ok": below, "cap": cap, "per_level": per_level}
+    # Keine Stufe hat den Cap gerissen: Cap ist zu gross, Probe aussagelos.
+    return {"ok": [], "cap": cap, "per_level": per_level,
+            "note": f"keine Stufe riss den Cap={cap}; kleiner wiederholen"}
 
 
 def _load_cline_probes(fresh):
@@ -654,7 +800,7 @@ def render(rows, args):
         print(line)
 
 
-def emit_config(usable_all):
+def emit_config(usable_all, key=None, check_reasoning=False):
     missing = [r for r in usable_all if not r.get("configured")]
     if not missing:
         print("\n# alle nutzbaren Free-Modelle sind bereits konfiguriert",
@@ -670,8 +816,27 @@ def emit_config(usable_all):
     print("]")
     print("\n// und unter \"models\":", file=sys.stderr)
     for r in missing:
+        levels = None
+        if check_reasoning and key:
+            res = cline_reason_levels(r["id"], key)
+            levels = res["ok"] or None
+            if res.get("note"):
+                note(f"  {r['id']}: {res['note']}")
         print(f'"{r["id"]}": {{"name": "{r["desc"] or r["id"]}", '
-              f'"tool_call": true}},')
+              f'"tool_call": true'
+              + (', "reasoning": true' if levels else "") + '},')
+        if levels:
+            # Variants + Default. Default = oberste belegte Stufe, denn
+            # darunter zu laufen ist eine bewusste Entscheidung, alles
+            # darueber waere geraten.
+            top = levels[0]
+            print(f'  // reasoning-Effekt bis {top} belegt (Cap-Probe)')
+            print(f'  "options": {{"reasoningEffort": "{top}"}},')
+            print('  "variants": {')
+            for lv in reversed(levels):
+                print(f'    "{lv}": {{"reasoningEffort": "{lv}"}}'
+                      + ("," if lv != levels[-1] else ""))
+            print("  },")
     return 0
 
 
@@ -694,6 +859,12 @@ def main():
                     help="Cline: nur Liste, keine LLM-Calls (kein Key noetig)")
     ap.add_argument("--emit-config", action="store_true",
                     help="Cline: Snippet fuer .opencode/opencode.json")
+    ap.add_argument("--reasoning", action="store_true",
+                    help="Cline: Reasoning-Stufen je Modell per Cap-Probe "
+                         "ermitteln und als Varianten ausgeben")
+    ap.add_argument("--reasoning-cap", type=int, default=CLINE_REASON_CAP,
+                    metavar="TOKENS",
+                    help=f"Budget der Cap-Probe (Default: {CLINE_REASON_CAP})")
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
@@ -725,7 +896,9 @@ def main():
               f"{', '.join(f'{k} {v}' for k, v in sorted(by.items())) or '—'}. "
               f"Alles: --all", file=sys.stderr)
         render(shown, args)
-    return emit_config(usable_all) if args.emit_config else 0
+    return emit_config(usable_all, key=read_key("cline"),
+                       check_reasoning=args.reasoning) \
+        if args.emit_config else 0
 
 
 if __name__ == "__main__":
