@@ -247,17 +247,17 @@ Bann nicht mehr, genau dann wird das Backup gebraucht.
   funktionsfähige Kopie auf Drive. Restore: `gdrive restore` klont aus der
    Backup-Generation (Fallback current). Skip wenn kein neuer Commit seit
    letztem Backup (State-File `.runtime/gdrive-backup.last`).
-- **Drosselung (Default 6 h):** das Bundle enthält die komplette Historie
-  (~111 MB) und ändert sich bei **jedem** Commit — ein Inhalts-Vergleich greift
-  also nicht. Ohne Drosselung läuft bei jedem 30-Minuten-Autosave mit Änderungen
-  ein 111-MB-Upload (gemessen ~22 s, ~5 MB/s ≈ 18 min/Tag, ~5 GB/Tag), obwohl
-  der Schutzzweck Account-Bann/Repo-Löschung ist und GitHub die Commits längst
-  hat. `gdrive-backup.sh` prüft deshalb die mtime des State-Files und überspringt
-  den Upload innerhalb des Intervalls. **GitHub-Push bleibt bei jedem Save
-  unberührt** — gedrosselt ist nur der teure Drive-Upload.
-  `backup --force` umgeht die Drosselung, `GDrive_MIN_INTERVAL_MINUTES=0`
-  schaltet sie ab, `gdrive status` zeigt „Drosselung aktiv: vor N min".
-  Das Intervall hängt an der mtime des State-Files, nicht an dessen Inhalt.
+- **Keine Drosselung — bewusst.** Ein Zeitintervall zwischen den Backups wurde
+  implementiert und wieder verworfen: Bei 30-Minuten-Autosave bedeutet jeder
+  gemessene Upload von 111 MB (~22 s, ~5 MB/s) rund 18 min/Tag — vertretbar,
+  solange der Schutzzweck stimmt. Der Schutzzweck ist aber Account-Bann
+  ODER Repo-Löschung, und dann zählt nicht Traffic, sondern Aktualität: ein
+  Backup, das 6 h alt ist, verliert im Worst Case (GitHub-Account gebannt UND
+  Codespace im selben Fenster verloren) bis zu 6 h Commits unwiederbringlich,
+  weil der Codespace selbst ephemer ist. Das ist ein echter Datenverlust und
+  keine Optimierung — der Preis ist zu hoch, der Nutzen zu klein. Deshalb:
+  **voller Upload bei jedem Save mit neuem Commit.** Wer die Backup-Frische
+  variieren will, nutzt `save.sh` (immer) gegenüber gezielten manuellen Läufen.
 - **Trigger:** `save.sh` ruft nach jedem erfolgreichen Push den Backup-Hook
   auf — damit sichert auch der Autosave-Daemon (alle 30 Min) automatisch nach
   Drive. Fehlt die rclone-Auth, überspringt sich der Hook selbst (Push-Erfolg
@@ -308,7 +308,7 @@ Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
 
-- 2026-09-26: **Drei Optimierungen, alle gemessen statt geraten.** (a) *Drive-Backup gedrosselt:* das git-bundle enthält die volle Historie (111 MB) und ändert sich bei jedem Commit, ein Inhalts-Vergleich greift also nicht — jeder 30-Minuten-Autosave mit Änderungen lud 111 MB neu hoch (gemessen: 22 s, ~5 MB/s ≈ 18 min/Tag, ~5 GB/Tag), obwohl GitHub die Commits längst hat und der Schutzzweck Account-Bann ist. `gdrive-backup.sh` prüft jetzt die mtime des State-Files und überspringt den Upload innerhalb von 6 h (`GDrive_MIN_INTERVAL_MINUTES`, `backup --force`, `status` zeigt es an). Der GitHub-Push bei jedem Save bleibt unberührt. (b) *config-watchdog restartete zu oft:* `inotifywait` überwacht das **Verzeichnis** `.opencode/`, und der inotify-Pfad verglich — anders als der Polling-Fallback — **keinen Hash**. Jeder Write auf `tui.json`, `package-lock.json` oder eine neue `agent/*.md` löste 8 s Debounce plus opencode-Server-Neustart aus, mit Restsessions-Risiko. Jetzt Hash-Vergleich nach dem Event, wie im Polling-Pfad. (c) *`secrets.sh unlock` entschlüsselte das Bundle zweimal* — einmal beim Durchprobieren der Passphrase-Kandidaten, einmal für echt. `find_working_passphrase` hinterlässt das Tarball jetzt zur Wiederverwendung; `status` räumt es auf, damit kein Temp-Verzeichnis leakt. Nicht angefasst: `keys.sh ensure` im opencode-Wrapper (18 ms pro Start, unter der Messgrenze). Verifiziert: Drosselung greift und `--force` umgeht sie (Upload + MD5-Verifikation grün), `tui.json`-Write löst keinen Restart mehr (Server-PID unverändert), Guard in 5 Logikfällen korrekt, `unlock` stellt Key byte-identisch wieder her, keine Temp-Dirs danach.
+- 2026-09-26: **Drive-Backup-Drosselung verworfen (bewusste Entscheidung, nicht vergessen).** Zuerst umgesetzt: zeitbasierte Drosselung (Default 6 h), um die 111 MB pro 30-Minuten-Autosave (~22 s, ~18 min/Tag) zu sparen. Zurückgenommen, weil der Schutzzweck Account-Bann/Repo-Löschung ist und dort nicht Traffic, sondern Aktualität zählt: Ein 6 h altes Bundle verliert im Worst Case (GitHub gebannt UND Codespace im selben Fenster weg — der Codespace ist selbst ephemer) bis zu 6 h Commits unwiederbringlich. Ein Mittelweg existiert nicht, ein git-bundle ist Alles-oder-nichts und ein „langsamerer Upload" wäre kein gültiges Backup. Also: voller Upload bei jedem Save mit neuem Commit, wie vorher. Die beiden anderen Optimierungen bleiben, weil sie ohne Nebenwirkung sind: (a) `config-watchdog.sh` verglich im inotify-Pfad — anders als der Polling-Fallback — **keinen Hash**; `inotifywait` überwacht das Verzeichnis `.opencode/`, wodurch jeder Write auf `tui.json`, `package-lock.json` oder eine neue `agent/*.md` 8 s Debounce plus opencode-Server-Neustart auslöste (mit Restsessions-Risiko). Jetzt Hash-Vergleich nach dem Event. (b) `secrets.sh unlock` entschlüsselte das Bundle zweimal — einmal beim Durchprobieren der Passphrase-Kandidaten, einmal für echt; `find_working_passphrase` hinterlässt das Tarball jetzt zur Wiederverwendung, `status` räumt es auf, damit kein Temp-Verzeichnis leakt. Nicht angefasst: `keys.sh ensure` im opencode-Wrapper (18 ms pro Start, unter der Messgrenze). Verifiziert: `tui.json`-Write löst keinen Restart mehr (Server-PID unverändert), Guard in 5 Logikfällen korrekt, `unlock` stellt den Key byte-identisch wieder her, keine Temp-Dirs danach.
 
 - 2026-09-26: **rclone-Installation repariert, Drive-Backup lief ins Leere.** `rclone-install.sh` lädt von `downloads.rclone.org/rclone-v<VER>-linux-amd64.zip`; rclone hat sein URL-Schema geändert, die Dateien liegen jetzt unter `downloads.rclone.org/v<VER>/`. Der alte flache Pfad liefert 404, das Skript bricht mit `set -e` ab, `setup.sh` schluckt den Fehler (`>/dev/null 2>&1`) — Ergebnis: `rclone` fehlt, und `gdrive-backup.sh` meldete dann irreführend „Remote 'gdrive' fehlt" statt „rclone fehlt". Der Pfad ist korrigiert, `gdrive-backup.sh` prüft das Binary jetzt getrennt vom Remote, Upload auf `gdrive:MAIN-backup/MAIN.bundle` verifiziert wieder. **Offen:** rclone warnt, dass der gemeinsam genutzte Google-Drive-`client_id` 2026 abgeschaltet wird — für den Drive-Backup braucht es einen eigenen `client_id` (siehe `https://rclone.org/drive/#making-your-own-client-id`, Token-Austausch über das eigene Konto).
 
