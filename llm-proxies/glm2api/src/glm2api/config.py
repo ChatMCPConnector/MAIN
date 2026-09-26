@@ -37,6 +37,8 @@ MAX_REQUEST_TIMEOUT_SECONDS = 900
 MAX_QUEUE_WAIT_TIMEOUT_SECONDS = 900
 MAX_BUSY_RETRIES = 30
 MAX_BUSY_RETRY_INTERVAL_SECONDS = 60.0
+MAX_RATE_LIMIT_RETRIES = 5
+MAX_RATE_LIMIT_RETRY_INTERVAL_SECONDS = 300.0
 MAX_GUEST_RETRIES = 10
 MAX_REQUEST_DEADLINE_SECONDS = 1800
 DEFAULT_REQUEST_DEADLINE_SECONDS = 300.0
@@ -330,6 +332,11 @@ class AppConfig:
     glm_queue_wait_timeout: int
     glm_busy_max_retries: int
     glm_busy_retry_interval: float
+    # F-6: eigener, KURZER budget fuer echte upstream-drosselung
+    # (code 10061 "请求过于频繁"). Busy (nebenlauf) braucht viele kurze
+    # versuche, ein ratelimit braucht wenige lange.
+    glm_rate_limit_max_retries: int
+    glm_rate_limit_retry_interval: float
     glm_guest_max_retries: int
     glm_stream_error_max_retries: int
     glm_stream_error_retry_interval: float
@@ -409,6 +416,8 @@ _CONFIG_KEY_NEAR_MISSES = (
     ("GLM_REQUEST_DEADLINE_SECONDS", "behavior"),
     ("GLM_QUEUE_WAIT_TIMEOUT_SECONDS", "behavior"),
     ("GLM_BUSY_RETRY_INTERVAL_SECONDS", "behavior"),
+    ("GLM_RATE_LIMIT_MAX_RETRIES", "behavior"),
+    ("GLM_RATE_LIMIT_RETRY_INTERVAL_SECONDS", "behavior"),
     ("GLM_BLOCKED_TOOL_FOLLOW_UPS", "behavior"),
     ("GLM_DELETE_CONVERSATION", "behavior"),
     ("LOG_LEVEL", "behavior"),
@@ -694,6 +703,29 @@ def load_config(env_file: str = ".env") -> AppConfig:
         MAX_BUSY_RETRY_INTERVAL_SECONDS,
         logger,
     )
+    # F-6: getrenntes budget fuer die echte konto-drosselung. Der 429/code
+    # 10061 mit "请求过于频繁" ist kein nebenlauf-busy: er klingt in
+    # minuten ab, nicht in sekunden. Mit dem busy-profil (30 versuche,
+    # basis 2s) feuerte der proxy bis zu 30 requests in ~4 minuten auf ein
+    # bereits gedrosseltes konto und verstaerkte die sperre. Zwei versuche
+    # im abstand von 30s/60s geben kurzzeitige throttles zeit, ohne zu
+    # hauen; danach geht ein sauberer 429 an den client.
+    glm_rate_limit_max_retries = _config_int(
+        values,
+        "GLM_RATE_LIMIT_MAX_RETRIES",
+        2,
+        0,
+        MAX_RATE_LIMIT_RETRIES,
+        logger,
+    )
+    glm_rate_limit_retry_interval = _config_float(
+        values,
+        "GLM_RATE_LIMIT_RETRY_INTERVAL_SECONDS",
+        30.0,
+        0.0,
+        MAX_RATE_LIMIT_RETRY_INTERVAL_SECONDS,
+        logger,
+    )
     glm_guest_max_retries = _config_int(
         values,
         "GLM_GUEST_MAX_RETRIES",
@@ -821,6 +853,8 @@ def load_config(env_file: str = ".env") -> AppConfig:
         glm_queue_wait_timeout=glm_queue_wait_timeout,
         glm_busy_max_retries=glm_busy_max_retries,
         glm_busy_retry_interval=glm_busy_retry_interval,
+        glm_rate_limit_max_retries=glm_rate_limit_max_retries,
+        glm_rate_limit_retry_interval=glm_rate_limit_retry_interval,
         glm_guest_max_retries=glm_guest_max_retries,
         glm_stream_error_max_retries=glm_stream_error_max_retries,
         glm_stream_error_retry_interval=glm_stream_error_retry_interval,

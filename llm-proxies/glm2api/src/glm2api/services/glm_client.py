@@ -1208,34 +1208,127 @@ class GLMWebClient:
     # 10040 = "model response context exceeded": input-historie zu gross —
     # retry koppelt an halbierung des kompressions-budgets (siehe
     # _open_chat_stream), deshalb transient.
-    TRANSIENT_UPSTREAM_ERROR_CODES = {10025, 10040, 10061, 10062}
+    #
+    # F-6: 10061 steht hier BEWUSST NICHT mehr. Der code traegt zwei
+    # voellig verschiedene bedeutungen:
+    #   "请等待其他对话生成完毕"  = nebenlauf-busy, weg in sekunden
+    #   "请求过于频繁"            = konto-drosselung, weg in minuten
+    # Beide ueber denselben transient-pfad zu schicken war die ursache der
+    # ratelimit-eskalation: der stream-retry (2x, 1s) UND der
+    # busy-http-loop (30x, 2s) feuerten beide auf eine echte drosselung und
+    # verstaerkten sie mit jedem versuch. Die trennung passiert jetzt in
+    # _classify_upstream_throttle; ein 10061 ist nur dann transient, wenn es
+    # der nebenlauf-busy ist.
+    TRANSIENT_UPSTREAM_ERROR_CODES = {10025, 10040, 10062}
+
+    # Der code, dessen beide varianten oben getrennt behandelt werden.
+    THROTTLE_UPSTREAM_ERROR_CODES = {10061}
+    # Textmarker des nebenlauf-busy: eine andere konversation im web-chat
+    # blockiert den slot, das ist in sekunden vorbei.
+    THROTTLE_BUSY_MARKERS = ("请等待其他对话生成完毕",)
+    # Textmarker der echten drosselung (kleinbuchstaben, wird gegen
+    # .casefold() geprueft — die chinesischen marker sind davon unberuehrt).
+    THROTTLE_RATE_LIMIT_MARKERS = (
+        "请求过于频繁",
+        "过于频繁",
+        "访问频繁",
+        "too many requests",
+        "rate limit",
+        "rate-limit",
+        "ratelimit",
+    )
+
+    @staticmethod
+    def _payload_error_sources(payload: dict[str, object]) -> list[dict[str, object]]:
+        """payload + seine `error`/`last_error`-objekte. Der upstream legt
+        den fehlercode je nach antwortform in eine dieser ebenen."""
+        sources = [payload]
+        for key in ("error", "last_error"):
+            nested = payload.get(key)
+            if isinstance(nested, dict):
+                sources.append(nested)
+        return sources
+
+    @classmethod
+    def _payload_has_code(
+        cls,
+        payload: dict[str, object],
+        codes: set[int],
+        keys: tuple[str, ...] = ("error_code", "code"),
+    ) -> bool:
+        for source in cls._payload_error_sources(payload):
+            for key in keys:
+                candidate = source.get(key)
+                if candidate is None:
+                    continue
+                try:
+                    if int(candidate) in codes:  # type: ignore[arg-type]
+                        return True
+                except (TypeError, ValueError):
+                    continue
+        return False
+
+    @classmethod
+    def _payload_error_text(cls, payload: dict[str, object]) -> str:
+        """gesamter meldungstext des payloads, casefolded. Deckt die
+        message-felder des 429-bodies genauso ab wie die eines SSE-events,
+        weil `error`/`last_error` mitgezogen werden."""
+        parts: list[str] = []
+        for source in cls._payload_error_sources(payload):
+            for key in ("message", "err_msg", "error_msg", "detail"):
+                value = source.get(key)
+                if value:
+                    parts.append(str(value))
+        return " ".join(parts).casefold()
+
+    @classmethod
+    def _classify_upstream_throttle(cls, payload: object) -> str:
+        """F-6: trennt die zwei bedeutungen von code 10061.
+
+        Rueckgabe: ``"busy"``, ``"rate_limit"`` oder ``""`` (kein throttling).
+        Der text entscheidet, nicht der code: beide varianten melden 10061,
+        nur die eine ist in sekunden weg.
+
+        Ein 10061 OHNE erkennbare message wird als ratelimit behandelt. Das
+        ist der harmlosere fehlerfall: im zweifel zwei versuche mit 30s/60s
+        abstand und danach ein sauberer 429 — statt 30 schneller versuche,
+        die eine bestehende drosselung nur verstaerken.
+        """
+        if not isinstance(payload, dict):
+            return ""
+        message = cls._payload_error_text(payload)
+        if any(marker in message for marker in cls.THROTTLE_BUSY_MARKERS):
+            return "busy"
+        if any(marker in message for marker in cls.THROTTLE_RATE_LIMIT_MARKERS):
+            return "rate_limit"
+        # `status` ist das feld, in dem chatglm.cn den 10061 im 429-body
+        # meldet; error_code/code decken die SSE-variante ab.
+        if cls._payload_has_code(
+            payload,
+            cls.THROTTLE_UPSTREAM_ERROR_CODES,
+            ("error_code", "code", "status"),
+        ):
+            return "rate_limit"
+        return ""
 
     def _payload_is_transient(self, payload: object) -> bool:
         """C-07: transient-Erkennung ZENTRAL. Vorher galt sie nur fuer SSE-
         events; ein transienter code im JSON-body (non-stream) oder im
         HTTP-error wurde als permanenter fehler behandelt und nicht
-        recovered."""
+        recovered.
+
+        F-6: 10061 ist nur der nebenlauf-busy transient. Die drosselung
+        darf nicht in den stream-retry laufen — sie wuerde dort weitere
+        versuche in sekundenabstaenden produzieren."""
         if not isinstance(payload, dict):
             return False
-        candidates = [
-            payload.get("error_code"),
-            payload.get("code"),
-        ]
-        nested = payload.get("error")
-        if isinstance(nested, dict):
-            candidates.extend([nested.get("error_code"), nested.get("code")])
-        last_error = payload.get("last_error")
-        if isinstance(last_error, dict):
-            candidates.extend([last_error.get("error_code"), last_error.get("code")])
-        for candidate in candidates:
-            if candidate is None:
-                continue
-            try:
-                if int(candidate) in self.TRANSIENT_UPSTREAM_ERROR_CODES:  # type: ignore[arg-type]
-                    return True
-            except (TypeError, ValueError):
-                continue
-        return False
+        if self._payload_has_code(
+            payload,
+            self.THROTTLE_UPSTREAM_ERROR_CODES,
+            ("error_code", "code", "status"),
+        ):
+            return self._classify_upstream_throttle(payload) == "busy"
+        return self._payload_has_code(payload, self.TRANSIENT_UPSTREAM_ERROR_CODES)
 
     def _raise_for_event_error(self, event: dict[str, object], stream: bool) -> None:
         status = str(event.get("status", "")).strip().lower()
@@ -1260,8 +1353,14 @@ class GLMWebClient:
         ).strip()
         detail = f"code={error_code} " if error_code is not None else ""
         transient = self._payload_is_transient(error_payload or event)
+        # F-6: eine drosselung, die mitten im stream kommt, ist kein
+        # gateway-defekt. Sie als 429 zu melden statt als 502, damit der
+        # client den Unterschied zwischen "upstream kaputt" und "warte,
+        # zu schnell" sieht und nicht sein eigenes retry-verhalten
+        # darauf ausrichtet.
+        status_code = 429 if self._classify_upstream_throttle(error_payload or event) == "rate_limit" else 502
         raise UpstreamAPIError(
-            status_code=502,
+            status_code=status_code,
             message=f"GLM upstream returned an error | {detail}{error_message}".strip(),
             payload=error_payload or event,
             transient=transient,
@@ -1507,7 +1606,19 @@ class GLMWebClient:
         debug_dump(self.logger, self.config.debug_dump_all, "Raw chat request body forwarded to GLM", request_body)
 
         def send_request(account_index: int, access_token: str):
-            for attempt in range(self.config.glm_busy_max_retries + 1):
+            # F-6: busy und ratelimit teilen sich den HTTP-429/code-10061-
+            # pfad, brauchen aber gegensetzliche antworten. Busy = eine
+            # andere konversation blockiert den slot, das ist in sekunden
+            # vorbei -> viele kurze versuche (GLM_BUSY_MAX_RETRIES).
+            # Ratelimit = konto-drosselung, die erst in minuten abklingt ->
+            # wenige versuche mit langem backoff, danach ein sauberer 429 an
+            # den client. Vorher liefen beide ueber denselben 30er-loop und
+            # hauen bei echter drosselung 30 mal in ~4 minuten auf dasselbe
+            # konto, was die sperre jeweils verlaengert hat.
+            busy_attempts = 0
+            rate_limit_attempts = 0
+            deadline = self._request_deadline()
+            while True:
                 try:
                     timestamp, nonce, sign = build_sign()
                     request = urllib.request.Request(
@@ -1527,7 +1638,7 @@ class GLMWebClient:
                     debug_dump(
                         self.logger,
                         self.config.debug_dump_all,
-                        f"Chat request headers forwarded to GLM account={account_index} attempt={attempt + 1}",
+                        f"Chat request headers forwarded to GLM account={account_index} attempt={busy_attempts + rate_limit_attempts + 1}",
                         dict(request.header_items()),
                     )
                     return self._prepare_chat_response(
@@ -1535,16 +1646,38 @@ class GLMWebClient:
                     )
                 except urllib.error.HTTPError as exc:
                     error_payload = self._read_error_payload(exc)
-                    if self._should_retry_busy_error(exc.code, error_payload) and attempt < self.config.glm_busy_max_retries:
+                    throttle = self._classify_upstream_throttle(error_payload) if exc.code == 429 else ""
+                    if (
+                        throttle == "rate_limit"
+                        and rate_limit_attempts < self.config.glm_rate_limit_max_retries
+                        and not self._deadline_exceeded(deadline)
+                    ):
+                        rate_limit_attempts += 1
+                        wait_seconds = self._rate_limit_backoff_seconds(rate_limit_attempts)
+                        self.logger.warning(
+                            "GLM upstream rate limit hit (code 10061), backing off instead of hammering attempt=%s/%s wait=%.1fs account=%s",
+                            rate_limit_attempts,
+                            self.config.glm_rate_limit_max_retries,
+                            wait_seconds,
+                            account_index,
+                        )
+                        time.sleep(wait_seconds)
+                        continue
+                    if (
+                        throttle == "busy"
+                        and busy_attempts < self.config.glm_busy_max_retries
+                        and not self._deadline_exceeded(deadline)
+                    ):
+                        busy_attempts += 1
                         # S-14: exponentielles backoff mit jitter statt
                         # fester wartezeit. Ohne exponentiellen anteil
                         # stampfen alle versuche im gleichen takts erneut
                         # auf dasselbe ausgelastete upstream; der jitter
                         # entzerrt mehrere parallele clienten.
-                        wait_seconds = self._busy_backoff_seconds(attempt)
+                        wait_seconds = self._busy_backoff_seconds(busy_attempts - 1)
                         self.logger.warning(
                             "GLM is processing another conversation, waiting to retry attempt=%s/%s wait=%.1fs account=%s",
-                            attempt + 1,
+                            busy_attempts,
                             self.config.glm_busy_max_retries,
                             wait_seconds,
                             account_index,
@@ -1556,6 +1689,17 @@ class GLMWebClient:
                     if target_conv_id and (exc.code in {400, 404} or "conversation" in message.lower() or "对话" in message):
                         self.logger.warning("GLM conversation %s seems invalid or expired (%s) — resetting active conversation", target_conv_id, message)
                         self.reset_active_conversation()
+                    if throttle:
+                        # F-6: das budget ist erschoepft oder die request-
+                        # deadline laeuft ab. Bewusst KEIN `transient` —
+                        # sonst nimmt der stream-retry die drosselung wieder
+                        # auf und produziert genau die versuche, die wir
+                        # hier gerade vermieden haben. Der client sieht 429.
+                        self.logger.warning(
+                            "GLM upstream still throttled after %s retries (kind=%s) — returning 429 to client",
+                            (rate_limit_attempts if throttle == "rate_limit" else busy_attempts),
+                            throttle,
+                        )
                     # C-07: transienter upstream-code im error-body (z.b. 10040
                     # bei zu grosser historie) wird auch bei HTTP-Fehlern
                     # als transient markiert, damit der stream-retry ihn
@@ -1566,8 +1710,6 @@ class GLMWebClient:
                         payload=error_payload,
                         transient=self._payload_is_transient(error_payload),
                     ) from exc
-
-            raise UpstreamAPIError(status_code=429, message="GLM has been busy for a long time, please retry later.")
 
         response = self._call_with_account_failover(
             f"chat:{requested_model}",
@@ -2176,12 +2318,17 @@ class GLMWebClient:
         backoff = min(base * (2 ** min(attempt, 3)), base * 4)
         return backoff * random.uniform(0.9, 1.5)
 
-    def _should_retry_busy_error(self, status_code: int, payload: dict[str, object]) -> bool:
-        if status_code != 429:
-            return False
-        message = str(payload.get("message", ""))
-        inner_status = payload.get("status")
-        return inner_status == 10061 or "请等待其他对话生成完毕" in message
+    def _rate_limit_backoff_seconds(self, attempt: int) -> float:
+        """F-6: ratelimit braucht sekunden->minuten, nicht sekunden.
+
+        `glm_rate_limit_retry_interval` ist die basis (standard 30s), jeder
+        weitere versuch verdoppelt, gedeckelt beim achtfachen. Bewusst KEIN
+        jitter nach unten: bei einer drosselung ist gleichzeitiges Aufwachen
+        mehrerer clients genau das, was die sperre am laufen haelt. 10 %
+        jitter nach oben entzerrt nur, ohne die drosselung zu fuettern."""
+        base = max(1.0, float(self.config.glm_rate_limit_retry_interval))
+        backoff = min(base * (2 ** max(0, attempt - 1)), base * 8)
+        return backoff * random.uniform(1.0, 1.1)
 
     def _build_error_message(self, status_code: int, payload: dict[str, object]) -> str:
         message = str(payload.get("message", "")).strip()
