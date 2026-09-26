@@ -40,7 +40,8 @@ Start** — der Code liegt komplett im Repo, es gibt nichts mehr zu klonen; nur
 
 Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 `secrets`, `ports`, `quota`, `st`, `ll`, `autosave` (status/start/stop/log),
-`config-watchdog` (status/start/stop/log), `landscape-diff`.
+`config-watchdog` (status/start/stop/log), `landscape-diff`, `ocver`
+(opencode-Versionspin: check/latest/bump/install).
 
 ## Enthalten
 
@@ -231,16 +232,29 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Profil `.runtime/firefox-profile/` enthält evtl. Logins — nie committen.
 - **Systempakete** via setup.sh (idempotent): nodejs, npm, xvfb, x11vnc, novnc,
   websockify, sqlite3, dbus-x11, build-essential, python3-* etc.
-- **opencode ist gepinnt:** `OPENCODE_VERSION` in `.devcontainer/setup.sh`
-  (aktuell 1.18.32), Installation via `opencode.ai/install --version`. Der
-  Versionspin muss mit dem `@opencode-ai/plugin`-Dep in `.opencode/package.json`
-  zusammenpassen — beide im selben Commit ändern. Vorher war die Installation
-  floating (`curl …/install | bash`), wodurch jeder neue Codespace eine andere
-  opencode-Version bekam und opencode beim Start den Plugin-Dep im Repo umschrieb
-  (dauerhafter uncommitteter Churn). Weicht die vorhandene Version vom Pin ab,
-  aktualisiert setup.sh; die laufende opencode-Server-Instanz nutzt die alte
-  Version bis zum nächsten Neustart. Rückweg: `OPENCODE_VERSION` in setup.sh
-  zurücksetzen.
+- **opencode ist gepinnt, mit EINER Quelle der Wahrheit:** dem
+  `@opencode-ai/plugin`-Dep in `.opencode/package.json`. Das ist genau die Version,
+  die opencode für seinen Plugin-Ladepfad selbst nachinstalliert — deshalb ist der
+  Pin auch der richtige: laufen beide auseinander, schreibt opencode den Dep beim
+  ersten TUI-Start um und der Codespace hinterlässt dauerhaft uncommittete
+  Änderungen. `.devcontainer/setup.sh` liest die Version von dort und installiert
+  genau sie (`opencode.ai/install --version`); weicht die vorhandene Installation
+  ab, aktualisiert setup.sh (Vergleich über `opencode-bin`, weil der
+  Multi-Client-Wrapper `opencode` ersetzt). **Pin wechseln:**
+  `./infra/scripts/opencode-version.sh bump` (Alias `ocver`) — updated Pin **und**
+  Lock in einem Schritt, ein Commit. `ocver check` zeigt Repo-Pin / Lock /
+  installiert / Latest und ein Urteil; `ocver latest` nur die neueste Release.
+  Bewusst **kein** Auto-Tracking: ein automatisch nachgeführter Pin würde bei jedem
+  Release das Repo verändern und über den Autosave-Daemon die Historie
+  beschreiben. Ein Codespace, ein Build — der laufende Server nutzt bis zum
+  Neustart seine alte Version.
+- **Git-Identität folgt dem Account** (siehe Secrets-/Auth-Abschnitt): `auth.sh
+  setup` leitet Name + `<id>+<login>@users.noreply.github.com` aus dem Token ab und
+  setzt sie **repo-lokal**; `auth.sh identity` zeigt sie. Beim Account-Wechsel
+  damit nichts zu tun. `store_token` überschreibt einen funktionierenden Token
+  **nicht** mit einem, der sich nicht auflösen lässt (Tippfehler ⇒ Push tot bis
+  zum nächsten Codespace). Override: `GIT_USER_NAME=… GIT_USER_EMAIL=… auth.sh setup`
+  — nur mit Bedacht, MAIN ist öffentlich und eine echte Adresse landet mit im Commit.
 - **Go-Toolchain:** Go 1.25.7 (gepinnt, entspricht `mise.toml` im antigravity-proxy)
   nach `/usr/local/go` via setup.sh — das Proxy-Binary liegt nicht im Git und wird
   pro Codespace neu gebaut (`scripts/start.sh` baut automatisch nach, Fallback

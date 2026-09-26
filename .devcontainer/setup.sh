@@ -9,13 +9,16 @@ sudo apt-get update -qq
 sudo apt-get install -y -qq curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential python3 python3-pip python3-venv ca-certificates gnupg nodejs npm xvfb x11vnc novnc websockify libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 inotify-tools > /dev/null
 sudo rm -rf /var/lib/apt/lists/*
 
-# opencode ist GEPINNT (Kanonisch: Version hier + .opencode/package.json).
-# Vorher war die Installation floating ("curl …/install | bash"), wodurch ein
-# neuer Codespace eine andere opencode-Version als das Repo bekam — opencode
-# schrieb dann beim Start den @opencode-ai/plugin-Dep in .opencode/package.json
-# um, was dauerhaft uncommitteten Churn erzeugte. Beide Pins müssen zusammen
-# passen. Rückweg: OPENCODE_VERSION anpassen (inkl. Plugin-Dep im selben Commit).
-readonly OPENCODE_VERSION="1.18.32"
+# opencode ist GEPINNT. Quelle der Wahrheit ist EINE Stelle: der
+# @opencode-ai/plugin-Dep in .opencode/package.json — genau die Version, die
+# opencode für seinen Plugin-Ladepfad selbst nachinstalliert. Vorher war die
+# Installation floating ("curl …/install | bash"), wodurch der Codespace eine
+# andere Version bekam als das Repo; opencode schrieb den Dep dann beim ersten
+# TUI-Start um (package.json + package-lock.json) und hinterließ dauerhaft
+# uncommitteten Churn, den der Autosave-Daemon mitcommittete.
+# Pin wechseln: ./infra/scripts/opencode-version.sh bump   (eine Stelle, ein Commit)
+OPENCODE_VERSION="$(sed -nE 's/.*"@opencode-ai\/plugin"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$REPO_ROOT/.opencode/package.json" 2>/dev/null | head -1)"
+: "${OPENCODE_VERSION:=1.18.32}"   # Notnagel, falls package.json fehlt/kaputt ist
 echo "==> [landscape] opencode installieren (gepinnt auf $OPENCODE_VERSION)..."
 opencode_install() {
   curl -fsSL https://opencode.ai/install | bash -s -- --version "$OPENCODE_VERSION"
