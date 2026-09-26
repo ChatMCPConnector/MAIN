@@ -114,10 +114,11 @@ def rewrite_arrows(data, carry=b"", now=0.0, last=None, debounce=0.2):
     `debounce` Sekunden wird verworfen — die Bytes werden aber trotzdem
     konsumiert, sonst rueutscht der rohe Pfeil an der App vorbei (das war ein
     echter Bug, den der Testfall „High-Resolution-Rad“ gefunden hat).
-    Wirkung: High-Resolution-Rad und Trackpad werden auf eine Rate begrenzt
-    (Default 200 ms ≈ 5 Seiten/s), bewusst langsames Scrollen laeuft unveraendert
-    durch. Andere Tasten sind nie betroffen — nur up/down, und nur die werden
-    ohnehin umgeschrieben.
+    Wirkung mit `debounce > 0`: High-Resolution-Rad und Trackpad werden auf eine
+    Rate begrenzt. **Default ist 0 (aus)** — die Drosselung war der falsche
+    Hebel, gewuenscht war kleinere *Schrittweite*, nicht geringere Rate. Andere
+    Tasten sind nie betroffen — nur up/down, und nur die werden ohnehin
+    umgeschrieben.
     """
     data = carry + data
     carry = b""
@@ -216,15 +217,14 @@ def main(argv):
     out = sys.stdout.buffer
     stdin_open = True
     arrow_page = os.environ.get("FREEBUFF_NO_ARROW_PAGE", "0") != "1"
-    # 200 ms ≈ 5 Seiten/s. Erhöht nach Nutzer-Feedback: 120 ms war "besser, aber
-    # noch etwas zu schnell". Laesst bewusst langsames Blattern (Notch-Abstand
-    # > 200 ms) unveraendert durch, also Seite fuer Seite weiter moeglich.
-    # 0 schaltet die Drosselung ab; der Wert ist ohne Codeaenderung pro Start
-    # ueber FREEBUFF_WHEEL_DEBOUNCE_MS stellbar (80/120/200/300 …).
+    # Default 0 = KEINE Drosselung. Der Nutzerwunsch lautete ausdruecklich
+    # „0 ms, aber weniger Zeilen pro Schritt“ — die Drosselung war der falsche
+    # Hebel (sie begrenzt die Rate, nicht die Schrittweite) und ist per
+    # FREEBUFF_WHEEL_DEBOUNCE_MS weiterhin stellbar, falls jemand sie braucht.
     try:
-        debounce = max(0.0, float(os.environ.get("FREEBUFF_WHEEL_DEBOUNCE_MS", "200")) / 1000.0)
+        debounce = max(0.0, float(os.environ.get("FREEBUFF_WHEEL_DEBOUNCE_MS", "0")) / 1000.0)
     except ValueError:
-        debounce = 0.2
+        debounce = 0.0
     carry = b""
     last_arrow = dict.fromkeys(ARROW_PAGE, -1e9)
     debug(f"arrow_page={arrow_page} debounce={debounce}s")
