@@ -23,15 +23,17 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, nvidia-models.py, validate-revision.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
+| `/workspaces/freebuff/` | **Freebuff CLI** (npm-Projekt + Binary-Cache), persistent, nicht im Repo — via `infra/scripts/freebuff-install.sh` |
 
 | `.env` `.runtime/` | GITIGNORED — Klartext-Secrets (.env), Browser-Profil, Runtime (nie committen) |
 
 ## Schnellstart
 
 Codespace bauen → `setup.sh` stellt ALLES automatisch wieder her (Systempakete,
-opencode, uv, Secrets-Unlock, Git-Auth, Browser-Runtime, **glm2api-Proxy inkl.
-Start** — der Code liegt komplett im Repo, es gibt nichts mehr zu klonen; nur
-`uv sync` (Python 3.14 + Deps, beim ersten Mal ~2-5 Min) + Autostart). Danach:
+opencode, uv, Secrets-Unlock, Git-Auth, Freebuff-CLI, Browser-Runtime,
+**glm2api-Proxy inkl. Start** — der Code liegt komplett im Repo, es gibt nichts
+mehr zu klonen; nur `uv sync` (Python 3.14 + Deps, beim ersten Mal ~2-5 Min) +
+Autostart). Danach:
 
 ```bash
 ./infra/scripts/save.sh status                       # Überblick (Repo, Auth, Secrets)
@@ -48,6 +50,12 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 
 - Ports 3000/8000 (Apps), 4096 (opencode-Server für Multi-Client), 8001 (glm2api LLM-Proxy), 9878 (antigravity-proxy), 6082/5920 (Browser-VNC, nur lokal)
 - opencode, Default-Modell `antigravity/gemini-3.8-flash` (fest auf high Thinking gemappt)
+- `infra/scripts/freebuff-install.sh`: Freebuff CLI (kostenloser Coding-Agent,
+  gepinnt 0.0.203) nach `/workspaces/freebuff`, Wrapper `freebuff` in
+  `~/.local/bin`. Bewusst kein `npm i -g`: der npm-Launcher legt sein 130-MB-
+  Binary hart nach `~/.config/manicode` (nicht persistent), der Wrapper stellt
+  es aus dem `/workspaces`-Cache wieder her. Werbefinanziert → nur für Code ohne
+  Vertraulichkeit.
 - `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
   (kostenlos, NIM-Keys), für Modell-Discovery
 - `infra/scripts/cline-models.py`: Cline-Free-Modelle live geprüft, Alias
@@ -288,6 +296,20 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Profil `.runtime/firefox-profile/` enthält evtl. Logins — nie committen.
 - **Systempakete** via setup.sh (idempotent): nodejs, npm, xvfb, x11vnc, novnc,
   websockify, sqlite3, dbus-x11, build-essential, python3-* etc.
+- **Freebuff CLI** (werbefinanzierter, kostenloser Coding-Agent, CodebuffAI)
+  v0.0.203 gepinnt: `infra/scripts/freebuff-install.sh`, automatisch via setup.sh.
+  Installiert **unter `/workspaces/freebuff`** (npm-Projekt mit `node_modules`,
+  persistent), ausdrücklich *nicht* global. `~/.local/bin/freebuff` ist nur ein
+  Wrapper: er stellt das native Binary (130 MB) aus dem Cache
+  `/workspaces/freebuff/bin/` nach `~/.config/manicode/` wieder her, weil der
+  npm-Launcher seinen Binary-Pfad **hart auf `~/.config/manicode` legt** (kein
+  Env-Override) und `$HOME` bei einem Codespace-Rebuild leer ist — ohne den Cache
+  lädt jeder Container 48 MB neu. Ohne Cache gemessen: ~30 s Download-UI;
+  mit Cache **8,9 s bis `freebuff --version`**. Start: `cd <projekt> && freebuff`
+  (erstmalig Account-Login, werbefinanziert, Prompts können zur
+  Ad-Personalisierung dienen — nie mit Secrets/Kundencode füttern, siehe
+  `infra/docs/free-cli-agents-2026-09.md`). Rückweg: `rm -rf
+  /workspaces/freebuff ~/.local/bin/freebuff ~/.config/manicode`.
 - **opencode ist gepinnt, mit EINER Quelle der Wahrheit:** dem
   `@opencode-ai/plugin`-Dep in `.opencode/package.json`. Das ist genau die Version,
   die opencode für seinen Plugin-Ladepfad selbst nachinstalliert — deshalb ist der
@@ -452,6 +474,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **Freebuff CLI installiert — diesmal unter `/workspaces` statt global, mit Binary-Cache, weil der npm-Launcher den Pfad hart verdrahtet hat.** `freebuff` (Free-Ableger von Codebuff, werbefinanziert) ist als npm-Paket verfügbar, und der übliche Befehl wäre `npm i -g freebuff` gewesen. Gewünscht war aber ausdrücklich `/workspaces` — richtig, und nicht nur aus Ordnungsliebe: **der npm-Launcher legt sein natives Binary (130 MB) nach `~/.config/manicode/freebuff`, mit `path.join(os.homedir(), '.config', 'manicode')` ohne jeden Env-Override** (`launcher.js:261-272`). `node_modules` unter `/workspaces` zu legen nützt bei einem Codespace-Rebuild also nichts, wenn das Binary in `$HOME` fehlt: jeder neue Container lädt es neu (48 MB Download, ~30 s, sichtbarer Progressbar-Output). Lösung: npm-Projekt unter `/workspaces/freebuff`, das native Binary zusätzlich nach `/workspaces/freebuff/bin/` gecacht, und `~/.local/bin/freebuff` als Wrapper, der den Cache bei Bedarf zurückkopiert (Binary + `tree-sitter.wasm` + `freebuff-metadata.json`, sonst startet es mit kaputter Sprach-Parser-Datei). Verifiziert durch Simulation des Rebuilds: `rm -rf ~/.config/manicode` → `freebuff --version` = `0.0.203` in **8,9 s statt Download**. Gepinnt auf 0.0.203 in `infra/scripts/freebuff-install.sh` (Repo-Soll: gepinnte Version + reproduzierbares Skript, `setup.sh` ruft es automatisch, idempotent geprüft über zwei Läufe). Ein Fehler beim ersten Lauf: im Skript `native_dir` statt `NATIVE_DIR` — mit `set -u` ein Abbruch mitten im Cache-Schritt, deshalb war der Cache beim ersten Test leer und der Wiederherstellungs-Pfad zunächst ungetestet. **Freebuff ist werbefinanziert und Prompt-/History-nutzend** — nach dem Repo-eigenen Recherche-Snapshot (`infra/docs/free-cli-agents-2026-09.md`) nur für Code ohne Vertraulichkeit, nie mit Secrets oder Kundencode.
 
 - 2026-09-26: **`cline-models.py` auf den tatsächlichen Zweck zugeschnitten: nur was in opencode nutzbar ist, nur was höchstens 7 Tage alt ist.** Der ausführliche Modus hatte den Zweck, die Verfügbarkeitsfrage zu klären — einmal geklärt war sie beantwortet, und die 4 `cline-free/*`-Zeilen waren nur noch Rauschen: Sie sind für opencode per Definition irrelevant (403, unabhängig von Key und von jedem Eintrag in `opencode.json`), also nicht „nicht konfigurierbar, wenn man es richtig macht", sondern generell unbrauchbar. Neuer Default filtert deshalb auf **nutzbar** *und* **≤ `--days` (7)**, und die Ausgabe wird entsprechend schlank: Status- und Cost-Spalte entfallen im Default-Modus, weil sie dort in jeder Zeile „ok" bzw. „0" gesagt hätten — stattdessen kommt `ctx` dazu (aus dem Katalog, `1000k` für space-bunny-alpha), das tatsächlich variiert. Mit `--all` kommen beide Spalten zurück, wo sie echte Information tragen. Der Probe selbst wurde leichter: kürzerer Prompt („Read /etc/hostname."), weil er ohnehin nur beweisen soll, dass das Modell antwortet, Tools aufruft und nichts kostet — gegengeprüft, dass der kurze Prompt weiterhin Tool-Calls auslöst (pixel-canary und space-bunny-alpha, beide `tool=True cost=0`), sonst wäre die Spalte `tool ok` eine Lüge. **Zwei Fehler beim Umbauen, beide beim Testen aufgefallen und gefixt:** (a) `--days 0` ließ `max_age` auf `None` und crashte die Zusammenfassungszeile mit `TypeError: unsupported format string passed to NoneType.__format__`; (b) **`--emit-config` benutzte die bereits gefilterte Menge** — ein nutzbares, aber älteres Modell wäre dadurch nie mehr zum Konfigurieren vorgeschlagen worden, obwohl es in opencode weiterhin nutzbar ist. Der Altersfilter ist jetzt eine reine Lesehilfe, `--emit-config` rechnet auf dem Stand davor (mit `--days 1` geprüft: die Ausgabe zeigt nur ein Modell, das Snippet enthält weiterhin beide). Verifiziert: Default 0,5 s aus dem Cache, 16 s kalt; `--all` 6/6 mit Status- und Cost-Spalte; `--days 0/1/2` korrekt; `--no-probe` ohne Key; `--emit-config` gegen leere und gefüllte Whitelist (Config danach byte-identisch wiederhergestellt).
 
