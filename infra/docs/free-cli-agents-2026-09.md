@@ -59,3 +59,25 @@ gegengefetcht.
 
 antigravity.google/pricing · antigravity.google/docs/cli/install/ · geminicli.com/plans/ · kiro.dev/pricing/ · kilocode.ai/landing/free-models · docs.cline.bot/getting-started/free-models · freebuff.com · opencode.ai/docs/zen/ (+ sst/opencode zen.mdx) · codebuddy.ai/docs/ide/Account/pricing · docs.qoder.com/cli/usage · console.groq.com/docs/rate-limits · openrouter.ai/docs/api-reference/limits · github.com/QwenLM/qwen-code/issues/3203 · github.com/iFlow-ai/iflow-cli · aws.amazon.com/blogs/devops/amazon-q-developer-end-of-support-announcement/ · docs.github.com/en/copilot/get-started/plans
 
+## E. Direkte Vergleiche (Vergleichs-Quellen, 2026-09-26)
+
+**Antigravity CLI vs Cline CLI** — terminaltrove.com/compare/ai-coding-agents/antigravity-cli-vs-cline-cli/:
+- Antigravity CLI: Google (AI Lab), Go, v1 seit 19.05.2026, offiziell „replacement for Gemini CLI"; MCP + Multi-Agent + Sandbox + tiefe Git-Integration; Modelle: Gemini 3.5 Pro/Flash, 3.1 Pro, 3 Flash, Claude Sonnet/Opus 4.7, GPT-OSS-120b; AA-Coding-Index 42 % (Gemini 3.8 Flash, high); Freemium $0–$200; proprietär.
+- Cline CLI: unabhängig, TypeScript, Apache-2.0, 30+ Provider (BYOK); „Free Tier" = eigene Keys; $20/Mo Team-Option; kein öffentlicher Benchmark-Score.
+- ⇒ Antigravity = stärkste Gratis-Modelle ohne Key; Cline CLI = offen/portabel, gratis aber nur mit eigenen Keys.
+
+**Kilo Code vs OpenCode vs Cline** — aicoderscope.com/blog/kilo-code-vs-opencode-vs-cline-2026/ (29.06.2026):
+- Alle $0 Tool + BYOK. Cline: sicherste In-Editor-Wahl (Plan/Act, MCP, Approval-Loop), ~64k★. OpenCode: Terminal-Power-User, 75+ Provider, ~180k★, OpenCode+GPT-5.5 83,4 % terminal-bench. Kilo: VS Code mit Auto-Model-Routing über 500+ Modelle, Kilo-CLI ist ein OpenCode-Fork, ~25k★.
+- Verdict der Quelle: Editor → Cline; Terminal → OpenCode; Auto-Routing → Kilo. Auslöser des Vergleichs: Roo-Code-Einstellung (Mai 2026).
+
+**Antigravity vs Gemini CLI** — cloud.google.com/blog (04.02.2026):
+- Antigravity = Agent-Manager + IDE (grafisch); Gemini CLI = Terminal/Headless/CI; damals beide „generous free tier"; danach (18.06.2026) wurde der Unpaid-Tier auf Antigravity CLI umgestellt.
+- Gemini CLI bleibt für Terminal/Headless mit API-Key/Paid relevant.
+
+**Einordnung** — agentic.ai/best/free-coding-agents (Sept 2026): Cline 18/36 Agenticness; die meisten „freien" Tools sind BYOK; Warnung: Freemium-Tools speichern History/Index serverseitig.
+
+## Quellen — Vergleiche
+
+terminaltrove.com/compare/ai-coding-agents/ (65 Agenten, Filter) · terminaltrove.com/compare/ai-coding-agents/antigravity-cli-vs-cline-cli/ · aicoderscope.com/blog/kilo-code-vs-opencode-vs-cline-2026/ · cloud.google.com/blog/topics/developers-practitioners/choosing-antigravity-or-gemini-cli · agentic.ai/best/free-coding-agents
+
+
