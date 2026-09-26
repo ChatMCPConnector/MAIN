@@ -677,6 +677,40 @@ def _scan_brackets(fragment: str, open_brackets: int, in_string: bool) -> tuple[
     return open_brackets, in_string
 
 
+# Markup-Zustand neben dem Klammer-Zustand. Fuer JSON reicht die Klammer
+# (`{"tool_calls":` ist eine offene Struktur), fuer DSML/XML nicht: dort gibt
+# es keine Klammern, und der part-merge entschied an `_starts_new_block` —
+# `|` und `>` am Part-Anfang gelten als Markdown-Bloecke (Tabelle, Zitat), im
+# DSML sind es Protokollzeichen. Folge (gemessen 2026-09-26): ein DSML-Aufruf
+# ueber viele Parts verlor den Call bei 34 von 147 Chunk-Groessen, das
+# zerschnittene Markup kam als Antworttext beim Client an. Ein tag
+# (`<...>`, geschlossen oder nicht) und ein laufender `tool_calls`-Block
+# werden deshalb getrennt mitgezählt.
+_MARKUP_TAG_RE = re.compile(r"<[^<>]*>?")
+_MARKUP_RUN_OPEN_RE = re.compile(r"<(?!/)[^<>]*tool_call", re.IGNORECASE)
+_MARKUP_RUN_CLOSE_RE = re.compile(r"</[^<>]*tool_call", re.IGNORECASE)
+
+
+def _scan_markup(
+    fragment: str, open_tag: bool, in_call_run: bool
+) -> tuple[bool, bool]:
+    """Inkrementeller markup-zustand ueber ein textfragment.
+
+    `open_tag` ist gesetzt, wenn das Fragment mitten in einem tag endet
+    (`<|DSML|to` + `ol_calls>`), `in_call_run`, solange ein
+    `…tool_calls…`-block geoeffnet und nicht wieder geschlossen ist. Beides
+    heisst: die naechste part ist eine FORTSETZUNG, keine neuer absatz.
+    """
+    for match in _MARKUP_TAG_RE.finditer(fragment):
+        tag = match.group(0)
+        open_tag = not tag.endswith(">")
+        if _MARKUP_RUN_OPEN_RE.match(tag):
+            in_call_run = True
+        elif in_call_run and _MARKUP_RUN_CLOSE_RE.match(tag):
+            in_call_run = False
+    return open_tag, in_call_run
+
+
 def _ends_sentence(text: str) -> bool:
     """Endet der text mit einem satzzeichen (ohne absatztrenner)?
 
@@ -4220,23 +4254,30 @@ class GLMEventAccumulator:
         strukturen: 400 parts ergaben 79.800 vollstaendige scans (1,17 s von
         2,2 s), 1000 parts 20,7 s — quadratisch. Neu wird nur das neue
         fragment betrachtet (O(fragment)), der klammer-/string-zustand
-        wird fortgeschrieben."""
+        wird fortgeschrieben — und (seit 2026-09-26) zusaetzlich der
+        markup-zustand, weil DSML keine klammern hat."""
         # getrennter zustand je kanal: text und reasoning clobbern sich
         # sonst gegenseitig (beide werden pro render aufgerufen).
-        state = self._joined_state.setdefault(channel, ["", 0, 0, False, 0])
+        # [text, anzahl_teile, klammertiefe, im_string, epoch, offener_tag, im_call_run]
+        state = self._joined_state.setdefault(channel, ["", 0, 0, False, 0, False, False])
         parts = [part for part in parts if part]
         if len(parts) < state[1] or state[4] != self._parts_epoch:
             # eine bereits gefuegte part wurde entfernt/ersetzt: neu bauen
-            state[0], state[1], state[2], state[3], state[4] = "", 0, 0, False, self._parts_epoch
+            state[:] = ["", 0, 0, False, self._parts_epoch, False, False]
         if state[1] == 0 and parts:
             state[0] = parts[0]
             state[2], state[3] = _scan_brackets(parts[0], 0, False)
+            state[5], state[6] = _scan_markup(parts[0], False, False)
             state[1] = 1
         for part in parts[state[1] :]:
             if not state[0]:
                 state[0] = part
-            elif state[2] or state[3]:
-                # offene struktur -> das ist eine fortsetzung
+            elif state[2] or state[3] or state[5] or state[6]:
+                # offene struktur -> das ist eine fortsetzung. `state[5]`
+                # (mitten im tag) und `state[6]` (laufender
+                # tool_calls-block) decken DSML/XML ab, das keine klammern
+                # hat — ohne sie hat der merge `|`/`>` am part-anfang als
+                # markdown-block gelesen und den aufruf zerschnitten.
                 state[0] += part
             elif not part.strip():
                 # S-06: gleiche regel wie im streampfad — eine part ohne
@@ -4250,6 +4291,7 @@ class GLMEventAccumulator:
             else:
                 state[0] += part
             state[2], state[3] = _scan_brackets(part, state[2], state[3])
+            state[5], state[6] = _scan_markup(part, state[5], state[6])
         state[1] = len(parts)
         state[4] = self._parts_epoch
         return state[0]

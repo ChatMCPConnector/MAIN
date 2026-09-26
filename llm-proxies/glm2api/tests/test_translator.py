@@ -4421,3 +4421,94 @@ def test_text_attempted_tools_separates_prose_from_protocol():
         names, has_protocol = accumulator._text_attempted_tools()
         assert names == expected_names, (text, names)
         assert has_protocol is expected_protocol, (text, has_protocol)
+
+
+# --- DSML ueber Part-Grenzen (2026-09-26) ---------------------------------
+#
+# Der part-merge schuetzte nur JSON: `{"tool_calls":` ist eine offene
+# Klammer, da wird nichts eingefuegt. DSML/XML hat keine Klammern, und die
+# entscheidung fiel an `_starts_new_block` — `|` und `>` am Part-Anfang
+# gelten als Markdown-Bloecke (Tabelle, Zitat), sind im DSML aber
+# Protokollzeichen. Folge: der merge setzte mitten im Markup einen
+# Absatzumbruch, der Aufruf wurde zerschnitten und kam nicht mehr an; das
+# zerschnittene Markup landete als Antworttext beim Client.
+#
+# Gemessen vor dem Fix: der Aufruf ging bei 34 von 147 Chunk-Groessen
+# verloren (bei 126 von 147, bevor T-20 den Merge inkrementell machte) — und
+# so war es seit dem ersten Commit, in dem glm2api im Repo liegt.
+
+_DSML_CALL = (
+    '<|DSML|tool_calls><|DSML|invoke name="read">'
+    '<|DSML|parameter name="filePath"><![CDATA[/a.py]]></|DSML|parameter>'
+    '</|DSML|invoke></|DSML|tool_calls>\n'
+)
+
+
+def _dsml_run(pieces, path):
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    for index, piece in enumerate(pieces):
+        accumulator.consume_event(_event("c", f"p{index}", text=piece))
+    if path == "stream":
+        accumulator.finalize("finish")
+        message = accumulator.build_response()["choices"][0]["message"]
+    else:
+        message = accumulator.build_response("finish")["choices"][0]["message"]
+    return [call["function"]["name"] for call in (message.get("tool_calls") or [])]
+
+
+@pytest.mark.parametrize("path", ["stream", "non-stream"])
+def test_dsml_call_survives_every_chunk_size(path):
+    """Jede Zerschnittenheit muss denselben Aufruf ergeben. Stichprobe ueber
+    alle Chunk-Groessen (1 Zeichen bis zum ganzen Text) — das ist die Form,
+    in der ChatGLM live liefert."""
+    lost = [
+        size
+        for size in range(1, len(_DSML_CALL) + 1)
+        if _dsml_run([_DSML_CALL[i : i + size] for i in range(0, len(_DSML_CALL), size)], path)
+        != ["read"]
+    ]
+    assert not lost, f"{path}: Aufruf verloren bei Chunk-Groessen {lost[:12]}"
+
+
+@pytest.mark.parametrize("path", ["stream", "non-stream"])
+def test_dsml_call_after_prose_survives_part_split(path):
+    """Der Live-Fall: Text und Markup in getrennten Parts, mit Schnitt
+    mitten im Tag."""
+    for split in range(0, len(_DSML_CALL), 7):
+        pieces = ["Ich lese die Datei.\n", _DSML_CALL[:split], _DSML_CALL[split:]]
+        assert _dsml_run(pieces, path) == ["read"], (path, split)
+
+
+def test_markdown_blocks_still_get_a_paragraph_break():
+    """Gegenprobe zum Fix: `|` und `>` am Part-Anfang sind AUSSERHALB von
+    Markup genau das, wofuer sie gedacht sind. Ein Zitat und eine Tabelle
+    muessen weiterhin als eigene Bloecke im Text landen."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    accumulator.consume_event(_event("c", "p1", text="Einleitung"))
+    accumulator.consume_event(_event("c", "p2", text="> Zitat aus der Anleitung"))
+    accumulator.consume_event(_event("c", "p3", text="| Spalte | Spalte |"))
+    accumulator.finalize("finish")
+    content = accumulator.build_response()["choices"][0]["message"]["content"] or ""
+
+    assert "\n\n> Zitat aus der Anleitung" in content, content
+    assert "\n\n| Spalte | Spalte |" in content, content
+
+
+def test_markup_state_does_not_leak_into_prose():
+    """Gegenprobe zum Gegen-Test: nach einem geschlossenen DSML-block muss
+    der merge wieder normal arbeiten — ein haengender `in_call_run`-zustand
+    wuerde jeden folgenden absatz verschlucken.
+
+    Geprueft wird `_join_parts_incremental` direkt: der turn hat einen
+    aufruf, und im non-stream-response ist `content` per OpenAI-vertrag leer,
+    sobald `tool_calls` da sind — der cache sagt dann nichts ueber den
+    merge aus.
+    """
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    parts: list[str] = []
+    for index, text in enumerate([_DSML_CALL, "Fertig gelesen.", "> Zitat aus der Anleitung"]):
+        accumulator.consume_event(_event("c", f"p{index}", text=text))
+        parts.append(text)
+        joined = accumulator._join_parts_incremental(parts, "text")
+
+    assert "\n\n> Zitat aus der Anleitung" in joined, joined

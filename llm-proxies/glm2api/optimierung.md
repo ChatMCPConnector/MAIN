@@ -503,9 +503,51 @@ Zerschnittenheit ist (`_text_attempted_tools()`):
 Der Vorlauf wurde auf `_unresolved_tool_attempt()` umgestellt, damit die
 Frage bei Chunk-Größe 1 überhaupt gestellt wird.
 
+### Gefunden beim selben Durchgang II: DSML über Part-Grenzen (seit Repo-Anfang)
+
+**Methode:** Differenzmessung statt Vermutung. Für jedes Szenario ist das
+Ergebnis bei **einem** großen Delta die Referenz; jede andere Zerschnittenheit
+muss dasselbe liefern. Zwei Achsen, weil der Upstream beide Formen liefert:
+Zeichen innerhalb eines Parts (`chars`) und Part-Grenzen (`logic_id`-Schnitte,
+gleichmäßig und ungleichmäßig). Geprüft wurde, was der **Client** bekommt:
+`finish_reason`, `tool_calls` (Namen + Argumente) und der sichtbare Text.
+
+**Symptom:** ein DSML-Aufruf ging bei **34 von 147** Chunk-Größen verloren
+(vor T-20, als der Merge noch nicht inkrementell war: 126 von 147), und das
+zerschnittene Markup kam als Antworttext an. `finish_reason` kippte dabei
+zusätzlich zwischen `stop` und `error`.
+
+**Ursache:** der Part-Merge schützte nur JSON. `{"tool_calls":` ist eine
+**offene Klammer**, und `_scan_brackets` verhindert dort jeden Eingriff.
+DSML/XML hat keine Klammern, also fiel die Entscheidung an `_starts_new_block`:
+`|` und `>` am Part-Anfang gelten als Markdown-Block (Tabelle, Zitat) — im
+DSML sind es Protokollzeichen. Der Merge setzte mitten im Markup einen
+Absatzumbruch:
+
+```
+1 part       <|DSML|tool_calls><|DSML|invoke name="read">…
+1 char/part  <\n\n|DSML\n\n|tool_calls\n\n><\n\n|DSML\n\n|invoke name="read"…
+```
+
+**Fix:** `_scan_markup` zählt neben den Klammern mit, ob das Fragment mitten
+in einem Tag endet (`open_tag`) und ob ein `…tool_calls…`-Block läuft
+(`in_call_run`). Beides heißt: die nächste Part ist eine Fortsetzung.
+
+**Zur Reichweite:** das war kein Rückschritt, sondern ein latenter Fehler seit
+dem ersten Commit, in dem glm2api im Repo liegt (`19c2e1d`, dort 126/147).
+Live nachgewiesen ist er nicht — der Prompt schreibt das JSON-Protokoll vor,
+DSML ist Legacy. `test_leak_sweep.py` hat aber DSML-Fälle, weil die Form
+durchaus vorkommt; wenn das Modell in sie zurückfällt, ging der Aufruf vorher
+stillschweigend verloren.
+
+**Merksatz für die nächste Session:** „chunk-stabil" ist keine Eigenschaft,
+die man einmal prüft und dann abhakt — sie ist eine **Invariante**, und sie
+gilt pro Achse (Zeichen, Parts) und pro Pfad. Die Messung kostet Sekunden
+und hat einen Fehler gefunden, den kein bestehender Test abgedeckt hat.
+
 ### Verifikation
 
-- **788 Tests grün** (718 vor dem Nachtrag + 70 neue; Basis der Übergabe
+- **794 Tests grün** (718 vor dem Nachtrag + 76 neue; Basis der Übergabe
   wiederum 532 + 143 aus S-05/06/07).
 - Jede neue Testklasse wurde gegen den **Vorher-Stand** laufen gelaufen, wie
   schon bei S-05/S-07: gegen `4af494e~1` (ohne S-09) schlagen **20** der
@@ -525,9 +567,17 @@ Frage bei Chunk-Größe 1 überhaupt gestellt wird.
   eingestuft — nicht Proxy-Seite.
 - `.env`-Korrektur (THEMA 9) live bestätigt: der Dienst startet wieder mit
   `token_source=.env GLM_REFRESH_TOKEN` und ohne `IGNORED`-Warnung.
-- Historie: `smoke-test.sh` 8/8; vier opencode-Sessions gegen den echten
-  Proxy (`glm2api verify 4/5/6/7`): eine finale Text-Part, **0**
-  Whitespace-Parts, 13 Tool-Calls, 0 Fehler. Regressionslauf mit dem
+- **Differenzmessung** (23 Szenarien × 2 Pfade × 3 Zerschnittenheits-Achsen ×
+  jede Chunk-Größe): vor dem Markup-Fix 210 Abweichungen, alle DSML; nach dem
+  Fix **null** — das Ergebnis ist von der Zerschnittenheit unabhängig.
+- DSML-Gegenprobe: die 4 neuen DSML-Tests schlagen gegen `1ec7ff4` fehl, die
+  beiden Gegenproben (Markdown-Block bekommt weiter seinen Absatzumbruch,
+  Markup-Zustand leakt nicht in Prosa) sind gegen **beide** Stände grün.
+- Live nach dem Markup-Fix: Neustart ok, Textantwort `stop`/„Ja",
+  Tool-Aufruf `tool_calls` — unverändert zum Stand davor.
+- Historie (S-05/06/07): `smoke-test.sh` 8/8; vier opencode-Sessions gegen den
+  echten Proxy (`glm2api verify 4/5/6/7`): eine finale Text-Part, **0**
+  Whitespace-Parts, 13 Tool-Calls, 0 Fehler; Regressionslauf mit dem
   7-Schritt-Stresstest ebenfalls sauber.
 
 ### Merkposten für die nächste Session
@@ -639,6 +689,7 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - Selbst-Narration über Delta-Grenzen (S-09) — DONE 2026-09-26
 - Holdback fraß das Werkzeug-Protokoll → T-06 ging verloren (S-09-Nachtrag) — DONE 2026-09-26
 - Abschluss-Einstufung hing an der Zerschnittenheit (`stop`/`error`) — DONE 2026-09-26
+- DSML-Aufruf an Part-Grenzen zerschnitten (latent seit Repo-Anfang) — DONE 2026-09-26
 - Vier wirkungslose + sechs doppelte Betriebs-Keys, `parse_dotenv` warnt jetzt — DONE 2026-09-26
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
