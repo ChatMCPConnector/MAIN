@@ -1324,16 +1324,33 @@ _SELF_STEERING_RE = re.compile(
 )
 
 
-def strip_self_steering(text: str) -> str:
+def strip_self_steering(text: str, *, require_complete_sentence: bool = False) -> str:
     """Entfernt Sätze, in denen das Modell sein eigenes Werkzeugverhalten
     kommentiert (S-08). Nur fuer den stream-pfad — siehe
-    `_SELF_STEERING_RE`."""
+    `_SELF_STEERING_RE`.
+
+    `require_complete_sentence=True` (der stream-pfad): entfernt wird nur,
+    was **vollstaendig** in diesem stueck liegt. Grund: ein stream-delta
+    beginnt mitten im satz. Ohne diese bedingung schnitt der filter mitten
+    im wort und liess ein fragment stehen — live gemessen:
+    '…fuer Dateisystem nutze ich jetzt `bash`:' wurde zu
+    '`isystem nutze ich jetzt `bash`:'. Was ueber delta-grenzen laeuft,
+    faellt beim finalize durch, wo der volle text vorliegt.
+    """
     if not text or not _SELF_STEERING_RE.search(text):
         return text
     kept: list[tuple[int, int]] = []
     for match in _SELF_STEERING_RE.finditer(text):
         start = _sentence_start_before(text, match.start())
         stop = _sentence_end_after(text, match.end())
+        if require_complete_sentence:
+            # ein echter satzende-punkt muss im stueck liegen …
+            if stop >= len(text.rstrip()) and not _SENTENCE_END_RE.search(text, match.end()):
+                continue
+            # … und davor muss eine echte satzgrenze liegen (nicht der
+            # delta-anfang, der mitten im satz liegen kann).
+            if start > 0 and text[start - 1] not in ".!?…\n":
+                continue
         if any(s <= start < e for s, e in kept):
             continue
         kept.append((start, stop))
@@ -2732,7 +2749,7 @@ class GLMEventAccumulator:
             # nachricht sieht. Der finale bericht (turn OHNE calls) bleibt
             # unberuehrt, weil dort eine aussage ueber `open` echter
             # inhalt sein kann (z. B. in einer analyse ueber den proxy).
-            visible_text_delta = strip_self_steering(visible_text_delta)
+            visible_text_delta = strip_self_steering(visible_text_delta, require_complete_sentence=True)
         if visible_text_delta:
             # THEMA 3 (F2): C0-Steuerzeichen im gestreamten Content ersetzen
             visible_text_delta = self._sanitize_visible_text(visible_text_delta)

@@ -3619,7 +3619,7 @@ def test_real_sentences_survive_the_self_steering_filter(keep):
 
 def test_self_steering_only_applies_while_the_turn_still_has_calls():
     """S-08: der filter darf den FINALEN bericht nicht entschaerfen. Er
-    haengt deshalb an der bedingung 'turn hat bereits calls'."""
+    haengt an der bedingung 'turn hat bereits calls'."""
     narration = "Ich nutze jetzt `read` und `bash` für die Analyse."
     accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
     for part in (
@@ -3641,6 +3641,24 @@ def test_self_steering_only_applies_while_the_turn_still_has_calls():
             if chunk.startswith("data: ") and "[DONE]" not in chunk
         ]
     assert not [item for item in streamed if item and item.strip()], streamed
+
+
+def test_self_steering_never_cuts_a_stream_delta_mid_sentence():
+    """S-08: ein stream-delta beginnt mitten im satz. Ein satzweiter
+    schnitt darauf erzeugt ein halbwort — live gemessen: aus
+    '…fuer Dateisystem nutze ich jetzt `bash`:' wurde
+    '`isystem nutze ich jetzt `bash`:'. Im stream darf deshalb NUR
+    entfernt werden, was vollstaendig im stueck liegt."""
+    from glm2api.services.translator import strip_self_steering
+
+    mid_sentence = "`open` ist hier nur für lokale Dateisystem nutze ich jetzt `bash`:"
+    assert strip_self_steering(mid_sentence, require_complete_sentence=True) == mid_sentence
+
+    complete = "Ich nutze jetzt `read` und `bash` für die Analyse. Danach lese ich die Dateien."
+    assert strip_self_steering(complete, require_complete_sentence=True) == (
+        "Danach lese ich die Dateien."
+    )
+
 
 
 @pytest.mark.parametrize("keep", [
