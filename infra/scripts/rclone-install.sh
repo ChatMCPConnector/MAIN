@@ -17,7 +17,9 @@ fi
 
 mkdir -p "$tmp_dir"
 archive="rclone-v${RCLONE_VERSION}-linux-amd64.zip"
-url="https://downloads.rclone.org/${archive}"
+# rclone hat sein URL-Schema geändert: die Dateien liegen jetzt unter
+# downloads.rclone.org/<VERSION>/ (der alte flache Pfad liefert 404).
+url="https://downloads.rclone.org/v${RCLONE_VERSION}/${archive}"
 
 echo "[rclone] Lade rclone v${RCLONE_VERSION}..."
 curl -fsSL --retry 5 --retry-all-errors -o "${tmp_dir}/${archive}" "${url}"

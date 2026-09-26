@@ -42,6 +42,13 @@ require_auth() {
     echo "[gdrive] Einmalig einrichten: siehe infrastructure.md (gdrive-backup Abschnitt)."
     return 1
   fi
+  # Ohne rclone-Binary war "Remote fehlt" die Meldung für zwei verschiedene
+  # Fehlerbilder. Erst das Binary prüfen, dann den Remote.
+  if ! command -v rclone >/dev/null 2>&1; then
+    echo "[gdrive] rclone nicht installiert — Backup übersprungen."
+    echo "[gdrive] Installieren: ./infra/scripts/rclone-install.sh"
+    return 1
+  fi
   rclone listremotes 2>/dev/null | grep -qx "${REMOTE}:" || {
     echo "[gdrive] Remote '${REMOTE}' fehlt in $RCLONE_CONF."
     return 1
