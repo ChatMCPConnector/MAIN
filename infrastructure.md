@@ -387,51 +387,67 @@ startet nur bei echtem TTY ueber den Filter (`FREEBUFF_NO_PTY_FILTER=1` =
 Direktstart). Preis: Freebuffs eigene Auswahl per Drag entfaellt, kopiert wird
 wie im normalen Terminal (Maus ziehen, `Ctrl+Shift+C`).
 
-**2. Mausrad.** Nach Schritt 1 nimmt das Terminal die Rad-Events als
-Scrollback-Aktion — und **genau hier unterscheiden sich die beiden Apps:**
-opencode rendert im normalen Buffer, also scrollt das Terminal den sichtbaren
-Text mit. Freebuff nutzt den Alternate Screen (`CSI ? 1049 h`, live belegt) —
-dort existiert kein Scrollback, ein Rad-Ereignis bewegt sich sichtbar also
-**nichts**. Man kann den Rad-Event aber zu einer Taste machen, denn die App
-bindet sie ohnehin: im Binary steht `case"pageup": scrollBy(-0.5,"viewport")`
-und `case"pagedown": scrollBy(0.5,"viewport")`, der Key-Parser mappt
-`\e[5~`/`\e[6~` darauf. Also mappt **`.vscode/keybindings.json`** (neu, Repo-
-Ebene, `when: terminalFocus`):
+**2. Mausrad — die Loesung steht seit Anfang an in `Revision.md` 4.16.**
+`.opencode/tui.json` ist „Opencode-TUI-Maus- und Keybind-Konfiguration“ mit der
+ausdruecklich genannten Abhaengigkeit **„xterm.js-Mausraduebersetzung“**, und
+`Revision.md` formuliert die gewuenschte **„Halbseiten-Navigation ueber Auf-/Ab-
+Tasten“**. `tui.json` setzt genau das um:
 
 ```json
-{ "key": "mousewheel up",   "command": "workbench.action.terminal.sendSequence",
-  "args": { "text": "\u001b[5~" }, "when": "terminalFocus" }
-{ "key": "mousewheel down", "command": "workbench.action.terminal.sendSequence",
-  "args": { "text": "\u001b[6~" }, "when": "terminalFocus" }
+"messages_half_page_up":   "up,ctrl+alt+u",   // Rad -> up, up = scrollt
+"messages_half_page_down": "down,ctrl+alt+d",
+"input_move_up":   "none",                    // der Input bekommt up/down NICHT
+"input_move_down": "none",
 ```
 
-Das ist **anwendungsneutral** und gilt fuer jeden Terminal, auch fuer `less`,
-`vim`, `man`, `htop`. Was sich aendert: das Mausrad scrollt in TUIs jetzt
-Tastenseiten (PageUp/PageDown) statt Terminal-Scrollback. Bei opencode ist das
-genau das Gewuenschte (`messages_page_up`/`messages_page_down` in `tui.json`).
+**Das ist der ganze Trick und nicht die Terminalseite:** das Mausrad wird ohne
+Mouse-Reporting zu `up`/`down` (xterm.js, live im Key-Log bestaetigt: die
+Testsession bekam `ESC[A`/`ESC[B`), und `up`/`down` wird in der App auf Scrollen
+umgehaengt, waehrend der Input seine Pfeiltasten bewusst verliert.
 
-**Freebuff braucht dafuer einen Multiplikator — und der Grund ist nicht
-Kosmetik.** Im Chat-Screen von freebuff gibt es keine Taste fuer einen
-Seitensprung. Der Component-Handler lautet woertlich:
+**Uebertragung auf freebuff, 1:1.** freebuff hat keine Keybind-Config, aber der
+pty-Filter sitzt genau an der Stelle, an der opencode die App-Config hat — im
+Tastatur-Eingangsstrom. `freebuff-pty.py` haengt daher dort `up`/`down` auf
+PageUp/PageDown um:
 
-```
-case"up":X(); break;  case"down":v(); break;
-case"pageup":J.current?.scrollBy(-10); break;      // 10 ZEILEN
-case"pagedown":J.current?.scrollBy(10); break;
-case"home":J.current?.scrollTo(0); break;  case"end":B(); break;  // Anfang/Ende
-a.preventDefault?.()                                    // Event wird geschluckt
-```
+| im Filter | |
+|---|---|
+| `ESC [ A` / `ESC O A` (up) | -> `ESC [ 5 ~` PageUp |
+| `ESC [ B` / `ESC O B` (down) | -> `ESC [ 6 ~` PageDown |
+| `ESC [ C` / `ESC [ D` (rechts/links) | unveraendert |
+| `ESC [ 1 ; 2 A` / `1 ; 5 A` (shift/ctrl+up) | unveraendert |
 
-Das `preventDefault` ist der entscheidende Punkt: opentuis eigener ScrollBox-
-Handler wuerde `pageup` auf **0,5 Viewport** mappen (`scrollBy(-0.5,"viewport")`),
-wird aber nie erreicht, weil der Component das Event vorher konsumiert. **Ein
-Tastendruck scrollt in freebuff also maximal 10 Zeilen** — „Bild hoch/runter"
-existiert als Taste nicht. Die Keybinding sendet deshalb **drei** PageUp/
-PageDown pro Rasterung (`\e[5~` dreimal), das ergibt ~30 Zeilen und damit
-gefuehlsmaessig eine Bildschirmseite. Die `3` ist eine Magic Number und steht
-deshalb an beiden Stellen im Repo (hier und im Changelog). Aendert freebuff den
-Schritt, muss sie nachgezogen werden; `home`/`end` im Tastaturlayout sind der
-Rettungsweg fuer den Sprung ans Ende.
+Warum PageUp/PageDown und nicht ein Zeilenschritt: `PageUp` ist im Bundle an den
+Root-Action `scroll-up` gebunden, und **der funktioniert nachweislich** (live
+getestet, Nutzerbestaetigung: „PageUp und PageDown scrollt hoch und runter“).
+Genau das war vorher ungeprueft, jetzt ist es der Anker.
+
+**Der Preis, derselbe wie bei opencode:** `up`/`down` verschieben im Input
+weder den Cursor noch navigieren in der Prompt-Historie. Bei freebuff ist das
+sichtbarer als bei opencode, weil es dort `bash-history-up`/`history-up`
+verloren hat — **das ist genau das, was die Nutzerbeobachtung „Mausrad scrollt
+nur den Chatverlauf“ war**: das Rad kam als `up`/`down` an undNavigierte die
+History, statt zu scrollen. Wer die Pfeiltasten in der Eingabe braucht
+(mehrzeilige Eingabe, gezielte History-Navigation): `FREEBUFF_NO_ARROW_PAGE=1
+freebuff`. Wer eine Taste fuer Prompt-Historie sucht: `ctrl+p`/`ctrl+n` bzw.
+die History-Actions selbst.
+
+**Verifikation:** 9 Faelle als Funktionstest (Richtungs-Paare, SS3-Variante im
+Application-Modus, links/rechts unveraendert, `shift+up`/`ctrl+up`
+unveraendert, Text+Pfeil, kein Doppel-Umschreiben von PageUp) und end-to-end am
+echten pty: Kind bekam `ESC[5~ ESC[5~ ESC[6~ ESC[C` fuer
+`up up down rechts`. Zusaetzlich abgesichert: eine ueber zwei Reads zerrissene
+Sequenz wird zurueckgehalten und zusammengesetzt (`abc` + `ESC[` / `A` ->
+`abc` + `ESC[5~`), sonst wuerde ein geteilter Pfeil durchrutschen.
+
+**Was dieser Weg NICHT kann** (und warum der Keybinding-Weg tot war): das Rad
+selbst umzuleiten. `.vscode/keybindings.json` mit `mousewheel up/down` wurde
+probeweise eingefuegt und hat **nie gefeuert** — laut VS-Code-Referenz gehoert
+`mousewheel` nicht zu den akzeptierten `key`-Werten (Buchstaben, Ziffern,
+Pfeile, `pageup`/`pagedown`, `home`/`end`, `tab`/`enter`/`escape`/`space`/
+`backspace`/`delete`, Nummernblock), wird also nicht dispatcht. Die Datei ist
+wieder entfernt. Die Umleitung des **Rads** ist unmoeglich, die Umleitung der
+**Taste, die das Rad erzeugt**, war von Anfang an der richtige Weg.
 
 **Die harte Grenze: Block-Scrollen vs. Copy/Paste — ein Entweder-oder.**
 Der Wunsch „Mausrad soll nur im Kommando-Output-Block scrollen, nicht im Chat"
@@ -456,7 +472,7 @@ Wünsche schliessen sich aus:
 | | Rad scrollt Output-Block | Block aufklappbar | Terminal-Auswahl/Kopieren |
 |---|---|---|---|
 | Maus-Reporting **an** (Filter aus) | ja | ja (Klick) | nein — aber freebuff kopiert selbst (`Drag to select text — it copies automatically`) |
-| Maus-Reporting **aus** (Filter an, **Default**) | nein | nein | ja, wie opencode |
+| Maus-Reporting **aus** (Filter an, **Default**) | nein | nein | **ja** — Rad -> `up`/`down` -> PageUp/PageDown (opencode-Verfahren) |
 
 Default ist bewusst die zweite Zeile (Entscheidung des Nutzers am 2026-09-26:
 „Maus soll aus, ich brauche keine Maus genau wie bei opencode").
@@ -639,6 +655,7 @@ Proxy bei jedem Start automatisch hoch.
   - **Nebenbefund:** `/workspaces/fb-probe` (32 KB) lag als Rest eines Testlaufs mit gesetzter `FREEBUFF_CONFIG_DIR` herum — nur ein WARN-Log (`No auth token available`) plus anonyme Analytics-ID, keine Credentials. Gelöscht. Lehre: das native Binary kennt `FREEBUFF_CONFIG_DIR`, der npm-Launcher **nicht** — beide auf verschiedene Pfade zu setzen erzeugt genau solche „ausgeloggt"-Symptome, ohne Fehlermeldung.
   - **Mausrad-FiX, zweite Runde (das war nicht die ganze Wahrheit):** Die erste Keybinding-Mappt `mousewheel` auf **ein** PageUp/PageDown — und der Nutzer meldet zu Recht „scrollt nur den Chat, im Chatbereich, 10 Zeilen". Ursache im Binary, Chat-Screen-Handler woertlich: `case"pageup":J.current?.scrollBy(-10)` bzw. `scrollBy(10)` fuer down, dazu `home`/`end` als Sprung an Anfang/Ende — und am Ende `a.preventDefault?.()`. **Dieses `preventDefault` ist der ganze Befund:** es unterdrueckt opentuis eigenen ScrollBox-Handler, der `pageup` auf `scrollBy(-0.5,"viewport")` mappen wuerde. Ein Tastendruck scrollt in freebuff also hart begrenzt auf 10 Zeilen, und **eine Taste fuer einen Bildschirmsprung existiert nicht** — kein `ctrl+pageup` (der Component bails bei ctrl/meta/option per `return`, und der Root-Handler ueberspringt es ueber `xz=(H)=>Boolean(H.ctrl||H.meta||H.option)`), kein `shift+pageup` (feuert beide Handler, also 10 Zeilen plus Root-Scroll), `home`/`end` sind Spruenge. opencode kann es, weil es die Tasten selbst mappt (`tui.json`: `messages_page_up: pageup`) — das ist der Unterschied, nicht die Terminalseite. Loesung ohne Eingriff in die App: die Keybinding sendet **dreimal** die Sequenz (`\e[5~` x3 hoch, `\e[6~` x3 runter), ~30 Zeilen pro Rasterung, das entspricht einer Bildschirmseite. **Ehrlich als Magic Number markiert** (im Abschnitt „Maus, Copy/Paste & Scrollen in TUIs" und hier), weil sie an freebuffs Schrittweite hängt: ändert freebuff `scrollBy(-10)`, muss die 3 nachgezogen werden. Der zweite Teil der Nutzerbeobachtung ist keine Fehlfunktion: die Nachrichtenliste ist der einzige scrollbare Bereich, eine Ebene darüber existiert nicht — bei opencode ist es dieselbe Liste, nur mit voller Seite als Schritt. **Methodisch bemerkenswert:** die erste Fassung stützte sich auf die Doku-Behauptung, xterm.js übersetze das Rad in up/down, statt den tatsächlichen Handler zu lesen. Der Handler war in drei Klicks im Bundle auffindbar (`case"pageup":J.current?.scrollBy(-10)`), die Behauptung war falsch. Bei TUI-Innenleben ist der Binary-Code die Quelle, nicht die Terminal-Erwartung.
   - **Vierte Runde, und damit die Ursache statt des Symptoms: der Output-Bereich ist nicht „nicht scrollbar", er ist EINGEKAPPT und nur per Klick aufklappbar.** Die Navigation durch den minifizierten Bundle hat die Komponente `LAH` zutage geforscht, und die macht drei Dinge klar: `LAH=({command,output,expandable$=!0,maxVisibleLines:L,isRunning,…})` — `J=L??($?5:10)` heisst **5 Zeilen** collapsed bzw. **10** bei nicht aufklappbarem Block; der Aufklapp-Trigger ist `K(yA,{onClick:M,…})`, also ein **Maus-Klick**; und in der ganzen Komponente kommt `useKey`, `focusable` und `handleKeyPress` **null Mal** vor. Die App fuehrt laut Bundle genau vier Tasten-Actions ueberhaupt: `toggle-agent-mode`, `toggle-all`, `toggle-dock-panel`, `toggle-sponsored-dock` — **kein `expand`, kein `collapse`, kein `scroll-block`**. `LAH` wird an genau zwei Stellen benutzt: abgeschlossenes Kommando mit `expandable:!0, maxVisibleLines:5`, laufendes Kommando (`pending-bash`) mit `expandable:!1, maxVisibleLines:10`. **Damit ist der pty-Filter nicht die Ursache des Problems, sondern sein Ausloeser**: er entfernt genau den Klick, mit dem der Block aufklappbar waere. **Und damit ist die Grundsatzfrage beantwortet, die ich vorher falsch gestellt hatte:** 1:1-Uebertragbarkeit von opencode gibt es nicht, weil die Apps gegenlaeufig gebaut sind — opencode ist **tastatur-first** (`tui.json` bindet jede Aktion, deshalb funktioniert `mouse: false` dort), freebuff ist **maus-first** (seine eigenen Tips: „Drag to select text — it copies automatically (or click on a message)"). **Entscheidung des Nutzers: Maus aus, „genau wie opencode".** Der Default bleibt damit der pty-Filter, und der Preis wird nicht wegoptimiert, sondern benannt und mit freebuff-eigenen Mitteln entschaerft: `/copy` (Alias `copy-chat`) legt den **ganzen** Chat inkl. vollstaendigem Output in die Zwischenablage, `/export` (Alias `export-chat`, mit Zielargument) schreibt ihn als Datei — beides im Bundle als Slash-Commands verifiziert. Als Bonus-Loesung fand sich `wrapMode:"word"` + `maxVisibleLines`: der Cap zaehlt **umgebrochene** Zeilen, ein breiteres Terminal zeigt also im selben 5-Zeilen-Fenster mehr Text — die billigste Entlastung ueberhaupt. **Konsequenz fuer die Doku-Regel:** Bevor man am Terminal-Layer dreht, gehoert der UI-Aufbau der App gelesen — zwei FehlDiagnosen in dieser Session (Doku-Behauptung statt Bundle, Step-Groesse statt Region) waeren durch ein `LAH`-Lesen in einer Minute vermeidbar gewesen.
+  - **Mausrad-FiX, fünfte Runde: die Lösung stand die ganze Zeit in `Revision.md` — und mein Keybinding-Weg war grundverkehrt.** Der Nutzer verwies auf die MAIN-Struktur, und dort steht es: **`Revision.md` 4.16 zu `.opencode/tui.json`** nennt als Zweck „Opencode-TUI-Maus- und Keybind-Konfiguration“, als **Abhängigkeit explizit die „xterm.js-Mausradübersetzung“** und als Betriebsannahme die **„gewünschte Halbseiten-Navigation über Auf-/Ab-Tasten“**; `input_move_up`/`input_move_down` seien „bewusst auf `none` gesetzt und konsistent mit der Halbseiten-Navigation“. `.opencode/tui.json` realisiert genau das: `messages_half_page_up: up`, `input_move_up: none`. **Der Trick ist die Umhaengung der Taste, die das Rad erzeugt — nicht eine Umleitung des Rads.** Bei freebuff gibt es keine Keybind-Config, aber der pty-Filter sitzt an derselben Stelle im Eingangsstrom, also haengt er dort `up`/`down` auf PageUp/PageDown um (`ESC[A`/`ESC OA` -> `ESC[5~`, `ESC[B`/`ESC OB` -> `ESC[6~`; links/rechts sowie `shift`/`ctrl`-Varianten unangetastet). **Damit ist auch die Nutzerbeobachtung „Mausrad scrollt nur Chatverlauf“ aufgeklaert:** das Rad kam als `up`/`down` an, und freebuff mappt die auf `bash-history-up`/`history-up` — also auf **Prompt-Historie**, nicht auf Scrollen. **Anker der Fixes ist die live bestaetigte Tatsache, dass `PageUp`/`PageDown` in freebuff funktionieren** (Nutzerbestaetigung), ueber den im Bundle belegten Root-Action `scroll-up`/`scroll-down`. Verifiziert: 9 Funktionstest-Faelle (Richtungs-Paare, SS3 im Application-Modus, links/rechts unveraendert, `shift+up`/`ctrl+up` unveraendert, Text+Pfeil, kein Doppel-Umschreiben) und end-to-end am echten pty — Kind bekam `ESC[5~ ESC[5~ ESC[6~ ESC[C` fuer `up up down rechts`. Abgesichert ist der Fall einer ueber zwei Reads **zerrissenen** Sequenz: unvollstaendige Praefixe werden zurueckgehalten (`abc` + `ESC[` / `A` -> `abc` + `ESC[5~`), sonst rueutscht ein geteilter Pfeil durch. **Der Preis ist derselbe wie bei opencode und deshalb korrekt:** `up`/`down` verschieben im Input nicht mehr den Cursor und navigieren nicht in der Prompt-Historie — genau der Verlust, den opencode mit `input_move_up: none` bewusst in Kauf nimmt. Bypass, falls doch noetig: `FREEBUFF_NO_ARROW_PAGE=1 freebuff`. **Und die Abgrenzung, die ich in vier Runden falsch gezogen habe:** Das Rad selbst umzuleiten ist unmöglich (VS Code dispatcht `mousewheel` nicht), die **Taste** umzuleiten war nie das Problem — sie war nur nie das, wonach ich gesucht habe. **Methodisch, die wichtigste Lehre dieser Session:** Bei einem Problem, das „dort war es doch schon gelöst“ heißt, gehört **zuerst** in die Repo-Doku geguckt, bevor Code analysiert wird. `Revision.md` 4.16 stand in der Struktur und war in Sekunden auffindbar — ich habe stattdessen vier Runden ein 136-MB-Bundle seziert. Dokumentation eines Vorgängers ist die billigste Fehlerquelle überhaupt.
   - **Mausrad-FiX, vierte Runde: die Keybinding war von Anfang an tot — und das Log hat es in 30 Sekunden gezeigt.** Weil die Diagnosen bisher immer am freebuff-Code hingen, habe ich den Weg umgedreht und **gemessen statt geraten**: `freebuff-pty.py` protokolliert (mit `FREEBUFF_PTY_DEBUG`, Standardpfad `/tmp/opencode/freebuff-keys.log`, **nur** Esc-/Steuersequenzen, getippter Text nur als Byte-Laenge `<12B text>`) jede Sequenz, die das Kind tatsächlich liest. Ergebnis nach drei Rasterungen: `-> ESC[A ESC[A` / `ESC[A` / `ESC[A` / `ESC[B` — **Pfeiltasten, kein einziges `ESC[5~`**. Zwei Schlussfolgerungen, beide belegt: **(a)** `.vscode/keybindings.json` mit `mousewheel up/down` hat **nie gefeuert**. Die VS-Code-Referenz listet die akzeptierten `key`-Werte auf (Buchstaben, Ziffern, Pfeile, `pageup`/`pagedown`, `home`/`end`, `tab`/`enter`/`escape`/`space`/`backspace`/`delete`, Nummernblock) — **`mousewheel` steht nicht darin und wird nicht dispatcht.** **(b)** Die Doku-Behauptung „xterm.js uebersetzt das Mausrad in `up`/`down`“ war **richtig**; ich hatte sie vorschnell als falsch abgetan und ist jetzt im Dokument wiederhergestellt. **Konsequenz:** Eine Umleitung des Mausrads ist im VS-Code-Terminal nicht moeglich — weder per Keybinding noch per Setting. Es bleiben zwei ehrliche Zustaende: Maus **an** (das Rad erreicht die App, sie scrollt ihre eigenen Bereiche — Chat *und* Output-Bloecke, Aufklappen per Klick geht, Kopieren ueber freebuffs eigenes Drag-to-copy) oder Maus **aus** (Terminal-Auswahl und -Kopieren wie opencode, aber das Rad kommt als `up`/`down` an und scrollt nichts). **Entfernt:** die tote `.vscode/keybindings.json` samt Doku-Verweisen, damit niemand denselben Weg noch einmal geht. Der Key-Log im Filter bleibt, weil er die Frage in Sekunden beantwortet. **Nebenbefund aus dem Log:** freebuff fordert die Maus-Sequenzen nach ein paar Sekunden erneut an (`Maus entfernt: 1000h 1002h 1003h 1006h` um 00:16:01 und 00:16:22) — der Filter faengt sie wieder ab, kostet aber nichts. **Methodisch, die eigentliche Lehre:** Bei „Taste kommt nicht an“-Problemen zuerst die **Tastatur-Event-Kette** (was kommt an?) pruefen, dann die **Anwendungslogik** (was macht die App damit?). Ich habe vier Runden die App analysiert, waehrend die Frage eine Ebene tiefer sass; der Logger sind 20 Zeilen und haetten Runde 1 ersetzt. **Und eine Korrektur an mir selbst aus derselben Session:** `git commit` committet den ganzen Index, nicht die genannten Pfade. Ein Commit hat eine parallel laufende, bereits gestagte Loeschung (`infra/scripts/free-models.py`, 905 Zeilen) mitgenommen. Ab jetzt pfadbegrenzt committen (`git commit -- <pfad>`), sonst schleppt man fremde Arbeit mit.
   - **Mausrad-FiX, dritte Runde — und die ehrliche Aufloesung: es geht nicht beides.** Die Keybinding-Mappt das Rad auf PageUp/PageDown; der Nutzer meldet danach korrekt: „scrollt das Chatfenster, nicht den Output-Block". Der Output-Block ist der Kommando-Output **innerhalb** einer Nachricht, und genau da liegt eine Eigenschaft, die ich erst jetzt belegt habe: **Er hat eine eigene Scrollbar** (`verticalScrollbarOptions.visible`, `trackOptions.width:1`, berechnetes `isScrollable` ab einer Hoehenkappe) — er ist also ein eigenstaendiger scrollbarer Bereich. Der Screen-Handler kann ihn trotzdem nicht erreichen: er behandelt `pageup`/`pagedown` und ruft danach `preventDefault`, wodurch opentuis `handleKeyPress` (das `pageup` auf **0,5 Viewport** mappen wuerde) fuer **kein** Kind mehr ausgefuehrt wird. Der zweite Hebel — Fokus — existiert ebenfalls nicht: `focusable` setzt freebuff **nirgends** (alle 17 Bundle-Treffer sind opentuis Basisklasse), `onMouseWheel` kommt **null Mal** vor, und es gibt keine Tab-Fokus-Zyklen (`Tab` oeffnet die Datei-/Slash-/Mention-Menues, `Esc` macht `unfocus-agent` fuer Agenten, nicht fuer Scrollboxen). **Folge: Der Block ist ausschliesslich mit der Maus scrollbar — und die Maus ist genau der Kanal, an dem die native Textauswahl haengt. Es ist ein echtes Entweder-oder**, kein Rezeptfehler: Maus an ⇒ Rad scrollt Blöcke, aber keine Terminal-Auswahl (freebuff kopiert dann selbst, „Drag to select text — it copies automatically"); Maus aus ⇒ Copy/Paste wie opencode, aber der Block steht still. opencode entkommt dem Dilemma, weil `tui.json` jede Scroll-Aktion an Tasten bindet — genau das fehlt freebuff 0.0.204. Statt weiter an der Keybinding zu drehen, ist der dokumentierte Ausweg der bereits vorhandene Bypass im Wrapper: `FREEBUFF_NO_PTY_FILTER=1 freebuff` (Maus an) vs. `freebuff` (Default, Maus aus). **Methodisch, als dritte Lektion festgehalten:** Ich hatte zweimal auf die Doku- bzw. Terminal-Erwartung gebaut statt auf den Bundle-Code, und einmal die Nutzer-Rückmeldung als „Step-Groesse" gelesen, obwohl sie eine **andere Region** meinte. Bei TUI-Innenleben gilt: erst Census (`XH("scrollbox")`-Vorkommen zählen, `focusable`/`onMouseWheel` suchen), dann bauen — und wenn die App die Fähigkeit nicht hat, laut sagen statt sie zu simulieren.
   - **Mausrad-FiX (Nachtrag):** Copy/Paste fixt und das Mausrad ist tot — die andere Hälfte derselben Münze. Die alte Doku behauptete, xterm.js übersetze das Rad in `up`/`down`; das stimmt nicht, und die Erklärung lief in die falsche Richtung: **nach `mouse: false` bzw. nach dem pty-Filter ist das Mausrad ein Terminal-Scrollback-Ereignis — und Terminal-Scrollback ist im Alternate Screen unsichtbar.** opencode rendert im normalen Buffer, deshalb war dort nie etwas kaputt; Freebuff schaltet `CSI ? 1049 h` (live aus der Aufzeichnung) und hat damit keinen Scrollback. Die App kann aber nichts dagegen tun, dass das Rad ankommt — sie **bindet** die passenden Tasten ohnehin (`case"pageup": scrollBy(-0.5,"viewport")`, `case"pagedown": scrollBy(0.5,"viewport")`, Key-Parser mappt `\e[5~`/`\e[6~`). Der einzige Hebel ist deshalb eine **VS-Code-Keybinding**: neues `.vscode/keybindings.json` mappt `mousewheel up`/`down` per `workbench.action.terminal.sendSequence` auf genau diese zwei Sequenzen, `when: terminalFocus`. Anwendungsneutral (gilt auch für `less`/`vim`/`man`/`htop`) und in VS Code ohne Neustart wirksam. Gegengeprüft, dass der pty-Filter die Tasten nicht beschädigt: `\e[5~`/`\e[6~` passieren ihn unverändert (sein Regex verlangt `\e[?` + Ziffern + `h`/`l`), im selben Durchlauf verschwinden `\e[?1003h`/`\e[?1000h`. **Bewusster Trade-off, im neuen Abschnitt „Maus, Copy/Paste & Scrollen in TUIs" dokumentiert:** das Rad scrollt jetzt Tastenseiten statt Terminal-Scrollback, bei opencode also eine Nachrichtenseite statt drei Zeilen; wer das nicht will, löscht die zwei Einträge in der Keybinding-Datei. Der Abschnitt ist als eigene Übersetzung geschrieben, weil das Problem in zwei Apps steckt und die Reihenfolge nicht umkehrbar ist: `mouse: true` ⇒ Copy/Paste weg, pty-Filter weg ⇒ Copy/Paste weg, und die Keybinding allein ersetzt den abgeschalteten Scrollback-Mechanismus nicht.
