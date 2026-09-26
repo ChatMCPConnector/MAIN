@@ -220,9 +220,17 @@ def main():
     else:
         cached = {} if args.no_cache else load_cache()
         todo = [m for m in models if m["id"] not in cached]
-        probes = dict(cached)
+        # Nur Eintraege fuer aktuell gelistete Modelle uebernehmen. Cline
+        # rotiert seine Free-Modelle, und ein Modell, das von der API
+        # verschwindet, wuerde sonst fuer immer im Cache liegen: die Anzeige
+        # ist zwar nur die frische Liste (kein sichtbarer Fehler), aber die
+        # Datei waechst unbegrenzt und ein spaeter wiederkehrendes Modell
+        # wuerde ein uraltes, nicht mehr gueltiges Probe-Ergebnis treffen.
+        live = {m["id"] for m in models}
+        probes = {k: v for k, v in cached.items() if k in live}
         note(f"Probe: {len(todo)} von {len(models)} (Cache: "
-             f"{'aus' if args.no_cache else 'an'})")
+             f"{'aus' if args.no_cache else 'an'}, "
+             f"{len(cached) - len(probes)} verwaist verworfen)")
         # Wenige Threads: Cline drosselt, und die Probes dauern bei
         # Reasoning-Modellen teils 15+ s (Kaltstart).
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
