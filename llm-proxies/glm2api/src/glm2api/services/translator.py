@@ -578,6 +578,67 @@ def _starts_new_block(part: str) -> bool:
     return bool(_BLOCK_START_RE.match(part))
 
 
+def _needs_paragraph_break(previous: str, following: str) -> bool:
+    """S-11: braucht die grenze zwischen zwei parts einen absatzumbruch?
+
+    Die alte regel war `ends_sentence(prev) or starts_new_block(new)`. Die
+    erste haelfte ist ein **urteil ueber ein transport-artefakt**: eine
+    part-Grenze sagt nichts ueber absaetze aus (live liefert glm-5.3 den
+    text in 4-8-zeichen-teilen, ein turn hatte 166 logic_ids). Faellt sie
+    genau auf ein satzende, klebte der umbruch mitten in einen fortlaufenden
+    satz. Gemessen an 'Der Bericht nennt drei Punkte. Nichts weiter.' ueber
+    acht chunk-groessen: drei ausgaben fuer denselben text —
+
+        '...Punkte. Nichts weiter.'      (1 part)
+        '...Punkte.\\n\\n Nichts weiter.'   (schnitt vor dem leerzeichen)
+        '...Punkte. \\n\\nNichts weiter.'   (schnitt nach dem leerzeichen)
+
+    und eine markdown-liste zerfiel in
+    '1.\\n\\n Erster Punkt\\n2.\\n\\n Zweiter Punkt'.
+
+    Der entscheidende hinweis ist der **leerraum am rand der grenze** — er
+    gehoert zum text des modells und ist damit unabhaengig von der
+    aufteilung:
+
+      1. die naechste part beginnt mit leerraum (auch ein zeilenumbruch):
+         das modell hat selbst getrennt -> kein umbruch, nur anhaengen.
+         Das ist der regelfall: nach einem satzende schreibt jedes Modell
+         ein trenzeichen, und genau dieses zeichen decides.
+      2. die vorherige part endet mit leerraum: dasselbe, nur von der
+         anderen seite. Ohne diese regel wurde ein umbruch HINTER ein
+         vorhandenes leerzeichen gesetzt (doppelter umbruch).
+      3. die naechste part eroeffnet einen neuen markdown-block (liste,
+         ueberschrift, zitat, tabelle, fence) -> umbruch.
+      4. sonst: umbruch, wenn die vorherige part mit einem satzzeichen
+         endet. Das ist die anti-kleb-regel fuer wirklich getrennte
+         parts ('Erster Absatz.' + 'Zweiter Absatz.' bleiben zwei
+         absaetze) — sie greift nur, wenn das modell zwischen beiden
+         TEILEN nichts geschrieben hat.
+
+    Was damit inhaltlich nicht entscheidbar bleibt: ein text, in dem das
+    modell nach einem satzende gar kein trenzeichen schreibt. Da sind
+    'Absatz. Absatz' (zwei getrennte parts) und 'Punkte.Nichts' (ein
+    text) an der grenze nicht unterscheidbar, und die entscheidung haengt
+    dann an der aufteilung des upstreams. Der regelfall — mit trenner —
+    ist abgedeckt.
+
+    Fuer JSON und DSML ist die trennung ohnehin nicht diese regel, sondern
+    der klammer- bzw. markup-zustand (`_scan_brackets` / `_scan_markup`).
+    """
+    if not following:
+        # S-06: eine part ohne inhalt (live: eine leere text-part neben
+        # jedem nativen call) bekommt keinen umbruch — 7 calls ergaben so
+        # 12 leerzeilen im sichtbaren text.
+        return False
+    if following[:1].isspace():
+        return False
+    if previous[-1:].isspace():
+        return False
+    if _starts_new_block(following):
+        return True
+    return _ends_sentence(previous)
+
+
 # Nackter call-objekt-anfang: {"name": … / {"arguments": … / {"filePath": …
 _BARE_CALL_OPENER_RE = re.compile(r'\{\s*"(?:name|arguments|filePath|command|content)"\s*:')
 
@@ -4367,9 +4428,8 @@ class GLMEventAccumulator:
                         (text_delta_parts or self._part_text_sent)
                         and rendered_text.strip()
                         and not self._emitted_text_needs_continuation()
-                        and (
-                            _ends_sentence(self._emitted_text_tail)
-                            or _starts_new_block(rendered_text)
+                        and _needs_paragraph_break(
+                            self._emitted_text_tail, rendered_text
                         )
                     ):
                         text_delta_parts.append("\n\n")
@@ -4389,9 +4449,8 @@ class GLMEventAccumulator:
                     if (
                         (reasoning_delta_parts or self._part_reasoning_sent)
                         and not text_continues_protocol(self._emitted_reasoning_tail)
-                        and (
-                            _ends_sentence(self._emitted_reasoning_tail)
-                            or _starts_new_block(rendered_reasoning)
+                        and _needs_paragraph_break(
+                            self._emitted_reasoning_tail, rendered_reasoning
                         )
                     ):
                         reasoning_delta_parts.append("\n\n")
@@ -4456,7 +4515,7 @@ class GLMEventAccumulator:
                 # volltext (und damit in der non-stream-antwort) genau so
                 # viele leerzeilen, wie der turn part-grenzen hat.
                 state[0] += part
-            elif _ends_sentence(state[0][-_EMITTED_TAIL_CHARS:]) or _starts_new_block(part):
+            elif _needs_paragraph_break(state[0][-_EMITTED_TAIL_CHARS:], part):
                 state[0] = f"{state[0]}\n\n{part}"
             else:
                 state[0] += part

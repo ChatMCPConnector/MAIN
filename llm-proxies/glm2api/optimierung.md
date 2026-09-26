@@ -629,9 +629,89 @@ Stream-Delta geprüft wird, braucht beides: eine **abschließende** Wortgrenze
 zurückgehalten wird, braucht er *genau eine* Senke — ein Puffer, den der
 Abschluss nicht mehr ausleert, ist kein Puffer, sondern ein Loch.
 
+### S-11 — Absatzumbrüche des Part-Merges hingen an der Part-Aufteilung
+
+Die Restklasse aus S-10 (der Part-Merge fügte um native Calls Absatzabstände
+ein, deren Position schwankte) hat dieselbe Ursache wie Fehler 1: ein
+**Transport-Artefakt wurde als Inhalt gedeutet**. Alle drei Fundstellen
+(Stream-Deltas, Reasoning-Kanal, `_join_parts_incremental`) benutzten dieselbe
+Regel
+
+```
+_ends_sentence(previous) or _starts_new_block(following)
+```
+
+und die erste Hälfte urteilt über eine Part-Grenze. Die ist aber keine
+Aussage über Absätze: live liefert glm-5.3 den Text in 4–8-Zeichen-Teilen
+(166 `logic_id`s in einem Turn). Fiel die Grenze genau auf ein Satzende,
+klebte der Absatzumbruch mitten in einen fortlaufenden Satz. Gemessen mit
+`/tmp/glmtest/paragraph_probe.py` (7 Texte × 8 Chunk-Größen, mit/ohne Call) —
+**derselbe Text in drei Ausgaben**:
+
+```
+'…Punkte. Nichts weiter.'        (1 Part)
+'…Punkte.\n\n Nichts weiter.'    (Schnitt vor dem Leerzeichen)
+'…Punkte. \n\nNichts weiter.'    (Schnitt nach dem Leerzeichen)
+```
+
+und eine Markdown-Liste zerfiel in `1.\n\n Erster Punkt\n2.\n\n Zweiter Punkt`.
+Der Cache-Pfad war in 6 von 7 Texten chunk-abhängig, der Stream in 4.
+
+**Fix:** `_needs_paragraph_break(previous, following)` — eine gemeinsame
+Regel für alle drei Stellen. Der maßgebliche Hinweis ist der **Leerraum am
+Rand der Grenze**, denn der gehört zum Text des Modells und ist damit
+unabhängig von der Aufteilung:
+
+1. Die nächste Part beginnt mit Leerraum (auch ein Zeilenumbruch) → das
+   Modell hat selbst getrennt: nur anhängen. **Das ist der Regelfall** —
+   nach einem Satzende schreibt jedes Modell ein Trennzeichen, und genau
+   dieses Zeichen entscheidet.
+2. Die vorherige Part endet mit Leerraum → dasselbe. Ohne diese Regel stand
+   der Umbruch *hinter* einem vorhandenen Leerzeichen (`'Punkte. \n\nNichts'`).
+3. Die nächste Part eröffnet einen neuen Markdown-Block → Umbruch.
+4. Sonst: Umbruch, wenn die vorherige Part mit einem Satzzeichen endet. Das
+   ist die Anti-Kleb-Regel für wirklich getrennte Parts
+   (`'Erster Absatz.' + 'Zweiter Absatz.'` bleiben zwei Absätze) — sie greift
+   nur, wenn das Modell zwischen den Teilen nichts geschrieben hat.
+
+Der erste Versuch, die Anti-Kleb-Regel ganz zu streichen, machte **vier
+bestehende Tests rot**, darunter `test_prose_parts_are_still_separated_by_a_blank_line`
+(„echte, getrennte Text-Parts dürfen NICHT zusammenschmelzen"). Die ist
+Absicht und bleibt — deshalb regelt die Leerzeichen-Bedingung *vor* ihr,
+statt sie zu ersetzen.
+
+**Was inhaltlich nicht entscheidbar bleibt** (und so dokumentiert ist): ein
+Text, in dem das Modell nach einem Satzende **gar kein** Trennzeichen
+schreibt. `'Absatz. Absatz'` (zwei getrennte Parts) und `'Punkte.Nichts'`
+(ein Text) sind an der Grenze nicht unterscheidbar; die Entscheidung hängt
+dann an der Aufteilung des Upstreams. Der Regelfall — mit Trenner — ist
+abgedeckt.
+
+**Zweite Restklasse, bleibt bewusst stehen:** was der Stream beim Eintreffen
+des Calls **noch in der Hand hält**, geht im Aufruf-Turn verloren. Drei
+Behälter, alle gemessen: der Narration-Carry (S-07/S-09, 1–2 Zeichen:
+`'…Dritter Punk'`), der `pending_text` des Tool-Parsers (Protokollverdacht:
+schließender ```` ``` ````) und der S-05-Puffer, solange der Fence unausgeglichen
+ist. S-10 hat den *veröffentlichbaren* Puffer bereits aus dem Loch geholt; die
+beiden anderen brauchen eine Freigabe am Call-Event *nach* den Filtern — das
+kollidiert mit S-09 (Narration darf den Client nie sehen) und ist deshalb
+hier nicht angefasst. Betroffen sind 1–2 Zeichen am Textende, nicht der
+Text; der Cache-/Non-Stream-Pfad ist nie betroffen.
+
+**Merksatz für die nächste Session:** Jede Formatierungsentscheidung an einer
+Transportgrenze (Part-Grenze, Chunk-Grenze) ist verdächtig. Fragen, die die
+Antwort liefern: (a) Ist der Wert, den ich prüfe, *Inhalt* des Modells oder
+*Zustand* der Übertragung? (b) Liegt das entscheidende Signal im Text
+selbst — dann ist es aufteilungsunabhängig; liegt es in der Grenze selbst,
+dann hängt das Ergebnis an einem Schnitt, den niemand kontrolliert.
+
 ### Verifikation
 
-- **839 Tests grün** (794 + 45 neue aus S-10).
+- **839 Tests grün** (794 + 45 neue aus S-10), mit S-11 **848** (+ 9).
+- S-11 gegen den Vorher-Stand (Positivkontrolle): **8** der 9 neuen Tests
+  schlagen fehl — alle sechs Chunk-Unabhängigkeits-Fälle, der
+  Doppelumbruch und der Regel-Test. Die Anti-Kleb-Gegenprobe
+  (`…_still_separated_by_a_blank_line`) ist gegen **beide** Stände grün.
 - S-10 gegen den Vorher-Stand `9054325` (**Positivkontrolle**): **13** der 45
   neuen Tests schlagen fehl, und zwar je Fehlerklasse mindestens einer —
   `prose … cut mid word[7]`, `preamble pattern … word prefix`,
@@ -791,6 +871,7 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - DSML-Aufruf an Part-Grenzen zerschnitten (latent seit Repo-Anfang) — DONE 2026-09-26
 - Vier wirkungslose + sechs doppelte Betriebs-Keys, `parse_dotenv` warnt jetzt — DONE 2026-09-26
 - Reihenfolge-Invariante native Parts: Wortpräfix-Fehlmatch, verlorene Zwischenräume, Präambel über der Chunk-Grenze, gefenceter Text im Aufruf-Turn, `flush()`-Strip (S-10) — DONE 2026-09-27
+- Absatzumbrüche des Part-Merges hingen an der Part-Aufteilung (S-11) — DONE 2026-09-27
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).

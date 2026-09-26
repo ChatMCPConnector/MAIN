@@ -4705,3 +4705,94 @@ def test_s10_visible_text_around_native_calls_is_chunk_independent(layout):
         stream_text,
         turn_text,
     )
+
+
+# S-11 (2026-09-27): der part-merge setzte seinen absatzumbruch nach der
+# regel `ends_sentence(prev) or starts_new_block(new)`. Die erste haelfte
+# urteilt ueber ein TRANSPORT-artefakt — eine part-Grenze sagt nichts
+# ueber absaetze (live 4-8 zeichen pro part, 166 logic_ids in einem turn).
+# Faellt sie auf ein satzende, klebte der umbruch mitten in den satz.
+# Gemessen mit /tmp/glmtest/paragraph_probe.py: 'Der Bericht nennt drei
+# Punkte. Nichts weiter.' kam in drei ausgaben, eine markdown-liste zerfiel
+# in '1.\n\n Erster Punkt\n2.\n\n Zweiter Punkt'.
+_S11_TEXTS = {
+    "satz-mit-space": "Der Bericht nennt drei Punkte. Nichts weiter.",
+    "zwei-saetze": "Erster Satz hier. Zweiter Satz hier.",
+    "absatz-mit-newline": "Erster Absatz.\n\nZweiter Absatz.",
+    "liste": "1. Erster Punkt\n2. Zweiter Punkt\n3. Dritter Punkt",
+    "fence": "Vorher\n```\nalpha\n```\nNachher",
+    "frage": "Was steht in der Datei? Sie enthaelt drei Zeilen.",
+}
+
+
+def _s11_cache(text, chunk_size):
+    """Der zusammengefuehrte volltext (`_render_full_output`) fuer einen
+    turn, dessen text in `chunk_size`-stuecken ankam."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    for index, piece in enumerate(
+        [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+    ):
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {
+                        "logic_id": f"p{index}",
+                        "content": [{"type": "text", "text": piece}],
+                    }
+                ],
+            }
+        )
+    return accumulator._render_full_output()[0]
+
+
+@pytest.mark.parametrize("label", sorted(_S11_TEXTS))
+def test_s11_paragraph_breaks_do_not_depend_on_the_part_split(label):
+    """S-11: derselbe text muss bei jeder chunk-groesse identisch
+    zusammengefuegt werden. Vor dem fix hing der absatzumbruch davon ab,
+    wo der upstream schnitt."""
+    text = _S11_TEXTS[label]
+    variants = {_s11_cache(text, size) for size in (1, 2, 3, 5, 7, 11, 20, 1000)}
+    assert len(variants) == 1, variants
+    # und der merge darf nichts erfinden: was das modell geschrieben hat,
+    # steht unveraendert drin (kein erfundener umbruch, kein fehlender).
+    assert next(iter(variants)) == text
+
+
+def test_s11_a_sentence_end_alone_still_separates_two_real_parts():
+    """Gegenprobe zur Korrektur: die Anti-Kleb-Regel bleibt. Zwei wirklich
+    getrennte parts ohne trennzeichen dazwischen sind zwei Absaetze
+    (`test_prose_parts_are_still_separated_by_a_blank_line` pinnt das
+    ebenfalls)."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+    accumulator.consume_event(_event("c", "p1", text="Erster Absatz."))
+    accumulator.consume_event(_event("c", "p2", text="Zweiter Absatz."))
+    assert accumulator._render_full_output()[0] == "Erster Absatz.\n\nZweiter Absatz."
+
+
+def test_s11_no_second_break_behind_an_existing_newline():
+    """S-11: der umbruch stand schon im text, ein zweiter waere doppelt —
+    daraus entstand 'Vorher\n\n\n```'."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+    accumulator.consume_event(_event("c", "p1", text="Vorher\n"))
+    accumulator.consume_event(_event("c", "p2", text="```\nalpha\n```"))
+    assert accumulator._render_full_output()[0] == "Vorher\n```\nalpha\n```"
+
+
+def test_s11_paragraph_break_rules_directly():
+    """Die regel selbst, unabhaengig vom merge — inklusive der faelle, die
+    nicht entscheidbar sind (kein trennzeichen im text)."""
+    from glm2api.services.translator import _needs_paragraph_break
+
+    # das modell hat selbst getrennt: nur anhaengen
+    assert not _needs_paragraph_break("Punkte.", " Nichts weiter.")
+    assert not _needs_paragraph_break("Punkte. ", "Nichts weiter.")
+    assert not _needs_paragraph_break("Punkt\n", "- Zweiter")
+    # wirklich getrennte parts: umbruch
+    assert _needs_paragraph_break("Erster Absatz.", "Zweiter Absatz.")
+    # neuer markdown-block
+    assert _needs_paragraph_break("Vorher", "```\ncode\n```")
+    assert _needs_paragraph_break("Vorher", "> Zitat")
+    # S-06: leere part (neben jedem nativen call)
+    assert not _needs_paragraph_break("Punkte.", "")
+    assert not _needs_paragraph_break("Punkte.", "   ")
