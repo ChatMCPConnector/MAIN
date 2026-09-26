@@ -512,6 +512,26 @@ Zeichen innerhalb eines Parts (`chars`) und Part-Grenzen (`logic_id`-Schnitte,
 gleichmäßig und ungleichmäßig). Geprüft wurde, was der **Client** bekommt:
 `finish_reason`, `tool_calls` (Namen + Argumente) und der sichtbare Text.
 
+Die Teile sind dabei **typisiert**, weil nicht alles zerlegbar ist:
+
+| Teil | Form | zerlegbar? |
+|---|---|---|
+| Text-Part | `{"type": "text"}` | ja — beides |
+| Denk-Part | `{"type": "think"}` | ja — beides |
+| **native Part** | `{"type": "tool_calls", ...}` (Dict *und* Listenform) | **nein** — der Upstream zerlegt sie nicht |
+
+Der native Pfad ist damit von der Messung ausdrücklich **nicht** abgedeckt:
+`_scan_brackets`/`_scan_markup` sehen ihn gar nicht, er läuft an der
+Text-Part-Verarbeitung vorbei. Das ist Absicht — ein Bug dort wäre kein
+Zerschnittenheits-Bug, sondern ein Bug in der Part-Reihenfolge, und der hätte
+die Messung nur verfälscht.
+
+**Die Messung braucht eine Positivkontrolle**, sonst beweist „null
+Abweichungen" nichts: drei Szenarien sind gegen ältere Stände nachweislich
+fehlgeschlagen (`ctl-dsml` gegen `1ec7ff4`: 400 Abweichungen; `ctl-dsml` +
+`ctl-blocked-text-protocol` gegen `4af494e~1`: 810). Ein Sweep, der auf
+diesen Ständen sauber bliebe, würde nichts messen.
+
 **Symptom:** ein DSML-Aufruf ging bei **34 von 147** Chunk-Größen verloren
 (vor T-20, als der Merge noch nicht inkrementell war: 126 von 147), und das
 zerschnittene Markup kam als Antworttext an. `finish_reason` kippte dabei
@@ -567,9 +587,12 @@ und hat einen Fehler gefunden, den kein bestehender Test abgedeckt hat.
   eingestuft — nicht Proxy-Seite.
 - `.env`-Korrektur (THEMA 9) live bestätigt: der Dienst startet wieder mit
   `token_source=.env GLM_REFRESH_TOKEN` und ohne `IGNORED`-Warnung.
-- **Differenzmessung** (23 Szenarien × 2 Pfade × 3 Zerschnittenheits-Achsen ×
-  jede Chunk-Größe): vor dem Markup-Fix 210 Abweichungen, alle DSML; nach dem
-  Fix **null** — das Ergebnis ist von der Zerschnittenheit unabhängig.
+- **Differenzmessung** (31 Szenarien × 2 Pfade × 3 Zerschnittenheits-Achsen ×
+  jede Chunk-Größe = 7818 Messungen, inklusive **nativer** `tool_calls`-Parts
+  in Dict- und Listenform sowie **Denk-Parts** als eigene Teile): vor dem
+  Markup-Fix 210 Abweichungen, alle DSML; nach dem Fix **null**. Erweitert um
+  native Parts und Reasoning-Kanal: ebenfalls **null** — die native und die
+  Denk-Form haben keine weitere Zerschnittenheitsabhängigkeit.
 - DSML-Gegenprobe: die 4 neuen DSML-Tests schlagen gegen `1ec7ff4` fehl, die
   beiden Gegenproben (Markdown-Block bekommt weiter seinen Absatzumbruch,
   Markup-Zustand leakt nicht in Prosa) sind gegen **beide** Stände grün.
