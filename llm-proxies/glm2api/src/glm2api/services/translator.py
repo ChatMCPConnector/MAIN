@@ -26,6 +26,7 @@ from ..utils.tool_parser import (
     text_continues_protocol,
 )
 from ..utils.tool_protocol import (
+    contains_tool_markup,
     strip_unterminated_tool_prefix,
     BLOCKED_NATIVE_TOOL_NAMES,
     is_blocked_tool_name,
@@ -1458,6 +1459,17 @@ def _sentence_end_after(text: str, position: int) -> int:
 # was er zu viel zurückhält, kommt spätestens mit der nächsten satzgrenze
 # ungekürzt wieder raus — das ist verzögerung, kein textverlust. Entscheiden
 # tun weiterhin ausschließlich `_SELF_STEERING_RE`/`_LIMIT_CLAIM_RE`.
+#
+# S-09-NACHTRAG (2026-09-26, zwei rote Tests): `tool_calls` steht in dieser
+# liste, und damit griff der holdback auch auf das JSON-PROTOKOLL des
+# aufrufs selbst. Das war ein Fehlalarm mit echtem schaden: der parser sah
+# den aufruf erst im `finalize`, und die bewertung „unbrauchbarer aufruf"
+# (T-06, `dropped_call_count`) war da schon durch. Gemessen:
+# `{"tool_calls":[{"name":"read","arguments":{}}]}` endete als
+# `finish_reason: stop` mit leerem inhalt statt als `error` — also genau der
+# leere ERFOLG, den T-06 abstellen sollte. Deshalb die reihenfolge:
+# markup wird zuerst ausgeschlossen (siehe `contains_tool_markup`), der
+# narration-holdback fasst danach nur noch Prosa an.
 _NARRATION_TOKEN_RE = re.compile(
     r"(?i)(?:"
     r"`(?:open|open_url|read|write|edit|bash|webfetch|glob|grep)`"
@@ -1501,9 +1513,19 @@ def _self_steering_holdback(text: str) -> bool:
     Ja, solange sein letzter satz unvollständig ist und ein token enthält,
     das in einer selbst-narration vorkommt (`_NARRATION_TOKEN_RE`). Ein
     text, der mit einem vollständigen satz endet, braucht nie zu warten.
+
+    **Nie bei Werkzeug-Markup** (`{"tool_calls":…}`, DSML): da gibt es
+    keinen offenen Satz zu Ende zu bringen, sondern einen Aufruf, den der
+    Parser in diesem Moment sehen MUSS. Der Parser hat mit D-01/D-03 seinen
+    eigenen Holdback für angebrochenes Markup; ein zweiter davor macht nur
+    den Aufruf unsichtbar — und kostet die T-06-Einstufung, weil
+    `dropped_call_count` nur beim `consume()` entsteht, nicht beim
+    späten `flush()`. Siehe `contains_tool_markup`.
     """
     pending = _pending_sentence(text)
     if len(pending) < 2:
+        return False
+    if contains_tool_markup(pending):
         return False
     return bool(_NARRATION_TOKEN_RE.search(pending))
 

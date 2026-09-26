@@ -354,6 +354,42 @@ def strip_unterminated_tool_prefix(text: str) -> tuple[str, int]:
     return text, 0
 
 
+# S-09 (Nachtrag): Werkzeug-MARKUP gegen Prosa unterscheiden.
+#
+# `_NARRATION_TOKEN_RE` im translator matcht unter anderem `tool_calls` —
+# das ist im PROSA-Fall richtig (das Modell ERZÄHLT über das Protokoll), im
+# Markup-Fall aber ein Fehlalarm: `{"tool_calls":[…]}` ist kein Satz, den man
+# zurückhalten kann, sondern der aufruf selbst. Wird es doch zurückgehalten,
+# sieht der parser den aufruf erst im `finalize`, und die bewertung
+# „unbrauchbarer aufruf" (T-06, `dropped_call_count`) ist da bereits
+# vorbei. Gemessen 2026-09-26: `{"tool_calls":[{"name":"read",
+# "arguments":{}}]}` endete als `finish_reason: stop` mit leerem inhalt
+# statt als `error` — der leere ERFOLG, den T-06 genau abstellen sollte.
+#
+# Deshalb die Entscheidung "darf ich warten?" VOR dem Muster: markup geht
+# immer direkt an den parser (der hat mit D-01/D-03 seinen eigenen
+# holdback fuer angebrochenes markup), der narration-holdback fasst nur
+# Prosa an.
+_TOOL_MARKUP_RE = re.compile(
+    r"(?i)(?:"
+    r"\"tool_calls?\"\s*:"          # {"tool_calls": [...]}  (JSON-Protokoll)
+    r"|\btool_calls?_(?:begin|end)\b"  # DSML-Marker
+    r"|<\s*/?\s*tool_call[\s>/]"    # <tool_call> / </tool_call> (Legacy-XML)
+    r")"
+)
+
+
+def contains_tool_markup(text: str) -> bool:
+    """Enthaelt `text` werkzeug-Markup statt reiner Prosa?
+
+    Conservative by design: nur eindeutige marker zaehlen. Ein Wort
+    `tool` in einem Satz ist Prosa, `{"tool_calls":` ist Protokoll.
+    """
+    if not text:
+        return False
+    return bool(_TOOL_MARKUP_RE.search(text))
+
+
 def _braces_balanced(fragment: str) -> bool:
     depth = 0
     in_string = False

@@ -206,7 +206,33 @@
         "stealth/pixel-canary": {
           "name": "Pixel Canary (free)",
           "reasoning": true,
-          "tool_call": true
+          "tool_call": true,
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "none": {
+              "reasoningEffort": "none"
+            },
+            "minimal": {
+              "reasoningEffort": "minimal"
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            },
+            "max": {
+              "reasoningEffort": "max"
+            }
+          }
         },
         "stealth/space-bunny-alpha": {
           "name": "Space Bunny Alpha (free)",

@@ -4110,3 +4110,216 @@ def test_blocked_only_turn_ends_cleanly_in_both_paths():
             else:
                 finish = accumulator.build_response("finish")["choices"][0]["finish_reason"]
             assert finish == expected, f"{path} / {payload[:40]} -> {finish}, erwartet {expected}"
+
+
+# --- S-09 (Narration ueber Delta-Grenzen) + Nachbesserung -----------------
+#
+# S-09 haelt text VOR dem parser zurueck, solange sein letzter satz noch
+# narration werden kann — sonst sieht kein filter beide haelfte eines
+# satzes in einem string (live repro M: 'Der `open`-Tool-Aufruf
+# funktioniert ... fuer lokale Pfade - ich nutze stattdessen `read`/`bash`:'
+# lief ueber drei stream-deltas und kam komplett durch).
+#
+# Der Nachtrag: der ausloeser matcht auch `tool_calls`, und damit griff er
+# auf das JSON-PROTOKOLL des aufrufs selbst. Folge war keine verzoegerung,
+# sondern ein echter fehler — der parser sah den aufruf erst im `finalize`,
+# und T-06 (`dropped_call_count` -> `truncated_turn` -> `error`) war da
+# schon entschieden. Zwei tests wurden rot und blieben es.
+
+
+def _feed_deltas(deltas, allowed=None):
+    """Delta-folge streamen; liefert (sichtbarer_stream, accumulator).
+
+    Der stream wird INKLUSIVE der `finalize`-chunks gesammelt — der
+    deferred-puffer landet beim client ueber diesen pfad, nicht ueber
+    `build_response().content` (das ist nur der gecachte volltext).
+    """
+    accumulator = GLMEventAccumulator(
+        model="m", allowed_tool_names=allowed or {"read", "bash"}
+    )
+    streamed: list[str] = []
+
+    def collect(chunks):
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+
+    for index, text in enumerate(deltas):
+        chunks, _ = accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {
+                        "logic_id": f"p{index}",
+                        "content": [{"type": "text", "text": text}],
+                    }
+                ],
+            }
+        )
+        collect(chunks)
+    collect(accumulator.finalize("finish"))
+    return "".join(streamed), accumulator
+
+
+# Live repro M (2026-09-26 19:29, 20 tool-calls im turn): ein text-part
+# enthielt drei varianten desselben selbstgespraechs, aneinandergeklebt,
+# weil die saetze ueber mehrere deltas liefen.
+_S09_NARRATION = (
+    "Der `open`-Tool-Aufruf funktioniert in dieser Umgebung nicht zuverlässig für "
+    "lokale Pfade – ich nutze stattdessen `read`/`bash`:\n"
+    "The `open` tool only works for web URLs — for local files I need to use "
+    "`read`/`bash`:"
+)
+
+
+def _s09_deltas(chunk_size: int):
+    """Der repro-M-text als delta-kette, jeweils mitten im satz zerschnitten."""
+    call = '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}[]'
+    deltas = [call]
+    for index in range(0, len(_S09_NARRATION), chunk_size):
+        deltas.append(_S09_NARRATION[index : index + chunk_size])
+    return deltas
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 13, 29, len(_S09_NARRATION)])
+def test_mid_run_narration_across_delta_boundaries_is_stripped(chunk_size):
+    """S-09: die narration laeuft ueber mehrere deltas; ohne den
+    carry-holdback sieht der filter nie beide haelfte eines satzes und
+    alles kommt durch (live: drei varianten aneinandergeklebt)."""
+    streamed, _accumulator = _feed_deltas(_s09_deltas(chunk_size))
+
+    assert "nur das `open`-Tool" not in streamed
+    assert "only works for web URLs" not in streamed, streamed
+    assert "Tool-Aufruf funktioniert" not in streamed, streamed
+
+
+@pytest.mark.parametrize("chunk_size", [1, 5, 17, 40])
+def test_narration_holdback_still_delivers_a_valid_call(chunk_size):
+    """Gegenprobe zum holdback: verzoegerung ist erlaubt, textverlust nicht.
+    Der aufruf muss ankommen — egal wo die delta-grenzen fallen."""
+    streamed, accumulator = _feed_deltas(_s09_deltas(chunk_size))
+
+    names = [
+        call["function"]["name"]
+        for call in (accumulator.build_response()["choices"][0]["message"].get("tool_calls") or [])
+    ]
+    assert names == ["read"], (chunk_size, names, streamed)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 4, 11, 33])
+def test_narration_holdback_never_hides_an_unusable_call(chunk_size):
+    """Der eigentliche schaden des fehlalarm-alten holdbacks (S-09-Nachtrag).
+
+    `read` ohne `filePath` ist ein ERLAUBTER aufruf mit fehlendem
+    pflichtargument: T-06 sagt da `error`, weil dem client etwas
+    Brauchbares fehlt. Der holdback hat den aufruf erst im `finalize`
+    freigegeben — zu spaet fuer die einstufung. Ergebnis war der leere
+    ERFOLG: `stop` mit leerem inhalt, der agent blieb stehen.
+    """
+    payload = '{"tool_calls":[{"name":"read","arguments":{}}]}[]'
+    deltas = [payload[index : index + chunk_size] for index in range(0, len(payload), chunk_size)]
+
+    for path in ("stream", "non-stream"):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+        for index, text in enumerate(deltas):
+            accumulator.consume_event(_event("c", f"p{index}", text=text))
+        if path == "stream":
+            accumulator.finalize("finish")
+            finish = accumulator.build_response()["choices"][0]["finish_reason"]
+        else:
+            finish = accumulator.build_response("finish")["choices"][0]["finish_reason"]
+        assert finish == "error", f"{path} / chunk={chunk_size} -> {finish}, erwartet error"
+
+
+def test_unusable_call_behind_narration_prose_is_still_an_error():
+    """Der alltagsfall aus repro M: erst narration, dann der (unbrauchbare)
+    aufruf. Die narration wird herausgefiltert, der aufruf muss trotzdem
+    eingestuft werden — beides in einem turn."""
+    for path in ("stream", "non-stream"):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+        accumulator.consume_event(
+            _event("c", "p1", text="Der `open`-Aufruf funktioniert hier nicht, ich nutze `read`.")
+        )
+        accumulator.consume_event(
+            _event("c", "p2", text='{"tool_calls":[{"name":"read","arguments":{}}]}[]')
+        )
+        if path == "stream":
+            accumulator.finalize("finish")
+            finish = accumulator.build_response()["choices"][0]["finish_reason"]
+        else:
+            finish = accumulator.build_response("finish")["choices"][0]["finish_reason"]
+        assert finish == "error", f"{path} -> {finish}, erwartet error"
+
+
+def test_blocked_call_behind_narration_prose_still_ends_with_stop():
+    """Gegenprobe zur selben stelle: ein GESPERRTER aufruf ist eine
+    vollstaendige antwort und endet mit `stop` — als `error` wiederholte
+    der echte client den turn endlos (5 min backoff, agentenlauf
+    2026-09-26)."""
+    for path in ("stream", "non-stream"):
+        accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+        accumulator.consume_event(
+            _event("c", "p1", text="Der `open`-Aufruf funktioniert hier nicht, ich nutze `read`.")
+        )
+        accumulator.consume_event(
+            _event("c", "p2", text='{"tool_calls":[{"name":"open_url","arguments":{"url":"https://x"}}]}[]')
+        )
+        if path == "stream":
+            accumulator.finalize("finish")
+            finish = accumulator.build_response()["choices"][0]["finish_reason"]
+        else:
+            finish = accumulator.build_response("finish")["choices"][0]["finish_reason"]
+        assert finish == "stop", f"{path} -> {finish}, erwartet stop"
+
+
+def test_complete_sentence_never_waits_for_the_next_delta():
+    """Der holdback darf nicht die auslieferung verzoegern, wenn gar nichts
+    mehr kommt: ein text mit Satzende geht sofort raus."""
+    _streamed, accumulator = _feed_deltas(["Ich nutze jetzt `read` fuer die Datei."])
+    assert accumulator._narration_carry == ""
+
+
+def test_long_unterminated_sentence_is_released_by_the_length_deckel():
+    """Prosa ohne Satzende, laenger als der deckel: weiter warten hat keinen
+    sinn, der text muss fliessen (sonst haengt eine ausgabe ohne
+    satzgrenze bis zum turn-ende)."""
+    long_prose = "Der Bericht nennt open als Werkzeug und " + ("beschreibt die Dateien " * 40)
+    _streamed, accumulator = _feed_deltas([long_prose])
+    assert accumulator._narration_carry == ""
+
+
+# --- contains_tool_markup: die entscheidung, die der holdback vorher traf --
+
+
+@pytest.mark.parametrize("text", [
+    '{"tool_calls":[{"name":"read","arguments":{}}]}[]',
+    '{"tool_calls":',
+    'prefix {"tool_calls": [{"name": "bash"}]}',
+    "… <tool_calls_begin> …",
+    "… </tool_call_end> …",
+    "… <tool_call> …",
+])
+def test_contains_tool_markup_recognises_protocol(text):
+    from glm2api.utils.tool_protocol import contains_tool_markup
+
+    assert contains_tool_markup(text) is True, text
+
+
+@pytest.mark.parametrize("text", [
+    "",
+    "Der `open`-Aufruf funktioniert hier nicht, ich nutze stattdessen `read`.",
+    "I need to use read instead of open.",
+    "Das Tool-Limit (8/8) ist erreicht.",
+    "Ich öffne die Datei mit dem Editor.",
+    "Ein Beispiel: {\"name\": \"beispiel\"} sieht so aus.",
+])
+def test_contains_tool_markup_leaves_prose_alone(text):
+    from glm2api.utils.tool_protocol import contains_tool_markup
+
+    assert contains_tool_markup(text) is False, text
