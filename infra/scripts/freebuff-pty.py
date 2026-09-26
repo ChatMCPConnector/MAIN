@@ -106,8 +106,19 @@ ARROW_PAGE = {
 PARTIAL_PREFIXES = (b"\x1b", b"\x1b[", b"\x1bO")
 
 
-def rewrite_arrows(data, carry=b""):
-    """up/down -> PageUp/PageDown. Gibt (neue_daten, rest) zurueck."""
+def rewrite_arrows(data, carry=b"", now=0.0, last=None, debounce=0.12):
+    """up/down -> PageUp/PageDown, mit Burst-Drosselung.
+
+    Gibt (neue_daten, rest, last) zurueck. `last` merkt sich je Richtung den
+    Zeitpunkt des zuletzt **gesendeten** Ereignisses; ein Ereignis innerhalb von
+    `debounce` Sekunden wird verworfen — die Bytes werden aber trotzdem
+    konsumiert, sonst rueutscht der rohe Pfeil an der App vorbei (das war ein
+    echter Bug, den der Testfall „High-Resolution-Rad“ gefunden hat).
+    Wirkung: High-Resolution-Rad und Trackpad werden auf eine Rate begrenzt
+    (Default 120 ms ≈ 8 Seiten/s), bewusst langsames Scrollen laeuft unveraendert
+    durch. Andere Tasten sind nie betroffen — nur up/down, und nur die werden
+    ohnehin umgeschrieben.
+    """
     data = carry + data
     carry = b""
     for pref in sorted(PARTIAL_PREFIXES, key=len, reverse=True):
@@ -116,10 +127,25 @@ def rewrite_arrows(data, carry=b""):
             data = data[: -len(pref)]
             break
     if not data:
-        return b"", carry
-    for src, dst in ARROW_PAGE.items():
-        data = data.replace(src, dst)
-    return data, carry
+        return b"", carry, last
+
+    out = bytearray()
+    pos = 0
+    for match in sorted(
+        (m for seq in ARROW_PAGE for m in re.finditer(re.escape(seq), data)),
+        key=lambda m: m.start(),
+    ):
+        if match.start() < pos:      # bereits von einer anderen Sequenz konsumiert
+            continue
+        direction = match.group()
+        out += data[pos:match.start()]
+        pos = match.end()             # in JEDEM Fall konsumieren
+        if now - last[direction] < debounce:
+            continue                  # Burst -> verwerfen, aber Bytes fressen
+        last[direction] = now
+        out += ARROW_PAGE[direction]
+    out += data[pos:]
+    return bytes(out), carry, last
 
 
 def window_size(fd):
@@ -190,8 +216,17 @@ def main(argv):
     out = sys.stdout.buffer
     stdin_open = True
     arrow_page = os.environ.get("FREEBUFF_NO_ARROW_PAGE", "0") != "1"
+    # 120 ms = sanft: begrenzt High-Resolution-Rad und Trackpad auf ~8 Seiten/s,
+    # laesst bewusst langsames Scrollen (Notch-Abstand > 120 ms) unveraendert durch.
+    # 0 schaltet die Drosselung ab, FREEBUFF_WHEEL_DEBOUNCE_MS=250 macht sie sehr
+    # zurueckhaltend. 80 ms war der Ausgangswert der ersten Messung.
+    try:
+        debounce = max(0.0, float(os.environ.get("FREEBUFF_WHEEL_DEBOUNCE_MS", "120")) / 1000.0)
+    except ValueError:
+        debounce = 0.12
     carry = b""
-    debug(f"arrow_page={arrow_page}")
+    last_arrow = dict.fromkeys(ARROW_PAGE, -1e9)
+    debug(f"arrow_page={arrow_page} debounce={debounce}s")
     try:
         while True:
             if resize_requested:
@@ -236,7 +271,8 @@ def main(argv):
                     # Das ist die Sicht auf die Tastatur-Kette: was hier landet,
                     # hat das Kind als Tastendruck gelesen.
                     if arrow_page:
-                        data, carry = rewrite_arrows(data, carry)
+                        data, carry, last_arrow = rewrite_arrows(
+                            data, carry, time.monotonic(), last_arrow, debounce)
                     if not data:
                         continue
                     debug(f" -> {summarize(data)}")
