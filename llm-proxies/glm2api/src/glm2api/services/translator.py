@@ -1120,6 +1120,18 @@ _PROTOCOL_META_PHRASES = (
     "konnte ich in dieser sitzung nicht",
     "konnte in dieser sitzung nicht",
     "analyse konnte in dieser sitzung nicht",
+    # englische varianten derselben erfundenen meldung (live repro D)
+    "the open tool doesn't work",
+    "the open tool does not work",
+    "open doesn't work",
+    "open does not work",
+    "switching to read",
+    # live repro E, weitere formen derselben selbstbeschreibung
+    "in dieser umgebung defekt",
+    "fur lokale pfade unzulassig",
+    "für lokale pfade unzulässig",
+    "aufruf zyklus",
+    "alle versuche fehlgeschlagen",
 )
 
 
@@ -1190,12 +1202,6 @@ _PROTOCOL_META_NARRATION_RE, _PROTOCOL_META_NARRATION_TAIL_RE = (
     _build_meta_narration_regexes(_PROTOCOL_META_PHRASES)
 )
 
-_PROTOCOL_META_NARRATION_SENTENCE_RE = re.compile(
-    r"[^.!?\n]*" + _PROTOCOL_META_NARRATION_RE.pattern[:-2] + r"[^.!?\n]*[.!?…]?",
-    re.IGNORECASE,
-)
-
-
 def strip_protocol_meta_narration(text: str) -> str:
     """Entfernt Text, in dem das Modell das Werkzeugprotokoll kommentiert
     (S-07) — 'Wrong tool calls above', 'instead of `open`', 'Correct JSON
@@ -1208,12 +1214,33 @@ def strip_protocol_meta_narration(text: str) -> str:
 
     Die phrasen sind am werkzeug-vokabular verankert, nicht an 'instead
     of' allgemein: 'The file uses 200 instead of 100 lines' bleibt
-    unangetastet."""
+    unangetastet.
+
+    S-08: der schnitt ist SATZ-aligned, nicht klausel-aligned. Mit
+    klauselschnitt blieb bei einem marker mitten im satz ein fragment
+    uebrig (live repro E: '`open` funktioniert nicht fuer lokale
+    Dateien. Ich nutze jetzt `read` und `bash`' wurde zu
+    '` nutze `read`:` nicht fuer lokale Dateien.'). Ein halber satz ist
+    schlimmer als ein ganzer fehlender."""
     if not text:
         return ""
     if not _PROTOCOL_META_NARRATION_RE.search(text):
         return text
-    return _PROTOCOL_META_NARRATION_SENTENCE_RE.sub(" ", text).strip()
+    spans: list[tuple[int, int]] = []
+    for match in _PROTOCOL_META_NARRATION_RE.finditer(text):
+        span = (match.start(), match.end())
+        if any(start <= span[0] < stop for start, stop in spans):
+            continue  # bereits von einem vorherigen treffer erfasst
+        spans.append(span)
+    if not spans:
+        return text
+    result: list[str] = []
+    cursor = 0
+    for start, stop in spans:
+        result.append(text[cursor:_sentence_start_before(text, start)])
+        cursor = _sentence_end_after(text, stop)
+    result.append(text[cursor:])
+    return re.sub(r"[ \t]{2,}", " ", "".join(result)).strip()
 
 
 _META_CHATTER_SENTENCE_RE = re.compile(
@@ -1234,6 +1261,137 @@ _META_CHATTER_SENTENCE_RE = re.compile(
 )
 
 
+# S-08: die ERFUNDENE LIMIT-MELDUNG. Sie ist die schaedlichste form, weil
+# das modell danach aufhoert zu arbeiten und dem client eine fertige
+# antwort samt grund fuer den abbruch liefert. Live reproduziert
+# (repro D, 2026-09-26, wortwoertlich als erster satz der antwort):
+#   'Tool-Limit erreicht — hier die Analyse basierend auf den gesammelten
+#    Daten:'
+# und in einer aelteren session: 'Tool-Limit (8/8 Runden) erreicht'.
+#
+# Zwei bedingungen, damit hier nicht echter inhalt verloren geht:
+#   * die limit-behauptung steht in den ERSTEN 200 zeichen (dort lebt
+#     die entschuldigungs-/abbruch-passage) ODER
+#   * der satz enthaelt ein stopp-wort (das modell BEGRUENDET hier seinen
+#     abbruch — genau das ist die gefaehrliche form).
+# Ein technischer bericht, der die limit-KONFIGURATION erwaehnt
+# ('bei 131072 tokenlimit greift finish_reason=length'), bleibt damit
+# unangetastet: er steht nicht am anfang und hat kein stopp-wort.
+_LIMIT_CLAIM_RE = re.compile(
+    r"(?:tool|token|output|round|turn|schritt|aufruf)[\s_-]*limit"
+    r"|(?:token|output)[\s_-]*(?:limit|budget|grenze)"
+    r"|(?:runden|tool|token)[\s_-]*limit"
+    r"|keine\s+tools?\s+mehr",
+    re.IGNORECASE,
+)
+
+_STOP_WORD_RE = re.compile(
+    r"(?:abgebrochen|abbrechen|bricht\s+ab|beendet|gestoppt|stoppen|stoppe|"
+    r"aufgeben|nicht\s+weiter|aufh[oö]r|aborted|stopped|cannot\s+continue|"
+    r"can\s+not\s+continue|give\s+up|unreachable"
+    # live repro E: '... (alle Versuche fehlgeschlagen, Tool-Limit
+    # erreicht)'. Das 'Tool-Limit' stand nicht am anfang, also griff nur
+    # das stopp-wort — und 'fehlgeschlagen' fehlte.
+    r"|fehlgeschlagen|gescheitert|vergeblich|verfehlt)",
+    re.IGNORECASE,
+)
+
+_LIMIT_LEAD_WINDOW = 200
+
+# S-08: SELBST-STEUERUNG. Die phrasenliste fuer die narration waechst ins
+# uferlose, wenn man sie gegen jede erfundene Formel schaerft (live
+# repro F: '`open` ist nur für Web-URLs', 'Ich muss das Tool `open`
+# sofort stoppen', 'Ich muss den Vorgang hier abbrechen' — drei
+# woertlich neue formen in einem lauf). Der robuste anteil ist nicht das
+# schlagwort, sondern die STRUKTUR: ein satz in der ersten person, der
+# das modell beim STEUERN beobachtet ('ich nutze/wechsle/stoppe/abbreche
+# ... + werkzeug'), ist fast immer self-talk und keine antwort.
+#
+# Anwendungsbereich bewusst auf den STREAM-Pfad: das ist der text, den
+# der client als laufende assistant-nachricht sieht. Der finale bericht
+# geht durch `finalize`/`strip_meta_chatter` und bleibt konservativ —
+# dort ist eine Aussage ueber `open` (z. B. in einer analyse ueber den
+# proxy) echter inhalt.
+_SELF_STEERING_RE = re.compile(
+    r"(?i)(?:\bich\b[^.!?\n]{0,60}?\b(?:nutze|verwende|wechsle|muss|beende|stoppe|"
+    r"abbreche|abbrechen|aufgeben|brauche|gehe|wechsle)\b[^.!?\n]{0,40}?"
+    r"(?:`?(?:open|open_url|read|write|edit|bash|webfetch|glob|grep)`?"
+    r"|tool[- ]?calls?|werkzeug|aufr(?:u|ü)fen)"
+    r"|\bich\s+(?:muss|beende|stoppe|breche)\b[^.!?\n]{0,50}?"
+    r"(?:`?open`?|tool|aufr(?:u|ü)fen|vorgang|abbruch)"
+    r"|`?open`?[^.!?\n]{0,30}?\b(?:ist\s+(?:nur|ein)|kann|koennte|funktioniert|arbeitet)\b"
+    r"[^.!?\n]{0,30}?(?:web|url|dateisystem|pfade|datei))"
+)
+
+
+def strip_self_steering(text: str) -> str:
+    """Entfernt Sätze, in denen das Modell sein eigenes Werkzeugverhalten
+    kommentiert (S-08). Nur fuer den stream-pfad — siehe
+    `_SELF_STEERING_RE`."""
+    if not text or not _SELF_STEERING_RE.search(text):
+        return text
+    kept: list[tuple[int, int]] = []
+    for match in _SELF_STEERING_RE.finditer(text):
+        start = _sentence_start_before(text, match.start())
+        stop = _sentence_end_after(text, match.end())
+        if any(s <= start < e for s, e in kept):
+            continue
+        kept.append((start, stop))
+    if not kept:
+        return text
+    result: list[str] = []
+    cursor = 0
+    for start, stop in kept:
+        result.append(text[cursor:start])
+        cursor = stop
+    result.append(text[cursor:])
+    return re.sub(r"[ \t]{2,}", " ", "".join(result)).strip()
+
+
+def strip_invented_limit_claim(text: str) -> str:
+    """Entfernt die erfundene 'Tool-Limit erreicht'-Meldung samt Satz (S-08)."""
+    if not text or not _LIMIT_CLAIM_RE.search(text):
+        return text
+    kept: list[tuple[int, int]] = []
+    for match in _LIMIT_CLAIM_RE.finditer(text):
+        start = _sentence_start_before(text, match.start())
+        stop = _sentence_end_after(text, match.end())
+        sentence = text[start:stop]
+        near_start = match.start() <= _LIMIT_LEAD_WINDOW
+        if not (near_start or _STOP_WORD_RE.search(sentence)):
+            continue
+        kept.append((start, stop))
+    if not kept:
+        return text
+    result: list[str] = []
+    cursor = 0
+    for start, stop in kept:
+        result.append(text[cursor:start])
+        cursor = stop
+    result.append(text[cursor:])
+    return "".join(result).strip()
+
+
+# Ein '.' beendet einen Satz NUR, wenn danach whitespace, zeilenumbruch oder
+# ende folgt. Ohne diese bedingung frisst der filter '.env.' mit — der
+# punkt darin ist kein satzende (gemessen: 'laut .env.' -> 'laut .').
+_SENTENCE_END_RE = re.compile(r"\.(?=\s|$)|\n")
+
+
+def _sentence_start_before(text: str, position: int) -> int:
+    head = text.rfind(".", 0, position)
+    line = text.rfind("\n", 0, position)
+    boundary = max(head, line)
+    return 0 if boundary == -1 else boundary + 1
+
+
+def _sentence_end_after(text: str, position: int) -> int:
+    match = _SENTENCE_END_RE.search(text, position)
+    if match is None:
+        return len(text)
+    return match.end() if text[match.start()] == "\n" else match.end()
+
+
 def strip_meta_chatter(text: str) -> str:
     """Strips self-apology and meta-commentary about failed/blocked tools and
     the model's own hallucinated conversation transcript.
@@ -1250,6 +1408,12 @@ def strip_meta_chatter(text: str) -> str:
     # S-07: protokoll-narration zuerst — sie ist der haeufigere fall und
     # steht in der Praxis VOR der selbstentschuldigung.
     text = strip_protocol_meta_narration(text)
+    if not text:
+        return ""
+    # S-08: die erfundene limit-meldung. Sie muss VOR der zeilen-filterung
+    # weg, sonst schuetzt die zeilenweise regel "meta-chatter steht immer
+    # am anfang seiner zeile" genau die hier schlimmste passage.
+    text = strip_invented_limit_claim(text)
     if not text:
         return ""
     # T-17: erst satzweise die fähigkeits-verleugnungen entfernen …
@@ -2562,6 +2726,13 @@ class GLMEventAccumulator:
         # finalize-pfad tut.
         if visible_text_delta and (self._server_side_tool_calls or self.tool_parser.tool_calls):
             visible_text_delta = strip_protocol_meta_narration(visible_text_delta)
+            # S-08: zusaetzlich die strukturelle selbst-steuerung. Nur
+            # hier — der turn ist mit einem call noch nicht fertig, es ist
+            # also der laufende self-talk, den der client als assistant-
+            # nachricht sieht. Der finale bericht (turn OHNE calls) bleibt
+            # unberuehrt, weil dort eine aussage ueber `open` echter
+            # inhalt sein kann (z. B. in einer analyse ueber den proxy).
+            visible_text_delta = strip_self_steering(visible_text_delta)
         if visible_text_delta:
             # THEMA 3 (F2): C0-Steuerzeichen im gestreamten Content ersetzen
             visible_text_delta = self._sanitize_visible_text(visible_text_delta)

@@ -3548,15 +3548,99 @@ def test_blocked_notice_says_what_to_do_instead():
     "Ich musste die Tool-Aufrufe jetzt stoppen.",
     "Die Analyse konnte in dieser Sitzung nicht durchgeführt werden.",
     "Ich kann den Ordner nicht analysieren: In dieser Umgebung steht mir nur das `open`-Tool zur Verfügung.",
+    # live repro E
+    "The `open` tool doesn't work for local filesystem — switching to `read`/`bash` as required.",
+    "`open` ist in dieser Umgebung defekt/für lokale Pfade unzulässig (alle Versuche fehlgeschlagen, Tool-Limit erreicht), daher nur die Struktur, keine Dateiinhalte:",
+    "Ich beende den fehlgeschlagenen `open`-Aufruf-Zyklus und wechsle auf `bash`.",
 ])
 def test_hallucinated_tool_inventory_is_stripped(narration):
-    """S-08: die erfundene werkzeug-inventur und die erfundene
+    """S-08: die erfundene werkzeug-inventur und die erfundete
     abbruch-erklaerung sind keine antwort, sie standen sichtbar beim client."""
     from glm2api.services.translator import strip_protocol_meta_narration
 
     assert strip_protocol_meta_narration(narration) == "", repr(
         strip_protocol_meta_narration(narration)
     )
+
+
+def test_narration_removal_never_leaves_a_half_sentence():
+    """S-08: mit klauselschnitt blieb ein fragment uebrig — live repro E
+    wurde aus '`open` funktioniert nicht fuer lokale Dateien. Ich nutze jetzt
+    `read` und `bash`' genau '` nutze `read`:` nicht fuer lokale Dateien.'.
+    Der schnitt muss satz-aligned sein."""
+    from glm2api.services.translator import strip_protocol_meta_narration
+
+    text = (
+        "The `open` tool doesn't work for local filesystem — switching to "
+        "`read`/`bash` as required.Ich nutze jetzt `read` und `bash` für die Analyse."
+    )
+    assert strip_protocol_meta_narration(text) == "", repr(strip_protocol_meta_narration(text))
+
+
+def test_legitimate_technical_mention_of_open_survives():
+    """Gegenprobe: in einem ANALYSE-Bericht ueber den Proxy ist die Aussage
+    '`open` ist hier nicht verfuegbar' echter Inhalt, keine Selbstbeschreibung
+    des modells."""
+    from glm2api.services.translator import strip_protocol_meta_narration
+
+    text = "Analyse abgeschlossen — 8 Dateien, 36 MB. `open` ist hier nicht verfügbar."
+    assert strip_protocol_meta_narration(text) == text
+
+
+@pytest.mark.parametrize("selftalk", [
+    # live repro E/F, woertlich
+    "`open` ist nur für Web-URLs — für Dateisystem nutze ich jetzt `read`/`bash`:Ich muss das Tool `open` sofort stoppen — es ist ein Web-Tool und bei Dateisystempfaden wirkungslos.",
+    "`open` kann keine Dateien lesen. Ich verwende jetzt die richtigen Tools (`read`, `bash`):Ich muss den Vorgang hier abbrechen: Ich habe wiederholt `open` aufgerufen.",
+    "Ich nutze jetzt `read` und `bash` für die Analyse.",
+    "Ich beende den fehlgeschlagenen `open`-Aufruf-Zyklus und wechsle auf `bash`.",
+])
+def test_self_steering_is_stripped_in_the_stream(selftalk):
+    """S-08: die phrasenliste gegen die narration waechst ins uferlose
+    (live repro F: drei woertlich neue formen in einem lauf). Der robuste
+    anteil ist die STRUKTUR — erster person + steuer-verb + werkzeug."""
+    from glm2api.services.translator import strip_self_steering
+
+    assert strip_self_steering(selftalk) == "", repr(strip_self_steering(selftalk))
+
+
+@pytest.mark.parametrize("keep", [
+    # PAARTEMPEL: die vergangenheitsform ist ein BERICHT, keine steuerung
+    "Ich habe 8 Dateien mit `read` gelesen und die Werte geprüft.",
+    # erst-person ohne werkzeug-bezug
+    "Ich muss den Bericht bis 18 Uhr abgeben.",
+    # finale antwort mit technischer aussage ueber open
+    "Analyse abgeschlossen — 8 Dateien, 36 MB. `open` ist hier nicht verfügbar.",
+])
+def test_real_sentences_survive_the_self_steering_filter(keep):
+    from glm2api.services.translator import strip_self_steering
+
+    assert strip_self_steering(keep) == keep
+
+
+def test_self_steering_only_applies_while_the_turn_still_has_calls():
+    """S-08: der filter darf den FINALEN bericht nicht entschaerfen. Er
+    haengt deshalb an der bedingung 'turn hat bereits calls'."""
+    narration = "Ich nutze jetzt `read` und `bash` für die Analyse."
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    for part in (
+        {
+            "logic_id": "c0",
+            "status": "finish",
+            "content": [
+                {"type": "tool_calls", "tool_calls": [{"name": "read", "id": "a", "arguments": {"filePath": "/a.py"}}]}
+            ],
+        },
+        {"logic_id": "t0", "content": [{"type": "text", "text": narration}]},
+    ):
+        chunks, _ = accumulator.consume_event(
+            {"conversation_id": "c", "status": "finish", "parts": [part]}
+        )
+        streamed = [
+            json.loads(chunk[6:].strip())["choices"][0]["delta"].get("content")
+            for chunk in chunks
+            if chunk.startswith("data: ") and "[DONE]" not in chunk
+        ]
+    assert not [item for item in streamed if item and item.strip()], streamed
 
 
 @pytest.mark.parametrize("keep", [
@@ -3568,6 +3652,62 @@ def test_real_answers_survive_the_inventory_filter(keep):
     from glm2api.services.translator import strip_protocol_meta_narration
 
     assert strip_protocol_meta_narration(keep) == keep
+
+
+@pytest.mark.parametrize("claim,expected", [
+    # live repro D 2026-09-26, wortwoertlich der erste satz der antwort
+    (
+        "Tool-Limit erreicht — hier die Analyse basierend auf den gesammelten Daten:\n\n# Analyse: `glm2api`",
+        "# Analyse: `glm2api`",
+    ),
+    # live, aeltere session `glm2api-Ordner-Analyse`
+    ("Tool-Limit (8/8 Runden) erreicht, ich kann nicht weitermachen.", ""),
+    ("Ich habe die Analyse abgebrochen: Tokenlimit erreicht.", ""),
+    ("Es gibt keine Tools mehr in dieser Umgebung.", ""),
+    # live repro E: das 'Tool-Limit' stand nicht am anfang, gerettet hat
+    # nur das stopp-wort 'fehlgeschlagen'
+    (
+        "`open` ist hier unzulässig (alle Versuche fehlgeschlagen, Tool-Limit erreicht), daher nur die Struktur.",
+        "",
+    ),
+    # ein NACKTES 'Limit' ist kein claim, sondern ein gesprächsthema —
+    # der text bleibt unangetastet, inklusive '.env.' (dessen punkt ist
+    # kein satzende)
+    (
+        "Der Bericht enthält 8 Dateien. Das Limit liegt laut .env bei 131072.",
+        "Der Bericht enthält 8 Dateien. Das Limit liegt laut .env bei 131072.",
+    ),
+])
+def test_invented_limit_claim_is_stripped(claim, expected):
+    """S-08: die erfundene limit-meldung ist die schaedlichste form — das
+    modell hoert danach auf zu arbeiten und liefert dem client eine fertige
+    antwort samt abbruchgrund."""
+    from glm2api.services.translator import strip_invented_limit_claim
+
+    assert strip_invented_limit_claim(claim) == expected
+
+
+@pytest.mark.parametrize("keep", [
+    # OHNE abbruchwort und NICHT am anfang: ein technischer bericht ueber
+    # die limit-KONFIGURATION bleibt stehen. Das ist der gewollte
+    # tradeoff — eine limit-erwaehnung in den ersten 200 zeichen wird
+    # entfernt, weiter hinten nicht.
+    "# Konfiguration\nBei GLM_MAX_OUTPUT_TOKENS=131072 greift finish_reason=length.",
+    "Ich habe 8 Dateien gelesen. Die Werte sind ok.",
+])
+def test_limit_mentions_in_technical_reports_survive(keep):
+    from glm2api.services.translator import strip_invented_limit_claim
+
+    assert strip_invented_limit_claim(keep) == keep
+
+
+def test_limit_claim_reaches_the_client_path():
+    """S-08: der filter haengt an `strip_meta_chatter`, damit er im
+    finalize-pfad (turn ohne calls) UND im stream-pfad greift."""
+    from glm2api.services.translator import strip_meta_chatter
+
+    text = "Tool-Limit erreicht — hier die Analyse:\n\n# Analyse: glm2api"
+    assert strip_meta_chatter(text) == "# Analyse: glm2api"
 
 
 def test_native_tool_call_as_list_is_parsed_with_all_guards():
