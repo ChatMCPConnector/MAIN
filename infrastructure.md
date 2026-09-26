@@ -65,8 +65,12 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
   freebuff pro Tastendruck nur 10 Zeilen scrollt (der Chat-Handler ruft
   `preventDefault` und unterdrückt opentuis 0,5-Viewport-Schritt), sendet die
   Keybinding **dreimal** PageUp/PageDown — die `3` ist eine Magic Number, die
-  bei freebuff-Updates nachgezogen werden muss. Details und Rückweg:
-  „Maus, Copy/Paste & Scrollen in TUIs".
+  bei freebuff-Updates nachgezogen werden muss. Der Kommando-Output-Block in
+  einer Nachricht ist dagegen **nur mit der Maus** scrollbar (freebuff setzt
+  `focusable` nirgends, `onMouseWheel` kommt nicht vor) — das Rad dort ist ein
+  Entweder-oder gegen Copy/Paste, umschaltbar mit
+  `FREEBUFF_NO_PTY_FILTER=1 freebuff`. Details: „Maus, Copy/Paste & Scrollen
+  in TUIs".
 - `infra/scripts/free-models.py`: kostenlose Modelle von **Cline und NVIDIA
   NIM** in einem Skript, zentrale Funktion `fetch_models()`, Aliase
   `free-models` (beide), `cline-models`, `nvidia-models`. Default: nur kostenlose
@@ -502,16 +506,54 @@ deshalb an beiden Stellen im Repo (hier und im Changelog). Aendert freebuff den
 Schritt, muss sie nachgezogen werden; `home`/`end` im Tastaturlayout sind der
 Rettungsweg fuer den Sprung ans Ende.
 
-**Nebenbefund, der die Erwartung praegt:** es scrollt nur der Chatbereich, weil
-die Nachrichtenliste der einzige scrollbare Bereich ist — eine zweite Ebene
-darueber (Kopf, Input, Dock) existiert nicht. Bei opencode ist es ebenfalls die
-Nachrichtenliste, die scrollt; der Unterschied ist nur, dass deren Schritt dort
-eine volle Seite ist.
+**Die harte Grenze: Block-Scrollen vs. Copy/Paste — ein Entweder-oder.**
+Der Wunsch „Mausrad soll nur im Kommando-Output-Block scrollen, nicht im Chat"
+ist in freebuff 0.0.204 **nicht baubar**, und das ist kein Verkken des Rezepts.
+Belegt am Bundle:
+
+* Es gibt 7 `scrollbox`-Instanzen. Eine davon ist der Kommando-Output-Block
+  (berechnet `heightLines`/`isScrollable`, `verticalScrollbarOptions.visible`,
+  `trackOptions.width:1`) — der hat also **eigene Scrollbar** und ist ab einer
+  Höhenkappe scrollbar. Die anderen sechs sind Nachrichtenliste, Agentenliste,
+  Detailpanel, Leerzustandsliste.
+* opentui wuerde diesem Block ueber `handleKeyPress` **0,5 Viewport** pro `pageup`
+  geben — aber **nur, wenn er fokussiert ist**.
+* freebuff setzt `focusable` **nirgends** (alle 17 Treffer im Bundle sind
+  opentuis Basisklasse, keine freebuff-Verwendung), und `onMouseWheel` kommt
+  **null Mal** vor. Es gibt also keinen Weg, den Block zu fokussieren.
+
+Damit bleibt dem Block genau **eine** Bedienart: die Maus. Und die Maus ist
+derselbe Kanal, an dem die native Textauswahl des Terminals haengt. Die beiden
+Wünsche schliessen sich aus:
+
+| | Rad scrollt Output-Block | Terminal-Auswahl/Kopieren |
+|---|---|---|
+| Maus-Reporting **an** (Filter aus) | ja | nein — aber freebuff kopiert selbst (`Drag to select text — it copies automatically`) |
+| Maus-Reporting **aus** (Filter an, Default) | nein | ja, wie opencode |
+
+opencode hat diesen Konflikt nicht, weil `tui.json` **jede** Scroll-Aktion an
+Tasten bindet. Genau das fehlt freebuff.
+
+**Pragmatische Aufloesung ohne Code:** der Bypass steckt bereits im Wrapper. Fuer
+Gefaelle, in denen ein langer Output-Block gelesen werden muss, startet man
+einmal mit Maus:
+
+```bash
+FREEBUFF_NO_PTY_FILTER=1 freebuff   # Maus an: Rad scrollt Blöcke, TUI kopiert selbst
+freebuff                           # Default: Maus aus, Copy/Paste wie opencode
+```
+
+Beides geht nicht gleichzeitig — das ist eine Entscheidung pro Start, kein Bug.
+Wer es bequemer will, bekommt mit einem Alias `fbm='FREEBUFF_NO_PTY_FILTER=1
+freebuff'` beide Varianten in einer Zeile.
+
 
 **3. Reihenfolge nicht umkehren.** Wer `mouse: true` setzt, bekommt Copy/Paste
-zurueck, verliert aber das Mausrad. Wer `freebuff-pty.py` entfernt, verliert
-Copy/Paste. Die Keybinding-Zeile allein reicht nicht — sie ersetzt den
-Scrollback-Mechanismus nicht, den man fuer Copy/Paste abgeschaltet hat.
+zurueck, verliert aber das Mausrad **und** die Block-Scrollbarkeit. Wer
+`freebuff-pty.py` entfernt, verliert Copy/Paste. Die Keybinding-Zeile allein
+reicht nicht — sie ersetzt den Scrollback-Mechanismus nicht, den man fuer
+Copy/Paste abgeschaltet hat, und sie erreicht den Output-Block ueberhaupt nicht,
+weil der Block nicht fokussierbar ist.
 
 **4. Ausserhalb von VS Code** (ssh, tmux, eigener Terminal-Emulator): die
 Keybinding greift nicht, dann einfach die Tastatur — `PageUp`/`PageDown`
@@ -660,6 +702,7 @@ Proxy bei jedem Start automatisch hoch.
   - **Korrigiert nach dem ersten Commit (Nutzerwunsch: „unter MAIN wie opencode"):** der erste Stand legte das npm-Projekt nach `/workspaces/freebuff` und cachte das Binary zwischen `/workspaces` und `$HOME` hin und her (Rebuild-Restore 3,3 s statt Download). Das war persistent, aber ein fremdes Zuständigkeitsmodell im Repo — opencode ist ephemer in `$HOME` und wird bei jedem Codespace neu gebaut. Jetzt identisch zu opencode: `$HOME/.local/share/freebuff` + Wrapper `~/.local/bin/freebuff`, **kein** `/workspaces`-Pfad und kein Cache mehr. **Der Gewinn des Caches ist damit weg — bewusst gegen diesen Preis:** jeder neue Codespace lädt 136 MB neu (12-24 s, läuft in setup.sh). Ein Zwischending aus beiden Welten (npm-Manifest im Repo, `node_modules` ephemer) wäre möglich, brächte aber einen zweiten Zustandspfad ohne Nutzen.
   - **Nebenbefund:** `/workspaces/fb-probe` (32 KB) lag als Rest eines Testlaufs mit gesetzter `FREEBUFF_CONFIG_DIR` herum — nur ein WARN-Log (`No auth token available`) plus anonyme Analytics-ID, keine Credentials. Gelöscht. Lehre: das native Binary kennt `FREEBUFF_CONFIG_DIR`, der npm-Launcher **nicht** — beide auf verschiedene Pfade zu setzen erzeugt genau solche „ausgeloggt"-Symptome, ohne Fehlermeldung.
   - **Mausrad-FiX, zweite Runde (das war nicht die ganze Wahrheit):** Die erste Keybinding-Mappt `mousewheel` auf **ein** PageUp/PageDown — und der Nutzer meldet zu Recht „scrollt nur den Chat, im Chatbereich, 10 Zeilen". Ursache im Binary, Chat-Screen-Handler woertlich: `case"pageup":J.current?.scrollBy(-10)` bzw. `scrollBy(10)` fuer down, dazu `home`/`end` als Sprung an Anfang/Ende — und am Ende `a.preventDefault?.()`. **Dieses `preventDefault` ist der ganze Befund:** es unterdrueckt opentuis eigenen ScrollBox-Handler, der `pageup` auf `scrollBy(-0.5,"viewport")` mappen wuerde. Ein Tastendruck scrollt in freebuff also hart begrenzt auf 10 Zeilen, und **eine Taste fuer einen Bildschirmsprung existiert nicht** — kein `ctrl+pageup` (der Component bails bei ctrl/meta/option per `return`, und der Root-Handler ueberspringt es ueber `xz=(H)=>Boolean(H.ctrl||H.meta||H.option)`), kein `shift+pageup` (feuert beide Handler, also 10 Zeilen plus Root-Scroll), `home`/`end` sind Spruenge. opencode kann es, weil es die Tasten selbst mappt (`tui.json`: `messages_page_up: pageup`) — das ist der Unterschied, nicht die Terminalseite. Loesung ohne Eingriff in die App: die Keybinding sendet **dreimal** die Sequenz (`\e[5~` x3 hoch, `\e[6~` x3 runter), ~30 Zeilen pro Rasterung, das entspricht einer Bildschirmseite. **Ehrlich als Magic Number markiert** (im Abschnitt „Maus, Copy/Paste & Scrollen in TUIs" und hier), weil sie an freebuffs Schrittweite hängt: ändert freebuff `scrollBy(-10)`, muss die 3 nachgezogen werden. Der zweite Teil der Nutzerbeobachtung ist keine Fehlfunktion: die Nachrichtenliste ist der einzige scrollbare Bereich, eine Ebene darüber existiert nicht — bei opencode ist es dieselbe Liste, nur mit voller Seite als Schritt. **Methodisch bemerkenswert:** die erste Fassung stützte sich auf die Doku-Behauptung, xterm.js übersetze das Rad in up/down, statt den tatsächlichen Handler zu lesen. Der Handler war in drei Klicks im Bundle auffindbar (`case"pageup":J.current?.scrollBy(-10)`), die Behauptung war falsch. Bei TUI-Innenleben ist der Binary-Code die Quelle, nicht die Terminal-Erwartung.
+  - **Mausrad-FiX, dritte Runde — und die ehrliche Aufloesung: es geht nicht beides.** Die Keybinding-Mappt das Rad auf PageUp/PageDown; der Nutzer meldet danach korrekt: „scrollt das Chatfenster, nicht den Output-Block". Der Output-Block ist der Kommando-Output **innerhalb** einer Nachricht, und genau da liegt eine Eigenschaft, die ich erst jetzt belegt habe: **Er hat eine eigene Scrollbar** (`verticalScrollbarOptions.visible`, `trackOptions.width:1`, berechnetes `isScrollable` ab einer Hoehenkappe) — er ist also ein eigenstaendiger scrollbarer Bereich. Der Screen-Handler kann ihn trotzdem nicht erreichen: er behandelt `pageup`/`pagedown` und ruft danach `preventDefault`, wodurch opentuis `handleKeyPress` (das `pageup` auf **0,5 Viewport** mappen wuerde) fuer **kein** Kind mehr ausgefuehrt wird. Der zweite Hebel — Fokus — existiert ebenfalls nicht: `focusable` setzt freebuff **nirgends** (alle 17 Bundle-Treffer sind opentuis Basisklasse), `onMouseWheel` kommt **null Mal** vor, und es gibt keine Tab-Fokus-Zyklen (`Tab` oeffnet die Datei-/Slash-/Mention-Menues, `Esc` macht `unfocus-agent` fuer Agenten, nicht fuer Scrollboxen). **Folge: Der Block ist ausschliesslich mit der Maus scrollbar — und die Maus ist genau der Kanal, an dem die native Textauswahl haengt. Es ist ein echtes Entweder-oder**, kein Rezeptfehler: Maus an ⇒ Rad scrollt Blöcke, aber keine Terminal-Auswahl (freebuff kopiert dann selbst, „Drag to select text — it copies automatically"); Maus aus ⇒ Copy/Paste wie opencode, aber der Block steht still. opencode entkommt dem Dilemma, weil `tui.json` jede Scroll-Aktion an Tasten bindet — genau das fehlt freebuff 0.0.204. Statt weiter an der Keybinding zu drehen, ist der dokumentierte Ausweg der bereits vorhandene Bypass im Wrapper: `FREEBUFF_NO_PTY_FILTER=1 freebuff` (Maus an) vs. `freebuff` (Default, Maus aus). **Methodisch, als dritte Lektion festgehalten:** Ich hatte zweimal auf die Doku- bzw. Terminal-Erwartung gebaut statt auf den Bundle-Code, und einmal die Nutzer-Rückmeldung als „Step-Groesse" gelesen, obwohl sie eine **andere Region** meinte. Bei TUI-Innenleben gilt: erst Census (`XH("scrollbox")`-Vorkommen zählen, `focusable`/`onMouseWheel` suchen), dann bauen — und wenn die App die Fähigkeit nicht hat, laut sagen statt sie zu simulieren.
   - **Mausrad-FiX (Nachtrag):** Copy/Paste fixt und das Mausrad ist tot — die andere Hälfte derselben Münze. Die alte Doku behauptete, xterm.js übersetze das Rad in `up`/`down`; das stimmt nicht, und die Erklärung lief in die falsche Richtung: **nach `mouse: false` bzw. nach dem pty-Filter ist das Mausrad ein Terminal-Scrollback-Ereignis — und Terminal-Scrollback ist im Alternate Screen unsichtbar.** opencode rendert im normalen Buffer, deshalb war dort nie etwas kaputt; Freebuff schaltet `CSI ? 1049 h` (live aus der Aufzeichnung) und hat damit keinen Scrollback. Die App kann aber nichts dagegen tun, dass das Rad ankommt — sie **bindet** die passenden Tasten ohnehin (`case"pageup": scrollBy(-0.5,"viewport")`, `case"pagedown": scrollBy(0.5,"viewport")`, Key-Parser mappt `\e[5~`/`\e[6~`). Der einzige Hebel ist deshalb eine **VS-Code-Keybinding**: neues `.vscode/keybindings.json` mappt `mousewheel up`/`down` per `workbench.action.terminal.sendSequence` auf genau diese zwei Sequenzen, `when: terminalFocus`. Anwendungsneutral (gilt auch für `less`/`vim`/`man`/`htop`) und in VS Code ohne Neustart wirksam. Gegengeprüft, dass der pty-Filter die Tasten nicht beschädigt: `\e[5~`/`\e[6~` passieren ihn unverändert (sein Regex verlangt `\e[?` + Ziffern + `h`/`l`), im selben Durchlauf verschwinden `\e[?1003h`/`\e[?1000h`. **Bewusster Trade-off, im neuen Abschnitt „Maus, Copy/Paste & Scrollen in TUIs" dokumentiert:** das Rad scrollt jetzt Tastenseiten statt Terminal-Scrollback, bei opencode also eine Nachrichtenseite statt drei Zeilen; wer das nicht will, löscht die zwei Einträge in der Keybinding-Datei. Der Abschnitt ist als eigene Übersetzung geschrieben, weil das Problem in zwei Apps steckt und die Reihenfolge nicht umkehrbar ist: `mouse: true` ⇒ Copy/Paste weg, pty-Filter weg ⇒ Copy/Paste weg, und die Keybinding allein ersetzt den abgeschalteten Scrollback-Mechanismus nicht.
   - **Copy/Paste-Fix (Nachtrag derselben Sitzung):** „ich kann nichts markieren und kopieren" — dieselbe Klasse wie bei opencode, dort per `mouse: false` in `.opencode/tui.json` gelöst. Für Freebuff existiert dieser Kniff **nicht** (settings.json-Reader akzeptiert nur `mode`/`adsEnabled`/`freebuffModel`; keine CLI-Flags, keine Env-Variablen; opentui's `useMouse` wird nicht gesetzt). Daher der äußere Eingriff: `infra/scripts/freebuff-pty.py` startet das TUI auf einem pty und entfernt aus dem Output ausschließlich `CSI ? 1000|1001|1002|1003|1005|1006|1015|1016 (h|l)`. **Bewusst nicht entfernt:** `?2004` (bracketed Paste — sonst wäre Pasten kaputt), `?1004`, `?1049`, Kitty-Keys. Bidirektional-Relay, SIGWINCH-Durchreichung und Exit-Code sind implementiert und getestet (Kind liest eine Zeile, Exit 42 kommt durch), Fenstergröße wird beim Start und bei Resize gesetzt. **Beleg statt Behauptung:** TUI-Aufzeichnung mit leerem Config-Dir (damit keine Session-Slot verbraucht wird) — mit Filter null Maus-Modi im Stream, ohne Filter `?1000h ?1002h ?1003h ?1006h`, TUI rendert in beiden Fällen. Damit ist zusätzlich ausgeschlossen, dass das Entfernen der Sequenzen das TUI blockiert (es wartet an keiner Stelle auf Mausereignisse). Der Wrapper wird bei **jedem** `setup.sh`-Lauf neu erzeugt, damit der Repo-Pfad nicht driftet — deshalb wandert `write_wrapper` auch in den Idempotenz-Pfad (vorher wäre der Wrapper nach einem Repo-Umzug still veraltet geblieben). **Für den Nutzer heißt das: laufende Freebuff-Session einmal beenden und neu starten**, der Filter hängt am Startpfad.
   - **Bewusst nicht gebaut:** ein API-Provider für opencode. Es gibt keinen OpenAI-kompatiblen Endpoint, kein Headless-Modus (einziges CLI-Kommando ist `login`) — die interne `codebuff.com/api/v1/freebuff/session`-Admission nachzubauen wäre ein Shim gegen das werbefinanzierte Geschäftsmodell, kein Weg. Für gratis-Modelle in opencode bleiben die BYOK-Pools.
