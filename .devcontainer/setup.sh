@@ -146,13 +146,6 @@ bash "$REPO_ROOT/infra/scripts/rclone-install.sh" >/dev/null 2>&1 \
   && echo "    rclone installiert ($(rclone version 2>/dev/null | head -1))." \
   || echo "    WARN: rclone-Install fehlgeschlagen, manuell: ./infra/scripts/rclone-install.sh"
 
-echo "==> [landscape] Freebuff-CLI (kostenloser Coding-Agent) installieren..."
-# /workspaces/freebuff liegt persistent, ~/.config/manicode nicht — der Wrapper
-# stellt das native Binary aus dem /workspaces-Cache selbst wieder her.
-bash "$REPO_ROOT/infra/scripts/freebuff-install.sh" >/dev/null 2>&1 \
-  && echo "    freebuff bereit ($(freebuff --version 2>/dev/null | tail -1))." \
-  || echo "    WARN: freebuff-Install fehlgeschlagen, manuell: ./infra/scripts/freebuff-install.sh"
-
 echo "==> [landscape] Browser-Runtime (Firefox) prüfen..."
 # Firefox (Mozilla-Tarball, gepinnt) als leichtgewichtige Desktop-Browser-Runtime
 if [ ! -x "$REPO_ROOT/.runtime/firefox/firefox" ]; then
