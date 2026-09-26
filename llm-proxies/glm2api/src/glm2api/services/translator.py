@@ -1237,6 +1237,86 @@ _PROTOCOL_META_NARRATION_RE, _PROTOCOL_META_NARRATION_TAIL_RE = (
     _build_meta_narration_regexes(_PROTOCOL_META_PHRASES)
 )
 
+# T-07-praeambel + S-07-protokoll-narration in EINEM muster. Wird gegen
+# `_preamble_narration_probe()` getestet, also mit dem wirklich
+# davorstehenden text — nicht gegen ein einzelnes stream-delta (siehe
+# dort, warum das der massgebliche Unterschied ist).
+#
+# S-10: die alternativen sind VOLLSTAENDIG aufgeschrieben. `ich` ohne
+# abschliessende wortgrenze traf mitten im wort: ein delta, das mit
+# 'icht' begann (rest von 'Ber|icht'), war eine praeambel — und die
+# maschinerie verwarf den rest des texts beim call. Gemessen bei
+# chunk-groesse 7: der client sah 'Der Ber' und sonst nichts, mitten
+# im wort (matrix in /tmp/glmtest/order_matrix.py, S-10 im
+# optimierung.md). Die alternativen, die auf leerraum enden
+# ('jetzt ', "i'll now "), bekommen bewusst KEIN abschliessendes `\b`:
+# dort ist der leerraum selbst die grenze, und ein `\b` am textende
+# wuerde sie wieder aushebeln.
+_PREAMBLE_NARRATION_RE = re.compile(
+    r"\b(?:ich\b|ich\s+werde\b|als\s+nächstes\b|jetzt\s+|zuerst\b|"
+    r"ich\s+schreibe\b|ich\s+lese\b|ich\s+führe\b"
+    r"|i\s+will\b|i['’]?ll\s+(?:now\s+)?|let\s+me\b|"
+    r"i\s+(?:am\s+going\s+to|will\s+now)\b|"
+    r"i'?m\s+going\s+to\b|now\s+i\s+will\b|"
+    r"ich\s+werde\s+jetzt\b|ich\s+schau(?:e|te)\b|"
+    r"als\s+nächstes\s+schau\b)"
+    # S-07: protokoll-narration ist ebenfalls eine "praeambel" — das
+    # modell erklaert das protokoll, statt es zu benutzen ('wrong tool
+    # calls above', 'instead of `open`'). Faellt sie hier durch,
+    # streamt sie unumkehrbar als antwort. Mit dem muster greift die
+    # vorhandene T-07-maschinerie: puffern und bei einem folgenden call
+    # verwerfen. (siehe `_PROTOCOL_META_PHRASES`).
+    r"|" + _PROTOCOL_META_NARRATION_RE.pattern,
+    re.IGNORECASE,
+)
+
+# Die woerter, mit denen die T-07-praeambel beginnt. Daraus wird der
+# vorhalte-lookahead gebaut: solange der text auf so einem WORDFRAGMENT
+# endet, ist noch nicht entschieden, ob daraus eine praeambel wird.
+_PREAMBLE_STEMS = (
+    "ich", "ich werde", "ich werde jetzt", "ich schreibe", "ich lese",
+    "ich führe", "ich schaue", "ich schaute", "als nächstes",
+    "als nächstes schau", "jetzt", "zuerst", "i", "i will", "i will now",
+    "i am going to", "i'm going to", "i'll", "i'll now", "let me",
+    "now i will",
+)
+
+
+def _build_stem_prefix_regex(stems: tuple[str, ...]) -> re.Pattern[str]:
+    """Alle (echten und abgeschnittenen) anfaenge der `stems`, am textende.
+
+    S-10: die praeambel-erkennung braucht den marker vollstaendig im
+    delta. Schneidet der upstream mitten im ersten wort, ist er es nicht —
+    und was schon draussen ist, kann nicht mehr zurueckgenommen werden.
+    Deshalb wird der text, solange er auf einem WORDFRAGMENT endet, wie
+    die protokoll-narration zurueckgehalten (`_narration_carry`). Die
+    wortgrenze vor dem fragment verhindert, dass gewöhnliche woerter
+    haengen bleiben ('Datei' endet auf 'i', ist aber kein praeambel-anfang).
+    """
+    fragments = {stem[:length] for stem in stems for length in range(1, len(stem) + 1)}
+    alternation = "|".join(sorted(fragments, key=len, reverse=True))
+    return re.compile(r"(?:\A|[^\w])(?:" + alternation + r")\Z", re.IGNORECASE)
+
+
+_PREAMBLE_STEM_PREFIX_RE = _build_stem_prefix_regex(_PREAMBLE_STEMS)
+
+
+def _preamble_narration_undecided(text: str) -> bool:
+    """Endet der text auf einem noch unvollstaendigen praeambel-anfang?
+
+    S-10: ohne diese rueckfrage verlor der client das, was vom ersten
+    wort der praeambel schon raus war — je nach chunk-groesse 'I', 'Ic'
+    oder 'Ich' (gemessen bei chunk-groessen 1 und 2, matrix in
+    /tmp/glmtest/order_matrix.py). Entschieden ist die frage, sobald der
+    text einen vollstaendigen marker enthaelt; dann uebernimmt wieder die
+    T-07-maschinerie.
+    """
+    if not text:
+        return False
+    if _PREAMBLE_NARRATION_RE.search(text):
+        return False
+    return bool(_PREAMBLE_STEM_PREFIX_RE.search(text))
+
 def strip_protocol_meta_narration(text: str) -> str:
     """Entfernt Text, in dem das Modell das Werkzeugprotokoll kommentiert
     (S-07) — 'Wrong tool calls above', 'instead of `open`', 'Correct JSON
@@ -2885,6 +2965,12 @@ class GLMEventAccumulator:
         if text_delta and (
             _PROTOCOL_META_NARRATION_TAIL_RE.search(text_delta)
             or _self_steering_holdback(text_delta)
+            # S-10: und solange der text auf einem unvollstaendigen
+            # praeambel-anfang endet. Sonst erkennt die T-07-maschlinie
+            # die praeambel erst, nachdem ihr anfang schon beim client
+            # ist — je nach chunk-groesse blieb 'I', 'Ic' oder 'Ich'
+            # stehen.
+            or _preamble_narration_undecided(text_delta)
         ):
             self._narration_carry = text_delta
             text_delta = ""
@@ -2956,31 +3042,29 @@ class GLMEventAccumulator:
                 and not self.tool_parser.tool_calls
             ):
                 looks_like_preamble = bool(
-                    re.search(
-                        # T-07: die muster waren ausschliesslich deutsch.
-                        # Live vorgekommen sind englische varianten
-                        # ("I will read the file", "Let me check the file",
-                        # "I'll now open the file") — die liefen komplett
-                        # unerkannt durch.
-                        r"\b(?:ich|ich\s+werde|als\s+nächstes|jetzt\s+|zuerst|"
-                        r"ich\s+schreibe|ich\s+lese|ich\s+führe"
-                        r"|i\s+will|i['’]?ll\s+(?:now\s+)?|let\s+me|"
-                        r"i\s+(?:am\s+going\s+to|will\s+now)|"
-                        r"i'?m\s+going\s+to|now\s+i\s+will|"
-                        r"ich\s+werde\s+jetzt|ich\s+schau(?:e|te)|"
-                        r"als\s+nächstes\s+schau)"
-                        # S-07: protokoll-narration ist ebenfalls eine
-                        # "praeambel" — das model erklaert das protokoll,
-                        # statt es zu benutzen ('Wrong tool calls above',
-                        # 'instead of `open`'). Faellt sie hier durch,
-                        # streamt sie unumkehrbar als antwort. Mit dem
-                        # muster greift die vorhandene T-07-maschinerie:
-                        # puffern und bei einem folgenden call verwerfen.
-                        # S-07-Muster: alternativ zu den obigen
-                        # (siehe `_PROTOCOL_META_PHRASES`).
-                        r"|" + _PROTOCOL_META_NARRATION_RE.pattern,
-                        visible_text_delta,
-                        re.IGNORECASE,
+                    # T-07: die muster waren ausschliesslich deutsch.
+                    # Live vorgekommen sind englische varianten
+                    # ("I will read the file", "Let me check the file",
+                    # "I'll now open the file") — die liefen komplett
+                    # unerkannt durch.
+                    #
+                    # S-10: getestet wird NICHT das einzelne delta,
+                    # sondern der wirklich davorstehende text plus delta.
+                    # Das war die ursache von zwei chunk-groessen-
+                    # abhaengigen fehlern (beide gemessen, 2026-09-27):
+                    #  1. das fuehrende `\b` ist am anfang eines strings
+                    #     bedeutungslos — es bedeutet dort immer "grenze".
+                    #     Ein delta 'icht' (rest von 'Ber|icht') war
+                    #     deshalb eine deutsche praeambel; die maschinerie
+                    #     pufferte und verwarf den rest, der client sah
+                    #     'Der Ber' (mitten im wort).
+                    #  2. eine praeambel, die ueber eine delta-grenze
+                    #     laeuft ('Ic' + 'h lese die Datei'), wurde gar
+                    #     nicht erkannt und streamte als antwort raus.
+                    # Mit dem kontext ist die erkennung unabhaengig
+                    # davon, wo der upstream seine teile schneidet.
+                    _PREAMBLE_NARRATION_RE.search(
+                        self._preamble_narration_probe(visible_text_delta)
                     )
                 )
                 if looks_like_preamble:
@@ -3023,7 +3107,7 @@ class GLMEventAccumulator:
                 (self._server_side_tool_calls or self.tool_parser.tool_calls)
                 and not self._preamble_pending
             ) or bool(self.blocked_tool_attempt_names)
-            if visible_text_delta and _filter_own_text:
+            if visible_text_delta and visible_text_delta.strip() and _filter_own_text:
                 # Die filter verlangen erste-person-steuernde oder die
                 # `open`+faehigkeits-kombination, nie ein blosses nennen von
                 # `open` — ein finaler bericht bleibt unbeschaedigt
@@ -3031,8 +3115,39 @@ class GLMEventAccumulator:
                 # `require_complete_sentence=True` bleibt: ein stream-delta
                 # beginnt mitten im satz, ein satzweiter schnitt darauf erzeugt
                 # ein halbwort.
+                # S-10: NUR fuer delta mit inhalt. Ein reiner
+                # whitespace-delta kann keine narration enthalten, und
+                # `_strip_self_talk` gibt fuer ihn "" zurueck — das
+                # zwischenzeichen fiel dadurch ersatzlos weg: aus
+                # 'Zweiter Absatz mit' wurde 'ZweiterAbsatzmit', sobald
+                # der turn aufrufe hatte (gemessen bei chunk-groessen
+                # 1-5, der zwischenraum fiel nach dem call, davor nicht).
+                # Dieselbe folge hatte D-06 einmal fuer die
+                # zurueckhaltung.
                 visible_text_delta = self._strip_self_talk(visible_text_delta)
             whitespace_only = not visible_text_delta.strip()
+            # S-10: der S-05-puffer ist die einzige geordnete senke fuer
+            # sichtbaren text — und im aufruf-turn gab es danach keine
+            # mehr: was im abschluss noch zuruecklag, verliess den
+            # turn nicht (bei calls gab der abschluss leftover-text
+            # nicht heraus). Folge, gemessen: ein kompletter text mit
+            # code-fence, der in EINEM part ankam, war danach spurlos
+            # weg — chunk-groesse 1000: stream leer, 1-20: voller
+            # text. Der text war also nicht am falschen platz, er
+            # fehlte. Sobald der turn aufrufe hat, ist der puffer
+            # antwort-text und geht raus: in reihenfolge und durch
+            # dieselben filter wie jeder andere sichtbare text.
+            if (
+                not visible_text_delta
+                and self._deferred_visible_text.strip()
+                and turn_has_calls
+                and not self._preamble_pending
+                and self._deferred_text_is_publishable(self._deferred_visible_text)
+            ):
+                self._deferred_visible_text, visible_text_delta = (
+                    "",
+                    self._deferred_visible_text,
+                )
             if (
                 visible_text_delta
                 and not whitespace_only
@@ -3206,6 +3321,23 @@ class GLMEventAccumulator:
         if filtered == core:
             return text
         return lead + filtered + trail
+
+    def _preamble_narration_probe(self, delta: str) -> str:
+        """S-10: kontext fuer die praeambel-erkennung.
+
+        Die muster matchen an wortgrenzen — und an einem stream-delta ist
+        der anfang keine. Getestet wird deshalb gegen den text, der dem
+        delta wirklich vorausgeht: der zuletzt gesendete schwanz
+        (`_emitted_text_tail`, genau der bereich, fuer den
+        `_emitted_text_needs_continuation` ohnehin gebraucht wird) plus
+        das, was im sichtbaren puffer wartet. Dadurch gilt fuer die
+        erkennung dieselbe regel wie fuer den client: es zaehlt der
+        text, den er sieht, unabhaengig davon, wo der upstream schneidet.
+        """
+        context = (self._emitted_text_tail + self._deferred_visible_text)[
+            -_EMITTED_TAIL_CHARS:
+        ]
+        return context + delta
 
     @staticmethod
     def _deferred_text_is_publishable(text: str) -> bool:
@@ -3644,6 +3776,17 @@ class GLMEventAccumulator:
                 self.tool_choice_mode,
             )
 
+        # S-10: `final_text` ist per definition NOCH NICHT gesendet — er
+        # stand bis hierher im deferred-puffer oder im parser. Mit der
+        # bedingung `not all_tool_calls` fiel er im aufruf-turn ersatzlos
+        # weg, und zwar komplett: ein text mit code-fence, der in EINEM
+        # part ankam (der fence haelt den stream zurueck), war danach
+        # spurlos, waehrend derselbe text bei allen anderen
+        # chunk-groessen vollstaendig ankam (gemessen: chunk 1000 →
+        # stream leer, chunk 1-20 → voller text; non-stream ebenfalls
+        # leer, weil `content` bei calls auf None steht). Der text geht
+        # jetzt raus wie jeder andere sichtbare text — nach allem, was
+        # schon gestreamt wurde, und vor dem aufruf-delta.
         if final_text and not all_tool_calls:
             delta_payload: dict[str, object] = {"content": final_text}
             if not self.emitted_role:
