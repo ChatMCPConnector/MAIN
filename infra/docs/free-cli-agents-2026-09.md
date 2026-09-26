@@ -26,7 +26,7 @@ gegengefetcht.
 |---|---|---|---|
 | **Groq** | 30 RPM / 1.000 RPD / 200K TPD (gpt-oss-120b, gpt-oss-20b, qwen3.8-27b) | GPT-OSS, Qwen3.8 | console.groq.com/docs/rate-limits — Groq dokumentiert **OpenCode/Kilo/Cline/Roo/Droid**-Integrationen |
 | **OpenRouter** | `:free`-Modelle: 20 RPM, 50 RPD; **1.000 RPD ab ~$10 Lifetime-Credits** | ~21 `:free`-Modelle (qwen3.8-27b, nemotron-3-ultra, cohere/north-mini-code, poolside/laguna …) | openrouter.ai/docs/api-reference/limits |
-| **NVIDIA NIM** | Free-Endpoints bis 40 RPM / 10k RPD (reported); im Repo bereits via `free-models.py nvidia` (Alias `nvidia-models`) | Kimi K3, DeepSeek V4 Pro/Flash, Nemotron | build.nvidia.com |
+| **NVIDIA NIM** | Free-Endpoints bis 40 RPM / 10k RPD (reported); **Stand 2026-09-26 entfernt** — der NVIDIA-Provider ist aus `opencode.json` raus, `free-models.py` ist gelöscht | Kimi K3, DeepSeek V4 Pro/Flash, Nemotron | build.nvidia.com |
 | **Google AI Studio API-Key** | Free-Tier (Limits nur in AI Studio sichtbar; Daten werden zur Produktverbesserung genutzt) | Gemini 3.8 Flash, 3.1 Pro | ai.google.dev |
 | **Z.ai (Zhipu)** | GLM-4.7-Flash / GLM-4.5-Flash = $0 (reported) | GLM-Flash-Serie | docs.z.ai |
 | **Cloudflare Workers AI** | 10.000 Neurons/Tag (reported) | qwen3-30b, qwen2.5-coder-32b, gpt-oss, glm-4.7-flash | developers.cloudflare.com |
@@ -52,7 +52,7 @@ gegengefetcht.
 1. **Sofort, ohne neues Tool:** opencode `/connect` → Zen, Free-Modelle wählen (Space Bunny Free / Nemotron / MiMo) — nur für Code ohne Vertraulichkeit.
 2. **Stärkster Gratis-Zugang:** offizielle **Antigravity CLI** (`agy`) — Gemini 3.8 Flash + Claude 4.6 gratis, sanktionierter Weg (Alternative zum inoffiziellen Proxy); `GOOGLE_GEMINI_BASE_URL` erlaubt Custom-Endpoints.
 3. **Zweit-Tool mit Planbarkeit:** Kiro CLI Free (50 Credits/Mo) oder Kilo Code (17 $0-Modelle, EU).
-4. **BYOK-Pools** für opencode: Groq (großzügig, schnell), OpenRouter `:free`, NVIDIA (im Repo), Z.ai GLM-Flash.
+4. **BYOK-Pools** für opencode: Groq (großzügig, schnell), OpenRouter `:free`, Z.ai GLM-Flash. ~~NVIDIA (im Repo)~~ — und Cline-`stealth/*`: beide am 2026-09-26 entfernt (Cline-Ausfälle, siehe `infrastructure.md`-Changelog).
 5. **Vorsicht:** Freebuff = werbefinanziert/Datenräume beachten; Cline-Promo/Freebuff/Zen-Free nie mit Secrets/Kundencode füttern.
 
 ## Quellen (selbst geprüft am 2026-09-26)
