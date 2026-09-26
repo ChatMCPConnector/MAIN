@@ -5,6 +5,9 @@ export TZ="Europe/Berlin"
 alias save='./infra/scripts/save.sh'
 alias auth='./infra/scripts/auth.sh status'
 alias secrets='./infra/scripts/secrets.sh status'
+alias keys='./infra/scripts/keys.sh status'
+alias keys-doctor='./infra/scripts/keys.sh doctor'
+alias keys-restore='./infra/scripts/keys.sh restore'
 alias ports='./infra/scripts/ports.sh'
 alias quota='bash /workspaces/MAIN/infra/scripts/quota.sh'
 alias st='git status -sb'
@@ -52,6 +55,8 @@ autosave() {
 # zentralen Server (Port 4096), damit sich parallele Sessions nie gegenseitig abbrechen.
 opencode() {
   local server_url="http://127.0.0.1:4096"
+  # Key-Dateien müssen existieren, sonst startet opencode nicht (bad file reference)
+  bash /workspaces/MAIN/infra/scripts/keys.sh ensure --quiet >/dev/null 2>&1 || true
   case "${1:-}" in
     serve|attach|models|stats|export|import|completion|agent|upgrade|uninstall|db|mcp|plugin|providers|debug|github|pr|run)
       command opencode "$@"
@@ -121,6 +126,9 @@ landscape-diff() {
   echo "   ~/.config/landscape/pat, nvidia-nim.key, xinjianya.key, chatglm-refresh-token"
   echo "   ~/.local/share/opencode/auth.json"
   echo "   .env"
+  echo ""
+  echo "== Key-Dateien (leer = Platzhalter, opencode startet, Provider 401) =="
+  bash /workspaces/MAIN/infra/scripts/keys.sh status 2>/dev/null
   echo ""
   echo "== opencode-Config lebt im Repo (.opencode/). =="
   echo ""

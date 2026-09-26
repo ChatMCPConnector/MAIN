@@ -63,8 +63,30 @@ Secret-Schutz-Purismus:
   `env`, `opencode-auth.json` → landen beim Unlock unter `~/.config/landscape/`,
   `~/.local/share/opencode/auth.json` bzw. `.env`.
 - `./infra/scripts/secrets.sh lock|unlock|status` verwaltet das Bundle.
+  `unlock` probiert **alle** Passphrase-Kandidaten durch, bis einer das Bundle
+  tatsächlich entschlüsselt (`LANDSCAPE_PASSPHRASE`, dann `config/passphrase`,
+  dann die interaktive Abfrage). Der erste Versuch gewinnt nicht mehr —
+  ein falsch gesetztes Secret kann den Auto-Unlock nicht mehr totlegen.
+  Kandidaten mit PAT-Präfix (`ghp_`, `github_pat_`, `glpat-`, …) werden
+  verworfen: ein PAT ist keine Passphrase (siehe Changelog 2026-09-26).
 - Codespaces-Secrets pro Account: `LANDSCAPE_PAT` (Git-Auth), `LANDSCAPE_PASSPHRASE` (optional).
+  `LANDSCAPE_PASSPHRASE` muss der **Inhalt von `config/passphrase`** sein, nicht
+  der PAT. Ist das Secret nicht gesetzt, greift der Repo-Fallback automatisch —
+  das Secret ist also Komfort, keine Voraussetzung.
 - NVIDIA-/XinJianYa-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` und kommen über das Bundle in jeden neuen Codespace. `glm2api` nutzt lokal `local` als Platzhalter; TokenRouter und Antigravity enthalten weiterhin getrackte Literalwerte (siehe `Revision.md`, `SEC-02`).
+- **Start-Garantie:** eine fehlende `{file:...}`-Referenz lässt opencode
+  *komplett* nicht starten (`Configuration is invalid … bad file reference`).
+  Deshalb legt `infra/scripts/keys.sh ensure` jede referenzierte Key-Datei als
+  leeren Platzhalter an, falls sie fehlt. Aufgerufen von `setup.sh`,
+  `opencode-server.sh` und dem `opencode`-Wrapper — damit startet opencode in
+  jedem Codespace, auch wenn der Unlock einmal scheitert. Ein 0-Byte-Platzhalter
+  gilt beim Unlock und beim Lock als „fehlt": er überschreibt nie einen echten
+  Key und landet nie im Bundle.
+  `./infra/scripts/keys.sh status|doctor|restore` (Aliase `keys`, `keys-doctor`,
+  `keys-restore`): `status` zeigt je Datei `OK/LEER/FEHLT`, `doctor` testet live
+  gegen die Provider (unterscheidet echt von Auth-Fehler, Cloudflare-Challenge
+  und Netz-Ausfall), `restore` holt fehlende Keys nach. `secrets.sh status`
+  prüft zusätzlich, ob das Bundle überhaupt entschlüsselbar ist.
 
 ## opencode-Konfiguration (`.opencode/`)
 
@@ -265,6 +287,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **opencode startet in neuen Codespaces wieder — Ursache war ein falsch befülltes Secret, nicht die Config.** `LANDSCAPE_PASSPHRASE` enthielt in einem Account den GitHub-PAT statt der Passphrase. `secrets.sh`nahm die Env-Variable blind als Passphrase, das Entschlüsseln schlug fehl, `~/.config/landscape/{nvidia-nim,xinjianya}.key` blieben aus — und weil `opencode.json` die Keys per `{file:…}` referenziert, verweigerte opencode den **komplett** Start (`bad file reference: … does not exist`). Drei Ebenen Fix: (a) `unlock` probiert alle Kandidaten durch (`LANDSCAPE_PASSPHRASE` → `config/passphrase` → Abfrage), verwirft PAT-ähnliche Werte und meldet PAT-Verdacht explizit; (b) neu `infra/scripts/keys.sh` (`ensure|status|doctor|restore`) — `ensure` legt referenzierte Key-Dateien als leere Platzhalter an, eingehängt in `setup.sh`, `opencode-server.sh` und den `opencode`-Wrapper, damit ein Secret-Problem nie wieder den Editor blockiert; (c) 0-Byte-Dateien gelten beim Unlock als „fehlt" (echter Key wird wiederhergestellt) und beim Lock als „nicht sichern" (Platzhalter überschreibt keinen Key). Nebenbefund zweier Bash-Fallen: ein `[ -n "$X" ] && …`-Statement unter `set -e` brach die Kandidatenliste ab, und `read` verwirft eine letzte Zeile ohne Newline — `config/passphrase` hat keins, die Passphrase wäre nie angekommen. `doctor` unterscheidet echte Auth-Fehler von einer Cloudflare-Challenge (xinjianya liefert 403-HTML für gut *und* schlecht) und nutzt 90 s Timeout, weil NIM Kaltstarts ~57 s braucht.
 
 - 2026-09-25: **`glm2api.sh restart` repariert.** Die PID-Datei zeigt auf den `uv run`-Wrapper; ein TERM an den Wrapper beendet das Python-Kind nicht. Es hielt weiter Port 8001, der Restart brach mit „konnten nicht gestoppt werden" ab und der Server lief auf altem Code weiter. Beide Stop-Wege räumen jetzt verwaiste Kindprozesse mit Warte-Schleife und KILL-Eskalation ab; danach startet der Server wieder sauber und die PID-Datei wird wieder gesetzt.
 

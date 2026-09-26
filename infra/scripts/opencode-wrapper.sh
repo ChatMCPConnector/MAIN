@@ -6,6 +6,15 @@ set -u
 
 REAL_OPENCODE="/home/vscode/.opencode/bin/opencode-bin"
 SERVER_URL="http://127.0.0.1:4096"
+REPO="/workspaces/MAIN"
+
+# Letzte Verteidigungslinie: fehlt eine per {file:...} referenzierte Key-Datei,
+# startet opencode nicht ("Configuration is invalid ... bad file reference").
+# ensure ist idempotent und nur ein paar Dateitests — billig genug für jeden Aufruf.
+KEYS="$REPO/infra/scripts/keys.sh"
+if [ -x "$KEYS" ]; then
+  bash "$KEYS" ensure --quiet >/dev/null 2>&1 || true
+fi
 
 # Nicht-TUI Befehle direkt durchreichen
 case "${1:-}" in
@@ -20,8 +29,8 @@ if curl -sf -m 2 "$SERVER_URL/" >/dev/null 2>&1; then
 fi
 
 # Server läuft noch nicht: versuchen zu starten
-if [ -x "/workspaces/MAIN/infra/scripts/opencode-server.sh" ]; then
-  /workspaces/MAIN/infra/scripts/opencode-server.sh start >/dev/null 2>&1 || true
+if [ -x "$REPO/infra/scripts/opencode-server.sh" ]; then
+  "$REPO/infra/scripts/opencode-server.sh" start >/dev/null 2>&1 || true
   if curl -sf -m 3 "$SERVER_URL/" >/dev/null 2>&1; then
     exec "$REAL_OPENCODE" attach "$SERVER_URL" "$@"
   fi

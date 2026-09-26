@@ -25,6 +25,9 @@ case "${1:-status}" in
 
     echo "[opencode-server] Starte zentralen Server auf Port ${PORT}..."
     cd /workspaces/MAIN
+    # Key-Dateien müssen existieren, sonst verweigert der Server den Start
+    # ("bad file reference: {file:...}"). Platzhalter genügen zum Starten.
+    bash /workspaces/MAIN/infra/scripts/keys.sh ensure --quiet 2>/dev/null || true
     nohup /home/vscode/.opencode/bin/opencode-bin serve --port "${PORT}" --hostname "${HOST}" </dev/null >> "${LOGFILE}" 2>&1 &
     SERVER_PID=$!
     disown "$SERVER_PID" 2>/dev/null || true

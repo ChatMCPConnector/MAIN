@@ -55,10 +55,19 @@ ln -sf "$REPO_ROOT/infra/scripts/quota.sh" "$HOME/.local/bin/quota"
 
 echo "==> [landscape] Secrets entsperren (falls Bundle + Passphrase da)..."
 if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
-  bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock >/dev/null 2>&1 && echo "    Secrets automatisch wiederhergestellt." || echo "    WARN: Auto-Unlock fehlgeschlagen (falsche Passphrase?)."
+  UNLOCK_LOG="$(bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock 2>&1)" \
+    && echo "    Secrets automatisch wiederhergestellt." \
+    || { echo "    WARN: Auto-Unlock fehlgeschlagen — Keys fehlen, opencode startet nicht:"
+         printf '%s\n' "$UNLOCK_LOG" | sed 's/^/      /'; }
 elif [ -f "$REPO_ROOT/config/secrets.enc" ]; then
   echo "    Bundle vorhanden, keine Passphrase. Entsperren mit: ./infra/scripts/secrets.sh unlock"
 fi
+
+echo "==> [landscape] API-Key-Dateien sicherstellen..."
+# opencode verweigert den Start, wenn eine per {file:...} referenzierte Key-Datei
+# fehlt. ensure legt fehlende Dateien als leere Platzhalter an — so startet
+# opencode in JEDEM Codespace, auch wenn der Unlock oben gescheitert ist.
+bash "$REPO_ROOT/infra/scripts/keys.sh" ensure || true
 
 echo "==> [landscape] .env prüfen..."
 if [ ! -f "$REPO_ROOT/.env" ] && [ -f "$REPO_ROOT/.env.example" ]; then
