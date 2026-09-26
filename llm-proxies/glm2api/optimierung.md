@@ -274,6 +274,137 @@ Status: **DONE — BEACHTEN** (Häufigkeit in kommenden Läufen über die
 
 ---
 
+## THEMA 8 — Live-Session-Test 2026-09-26: drei Stream-Bugs (DONE 2026-09-26)
+
+Drei Fehlerklassen, die ausschliesslich im **echten opencode-Betrieb**
+auftraten und von keinem bestehenden Test abgedeckt waren. Alle drei kamen
+aus demselben Grund: die Tests prüften den *gecachten Volltext*
+(`build_response().content`), nicht das, was **im Stream** beim Client
+ankommt. Der cached text war in allen Fällen korrekt — der Stream nicht.
+
+### S-05 — Sichtbarer Text in falscher Reihenfolge (Textverlust/Duplikat)
+
+**Symptom (live, session `glm2api limited 3`):** die Schlussantwort kam
+umgestellt und mit Textverlust an:
+
+```
+Alle 3 Schritte sind abgeschlossen:
+1. **URL-Inhalt** (`http://127.0.0.1:8899/data.txt`, geholt via2. **README-Prüfung** (via `read`): …
+3. **Ergebnisdatei**: … geschrieben (erfolgreich bestätigt).`bash` + `curl`):
+   ```
+   alpha
+   ```
+```
+
+Der Absatz nach dem Code-Fence stand **hinter** dem restlichen Text, der
+Abschnitt mitten im Satz war abgeschnitten.
+
+**Ursache:** zwei Senken ohne Reihenfolge-Garantie. `_deferred_visible_text`
+(puffert, wenn ein Fence offen ist / der Parser hält / ein Protokollfragment
+im Delta steckt) und der direkte Stream. Sobald ein Delta in den Puffer ging,
+konnte der nächste direkt raus — und der Puffer wurde erst im `finalize`
+angehängt, also **hinter** allem. Auslöser live: ein Fence, das **mitten in
+einem Delta** geschlossen wurde (`fence_pending` war für dieses Delta noch
+wahr). Reproduziert bei **15 von 15** Chunk-Größen, mit Textverlust *und*
+Duplikaten (chunk=5 gab den Text zweimal aus).
+
+**Fix:** ein einziger geordneter Sensen für sichtbaren Text. Vor jedem
+direkten Emit wird der Puffer geleert; ist er noch nicht „sauber"
+(offener Fence / Protokollfragment), bleibt die Zurückhaltung **sticky**,
+damit die Reihenfolge gewahrt bleibt. Zusätzlich `_deferred_text_is_publishable()`.
+
+### S-06 — Leerzeilen-Artefakt neben Tool-Calls
+
+**Symptom (live, 8 parallele `read`s):** der Client bekam einen Text-Part,
+der aus **12 Leerzeilen** bestand — eine leere assistant-Nachricht in der TUI
+und dauerhafter Ballast im Kontext.
+
+**Ursache:** glm-5.3 liefert neben jedem nativen `tool_calls`-Part eine eigene
+Text-Part, die nur aus Whitespace besteht. Der Part-Merge setzte an **jeder**
+`logic_id`-Grenze zusätzlich einen Absatzumbruch. Reproduziert: 7 Calls →
+14 Leerzeilen im Stream. (Eine **leere** Part ist nicht der Auslöser — die
+trifft die `if rendered_text`-Bedingung gar nicht; es muss eine
+Whitespace-Part sein.)
+
+**Fix (zwei Stellen):** (a) der Merge setzt keinen Absatzumbruch vor eine
+Part ohne Inhalt; (b) reiner Whitespace wandert in denselben geordneten
+Puffer (S-05) und wird erst mit echtem Text ausgegeben — steht bis zum
+Ende nur Whitespace im Puffer, fällt er beim `finalize` weg. D-06 bleibt
+unverändert: nach dem ersten sichtbaren Text ist ein Whitespace-Delta ein
+Trennzeichen zwischen zwei Wörtern und geht sofort raus.
+
+### S-07 — Protokoll-Narration statt Protokoll-Nutzung (das `open`-Problem)
+
+**Symptom (live, 8 parallele `read`s):** die Schlussantwort begann mit dem
+Monolog des Modells:
+
+```
+Wrong tool calls above — correcting to the allowed tools:I must use
+`read`/`webfetch`/`bash` instead of `open`. Correct JSON protocol:
+```
+
+Das ist die gesuchte Stelle: das Modell **erzählt** über `open` und das
+JSON-Protokoll, statt es zu benutzen — der Aufrufer war nie ein
+Tool-Call (`blocked=[]` im Proxy-Log), es ist reiner Text.
+
+**Ursache:** die Muster der Meta-Chatter-Filter kannten nur
+Selbstentschuldigung. Dazu kam eine **verschachtelte** Struktur, die der
+T-07-Preamble-Pfad nicht abdeckt. Aus dem Debug-Log (Part-Folge desselben
+Turns):
+
+```
+lid=21436e text='Wrong tool calls above — correcting to…'
+lid=bd7fc0 ntc=1                       <- erster Aufruf
+lid=dffe3c ntc=0
+lid=be301b ntc=1                       <- zweiter Aufruf
+lid=5c55d7 text='I must use `read`…instead of `open`. Correct JSON protocol:'
+```
+
+Die erste Passage wird von der T-07-Maschinerie verworfen (sie stand vor dem
+ersten Aufruf an). Die **zweite** kam danach und lief ungefiltert raus.
+
+**Fix (drei Einsatzstellen, weil die Pfade getrennt sind):**
+1. **Frühwarnung vor dem Parser** (`_PROTOCOL_META_NARRATION_TAIL_RE`):
+   Deltas, deren Ende noch ein *Präfix* einer Marke ist, werden
+   zurückgehalten und erst freigegeben, wenn der Text entweder zur Marke
+   geworden ist oder erkennbar etwas anderes. Ohne diesen Lookahead matcht
+   die Marke nur, wenn sie zufällig in **einen** Delta passt — bei
+   Chunk-Größe 1–13 streamte sie komplett durch.
+2. **Nach den Aufrufen**: ist der Turn bereits im Aufruf-Modus, wird
+   Protokoll-Narration still entfernt (`strip_protocol_meta_narration`).
+3. **Finalize/Preamble-Discard**: der Preamble-Puffer wird auch dann
+   verworfen, wenn die Aufrufe in einem *eigenen* Event kamen (der
+   Discard lief nur, wenn im selben Event ein sichtbarer Delta ankam).
+
+Die Phrasen sind WORTLISTEN; daraus werden Voll- und Präfix-Muster erzeugt,
+Worttrenner sind `[-_\s]+` (live: „Tool-Calls", `open_url`) und jedes Wort
+darf in Backticks stehen (live: „instead of \`open\`"). Das Tail-Muster ist
+an einer **Wortgrenze** verankert — ohne den Anker matchte das einzelne `r`
+aus „right…" mitten in jedem Text.
+
+### Verifikation
+
+- **675 Tests grün** (532 vor diesem Arbeitsgang + 143 neue).
+- Jede neue Testklasse wurde gegen den **Vorher-Stand** laufen gelassen:
+  34 (S-05) bzw. 17 (S-07) schlagen ohne den Fix fehl, mit dem Fix grün.
+  Nichts davon war ein leerer Test.
+- Live: `smoke-test.sh` 8/8. Vier opencode-Sessions gegen den echten Proxy
+  (`glm2api verify 4/5/6/7`): eine finale Text-Part, **0** Whitespace-Parts,
+  13 Tool-Calls, 0 Fehler. Regressionslauf mit dem 7-Schritt-Stresstest
+  ebenfalls sauber.
+
+### Merkposten für die nächste Session
+
+Ein Test, der `build_response()["choices"][0]["message"]["content"]` prüft,
+prüft den **gecachten** Text. Für Stream-Verhalten muss der Test die Chunks
+aus `consume_event` **und** aus `finalize()` sammeln — `_stream_visible()`
+in `test_translator.py` tat das nicht und hat genau diese drei Bugs
+durchgelassen. Bei `allowed_tool_names` gesetzt ist `content` im
+Non-Stream-Response per OpenAI-Vertrag `None`, sobald Tool-Calls da sind:
+für reine Stream-Aussagen dort also nichts nachprüfbar.
+
+---
+
 ## Erledigt-Historie (Kurzreferenz)
 
 - Echo/Duplikat-Loops (native Parts, 36/Turn) — DONE 3cd794e
@@ -281,6 +412,9 @@ Status: **DONE — BEACHTEN** (Häufigkeit in kommenden Läufen über die
 - Invalides JSON (unbalancierte Klammern, 6,6KB) — DONE fea9c22/79fca84
 - Doppelausgabe Call+Text (Midstream) — DONE 7a2a2cd
 - Nacktes JSON-Array als Protokoll (Leak-Variante D) — DONE efbc2e7
+- Stream-Reihenfolge umgestellt (S-05) — DONE 2026-09-26
+- Leerzeilen-Artefakt neben Tool-Calls (S-06) — DONE 2026-09-26
+- Protokoll-Narration im Client-Text (S-07) — DONE 2026-09-26
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).
