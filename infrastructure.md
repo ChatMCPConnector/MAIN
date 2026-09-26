@@ -21,7 +21,7 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau), autosave-daemon.sh (30-Min-Auto-Commit+Push), proxy-watchdog.sh |
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
-| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, nvidia-models.py, validate-revision.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
+| `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, free-models.py, validate-revision.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
 
 | `.env` `.runtime/` | GITIGNORED — Klartext-Secrets (.env), Browser-Profil, Runtime (nie committen) |
@@ -42,48 +42,67 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 `secrets`, `keys` (status/doctor/restore), `ports`, `quota`, `st`, `ll`, `autosave` (status/start/stop/log),
 `config-watchdog` (status/start/stop/log), `landscape-diff`, `ocver`
 (opencode-Versionspin: check/latest/bump/install), `csecret` (Codespaces-Secrets),
-`cline-models` und `nvidia-models` (Free-Modell-Discovery).
+`free-models` (kostenlose Modelle von Cline + NVIDIA NIM, letzte 14 Tage),
+`cline-models`, `nvidia-models` (jeweils auf einen Anbieter festgelegt).
 
 ## Enthalten
 
 - Ports 3000/8000 (Apps), 4096 (opencode-Server für Multi-Client), 8001 (glm2api LLM-Proxy), 9878 (antigravity-proxy), 6082/5920 (Browser-VNC, nur lokal)
 - opencode, Default-Modell `antigravity/gemini-3.8-flash` (fest auf high Thinking gemappt)
-- `infra/scripts/nvidia-models.py`: NVIDIA-Modellindex von build.nvidia.com
-  (kostenlos, NIM-Keys), für Modell-Discovery
-- `infra/scripts/cline-models.py`: Cline-Free-Modelle live geprüft, Alias
-  `cline-models`. Trennt die zwei Namensräume, die nur ähnlich aussehen:
-  `stealth/*` geht über die Cline-API (also in opencode nutzbar), `cline-free/*`
+- `infra/scripts/free-models.py`: kostenlose Modelle von **Cline und NVIDIA
+  NIM** in einem Skript, zentrale Funktion `fetch_models()`, Aliase
+  `free-models` (beide), `cline-models`, `nvidia-models`. Default: nur kostenlose
+  Modelle der **letzten 14 Tage**, neueste zuerst; `--all` hebt beide Filter auf,
+  `--days N` verstellt das Fenster (`--days 0` schaltet es ab). Aufruf
+  `free-models [alle|cline|nvidia]`.
+
+  Die beiden Anbieter haben völlig verschiedene Abrufwege — Cline ist eine
+  JSON-API, NVIDIA nur HTML-Scraping über `build.nvidia.com` (`models.md` +
+  `nimType`-Attribute, mit `updated` als einziger belastbarer Datumsquelle, weil
+  die integrate-API nur ein Dummy-`created` liefert). Beides in eine Funktion zu
+  zwingen hieße, den billigen JSON-Abruf mit dem teuren Scraping zu verheiraten;
+  deshalb ist nur die *Antwortform* normalisiert, nicht der Abruf. Getrennte
+  Caches mit unterschiedlichen Haltezeiten: `~/.cache/nvidia-models-cache.json`
+  (Modellseiten 24 h) und `~/.cache/cline-models-cache.json` (Probes 1 h,
+  `first_seen` ungekürzt). Beide Modelllisten werden immer frisch geholt, weil
+  Modelle rotieren und ein Cache neue Angebote tagelang unterschlüge.
+
+  **Cline — die Verfügbarkeitsfrage, die sonst niemand beantworten kann:**
+  `stealth/*` geht über die Cline-API (in opencode nutzbar), `cline-free/*`
   antwortet `403 only available via Cline product surfaces` und ist auf
   Cline-CLI/IDE beschränkt — in `opencode.json` nicht konfigurierbar, egal wie
-  man es einträgt. Der Probe misst pro Modell API-Erreichbarkeit, Tool-Call
-  und echte Kosten (`usage.cost`), und gleicht mit der Whitelist in
-  `opencode.json` ab. **Umfang bewusst nur der Cline-Free-Block** (Promotions-
-  Modelle, die in der CLI als FREE markiert sind) — nicht die 17 `:free`-
-  Modelle des Katalogs, die ebenfalls 0 USD kosten, aber OpenRouter-
-  Passthrough sind, bei praktisch jedem Anbieter als Nemotron-Version
-  dauerhaft verfügbar sind und sich deshalb nicht sinnvoll nach „neu"
-  filtern lassen. Spalten `seit`/`Alter`/`Quelle` beantworten „wie lange gibt
-  es das Modell schon": Cline führt für 5 der 6 Free-Modelle **kein** `created`
-  (die `cline-free/*` stehen in keinem Katalog), deshalb hält das Skript eine
-  eigene `first_seen`-Registry, die im Gegensatz zu den Probes nicht altert und
-  das Verschwinden eines Modells übersteht. Quelle in der Ausgabe unterscheidbar:
-  `Cline` = Cline-eigenes `created` (nur `space-bunny-alpha`), `erstmals` = von
-  uns beim ersten Lauf notiert, also „seit wann wir es kennen", nicht „seit wann
-  es existiert". **Anzeige-Default absichtlich eng:** nur was über die API
-  nutzbar ist und nicht älter als `--days` (Default **14** — manche Promotions
-  laufen rund zwei Wochen, mit 7 wären sie aus der Anzeige gefallen, obwohl sie
-  noch laufen) — die CLI-only-Modelle
-  sind für opencode per Definition irrelevant (403, unabhängig von Key und
-  `opencode.json`), deshalb auch die schlanke Ausgabe ohne Status-/Cost-Spalte,
-  die dort in jeder Zeile dasselbe gesagt hätten. `--all` stellt
-  Vollständigkeit wieder her, `--days 0` hebt nur den Altersfilter auf,
-  `--min-age`/`--max-age` für explizite Kontrolle. **`--emit-config` arbeitet
+  man es einträgt. Namen ähnlich, Verfügbarkeit völlig verschieden. Der Probe
+  misst pro Modell API-Erreichbarkeit, Tool-Call und echte Kosten (`usage.cost`)
+  und gleicht mit der Whitelist in `opencode.json` ab. **Umfang bewusst nur der
+  Cline-Free-Block** (Promotions-Modelle, die in der CLI als FREE markiert sind)
+  — nicht die 17 `:free`-Modelle des Katalogs, die ebenfalls 0 USD kosten, aber
+  OpenRouter-Passthrough sind, bei praktisch jedem Anbieter als Nemotron-Version
+  dauerhaft verfügbar sind und sich deshalb nicht sinnvoll nach „neu" filtern
+  lassen.
+
+  Spalten `seit`/`Alter`/`Quelle` beantworten „wie lange gibt es das Modell
+  schon". Für NVIDIA ist das das `updated`-Datum aus dem Frontmatter, also ein
+  echtes Datum. Für Cline ist die Lage schlechter: Cline führt `created` nur für
+  **1 von 6** Free-Modellen (die `cline-free/*` stehen in keinem Katalog), also
+  hält das Skript eine `first_seen`-Registry, die im Gegensatz zu den Probes
+  nicht altert und das Verschwinden eines Modells übersteht. Quelle in der
+  Ausgabe unterscheidbar: `Cline`/`NVIDIA` = herstellerseitig belegt,
+  `erstmals` = von uns beim ersten Lauf notiert, also „seit wann **wir** es
+  kennen", nicht „seit wann es existiert". 14 statt 7 Tage, weil manche Promotions
+  rund zwei Wochen laufen — ein kürzeres Fenster blendet Modelle aus, die noch
+  aktiv sind. Im Default-Modus (nur nutzbar) entfallen Status- und Cost-Spalte,
+  weil sie dort in jeder Zeile dasselbe gesagt hätten. **`--emit-config` rechnet
   bewusst auf dem Stand vor dem Altersfilter** — ein nutzbares, aber älteres
   Modell ist in opencode weiterhin nutzbar und muss weiterhin vorgeschlagen
   werden; der Altersfilter ist eine Lesehilfe, keine Nutzungsgrenze. Ohne Key
-  geht `--no-probe` (nur Liste, ohne LLM-Calls). Cache
-  `~/.cache/cline-models-cache.json`: Probes 1 h, `first_seen` ungekürzt; die
-  Modellliste selbst wird immer frisch geholt, weil Free-Modelle rotieren.
+  geht `--no-probe` (nur Liste, ohne LLM-Calls).
+
+  **`--api` bei NVIDIA ist der Abgleich gegen die integrate-API** und deckt eine
+  Lücke auf, die der Doku-Index nicht zeigt: von 41 als free markierten
+  NVIDIA-Modellen waren live nur **7** abrufbar, **34** stehen nur in der
+  Dokumentation. Das FREE-Flag aus dem Index sagt also nichts darüber aus, ob
+  ein Modell wirklich rufbar ist — deshalb ist die Spalte `live` per `--api`
+  zuschaltbar und bleibt im Default aus, um die Ausgabe nicht zu überladen.
 
 ## Secrets-Modell (bewusst: Komfort > Sicherheit)
 
@@ -454,6 +473,8 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **`nvidia-models.py` und `cline-models.py` zu `free-models.py` zusammengeführt — eine Datei, ein Aufruf, `fetch_models()`, 14-Tage-Filter für beide Anbieter.** Zwei Skripte mit demselben Zweck und sehr unterschiedlichem Reifegrad: zwei Caches, zwei Ausgabeformate, zwei Sortierungen — und die Antwort auf „welches kostenlose Modell ist neu" musste je nach Anbieter anders zusammengesucht werden. Zentrale Funktion ist `fetch_models(providers, args, now)`, die für beide Anbieter dieselbe normalisierte Zeilenform liefert (`provider`, `id`, `ts`, `age`, `free`, `desc`, `date_src` plus Anbieter-Extras). **Was bewusst nicht vereinheitlicht wurde, ist der Abruf:** Cline ist eine JSON-API, NVIDIA nur HTML-Scraping über `build.nvidia.com` (`models.md` + `nimType`-Attribute, mit `updated` als einziger belastbarer Datumsquelle, weil die integrate-API nur ein Dummy-`created` liefert). Beides in eine Funktion zu zwingen hieße, den billigen JSON-Abruf mit dem teuren Scraping zu verheiraten und die zwei Caches in einen mit einer TTL zusammenzuziehen, die keinem der beiden gerecht wird — sie sind deshalb getrennt geblieben (NVIDIA-Modellseiten 24 h, Cline-Probes 1 h, `first_seen` ungekürzt), inklusive kompatiblem Format, sodass die vorhandenen Caches weiterverwendet werden. **NVIDIA bekam die Cline-Regeln:** Default nur kostenlose Modelle der letzten 14 Tage, neueste zuerst. Bei NVIDIA ist das nicht nur Kosmetik — der Index führt 97 Modelle, davon nur 8 im 14-Tage-Fenster, also blendet der Filter 89 durchwegs als Dauerbestand erkennbare Einträge aus. Das Alter kommt dort aus `updated` und ist damit ein echtes Datum, nicht wie bei Cline eine Beobachtung. Aliase zeigen alle auf das eine Skript (`free-models`, `cline-models` = nur Cline, `nvidia-models` = nur NVIDIA). **Zwei Fehler beim Zusammenführen gefunden, beide beim Testen:** (a) `--api` war im neuen Skript ein stiller No-op — `nv_api_ids()` war definiert, wurde aber nirgends aufgerufen, das Flag tat also nichts, ohne zu warnen; jetzt füllt es ein `live`-Feld, das die Spalte nur dann einblendet, wenn es belastbar ermittelt wurde (kein Key oder Netzfehler → Spalte weg statt einer Behauptung). (b) Beim Nachtragen fiel die **Lücke auf, die der Doku-Index von NVIDIA verdeckt: von 41 als free markierten Modellen sind live nur 7 abrufbar, 34 stehen ausschließlich in der Dokumentation.** Das `Free Endpoint`-Flag sagt also nichts darüber aus, ob ein Modell wirklich rufbar ist. `--api` bleibt opt-in, um die Standardausgabe nicht zu überladen — wer ein NVIDIA-Modell tatsächlich nutzen will, sollte es mit `--api` prüfen. Verifiziert: `free-models` 103 geladen / 10 passend (Cline 2, NVIDIA 8), `cline --all` 6/6 mit vollen Spalten, `--days 5` und `--days 8` korrekt, `--emit-config` unverändert, `--api` mit belastbarer `live`-Spalte und korrektem „kein API", alle drei Aliase, `bash -n` auf aliases.sh, beide Caches formatkompatibel wiederverwendet.
 
 - 2026-09-26: **`cline-models.py` auf den tatsächlichen Zweck zugeschnitten: nur was in opencode nutzbar ist, nur was höchstens 7 Tage alt ist.** Der ausführliche Modus hatte den Zweck, die Verfügbarkeitsfrage zu klären — einmal geklärt war sie beantwortet, und die 4 `cline-free/*`-Zeilen waren nur noch Rauschen: Sie sind für opencode per Definition irrelevant (403, unabhängig von Key und von jedem Eintrag in `opencode.json`), also nicht „nicht konfigurierbar, wenn man es richtig macht", sondern generell unbrauchbar. Neuer Default filtert deshalb auf **nutzbar** *und* **≤ `--days` (7)**, und die Ausgabe wird entsprechend schlank: Status- und Cost-Spalte entfallen im Default-Modus, weil sie dort in jeder Zeile „ok" bzw. „0" gesagt hätten — stattdessen kommt `ctx` dazu (aus dem Katalog, `1000k` für space-bunny-alpha), das tatsächlich variiert. Mit `--all` kommen beide Spalten zurück, wo sie echte Information tragen. Der Probe selbst wurde leichter: kürzerer Prompt („Read /etc/hostname."), weil er ohnehin nur beweisen soll, dass das Modell antwortet, Tools aufruft und nichts kostet — gegengeprüft, dass der kurze Prompt weiterhin Tool-Calls auslöst (pixel-canary und space-bunny-alpha, beide `tool=True cost=0`), sonst wäre die Spalte `tool ok` eine Lüge. **Zwei Fehler beim Umbauen, beide beim Testen aufgefallen und gefixt:** (a) `--days 0` ließ `max_age` auf `None` und crashte die Zusammenfassungszeile mit `TypeError: unsupported format string passed to NoneType.__format__`; (b) **`--emit-config` benutzte die bereits gefilterte Menge** — ein nutzbares, aber älteres Modell wäre dadurch nie mehr zum Konfigurieren vorgeschlagen worden, obwohl es in opencode weiterhin nutzbar ist. Der Altersfilter ist jetzt eine reine Lesehilfe, `--emit-config` rechnet auf dem Stand davor (mit `--days 1` geprüft: die Ausgabe zeigt nur ein Modell, das Snippet enthält weiterhin beide). Verifiziert: Default 0,5 s aus dem Cache, 16 s kalt; `--all` 6/6 mit Status- und Cost-Spalte; `--days 0/1/2` korrekt; `--no-probe` ohne Key; `--emit-config` gegen leere und gefüllte Whitelist (Config danach byte-identisch wiederhergestellt).
 

@@ -26,7 +26,7 @@ gegengefetcht.
 |---|---|---|---|
 | **Groq** | 30 RPM / 1.000 RPD / 200K TPD (gpt-oss-120b, gpt-oss-20b, qwen3.8-27b) | GPT-OSS, Qwen3.8 | console.groq.com/docs/rate-limits — Groq dokumentiert **OpenCode/Kilo/Cline/Roo/Droid**-Integrationen |
 | **OpenRouter** | `:free`-Modelle: 20 RPM, 50 RPD; **1.000 RPD ab ~$10 Lifetime-Credits** | ~21 `:free`-Modelle (qwen3.8-27b, nemotron-3-ultra, cohere/north-mini-code, poolside/laguna …) | openrouter.ai/docs/api-reference/limits |
-| **NVIDIA NIM** | Free-Endpoints bis 40 RPM / 10k RPD (reported); im Repo bereits via `nvidia-models.py` | Kimi K3, DeepSeek V4 Pro/Flash, Nemotron | build.nvidia.com |
+| **NVIDIA NIM** | Free-Endpoints bis 40 RPM / 10k RPD (reported); im Repo bereits via `free-models.py nvidia` (Alias `nvidia-models`) | Kimi K3, DeepSeek V4 Pro/Flash, Nemotron | build.nvidia.com |
 | **Google AI Studio API-Key** | Free-Tier (Limits nur in AI Studio sichtbar; Daten werden zur Produktverbesserung genutzt) | Gemini 3.8 Flash, 3.1 Pro | ai.google.dev |
 | **Z.ai (Zhipu)** | GLM-4.7-Flash / GLM-4.5-Flash = $0 (reported) | GLM-Flash-Serie | docs.z.ai |
 | **Cloudflare Workers AI** | 10.000 Neurons/Tag (reported) | qwen3-30b, qwen2.5-coder-32b, gpt-oss, glm-4.7-flash | developers.cloudflare.com |

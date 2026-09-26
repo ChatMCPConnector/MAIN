@@ -15,10 +15,12 @@ alias ll='ls -lah'
 alias gdrive='bash /workspaces/MAIN/infra/scripts/gdrive-backup.sh'
 alias ocver='bash /workspaces/MAIN/infra/scripts/opencode-version.sh'
 alias csecret='bash /workspaces/MAIN/infra/scripts/codespace-secret.sh'
-# Modell-Indizes. cline zeigt nur die Free-Modelle und sagt je Modell, ob es
+# Modell-Index. free-models vereint Cline und NVIDIA NIM: zeigt nur kostenlose
+# Modelle der letzten 14 Tage, neueste zuerst. cline-only sagt je Modell, ob es
 # ueber die API (also in opencode) nutzbar ist oder nur in der Cline-CLI.
-alias cline-models='python3 /workspaces/MAIN/infra/scripts/cline-models.py'
-alias nvidia-models='python3 /workspaces/MAIN/infra/scripts/nvidia-models.py'
+alias free-models='python3 /workspaces/MAIN/infra/scripts/free-models.py'
+alias cline-models='python3 /workspaces/MAIN/infra/scripts/free-models.py cline'
+alias nvidia-models='python3 /workspaces/MAIN/infra/scripts/free-models.py nvidia'
 
 # Autosave-Daemon: status / start / stop / log
 autosave() {
