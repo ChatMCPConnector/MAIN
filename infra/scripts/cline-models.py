@@ -47,17 +47,29 @@ id/name/desc. Deshalb gibt es zwei Quellen, in der Spalte "Quelle" erkennbar:
 first_seen ueberlebt bewusst das Verschwinden eines Modells (anders als die
 Probes), sonst waere die Angabe nach einer Rotation wertlos.
 
-Cache: ~/.cache/cline-models-cache.json. Probes 1 h (teuer,Live-Calls).
+Anzeige-Default ist absichtlich eng: NUR Modelle, die (a) ueber die API
+nutzbar sind und (b) nicht aelter als --days Tage (Default 7) sind. Die
+CLI-only-Modelle sind fuer opencode per Definition irrelevant — 403, egal
+welcher Key und egal was in opencode.json steht. Deshalb auch die
+schlanke Spaltenausgabe ohne Status/cost: in diesem Modus wuerden beide in
+jeder Zeile "ok" bzw. "0" sagen. `--all` stellt Vollstaendigkeit wieder her
+(inkl. Status- und Kosten-Spalte). `--days 0` hebt nur den Altersfilter auf.
+Wichtig: `--emit-config` arbeitet auf dem Stand VOR dem Altersfilter — ein
+nutzbares, aber aelteres Modell ist in opencode weiterhin nutzbar und muss
+auch weiterhin vorgeschlagen werden. Der Altersfilter ist eine Lesehilfe,
+keine Nutzungsgrenze.
+
+Cache: ~/.cache/cline-models-cache.json. Probes 1 h (teuer, Live-Calls).
 first_seen: ungekuerzt. Die Modellliste wird immer frisch geholt, weil
 Free-Modelle rotieren und ein Cache sie tagelang unterschlaege.
 
 Key: $CLINE_API_KEY oder ~/.config/landscape/cline.key.
 
 Verwendung:
-  python3 infra/scripts/cline-models.py              # Free-Modelle + Status
-  python3 infra/scripts/cline-models.py -n 50        # mehr Zeilen
-  python3 infra/scripts/cline-models.py --max-age 3  # nur juengere als 3 Tage
-  python3 infra/scripts/cline-models.py --min-age 7  # nur aeltere als 7 Tage
+  python3 infra/scripts/cline-models.py              # nutzbar + <= 7 Tage
+  python3 infra/scripts/cline-models.py --days 3     # nur neuere
+  python3 infra/scripts/cline-models.py --days 0     # nur nutzbare, ohne Altersfilter
+  python3 infra/scripts/cline-models.py --all        # alles, jede Quelle
   python3 infra/scripts/cline-models.py --no-probe   # nur Liste, kein LLM-Call
   python3 infra/scripts/cline-models.py --emit-config  # Snippet fuer opencode.json
   python3 infra/scripts/cline-models.py -v           # Details/Fehler
@@ -198,8 +210,11 @@ def probe(model_id, key, max_tokens=PROBE_MAX_TOKENS):
     """
     payload = json.dumps({
         "model": model_id,
-        "messages": [{"role": "user",
-                      "content": "Read /etc/hostname with the read tool."}],
+        # Absichtlich kurz: der Probe soll nur beweisen, dass das Modell
+        # antwortet, Tools aufruft und nichts kostet. Eine echte Aufgabe
+        # davor zu lohnen wuerde den Test nur teurer machen, ohne die drei
+        # Fragen zu beantworten.
+        "messages": [{"role": "user", "content": "Read /etc/hostname."}],
         "tools": TOOL_SPEC,
         "max_tokens": max_tokens,
     }).encode()
@@ -291,6 +306,11 @@ STATUS_LABEL = {
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", "--top", type=int, default=40)
+    ap.add_argument("--days", type=float, default=7, metavar="TAGE",
+                    help="nur Modelle, die hoechstens TAGE Tage alt sind "
+                         "(Default: 7, 0 = alle)")
+    ap.add_argument("--all", action="store_true",
+                    help="keine Filter: alle Modelle, jedes Alter")
     ap.add_argument("--min-age", type=float, metavar="TAGE",
                     help="nur Modelle aelter als TAGE Tage (neuere ausblenden)")
     ap.add_argument("--max-age", type=float, metavar="TAGE",
@@ -399,25 +419,50 @@ def main():
     # ohne Datumsangabe landen hinten, statt eine 0 zu behaupten.
     rows.sort(key=lambda r: -(r["seen"] or 0))
 
-    # Altersfilter. first_seen ist immer befuellt (aus dem Cache geladen, oder
-    # im allerersten Lauf auf "jetzt" gesetzt), deshalb kann hier kein Datum
-    # fehlen und ein Filter kann nichts stillschweigend verschlucken.
-    if args.min_age is not None or args.max_age is not None:
+    # --- Filter -----------------------------------------------------------
+    # Default ist absichtlich eng: nur was in opencode tatsaechlich nutzbar
+    # ist, und nur was jung genug ist, um sich zu lohnen. Die CLI-only-
+    # Modelle sind fuer die Nutzung in opencode per Definition irrelevant
+    # (403, unabhaengig vom Key und von jedem Eintrag in opencode.json).
+    # Wer die Vollstaendigkeit will, nimmt --all.
+    #
+    # first_seen ist immer befuellt (aus dem Cache geladen, oder im allerersten
+    # Lauf auf "jetzt" gesetzt), deshalb kann hier kein Datum fehlen und ein
+    # Filter kann nichts stillschweigend verschlucken.
+    if not args.all:
+        # --days schlaegt --min-age/--max-age, weil es der Default-Pfad ist.
+        if args.min_age is None and args.max_age is None and args.days > 0:
+            args.max_age = args.days
+        if not args.no_probe and key:
+            before = len(rows)
+            rows = [r for r in rows if r["status"] == "ok"]
+            dropped = before - len(rows)
+            if dropped:
+                note(f"Filter: {dropped} nicht nutzbar ausgeblendet")
+    # --emit-config arbeitet bewusst auf diesem Stand, VOR dem Altersfilter:
+    # ein nutzbares Modell, das aelter als --days ist, ist in opencode immer
+    # noch nutzbar und muss dort auch weiterhin vorgeschlagen werden. Der
+    # Altersfilter ist eine Lesehilfe, keine Nutzungsgrenze.
+    rows_usable = [r for r in rows if r["status"] == "ok"]
+
+    if not args.all:
         keep = []
         for r in rows:
-            if r["age"] is None:
-                keep.append(r)
+            if args.min_age is not None and r["age"] is not None \
+                    and r["age"] < args.min_age:
                 continue
-            if args.min_age is not None and r["age"] < args.min_age:
-                continue
-            if args.max_age is not None and r["age"] > args.max_age:
+            if args.max_age is not None and r["age"] is not None \
+                    and r["age"] > args.max_age:
                 continue
             keep.append(r)
-        hidden = len(rows) - len(keep)
+        if len(keep) != len(rows):
+            print(f"Altersfilter (<= {args.max_age} Tage): "
+                  f"{len(rows) - len(keep)} ausgeblendet", file=sys.stderr)
         rows = keep
-        if hidden:
-            print(f"Altersfilter: {hidden} Modelle ausgeblendet "
-                  f"(--min-age/--max-age)", file=sys.stderr)
+        if not rows:
+            print("Keine Modelle nach den Filtern uebrig "
+                  "(mit --all alles anzeigen).", file=sys.stderr)
+            return 1
 
     def age_cell(r):
         if r["seen"] is None:
@@ -435,28 +480,51 @@ def main():
             print(f"{i:>3}  {r['id']:<44} {day:<11} {age:<6} "
                   f"{r['seen_src']:<9} {mark:<4} {r['desc'][:34]}")
     else:
-        print(f"{'#':>3}  {'Modell-ID':<44} {'seit':<11} {'Alter':<6} "
-              f"{'Quelle':<9} {'Status':<14} {'tool':<5} {'cost':<7} cfg  "
-              f"Beschreibung")
+        # Ohne --all steht hier per Definition nur "nutzbar", also entfallen
+        # Status- und Kosten-Spalte: sie wuerden in jeder Zeile dasselbe
+        # sagen (ok / 0). Beide tauchen nur mit --all wieder auf, wo sie
+        # echte Information tragen.
+        lean = not args.all
+        if lean:
+            print(f"{'#':>3}  {'Modell-ID':<44} {'seit':<11} {'Alter':<6} "
+                  f"{'Quelle':<9} {'ctx':<9} tool cfg  Beschreibung")
+        else:
+            print(f"{'#':>3}  {'Modell-ID':<44} {'seit':<11} {'Alter':<6} "
+                  f"{'Quelle':<9} {'Status':<14} {'tool':<5} {'cost':<7} cfg  "
+                  f"Beschreibung")
         for i, r in enumerate(rows[:args.top], 1):
             day, age = age_cell(r)
-            label = STATUS_LABEL.get(r["status"], r["status"])
             tool = "ok" if r["tool"] else "-"
-            cost = ("0" if r["cost"] == 0 else
-                    (f"{r['cost']:.5f}" if isinstance(r["cost"], float)
-                     else "-"))
             cfg = "ja" if r["configured"] else "nein"
-            print(f"{i:>3}  {r['id']:<44} {day:<11} {age:<6} "
-                  f"{r['seen_src']:<9} {label:<14} {tool:<5} "
-                  f"{cost:<7} {cfg:<4} {r['desc'][:32]}")
+            if lean:
+                ctx = f"{r['ctx']//1000}k" if r["ctx"] else "-"
+                print(f"{i:>3}  {r['id']:<44} {day:<11} {age:<6} "
+                      f"{r['seen_src']:<9} {ctx:<9} {tool:<4} {cfg:<4} "
+                      f"{r['desc'][:30]}")
+            else:
+                label = STATUS_LABEL.get(r["status"], r["status"])
+                cost = ("0" if r["cost"] == 0 else
+                        (f"{r['cost']:.5f}" if isinstance(r["cost"], float)
+                         else "-"))
+                print(f"{i:>3}  {r['id']:<44} {day:<11} {age:<6} "
+                      f"{r['seen_src']:<9} {label:<14} {tool:<5} "
+                      f"{cost:<7} {cfg:<4} {r['desc'][:32]}")
 
     usable = [r for r in rows if r["status"] == "ok"]
     cli_only = [r for r in rows if r["status"] == "cli_only"]
-    if not args.no_probe and key:
+    if not args.no_probe and key and args.all:
         print("", file=sys.stderr)
         print(f"{len(usable)} ueber die API nutzbar (opencode), "
               f"{len(cli_only)} nur in der Cline-CLI/IDE "
               f"(opencode.json kann sie nicht nutzen).", file=sys.stderr)
+    elif not args.no_probe and key and not args.all:
+        # --days 0 bzw. --min-age hebt den Altersfilter auf, dann gibt es kein
+        # max_age zum Formatieren.
+        span = (f"nur Modelle <= {args.max_age:g} Tage"
+                if args.max_age is not None else "ohne Altersfilter")
+        print("", file=sys.stderr)
+        print(f"{len(usable)} nutzbar, alle kostenlos ({span}). "
+              f"Fuer die Vollstaendigkeit: --all", file=sys.stderr)
 
     if args.emit_config:
         if args.no_probe or not key:
@@ -465,14 +533,14 @@ def main():
                   "sind. Ohne\n       --no-probe aufrufen (Key noetig).",
                   file=sys.stderr)
             return 1
-        missing = [r for r in usable if not r["configured"]]
+        missing = [r for r in rows_usable if not r["configured"]]
         if not missing:
             print("\n# alle nutzbaren Free-Modelle sind bereits konfiguriert",
                   file=sys.stderr)
             return 0
         print("\n// fuer .opencode/opencode.json, provider.cline:")
         print('"whitelist": [')
-        for r in rows:
+        for r in rows_usable:
             if r["configured"]:
                 print(f'  "{r["id"]}",')
         for r in missing:
