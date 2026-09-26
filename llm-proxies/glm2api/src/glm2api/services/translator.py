@@ -579,6 +579,37 @@ def _starts_new_block(part: str) -> bool:
 # Nackter call-objekt-anfang: {"name": … / {"arguments": … / {"filePath": …
 _BARE_CALL_OPENER_RE = re.compile(r'\{\s*"(?:name|arguments|filePath|command|content)"\s*:')
 
+# S-05: die drei opnerformen, die den finalize-safety-net brauchen. Sie
+# entscheiden, OB ein zurueckgehaltener text jetzt schon raus darf oder
+# weiter warten muss (siehe `_deferred_visible_is_publishable`).
+_PROTOCOL_FRAGMENT_MARKERS = (
+    '{"tool_calls"',
+    "<ml_tool_call",
+    "<|DSML|tool_call",
+)
+
+
+def _contains_protocol_fragment(text: str) -> bool:
+    """Traegt der text ein stueck tool-protokoll, das der finalize-pfad
+    noch entfernen muss?"""
+    if not text:
+        return False
+    if any(marker in text for marker in _PROTOCOL_FRAGMENT_MARKERS):
+        return True
+    return _BARE_CALL_OPENER_RE.search(text) is not None
+
+
+def _fences_balanced(text: str) -> bool:
+    """Sind alle code-fences im text geschlossen?
+
+    Ein ungeschlossener fence darf nicht mitten im stream raus: er koennte
+    das tool-protokoll umhuellen (```json {"tool_calls":...}), und genau
+    diese unwrap-arbeit macht der finalize-pfad."""
+    for marker in ("```", "~~~"):
+        if text.count(marker) % 2 == 1:
+            return False
+    return True
+
 # P-07/D-03: tool-markup, das nie geschlossen wurde. Der stream-pfad
 # haelt es ueber den markup-holdback zurueck; der final-/non-stream-pfad
 # tat das nicht und lieferte rohes DSML als antwort (gemessen in 12 von
@@ -959,8 +990,178 @@ def strip_transcript_echo(text: str) -> str:
     return "".join(kept_lines).strip()
 
 
+# S-07: das Modell ERKLAERT das Werkzeugprotokoll, statt es zu benutzen.
+#
+# Live 2026-09-26 (glm-5.3, session `glm2api verify 4`): ein turn mit 8
+# korrekten parallelen `read`-calls lieferte zusaetzlich genau diesen
+# monolog als sichtbaren text:
+#   "Wrong tool calls above — correcting to the allowed tools:I must use
+#    `read`/`webfetch`/`bash` instead of `open`. Correct JSON protocol:"
+# Der client (opencode) legte daraus eine assistant-nachricht an: sichtbarer
+# ballast im TUI, dauerhafter ballast im kontext — und das modell lernt
+# daran, dass narrativ erlaubt ist.
+#
+# Drei einsatzstellen, weil die drei pfade getrennt sind:
+#   * `_PROTOCOL_META_NARRATION_TAIL_RE` — der stream-pfad, VOR dem parser.
+#     Nur so greift die erkennung bei JEDER chunk-groesse: sie haelt deltas
+#     zurueck, deren ende noch ein PRAEFIX einer marke ist ("Wro", "Wrong
+#     tool", …), und gibt sie erst frei, wenn der text entweder zur marke
+#     geworden ist (dann puffert die T-07-maschinery und verwirft sie bei
+#     aufrufen) oder erkennbar etwas anderes ist. Ohne den lookahead
+#     matcht die marke nur, wenn sie zufaellig in EINEN delta passt — bei
+#     chunk-groesse 1-13 streamte sie komplett durch (gemessen).
+#   * `_META_CHATTER_SENTENCE_RE` — der finalize-pfad fuer turns OHNE
+#     aufrufe (mit aufrufen greift der verwurf oben).
+#   * `strip_protocol_meta_narration` — der direktaufruf fuer tests und
+#     fuer aufrufer, die den text ohne accumulator filtern wollen.
+#
+# Die phrasen sind WORTLISTEN, keine regexp. Daraus werden zwei muster
+# erzeugt: die vollform und alle WORDPRAEFIXE. Jedes wort darf in
+# backticks stehen ("instead of `open`") — das ist die live-form und ein
+# eigenes literal-muster wuerde daran vorbeigehen.
+_PROTOCOL_META_PHRASES = (
+    "wrong tool call",
+    "wrong tool calls",
+    "tool call above",
+    "tool calls above",
+    "tool usage above",
+    "tool calls earlier",
+    "tool calls before",
+    "tool calls wrong",
+    "tool calls invalid",
+    "tool calls not allowed",
+    "correcting to the allowed tools",
+    "correct to the allowed tools",
+    "correctly to the allowed tools",
+    "correct json protocol",
+    "proper json protocol",
+    "right json protocol",
+    "the expected json protocol",
+    "json protocol is",
+    "json protocol below",
+    "instead of open",
+    "instead of open url",
+    "instead of openurl",
+    "instead of browse",
+    "instead of web search",
+    "instead of web run",
+    "instead of execute sandbox code",
+    "instead of code interpreter",
+    "use read instead",
+    "use write instead",
+    "use bash instead",
+    "use webfetch instead",
+    "use glob instead",
+    "use grep instead",
+    "falsche tool calls",
+    "falscher tool call",
+    "fehlerhafte tool calls",
+    "ungueltige tool calls",
+    "unzulaessige tool calls",
+    "tool calls oben",
+    "tool calls ungueltig",
+    "tool calls falsch",
+    "korrigiere auf die erlaubten tools",
+    "korrigiere zu den erlaubten tools",
+    "statt open",
+)
+
+
+def _meta_phrase_fragment(words: list[str], last_word_partial: bool = False) -> str:
+    r"""Ein wort als regex, optional in backticks; woerter mit beliebigem
+    whitespace dazwischen (live: 'Correct JSON protocol:').
+
+    `last_word_partial` erlaubt JEDE unvollstaendige schreibung des letzten
+    worts. Das ist fuer den fruehwarn-lookahead noetig: der upstream
+    schneidet mitten im wort ("Wrong tool c"), und ein rein auf ganze
+    woerter gebautes praefix-muster wuerde den holdback genau dort
+    aufgeben — mit folge, dass die narration bei chunk-groesse 1-13
+    komplett durchstreamt (live gemessen).
+
+    Die wort-trenner sind `[-_\s]+`, nicht nur whitespace: das modell
+    schreibt "Tool-Calls" (live, deutsch) und "open_url" (der echte
+    werkzeugname) mit trennzeichen."""
+    parts = []
+    for index, word in enumerate(words):
+        literal = re.escape(word)
+        if last_word_partial and index == len(words) - 1:
+            # Ein zeichen genuegt: der upstream schneidet nach dem
+            # ersten buchstaben. Dass ein einzelnes 'r' nicht JEDEN text
+            # matcht, sichert der wortgrenzen-anker im tail-muster
+            # (siehe `_build_meta_narration_regexes`) — nicht diese
+            # zeichenkette.
+            literal = re.escape(word[0]) + "".join(
+                re.escape(char) + "?" for char in word[1:]
+            )
+        parts.append(r"`?" + literal + r"`?")
+    return r"`?[-_\s]+".join(parts)
+
+
+def _build_meta_narration_regexes(phrases: tuple[str, ...]) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    full: list[str] = []
+    prefixes: list[str] = []
+    for phrase in phrases:
+        words = phrase.split()
+        for count in range(1, len(words) + 1):
+            part = words[:count]
+            # JEDE anzahl an woertern braucht die partielle form des
+            # letzten worts: der upstream schneidet mitten im wort, und
+            # "wrong tool c" ist ein praefix mit DREI woertern, dessen
+            # drittes nur zur haelfte da ist. Ohne die partielle form
+            # fuer count == len(words) greift der lookahead bei genau
+            # diesem fall nicht.
+            prefixes.append(_meta_phrase_fragment(part, last_word_partial=True))
+            if count == len(words):
+                full.append(_meta_phrase_fragment(part))
+    full_re = re.compile("(?:" + "|".join(full) + r")\b", re.IGNORECASE)
+    # laengere praefixe zuerst: sonst matcht "wrong" und der rest
+    # "tool calls" bleibt als eigenstaendiges muster uebrig.
+    ordered = sorted(set(prefixes), key=len, reverse=True)
+    # S-07: der lookahead muss an einer WORTgrenze beginnen. Ohne den
+    # anker matchte das einzelne 'r' aus 'right…' mitten in jedem text
+    # ('Nachher' -> 'r') und der holdback griff an jedem turnende — mit
+    # folge, dass ein fuehrender zeilenumbruch in den parser wanderte und
+    # von dessen flush weggestrippt wurde (gemessen: '```Nachher' statt
+    # '```\nNachher').
+    tail_re = re.compile(
+        r"(?:^|(?<=[\s`\-_]))(?:" + "|".join(ordered) + r")\s*$",
+        re.IGNORECASE,
+    )
+    return full_re, tail_re
+
+
+_PROTOCOL_META_NARRATION_RE, _PROTOCOL_META_NARRATION_TAIL_RE = (
+    _build_meta_narration_regexes(_PROTOCOL_META_PHRASES)
+)
+
+_PROTOCOL_META_NARRATION_SENTENCE_RE = re.compile(
+    r"[^.!?\n]*" + _PROTOCOL_META_NARRATION_RE.pattern[:-2] + r"[^.!?\n]*[.!?…]?",
+    re.IGNORECASE,
+)
+
+
+def strip_protocol_meta_narration(text: str) -> str:
+    """Entfernt Text, in dem das Modell das Werkzeugprotokoll kommentiert
+    (S-07) — 'Wrong tool calls above', 'instead of `open`', 'Correct JSON
+    protocol'.
+
+    Klauselweise: der markierte abschnitt plus der satz, in dem er steht,
+    faellt; alles andere bleibt. Klausel statt zeile, weil die marke auch
+    mitten im satz stehen kann ('I must use `read` instead of `open`.') —
+    eine zeilen- oder satz-Anfangserkennung greift dort nicht.
+
+    Die phrasen sind am werkzeug-vokabular verankert, nicht an 'instead
+    of' allgemein: 'The file uses 200 instead of 100 lines' bleibt
+    unangetastet."""
+    if not text:
+        return ""
+    if not _PROTOCOL_META_NARRATION_RE.search(text):
+        return text
+    return _PROTOCOL_META_NARRATION_SENTENCE_RE.sub(" ", text).strip()
+
+
 _META_CHATTER_SENTENCE_RE = re.compile(
-    r"(?i)(?:^|(?<=[.!?…])\s)"
+    r"(?:^|(?<=[.!?…])\s)"
     r"(?:\W*)(?:"
     r"i(?:'m| am)\s+(?:so |very )?sorry\b"
     r"|i\s+(?:cannot|can't|can not|am\s+unable\s+to|don't\s+have\s+(?:access|the\s+ability)\s+to|do\s+not\s+have\s+access\s+to)\b"
@@ -968,7 +1169,12 @@ _META_CHATTER_SENTENCE_RE = re.compile(
     r"|es\s+tut\s+mir\s+leid"
     r"|ich\s+kann\s+(?:das\s+)?(?:nicht|leider\s+nicht)\b"
     r"|mir\s+steht\s+(?:das\s+|dieses\s+)?(?:tool|werkzeug)\s+(?:nicht|leider\s+nicht)\s+zur\s+verfügung"
-    r")[^.!?\n]*[.!?…]?"
+    # S-07: die narration wird als eigener alternativ-zweig angehaengt
+    # (siehe `strip_protocol_meta_narration`); das inline-`(?i)` ist weg,
+    # weil python 3.11+ keine flags mehr in der mitte eines patterns
+    # erlaubt. Verhalten identisch (re.IGNORECASE statt `(?i)` am anfang).
+    r")[^.!?\n]*[.!?…]?",
+    re.IGNORECASE,
 )
 
 
@@ -983,6 +1189,11 @@ def strip_meta_chatter(text: str) -> str:
     standen ueberhaupt nicht in der liste. Deshalb zusaetzlich satzweise:
     nur der verdaechtige Satz faellt, der Rest der Antwort bleibt.
     """
+    if not text:
+        return ""
+    # S-07: protokoll-narration zuerst — sie ist der haeufigere fall und
+    # steht in der Praxis VOR der selbstentschuldigung.
+    text = strip_protocol_meta_narration(text)
     if not text:
         return ""
     # T-17: erst satzweise die fähigkeits-verleugnungen entfernen …
@@ -1673,6 +1884,18 @@ class GLMEventAccumulator:
     _parts_epoch: int = 0
 
     _deferred_visible_text: str = ""
+    # S-06: stand schon sichtbarer (nicht-rein-whitespace) text in diesem
+    # turn im stream? Dann ist ein whitespace-delta ein trennzeichen
+    # zwischen zwei sichtbaren stuecken und wird sofort rausgeschickt
+    # (D-06). Vor dem ersten sichtbaren text ist er ein Kandidat fuer das
+    # leerzeilen-artefakt neben tool-calls und wartet im puffer.
+    _emitted_visible_text: bool = False
+    # S-07: text, der noch NICHT an den parser gegeben wurde, weil sein
+    # ende noch ein praefix einer narration-marke ist. Ohne diesen
+    # vorlauf matcht die marke nur, wenn sie zufaellig in einen einzigen
+    # delta passt — bei chunk-groesse 1-13 kam die komplette narration
+    # durch (live gemessen).
+    _narration_carry: str = ""
     _deferred_reasoning: str = ""
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
     blocked_tool_attempt_names: list[str] = field(default_factory=list)
@@ -2234,7 +2457,38 @@ class GLMEventAccumulator:
                     )
                 )
 
+        # S-07: fruehwarnung vor dem parser. Solange das ende des
+        # mitgefuehrten texts noch ein praefix einer narration-marke ist,
+        # wird der delta NICHT an den parser gegeben — sonst streamt die
+        # marke bei kleinen chunk-groessen, bevor sie als marke erkennbar
+        # ist. Sobald der text entweder zur marke geworden ist (dann
+        # uebernimmt die T-07-praeambel das puffern und verwerfen) oder
+        # erkennbar etwas anderes ist, geht der ganze carry in einem
+        # rutsch an den parser — die reihenfolge bleibt so erhalten.
+        text_delta = self._narration_carry + text_delta
+        if text_delta and _PROTOCOL_META_NARRATION_TAIL_RE.search(text_delta):
+            self._narration_carry = text_delta
+            text_delta = ""
+        else:
+            self._narration_carry = ""
+
         visible_text_delta = self.tool_parser.consume(text_delta)
+        # S-07 (verschachtelt): NACH den aufrufen kann noch narration
+        # kommen. Live-Struktur (debug-log, glm-5.3, 8 parallele reads):
+        #   lid=21436e text='Wrong tool calls above — correcting to…'
+        #   lid=bd7fc0 ntc=1                      <- erster aufruf
+        #   lid=dffe3c ntc=0
+        #   lid=be301b ntc=1                      <- zweiter aufruf
+        #   lid=5c55d7 text='I must use `read`…instead of `open`. Correct
+        #                    JSON protocol:'      <- narration NACH den calls
+        # Die T-07-praeambel verwirft nur die ERSTE narration (die stand
+        # vor dem ersten aufruf an); die zweite lief danach ungefiltert als
+        # antwort raus. Ist der turn bereits im aufruf-modus, ist
+        # protokoll-narration per definition kein antworttext — sie wird
+        # hier still entfernt, genau wie `strip_meta_chatter` es im
+        # finalize-pfad tut.
+        if visible_text_delta and (self._server_side_tool_calls or self.tool_parser.tool_calls):
+            visible_text_delta = strip_protocol_meta_narration(visible_text_delta)
         if visible_text_delta:
             # THEMA 3 (F2): C0-Steuerzeichen im gestreamten Content ersetzen
             visible_text_delta = self._sanitize_visible_text(visible_text_delta)
@@ -2255,10 +2509,7 @@ class GLMEventAccumulator:
             # gehoeren in denselben holdback — der finalize-safety-net
             # entfernt sie anschliessend.
             protocol_fragment = self.allowed_tool_names is not None and (
-                '{"tool_calls"' in visible_text_delta
-                or "<ml_tool_call" in visible_text_delta
-                or "<|DSML|tool_call" in visible_text_delta
-                or _BARE_CALL_OPENER_RE.search(visible_text_delta) is not None
+                _contains_protocol_fragment(visible_text_delta)
             )
             # T-07: sobald dieser turn einen tool-call enthaelt, darf bereits
             # gesendeter text nicht als antwort stehen bleiben. Solange
@@ -2300,7 +2551,17 @@ class GLMEventAccumulator:
                         r"i\s+(?:am\s+going\s+to|will\s+now)|"
                         r"i'?m\s+going\s+to|now\s+i\s+will|"
                         r"ich\s+werde\s+jetzt|ich\s+schau(?:e|te)|"
-                        r"als\s+nächstes\s+schau)\b",
+                        r"als\s+nächstes\s+schau)"
+                        # S-07: protokoll-narration ist ebenfalls eine
+                        # "praeambel" — das model erklaert das protokoll,
+                        # statt es zu benutzen ('Wrong tool calls above',
+                        # 'instead of `open`'). Faellt sie hier durch,
+                        # streamt sie unumkehrbar als antwort. Mit dem
+                        # muster greift die vorhandene T-07-maschinerie:
+                        # puffern und bei einem folgenden call verwerfen.
+                        # S-07-Muster: alternativ zu den obigen
+                        # (siehe `_PROTOCOL_META_PHRASES`).
+                        r"|" + _PROTOCOL_META_NARRATION_RE.pattern,
                         visible_text_delta,
                         re.IGNORECASE,
                     )
@@ -2343,7 +2604,56 @@ class GLMEventAccumulator:
                 # finalize. Sonst wuerde JEDER text bei deklarierten tools
                 # bis zum finalize gebuffert (UX-regression).
                 self._deferred_visible_text += visible_text_delta
-            else:
+                visible_text_delta = ""
+            elif visible_text_delta:
+                # S-05: der deferred-puffer und der direkte stream waren ZWEI
+                # senken ohne reihenfolge-garantie. Ohne diese stelle kam der
+                # earlier gepufferte text erst im finalize heraus und stand
+                # damit HINTER dem zwischenzeitlich direkt gestreamten —
+                # eine echte reihenfolgeumstellung, live gemessen:
+                #   'geholt via' + '2. **README** ... bestaetigt).'
+                #   + '`bash` + `curl`): ``` alpha beta gamma ```'
+                # (abschnitt mitten im satz, nummerierung verschoben).
+                # Ausloeser war ein fence, der MITTEN in einem delta
+                # geschlossen wurde: `fence_pending` war fuer dieses delta
+                # noch wahr, der puffer gefuellt, der rest des turns direkt
+                # gestreamt.
+                #
+                # S-06: derselbe puffer ist jetzt der EINZIGE geordnete
+                # senken fuer sichtbaren text, und er nimmt auch reine
+                # whitespace-deltas auf. Grund: whitespace neben
+                # tool-calls ist ein artefakt des part-merge (live: 7 native
+                # calls -> 14 leerzeilen im stream) und laesst sich nur
+                # rausreissen, wenn man ihn BIS zum ende wartet — vorher
+                # weiss niemand, ob noch text kommt. Als trennende zeile
+                # zwischen zwei sichtbaren woertern bleibt er voll
+                # erhalten: sobald echter text folgt, wird er in
+                # reihenfolge mit ausgegeben (D-06 unveraendert).
+                merged = self._deferred_visible_text + visible_text_delta
+                if not merged.strip() and not self._emitted_visible_text:
+                    # S-06: nur whitespace und bisher gab es KEINEN sichtbaren
+                    # text in diesem turn -> warten. Entweder folgt echter
+                    # text (dann geht der whitespace in reihenfolge mit
+                    # raus, D-06 unveraendert) oder der turn besteht aus
+                    # nichts ausser aufrufen (dann faellt er beim finalize
+                    # weg — genau der artefakt, um den es geht: glm-5.3
+                    # liefert neben jedem nativen call eine eigene
+                    # whitespace-part, live 7 calls -> 14 leerzeilen im
+                    # stream).
+                    self._deferred_visible_text = merged
+                    visible_text_delta = ""
+                elif not self._deferred_text_is_publishable(self._deferred_visible_text):
+                    # der gepufferte teil traegt noch arbeit offen, die der
+                    # finalize-pfad macht (offener fence / protokoll-
+                    # fragment) -> sticky warten, reihenfolge bleibt gewahrt
+                    self._deferred_visible_text = merged
+                    visible_text_delta = ""
+                else:
+                    self._deferred_visible_text = ""
+                    visible_text_delta = merged
+            if visible_text_delta:
+                if visible_text_delta.strip():
+                    self._emitted_visible_text = True
                 delta_payload: dict[str, object] = {"content": visible_text_delta}
                 if not self.emitted_role:
                     delta_payload = {"role": "assistant", "content": visible_text_delta}
@@ -2369,6 +2679,23 @@ class GLMEventAccumulator:
         if blocked_native_seen is not None and blocked_native_seen[0]:
             return chunks, "intervene"
         return chunks, str(payload.get("status")) if payload.get("status") is not None else None
+
+    @staticmethod
+    def _deferred_text_is_publishable(text: str) -> bool:
+        """S-05: darf der gepufferte sichtbare text JETZT raus?
+
+        Nein, wenn er noch arbeit offenlaesst, die der finalize-pfad
+        macht: ein ungeschlossener code-fence (darin koennte das
+        tool-protokoll stecken, das der finalize-unwrap entfernt) oder ein
+        protokollfragment (das der finalize-safety-net zerschneidet). In
+        beiden faellen wartet der puffer weiter — die zurueckhaltung
+        bleibt dann sticky, damit die reihenfolge gewahrt bleibt.
+        """
+        if not text:
+            return True
+        if not _fences_balanced(text):
+            return False
+        return not _contains_protocol_fragment(text)
 
     def _unwrap_protocol_only_fences(self, text: str) -> str | None:
         """Entfernt ```-Fences, deren Inhalt (fast) NUR das Tool-Protokoll
@@ -2411,6 +2738,12 @@ class GLMEventAccumulator:
             log.debug("Ignoring repeated finalize() call; turn was already finalized")
             return []
         self._finalized = True
+        # S-07: der fruehwarn-carry muss noch an den parser, sonst geht
+        # der text verloren (er war nie im parser und wird beim flush
+        # nicht zurueckgegeben).
+        if self._narration_carry:
+            self.tool_parser.pending_text += self._narration_carry
+            self._narration_carry = ""
         tail_text, xml_tool_calls = self.tool_parser.flush()
         xml_tool_calls = sanitize_tool_calls(xml_tool_calls, fallback_url=self.fallback_tool_url)
         # T-05: zurueckgehaltenes reasoning (protokoll-verdacht) zuerst
@@ -2479,6 +2812,19 @@ class GLMEventAccumulator:
         xml_tool_calls = _dedupe_tool_call_list(xml_tool_calls)
         merged_raw_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
         all_tool_calls = sanitize_tool_calls(merged_raw_calls, fallback_url=self.fallback_tool_url)
+        # S-07: die praeambel-verwurf-logik in `consume_event` laeuft nur,
+        # wenn in DEMSELBEN event ein sichtbarer delta ankommt. Traegt der
+        # aufruf in einem eigenen event (der haeufige fall: die
+        # protokoll-narration steht im text-event, die `{"tool_calls":…}[]`
+        # bloecke kommen in den folgenden), wurde der puffer nie verworfen
+        # und stand am ende als antwort da. Genau der live-befund:
+        #   'Wrong tool calls above — correcting to the allowed tools:…'
+        # neben 8 korrekten reads. Hier ist die entscheidung moeglich:
+        # der turn HAT aufrufe, also ist der gepufferte text die praeambel
+        # und gehoert verworfen.
+        if all_tool_calls and self._preamble_pending:
+            self._preamble_pending = False
+            self._deferred_visible_text = ""
         # T-06: das modell WOLLTE einen aufruf, der wegen fehlendem
         # pflichtargument nicht ausfuehrbar ist (`write` ohne content,
         # `read` ohne filePath). Vorher galt der turn danach als leerer
@@ -2693,6 +3039,14 @@ class GLMEventAccumulator:
                     )
         if final_text:
             final_text = self._sanitize_visible_text(final_text)
+            # S-06: derselbe whitespace-artefakt wie im stream, fuer den
+            # non-stream-pfad. Mehrere protokollbloecke mit leerzeilen
+            # dazwischen ergeben einen inhalt, der NICHTS sagt — der client
+            # (opencode) legt daraus einen leeren text-part an bzw. sendet
+            # eine leere assistant-nachricht. Mit inhalt daneben ist er
+            # unschaedlich, allein ist er nur ballast.
+            if all_tool_calls and not final_text.strip():
+                final_text = ""
             # Halluziniertes eigenes konversations-format (User:/Assistant: mit
             # [{"call_id":...}]) ist nie eine echte antwort — hier sind die
             # zeilen vollstaendig, deshalb erst hier strippen.
@@ -3304,8 +3658,17 @@ class GLMEventAccumulator:
                     # ein `\n\n` an jeder part-grenze zerreiss jede zeile,
                     # wenn der upstream einen text ueber viele logic_ids
                     # verteilt (live: 166 ids in einem turn).
+                    # S-06: eine part OHNE inhalt bekommt keinen absatz-
+                    # umbruch. Live (2026-09-26) lieferte glm-5.3 neben
+                    # jedem nativen tool_call eine eigene (leere) text-part;
+                    # 7 calls ergaben 6 grenzen und damit EXAKT 12
+                    # leerzeilen als sichtbaren text — eine leere assistant-
+                    # nachricht in der TUI und ballast im kontext. Der
+                    # trenner ist zwischen zwei echten absaetzen richtig,
+                    # vor einem leeren part ist er reiner muell.
                     if (
                         (text_delta_parts or self._part_text_sent)
+                        and rendered_text.strip()
                         and not self._emitted_text_needs_continuation()
                         and (
                             _ends_sentence(self._emitted_text_tail)
@@ -3381,6 +3744,13 @@ class GLMEventAccumulator:
                 state[0] = part
             elif state[2] or state[3]:
                 # offene struktur -> das ist eine fortsetzung
+                state[0] += part
+            elif not part.strip():
+                # S-06: gleiche regel wie im streampfad — eine part ohne
+                # inhalt bekommt keinen absatzumbruch. Sonst erzeugt eine
+                # leere part neben jedem nativen tool_call im cached
+                # volltext (und damit in der non-stream-antwort) genau so
+                # viele leerzeilen, wie der turn part-grenzen hat.
                 state[0] += part
             elif _ends_sentence(state[0][-_EMITTED_TAIL_CHARS:]) or _starts_new_block(part):
                 state[0] = f"{state[0]}\n\n{part}"

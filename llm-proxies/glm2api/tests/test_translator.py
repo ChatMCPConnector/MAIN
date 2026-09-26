@@ -3137,9 +3137,364 @@ def test_protocol_inside_fence_is_still_cleaned_before_it_reaches_the_client():
     assert "```json" not in streamed, f"protokoll-fence nicht entpackt: {streamed!r}"
 
 
+# --- S-06 (Whitespace-Artefakt neben tool-calls) ---------------------------
+
+
+def _multi_block_call_turn(reads):
+    """Mehrere protokollbloecke, durch zeilenumbrueche getrennt — so
+    emittiert glm-5.3 parallele aufrufe (live: 7 reads in einem turn, der
+    text-part danach bestand aus 12 leerzeilen).
+
+    Der fuehrende umbruch ist der live gefundene ausloeser: er gehoert zu
+    keinem block, wird also von keinem `[]`-terminator geschluckt und
+    rutscht als sichtbarer whitespace in den stream."""
+    blocks = [
+        '{"tool_calls":[{"name":"read","arguments":{"filePath":"/f%d.py"}}]}[]' % index
+        for index in range(reads)
+    ]
+    return "\n" + "\n".join(blocks) + "\n"
+
+
+@pytest.mark.parametrize("reads", [1, 3, 7])
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 13, 40, 200])
+def test_no_whitespace_only_text_next_to_tool_calls(reads, chunk_size):
+    """S-06: die leerzeilen ZWISCHEN den protokollbloecken sind ein
+    strip-artefakt. Live gingen sie als text-part mit 12 leerzeilen an den
+    client (leere assistant-nachricht in der TUI)."""
+    text = _multi_block_call_turn(reads)
+    got = _stream_including_finalize(text, chunk_size, allowed={"read"})
+    assert got.strip() == "", f"whitespace-only text erreicht den client: {got!r}"
+
+
+def test_whitespace_still_streams_before_the_first_call():
+    """D-06-gegenprobe: VOR dem ersten aufruf ist ein whitespace-delta die
+    trennende zeile zwischen zwei sichtbaren woertern und muss raus."""
+    text = "Hier ist die Anleitung.\n\n"
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    streamed = []
+    for index in range(0, len(text), 3):
+        chunks, _ = accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {"logic_id": "p1", "content": [{"type": "text", "text": text[index : index + 3]}]}
+                ],
+            }
+        )
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            if delta.get("content"):
+                streamed.append(delta["content"])
+    assert "".join(streamed).strip() == "Hier ist die Anleitung.", streamed
+
+
+def test_non_stream_response_has_no_whitespace_only_content_with_calls():
+    """S-06 im non-stream-pfad: `content` darf neben tool_calls nicht nur
+    aus leerzeichen bestehen."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    text = _multi_block_call_turn(2)
+    for index in range(0, len(text), 9):
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {"logic_id": "p1", "content": [{"type": "text", "text": text[index : index + 9]}]}
+                ],
+            }
+        )
+    accumulator.finalize("finish")
+    message = accumulator.build_response()["choices"][0]["message"]
+    assert len(message.get("tool_calls") or []) == 2
+    assert not (message.get("content") or "").strip(), repr(message.get("content"))
+
+
+@pytest.mark.parametrize("reads", [1, 3, 7])
+@pytest.mark.parametrize("filler", ["\n", " ", "\n\n"], ids=["newline", "space", "blank"])
+def test_native_calls_with_blank_text_parts_emit_no_blank_lines(reads, filler):
+    """S-06, live-form: glm-5.3 liefert neben jedem nativen `tool_calls`-part
+    eine eigene text-part, die nur aus leerzeichen besteht. Der part-merge
+    setzte an jeder logic_id-grenze zusaetzlich einen absatzumbruch — 7 calls
+    ergaben 14 leerzeilen als sichtbaren text (live-session: text-part aus 12
+    leerzeilen neben 7 reads; in der TUI eine leere assistant-nachricht, im
+    kontext dauerhaft ballast).
+
+    Eine LEERE part (`""`) ist nicht der ausloeser — die trifft die
+    `if rendered_text`-bedingung gar nicht. Getestet wird deshalb bewusst
+    die whitespace-part."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    parts = []
+    for index in range(reads):
+        parts.append({"logic_id": f"t{index}", "content": [{"type": "text", "text": filler}]})
+        parts.append(
+            {
+                "logic_id": f"c{index}",
+                "status": "finish",
+                "content": [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": [
+                            {"name": "read", "id": f"call{index}", "arguments": {"filePath": f"/f{index}.py"}}
+                        ],
+                    }
+                ],
+            }
+        )
+    streamed: list[str] = []
+    for part in parts:
+        chunks, _ = accumulator.consume_event(
+            {"conversation_id": "c", "status": "finish", "parts": [part]}
+        )
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+    for chunk in accumulator.finalize("finish"):
+        if not chunk.startswith("data: ") or "[DONE]" in chunk:
+            continue
+        try:
+            delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+        except (json.JSONDecodeError, KeyError, IndexError):
+            continue
+        if delta.get("content"):
+            streamed.append(delta["content"])
+
+    message = accumulator.build_response()["choices"][0]["message"]
+    assert len(message.get("tool_calls") or []) == reads
+    assert "".join(streamed) == "", f"leerzeilen im stream: {''.join(streamed)!r}"
+    # non-stream: `content` ist per OpenAI-vertrag None, sobald tool_calls
+    # da sind (`"content": None if all_tool_calls or ...`).
+    assert message.get("content") in ("", None), repr(message.get("content"))
+
+
+def test_prose_around_native_calls_keeps_its_spacing():
+    """Gegenprobe zu S-06: echter text um native calls herum muss
+    unveraendert im stream ankommen — und die leerzeichen zwischen zwei
+    woertern sind kein artefakt.
+
+    Geprueft wird der STREAM, nicht `message["content"]`: bei tool_calls ist
+    das per OpenAI-vertrag None, dort waere nichts zu sehen."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    streamed: list[str] = []
+
+    def collect(chunks):
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+
+    collect(
+        accumulator.consume_event(
+            {"conversation_id": "c", "parts": [{"logic_id": "a", "content": [{"type": "text", "text": "Erster Teil."}]}]}
+        )[0]
+    )
+    collect(
+        accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "status": "finish",
+                "parts": [
+                    {
+                        "logic_id": "c0",
+                        "status": "finish",
+                        "content": [
+                            {"type": "tool_calls", "tool_calls": [{"name": "read", "id": "x", "arguments": {"filePath": "/a.py"}}]}
+                        ],
+                    }
+                ],
+            }
+        )[0]
+    )
+    collect(
+        accumulator.consume_event(
+            {"conversation_id": "c", "parts": [{"logic_id": "b", "content": [{"type": "text", "text": "Zweiter Teil."}]}]}
+        )[0]
+    )
+    collect(accumulator.finalize("finish"))
+
+    message = accumulator.build_response()["choices"][0]["message"]
+    assert len(message.get("tool_calls") or []) == 1
+    text = "".join(streamed)
+    assert "Erster Teil." in text and "Zweiter Teil." in text, repr(text)
+    assert text.index("Erster Teil.") < text.index("Zweiter Teil."), "reihenfolge umgestellt"
+
+
+def test_real_paragraphs_still_get_their_blank_line():
+    """Gegenprobe: zwei echte, mit satzzeichen abgeschlossene absaetze
+    bekommen ihren absatzumbruch weiterhin."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=None)
+    accumulator.consume_event(
+        {
+            "conversation_id": "c",
+            "parts": [{"logic_id": "a", "content": [{"type": "text", "text": "Erster Absatz."}]}],
+        }
+    )
+    accumulator.consume_event(
+        {
+            "conversation_id": "c",
+            "parts": [{"logic_id": "b", "content": [{"type": "text", "text": "Zweiter Absatz."}]}],
+        }
+    )
+    accumulator.finalize("finish")
+    content = accumulator.build_response()["choices"][0]["message"].get("content") or ""
+    assert content == "Erster Absatz.\n\nZweiter Absatz.", repr(content)
+
+
+# --- S-07 (Protokoll-Narration statt Protokoll-Nutzung) -------------------
+
+# Live-Befund 2026-09-26, session `glm2api verify 4`: ein turn mit 8
+# korrekten parallelen `read`-calls lieferte zusaetzlich diesen monolog als
+# sichtbaren text. Wörtlich der text-part, den opencode bekam.
+_S07_LIVE_LEAK = (
+    "Wrong tool calls above — correcting to the allowed tools:"
+    "I must use `read`/`webfetch`/`bash` instead of `open`. Correct JSON protocol:\n\n"
+)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 7, 13, 40, 200])
+def test_protocol_narration_never_reaches_the_client_next_to_calls(chunk_size):
+    """S-07: das modell ERKLAERT das protokoll, statt es zu benutzen. Ohne
+    den fix streamt der monolog unumkehrbar raus (der turn hat calls, also
+    greift der finalize-strip nicht mehr)."""
+    calls = "".join(
+        '{"tool_calls":[{"name":"read","arguments":{"filePath":"/f%d.py"}}]}[]' % index
+        for index in range(3)
+    )
+    text = _S07_LIVE_LEAK + calls
+    got = _stream_including_finalize(text, chunk_size, allowed={"read"})
+    assert "Wrong tool calls" not in got, f"protokoll-narration im stream: {got!r}"
+    assert "instead of `open`" not in got, f"protokoll-narration im stream: {got!r}"
+    assert "JSON protocol" not in got, f"protokoll-narration im stream: {got!r}"
+
+
+@pytest.mark.parametrize("narration", [
+    "Wrong tool calls above — correcting to the allowed tools.",
+    "Correct JSON protocol:",
+    "I must use `read` instead of `open`.",
+    "Tool calls above were invalid.",
+    "Correcting to the allowed tools now.",
+    "Falsche Tool-Calls oben — ich korrigiere auf die erlaubten Tools.",
+])
+def test_strip_protocol_meta_narration_removes_each_live_form(narration):
+    from glm2api.services.translator import strip_protocol_meta_narration
+
+    assert strip_protocol_meta_narration(narration) == ""
+
+
+def _interleaved_narration_turn():
+    """Die EXAKTE part-folge aus dem debug-log (live, glm-5.3, 8 reads).
+
+    Die narration kommt VOR dem ersten aufruf (das T-07-handling
+    verwirft sie) und NOCHMAL NACH den aufrufen. Genau die zweite
+    passage lief als antwort zum client.
+    """
+    return [
+        {"logic_id": "21436e", "status": "finish",
+         "content": [{"type": "text", "text": "Wrong tool calls above — correcting to the allowed tools:"}]},
+        {"logic_id": "bd7fc0", "status": "finish",
+         "content": [{"type": "tool_calls", "tool_calls": [{"name": "read", "id": "a", "arguments": {"filePath": "/f1.py"}}]}]},
+        {"logic_id": "dffe3c", "status": "finish", "content": [{"type": "text", "text": ""}]},
+        {"logic_id": "be301b", "status": "finish",
+         "content": [{"type": "tool_calls", "tool_calls": [{"name": "read", "id": "b", "arguments": {"filePath": "/f2.py"}}]}]},
+        {"logic_id": "5c55d7", "status": "finish",
+         "content": [{"type": "text", "text": "I must use `read`/`webfetch`/`bash` instead of `open`. Correct JSON protocol:"}]},
+    ]
+
+
+def test_narration_after_tool_calls_is_also_suppressed():
+    """S-07 (verschachtelt): narration NACH den aufrufen. Die T-07-
+    praeambel deckt nur die narration VOR dem ersten aufruf ab."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    streamed: list[str] = []
+
+    def collect(chunks):
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+
+    for part in _interleaved_narration_turn():
+        collect(accumulator.consume_event({"conversation_id": "c", "status": "finish", "parts": [part]})[0])
+    collect(accumulator.finalize("finish"))
+
+    text = "".join(streamed)
+    assert "Wrong tool calls" not in text, text
+    assert "instead of `open`" not in text, text
+    assert "JSON protocol" not in text, text
+    message = accumulator.build_response()["choices"][0]["message"]
+    assert len(message.get("tool_calls") or []) == 2
+
+
+def test_real_prose_after_tool_calls_still_arrives():
+    """Gegenprobe: nach den aufrufen darf echter text ankommen — nur
+    protokoll-narration wird entfernt."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    streamed: list[str] = []
+
+    def collect(chunks):
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+
+    collect(accumulator.consume_event({"conversation_id": "c", "status": "finish", "parts": [
+        {"logic_id": "c0", "status": "finish", "content": [
+            {"type": "tool_calls", "tool_calls": [{"name": "read", "id": "a", "arguments": {"filePath": "/f1.py"}}]}]},
+    ]})[0])
+    collect(accumulator.consume_event({"conversation_id": "c", "parts": [
+        {"logic_id": "t0", "content": [{"type": "text", "text": "Erste Datei gelesen, Inhalt: wert-1."}]},
+    ]})[0])
+    collect(accumulator.finalize("finish"))
+
+    assert "wert-1" in "".join(streamed), streamed
+
+
+@pytest.mark.parametrize("keep", [
+    # der satz nennt `open_url`, redet aber ueber das WERKZEUG, nicht
+    # ueber das protokoll — das ist eine echte antwort und muss bleiben.
+    "Bitte beachte: open_url ist ein anderes Werkzeug als read.",
+    "Die Datei ist da. Ich habe 8 Dateien gelesen.",
+    "The file uses 200 instead of 100 lines.",
+    "Bericht erstellt: 8 Dateien, Muster wert-1 bis wert-8.",
+])
+def test_strip_protocol_meta_narration_keeps_real_answers(keep):
+    from glm2api.services.translator import strip_protocol_meta_narration
+
+    assert strip_protocol_meta_narration(keep) == keep
+
+
+def test_narration_stripped_from_text_only_answer():
+    """S-07 im finalize-pfad: ein turn OHNE calls, dessen antwort nur aus
+    narration besteht, wird nicht als antwort ausgeliefert."""
+    from glm2api.services.translator import strip_meta_chatter
+
+    assert strip_meta_chatter(_S07_LIVE_LEAK) == ""
+    mixed = _S07_LIVE_LEAK + "Fertig. Der Bericht liegt unter /tmp/bericht.md."
+    assert strip_meta_chatter(mixed) == "Fertig. Der Bericht liegt unter /tmp/bericht.md."
+
+
 def test_native_tool_call_as_list_is_parsed_with_all_guards():
-    """T-11: `tool_calls` kommt auch als LISTE vor; der Dict-Zweig
-    ignorierte sie — der native Call kam nie an."""
     protocol = {"name": "read", "id": "a", "arguments": {"filePath": "/a.py"}}
 
     allowed = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
