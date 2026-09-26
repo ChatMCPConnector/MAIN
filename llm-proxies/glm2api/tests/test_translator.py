@@ -3019,6 +3019,124 @@ def test_preamble_is_suppressed_when_a_call_follows(preamble):
     assert not (message.get("content") or "").strip(), "praeambel steht als antwort vor dem call"
 
 
+# --- S-05 (Stream-Reihenfolge des deferred-puffers) ------------------------
+
+
+def _stream_including_finalize(text: str, chunk_size: int, allowed=None) -> str:
+    """Was der Client im stream wirklich sieht — INKLUSIVE des finalize-flush.
+
+    `_stream_visible` (D-06) liest nur die deltas aus `consume_event` und
+    vergleicht `streamed + build_response().content`. `build_response()`
+    liefert aber den *gecachten* volltext, nicht das, was im stream ankam.
+    Genau dadurch blieb S-05 unsichtbar: der sichtbare stream war verstuem-
+    melt, der cached volltext aber korrekt. Diese variante sammelt daher
+    auch die chunks aus `finalize()` — das ist der pfad, ueber den der
+    deferred-puffer beim client landet.
+    """
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names=allowed or {"read", "bash"})
+    streamed: list[str] = []
+
+    def collect(chunks):
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+
+    for index in range(0, len(text), chunk_size):
+        chunks, _ = accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {"logic_id": "p1", "content": [{"type": "text", "text": text[index : index + chunk_size]}]}
+                ],
+            }
+        )
+        collect(chunks)
+    collect(accumulator.finalize("finish"))
+    return "".join(streamed)
+
+
+# Live-Befund 2026-09-26, glm-5.3, session `glm2api limited 3`: der
+# abschnitt nach einem code-fence kam HINTER dem davor. Der fence wurde mitten
+# in einem delta geschlossen (`fence_pending` war fuer dieses delta noch
+# wahr) -> der gepufferte text kam erst im finalize und stand damit hinter
+# dem zwischenzeitlich direkt gestreamten rest.
+_S05_TEXTS = {
+    "plain-fence": "Vorher\n```\nalpha\nbeta\n```\nNachher",
+    "fence-inline": "Vorher ```alpha``` Nachher",
+    "fence-then-prose": "Text\n\n```\ncode\n```\n\nFertig. Ende.",
+    "list-with-url": (
+        "1. **URL-Inhalt** (`http://127.0.0.1:8899/data.txt`, geholt via `bash` + `curl`):\n"
+        "   ```\n   alpha\n   beta\n   gamma\n   ```\n"
+        "2. **README** (via `read`): existiert.\n"
+        "3. **Ergebnisdatei**: geschrieben (bestaetigt)."
+    ),
+    "fence-last": "Text\n\n```\ncode\n```",
+    "no-fence": "1. **A** (`http://127.0.0.1:8899/x.txt`):\n   alpha\n2. **B** Ende.",
+}
+
+
+@pytest.mark.parametrize("label", sorted(_S05_TEXTS))
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13, 17, 25, 40, 100])
+def test_stream_preserves_order_across_code_fences(label, chunk_size):
+    """S-05: der stream muss den sichtbaren text in modellreihenfolge
+    ausgeben. Vor dem fix wurde der gepufferte abschnitt umgestellt, und bei
+    mehreren chunk-groessen ging text verloren oder kam doppelt."""
+    text = _S05_TEXTS[label]
+    got = _stream_including_finalize(text, chunk_size)
+    assert got.split() == text.split(), (
+        f"{label} (chunk={chunk_size}): reihenfolge/verlust im stream\n"
+        f"  IST : {got!r}\n  SOLL: {text!r}"
+    )
+
+
+def test_stream_still_flushes_prose_early_instead_of_buffering_to_the_end():
+    """Gegenprobe zur reihenfolge-fix: der puffer darf nicht zumpuffer werden.
+
+    Ohne fence und ohne protokoll wird prosa weiterhin sofort gestreamt —
+    der fix haengt nur am `deferred_visible_text`, nicht am normalen pfad.
+    """
+    text = "Erste Zeile. Zweite Zeile. Dritte Zeile."
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    early: list[str] = []
+    for index in range(0, len(text), 7):
+        chunks, _ = accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {"logic_id": "p1", "content": [{"type": "text", "text": text[index : index + 7]}]}
+                ],
+            }
+        )
+        for chunk in chunks:
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            if delta.get("content"):
+                early.append(delta["content"])
+    assert len("".join(early)) > len(text) // 2, (
+        f"normale prosa wird nicht mehr gestreamt, sondern bis zum finalize gepuffert: {early!r}"
+    )
+
+
+def test_protocol_inside_fence_is_still_cleaned_before_it_reaches_the_client():
+    """Gegenprobe zur sticky-regel: ein fence, der das protokoll umhuellt,
+    wird NICHT vorzeitig rausgegeben — der finalize-unwrap muss ihn holen."""
+    text = (
+        "Hier ist der Aufruf:\n```json\n"
+        '{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}[]\n'
+        "```\nFertig."
+    )
+    streamed = _stream_including_finalize(text, 6, allowed={"read"})
+    assert '"tool_calls"' not in streamed, f"protokoll im client-stream: {streamed!r}"
+    assert "```json" not in streamed, f"protokoll-fence nicht entpackt: {streamed!r}"
+
+
 def test_native_tool_call_as_list_is_parsed_with_all_guards():
     """T-11: `tool_calls` kommt auch als LISTE vor; der Dict-Zweig
     ignorierte sie — der native Call kam nie an."""

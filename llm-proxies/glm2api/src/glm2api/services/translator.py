@@ -579,37 +579,6 @@ def _starts_new_block(part: str) -> bool:
 # Nackter call-objekt-anfang: {"name": … / {"arguments": … / {"filePath": …
 _BARE_CALL_OPENER_RE = re.compile(r'\{\s*"(?:name|arguments|filePath|command|content)"\s*:')
 
-# S-05: die drei opnerformen, die den finalize-safety-net brauchen. Sie
-# entscheiden, OB ein zurueckgehaltener text jetzt schon raus darf oder
-# weiter warten muss (siehe `_deferred_visible_is_publishable`).
-_PROTOCOL_FRAGMENT_MARKERS = (
-    '{"tool_calls"',
-    "<ml_tool_call",
-    "<|DSML|tool_call",
-)
-
-
-def _contains_protocol_fragment(text: str) -> bool:
-    """Traegt der text ein stueck tool-protokoll, das der finalize-pfad
-    noch entfernen muss?"""
-    if not text:
-        return False
-    if any(marker in text for marker in _PROTOCOL_FRAGMENT_MARKERS):
-        return True
-    return _BARE_CALL_OPENER_RE.search(text) is not None
-
-
-def _fences_balanced(text: str) -> bool:
-    """Sind alle code-fences im text geschlossen?
-
-    Ein ungeschlossener fence darf nicht mitten im stream raus: er koennte
-    das tool-protokoll umhuellen (```json {"tool_calls":...}), und genau
-    diese unwrap-arbeit macht der finalize-pfad."""
-    for marker in ("```", "~~~"):
-        if text.count(marker) % 2 == 1:
-            return False
-    return True
-
 # P-07/D-03: tool-markup, das nie geschlossen wurde. Der stream-pfad
 # haelt es ueber den markup-holdback zurueck; der final-/non-stream-pfad
 # tat das nicht und lieferte rohes DSML als antwort (gemessen in 12 von
@@ -2286,7 +2255,10 @@ class GLMEventAccumulator:
             # gehoeren in denselben holdback — der finalize-safety-net
             # entfernt sie anschliessend.
             protocol_fragment = self.allowed_tool_names is not None and (
-                _contains_protocol_fragment(visible_text_delta)
+                '{"tool_calls"' in visible_text_delta
+                or "<ml_tool_call" in visible_text_delta
+                or "<|DSML|tool_call" in visible_text_delta
+                or _BARE_CALL_OPENER_RE.search(visible_text_delta) is not None
             )
             # T-07: sobald dieser turn einen tool-call enthaelt, darf bereits
             # gesendeter text nicht als antwort stehen bleiben. Solange
@@ -2371,35 +2343,7 @@ class GLMEventAccumulator:
                 # finalize. Sonst wuerde JEDER text bei deklarierten tools
                 # bis zum finalize gebuffert (UX-regression).
                 self._deferred_visible_text += visible_text_delta
-                visible_text_delta = ""
-            elif visible_text_delta and self._deferred_visible_text:
-                # S-05: der deferred-puffer und der direkte stream sind ZWEI
-                # senken ohne reihenfolge-garantie. Ohne diese stelle kam der
-                # earlier gepufferte text erst im finalize heraus und stand
-                # damit HINTER dem zwischenzeitlich direkt gestreamten —
-                # eine echte reihenfolgeumstellung, live gemessen:
-                #   'geholt via' + '2. **README** ... bestaetigt).'
-                #   + '`bash` + `curl`): ``` alpha beta gamma ```'
-                # (abschnitt mitten im satz, nummerierung verschoben).
-                # Ausloeser war ein fence, der MITTEN in einem delta
-                # geschlossen wurde: `fence_pending` war fuer dieses delta
-                # noch wahr, der puffer gefuellt, der rest des turns direkt
-                # gestreamt. Fix: was gepuffert liegt, geht VOR diesem delta
-                # raus. Ist der puffer noch nicht sauber (offener fence,
-                # protokollfragment), bleibt die zurueckhaltung STICKY —
-                # dann wartet auch dieser delta, und die reihenfolge bleibt
-                # gewahrt. Das ist die D-06-regel ("whitespace wird nie
-                # zurueckgehalten") unter der neuen randbedingung, dass
-                # ueberhaupt schon text wartet: ein whitespace-delta ZUERST
-                # rauszuschicken klebte words together ('Hier ist die' erst
-                # nach dem space), also wandert er mit in den puffer.
-                released, self._deferred_visible_text = self._deferred_visible_text, ""
-                if self._deferred_text_is_publishable(released):
-                    visible_text_delta = released + visible_text_delta
-                else:
-                    self._deferred_visible_text = released + visible_text_delta
-                    visible_text_delta = ""
-            if visible_text_delta:
+            else:
                 delta_payload: dict[str, object] = {"content": visible_text_delta}
                 if not self.emitted_role:
                     delta_payload = {"role": "assistant", "content": visible_text_delta}
@@ -2425,23 +2369,6 @@ class GLMEventAccumulator:
         if blocked_native_seen is not None and blocked_native_seen[0]:
             return chunks, "intervene"
         return chunks, str(payload.get("status")) if payload.get("status") is not None else None
-
-    @staticmethod
-    def _deferred_text_is_publishable(text: str) -> bool:
-        """S-05: darf der gepufferte sichtbare text JETZT raus?
-
-        Nein, wenn er noch arbeit offenlaesst, die der finalize-pfad
-        macht: ein ungeschlossener code-fence (darin koennte das
-        tool-protokoll stecken, das der finalize-unwrap entfernt) oder ein
-        protokollfragment (das der finalize-safety-net zerschneidet). In
-        beiden faellen wartet der puffer weiter — die zurueckhaltung
-        bleibt dann sticky, damit die reihenfolge gewahrt bleibt.
-        """
-        if not text:
-            return True
-        if not _fences_balanced(text):
-            return False
-        return not _contains_protocol_fragment(text)
 
     def _unwrap_protocol_only_fences(self, text: str) -> str | None:
         """Entfernt ```-Fences, deren Inhalt (fast) NUR das Tool-Protokoll
