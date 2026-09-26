@@ -23,15 +23,17 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, free-models.py, validate-revision.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
+| `/workspaces/freebuff/` | **Freebuff CLI** (npm-Projekt + Binary-Cache), persistent, nicht im Git — via `infra/scripts/freebuff-install.sh` |
 
 | `.env` `.runtime/` | GITIGNORED — Klartext-Secrets (.env), Browser-Profil, Runtime (nie committen) |
 
 ## Schnellstart
 
 Codespace bauen → `setup.sh` stellt ALLES automatisch wieder her (Systempakete,
-opencode, uv, Secrets-Unlock, Git-Auth, Browser-Runtime, **glm2api-Proxy inkl.
-Start** — der Code liegt komplett im Repo, es gibt nichts mehr zu klonen; nur
-`uv sync` (Python 3.14 + Deps, beim ersten Mal ~2-5 Min) + Autostart). Danach:
+opencode, uv, Secrets-Unlock, Git-Auth, Freebuff-CLI, Browser-Runtime,
+**glm2api-Proxy inkl. Start** — der Code liegt komplett im Repo, es gibt nichts
+mehr zu klonen; nur `uv sync` (Python 3.14 + Deps, beim ersten Mal ~2-5 Min) +
+Autostart). Danach:
 
 ```bash
 ./infra/scripts/save.sh status                       # Überblick (Repo, Auth, Secrets)
@@ -49,6 +51,12 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
 
 - Ports 3000/8000 (Apps), 4096 (opencode-Server für Multi-Client), 8001 (glm2api LLM-Proxy), 9878 (antigravity-proxy), 6082/5920 (Browser-VNC, nur lokal)
 - opencode, Default-Modell `antigravity/gemini-3.8-flash` (fest auf high Thinking gemappt)
+- Freebuff CLI: kostenloser, werbefinanzierter Coding-Agent, gepinnt 0.0.204,
+  liegt unter `/workspaces/freebuff` (persistent), Login verschlüsselt im
+  Secret-Bundle → in jedem Codespace eingeloggt. `cd <projekt> && freebuff`.
+  Kein API-Endpoint für opencode (kein OpenAI-kompatibler Server, kein
+  Headless-Modus); werbefinanziert, Prompts werden zur Ad-Personalisierung
+  ausgewertet → nichts Geheimes rein.
 - `infra/scripts/free-models.py`: kostenlose Modelle von **Cline und NVIDIA
   NIM** in einem Skript, zentrale Funktion `fetch_models()`, Aliase
   `free-models` (beide), `cline-models`, `nvidia-models`. Default: nur kostenlose
@@ -115,8 +123,10 @@ Secret-Schutz-Purismus:
   (der alte PAT wurde dadurch geleakt und von GitHub revoked).
 - `config/secrets.enc` (+ Manifest): verschlüsseltes Bundle mit
   `pat`, `nvidia-nim.key`, `xinjianya.key`, `cline.key`, `antigravity-oauth_creds.json`,
-  `chatglm-refresh-token`, `env`, `opencode-auth.json` → landen beim Unlock unter
-  `~/.config/landscape/`, `~/.local/share/opencode/auth.json` bzw. `.env`.
+  `chatglm-refresh-token`, `env`, `opencode-auth.json`, `rclone.conf`,
+  `freebuff-credentials.json` → landen beim Unlock unter
+  `~/.config/landscape/`, `~/.local/share/opencode/auth.json`, `.env`,
+  `~/.config/rclone/` bzw. `~/.config/manicode/` (Freebuff-Login).
 - `./infra/scripts/secrets.sh lock|unlock|status` verwaltet das Bundle.
   `unlock` probiert **alle** Passphrase-Kandidaten durch, bis einer das Bundle
   tatsächlich entschlüsselt (`LANDSCAPE_PASSPHRASE`, dann `config/passphrase`,
@@ -309,6 +319,48 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Profil `.runtime/firefox-profile/` enthält evtl. Logins — nie committen.
 - **Systempakete** via setup.sh (idempotent): nodejs, npm, xvfb, x11vnc, novnc,
   websockify, sqlite3, dbus-x11, build-essential, python3-* etc.
+- **Freebuff CLI** (werbefinanzierter, kostenloser Coding-Agent von CodebuffAI),
+  Version **0.0.204 gepinnt** in `infra/scripts/freebuff-install.sh`, automatisch
+  via setup.sh — **nach** dem Secrets-Schritt, weil der Login aus dem Bundle
+  kommt. Nicht global: das npm-Projekt liegt unter `/workspaces/freebuff`
+  (persistent), `~/.local/bin/freebuff` ist nur ein dünner Wrapper.
+  - **Zwei Ebenen, die man unterscheiden muss:** die npm-Pin (Launcher, hier
+    gepinnt) und das **native Binary, das der Launcher selbst nachlädt** — es
+    zieht immer das *neueste* veröffentlichte Binary (live belegt: npm-Pin
+    0.0.203, Launcher zog 0.0.204 und schrieb `.freebuff-0.0.204-*.tar.gz.part`
+    nach `$HOME`). Die Pin ist damit für den Launcher belastbar, für das Binary
+    nicht — ein Upstream-Release kommt mit dem nächsten Codespace-Build durch.
+    Deshalb: `FREEBUFF_VERSION` im Skript an `npm view freebuff version`
+    angleichen, und die `.part`-/`.freebuff-download-temp-*`-Reste aufräumen
+    (fressen sonst bei jedem Start Platte).
+  - **Binary-Pfad ist hart verdrahtet:** der Launcher legt es nach
+    `~/.config/manicode/freebuff` (`launcher.js`:
+    `path.join(os.homedir(), '.config', 'manicode')` — **kein** Env-Override).
+    `$HOME` ist ephemer, deshalb cacht der Wrapper die drei Dateien
+    (`freebuff`, `tree-sitter.wasm`, `freebuff-metadata.json` — ohne die
+    beiden NebenDateien startet die Sprach-Parser-Datei kaputt) aus
+    `/workspaces/freebuff/bin/` zurück. Gemessen: frische Installation 12 s
+    (npm + 130-MB-Binary), Rebuild-Restore **3,3 s** statt Download.
+  - **Login:** `~/.config/manicode/credentials.json` (Account-Token +
+    Fingerprint) liegt **verschlüsselt** in `config/secrets.enc`
+    (`secrets.sh` packt `freebuff-credentials.json`, Unlock legt es mit 0600
+    zurück) → in jedem neuen Codespace eingeloggt. `freebuff login` geht nicht
+    headless (gibt eine Browser-URL aus und wartet). **Der Token kann
+    serverseitig ablaufen** — dann einmal `freebuff login` + `secrets.sh lock`
+    + `save`.
+  - **Kosten/Modell:** 100 Freebucks/Tag (Reset Mitternacht PT), werbefinanziert
+    (Text Ads, Prompts werden zur Ad-Personalisierung ausgewertet), Modelle mit
+    Training-Freigabe u.a. DeepSeek V4/V4.1 Flash, Muse Spark, Space Bunny
+    Alpha. **Nicht** mit Secrets, `.env` oder Kundencode füttern. Session =
+    60-Minuten-Slot (`/end-session` beendet vorzeitig, ungenutzte Freebucks
+    werden erstattet, nach 5 min Idle läuft keine Zeit mehr).
+  - **Keine API für opencode:** es gibt keinen OpenAI-kompatiblen Endpoint und
+    keinen Headless-Modus (einziges CLI-Kommando ist `login`); die interne
+    `codebuff.com/api/v1/freebuff/session`-Admission wäre ein Shim, kein Weg.
+    Für gratis-Modelle in opencode bleiben die BYOK-Pools (Groq, OpenRouter
+    `:free`, NVIDIA NIM, Z.ai GLM-Flash, Cline-`stealth/*`).
+  - **Rückweg:** `rm -rf /workspaces/freebuff ~/.local/bin/freebuff ~/.config/manicode`
+    (Bundle-Eintrag `freebuff-credentials.json` bleibt, ist nur ungenutzt).
 - **opencode ist gepinnt, mit EINER Quelle der Wahrheit:** dem
   `@opencode-ai/plugin`-Dep in `.opencode/package.json`. Das ist genau die Version,
   die opencode für seinen Plugin-Ladepfad selbst nachinstalliert — deshalb ist der
@@ -473,6 +525,12 @@ Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
 ## Changelog
+
+- 2026-09-26: **Freebuff CLI kommt fest in die Landschaft — Install + Login inklusive, mit zwei Fallen, die erst der Live-Test gezeigt hat.** Zuerst als reines `/workspaces`-Projekt gebaut (Nutzerwunsch: nicht global), nach Rückmeldung aber sauber ins Repo geholt, damit jeder neue Codespace es automatisch hat. `infra/scripts/freebuff-install.sh` (Pin **0.0.204**), `setup.sh` ruft es **nach** dem Secrets-Schritt, Login (`~/.config/manicode/credentials.json`) wandert über `secrets.sh` in `config/secrets.enc` — Muster exakt wie `rclone.conf`. Damit `secrets.sh lock` nicht versehentlich ein Secret verliert, sind **vor** dem Neuverschlüsseln alle 9 bisherigen Bundle-Einträge auf Existenz geprüft (alle OK).
+  - **Falle 1 — npm-Pin ist nicht die Binary-Version:** `npm view freebuff version` stand bei 0.0.203, der Launcher zog beim selben Start **0.0.204** (`frebuff-metadata.json` + `.freebuff-0.0.204-linux-x64.tar.gz.part` in `~/.config/manicode`). Der Launcher lädt selbstständig das *neueste* native Binary, unabhängig von der npm-Pin, ohne jeden Env-Override (im `launcher.js` gibt es nur PostHog-/App-URL-Variablen). Konsequenz: Pin auf 0.0.204 angeglichen und die `.part`-/`-download-temp`-Reste eingeräumt, die sonst bei **jedem** Start ~30 MB in den ephemeren `$HOME` schreiben. Die Pin ist damit für den Launcher belastbar, für das Binary nicht — ein Upstream-Release kommt mit dem nächsten Build durch. Steht so in der Doku, damit das später niemand überrascht.
+  - **Falle 2 — `rm -rf ~/.config/manicode` löscht den Login mit:** Der Testlauf „Rebuild simulieren" hat dabei den gerade erst erzeugten `credentials.json` mitgerissen (erst danach fiel mir auf, dass dort auch der Token liegt, den `secrets.sh` sichern soll). Der Token war danach nicht mehr rekonstruierbar — die API-Probe mit dem alten Wert lieferte 401, also: einmal neu einloggen, *dann* locken. Reihenfolge ist jetzt im Skript festgehalten (Login-Check am Ende, mit Hinweis auf `login` + `secrets.sh lock`).
+  - **Gemessen:** frische Installation 12 s (npm 2 s + 130-MB-Binary), Rebuild-Restore aus dem `/workspaces`-Cache **3,3 s** statt Download. Die drei Cache-Dateien sind nicht optional: ohne `tree-sitter.wasm` startet die Sprach-Parser-Datei kaputt, ohne `freebuff-metadata.json` schlägt die Versionsprüfung fehl.
+  - **Bewusst nicht gebaut:** ein API-Provider für opencode. Es gibt keinen OpenAI-kompatiblen Endpoint, kein Headless-Modus (einziges CLI-Kommando ist `login`) — die interne `codebuff.com/api/v1/freebuff/session`-Admission nachzubauen wäre ein Shim gegen das werbefinanzierte Geschäftsmodell, kein Weg. Für gratis-Modelle in opencode bleiben die BYOK-Pools.
 
 - 2026-09-26: **`nvidia-models.py` und `cline-models.py` zu `free-models.py` zusammengeführt — eine Datei, ein Aufruf, `fetch_models()`, 14-Tage-Filter für beide Anbieter.** Zwei Skripte mit demselben Zweck und sehr unterschiedlichem Reifegrad: zwei Caches, zwei Ausgabeformate, zwei Sortierungen — und die Antwort auf „welches kostenlose Modell ist neu" musste je nach Anbieter anders zusammengesucht werden. Zentrale Funktion ist `fetch_models(providers, args, now)`, die für beide Anbieter dieselbe normalisierte Zeilenform liefert (`provider`, `id`, `ts`, `age`, `free`, `desc`, `date_src` plus Anbieter-Extras). **Was bewusst nicht vereinheitlicht wurde, ist der Abruf:** Cline ist eine JSON-API, NVIDIA nur HTML-Scraping über `build.nvidia.com` (`models.md` + `nimType`-Attribute, mit `updated` als einziger belastbarer Datumsquelle, weil die integrate-API nur ein Dummy-`created` liefert). Beides in eine Funktion zu zwingen hieße, den billigen JSON-Abruf mit dem teuren Scraping zu verheiraten und die zwei Caches in einen mit einer TTL zusammenzuziehen, die keinem der beiden gerecht wird — sie sind deshalb getrennt geblieben (NVIDIA-Modellseiten 24 h, Cline-Probes 1 h, `first_seen` ungekürzt), inklusive kompatiblem Format, sodass die vorhandenen Caches weiterverwendet werden. **NVIDIA bekam die Cline-Regeln:** Default nur kostenlose Modelle der letzten 14 Tage, neueste zuerst. Bei NVIDIA ist das nicht nur Kosmetik — der Index führt 97 Modelle, davon nur 8 im 14-Tage-Fenster, also blendet der Filter 89 durchwegs als Dauerbestand erkennbare Einträge aus. Das Alter kommt dort aus `updated` und ist damit ein echtes Datum, nicht wie bei Cline eine Beobachtung. Aliase zeigen alle auf das eine Skript (`free-models`, `cline-models` = nur Cline, `nvidia-models` = nur NVIDIA). **Zwei Fehler beim Zusammenführen gefunden, beide beim Testen:** (a) `--api` war im neuen Skript ein stiller No-op — `nv_api_ids()` war definiert, wurde aber nirgends aufgerufen, das Flag tat also nichts, ohne zu warnen; jetzt füllt es ein `live`-Feld, das die Spalte nur dann einblendet, wenn es belastbar ermittelt wurde (kein Key oder Netzfehler → Spalte weg statt einer Behauptung). (b) Beim Nachtragen fiel die **Lücke auf, die der Doku-Index von NVIDIA verdeckt: von 41 als free markierten Modellen sind live nur 7 abrufbar, 34 stehen ausschließlich in der Dokumentation.** Das `Free Endpoint`-Flag sagt also nichts darüber aus, ob ein Modell wirklich rufbar ist. `--api` bleibt opt-in, um die Standardausgabe nicht zu überladen — wer ein NVIDIA-Modell tatsächlich nutzen will, sollte es mit `--api` prüfen. Verifiziert: `free-models` 103 geladen / 10 passend (Cline 2, NVIDIA 8), `cline --all` 6/6 mit vollen Spalten, `--days 5` und `--days 8` korrekt, `--emit-config` unverändert, `--api` mit belastbarer `live`-Spalte und korrektem „kein API", alle drei Aliase, `bash -n` auf aliases.sh, beide Caches formatkompatibel wiederverwendet.
 

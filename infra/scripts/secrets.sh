@@ -154,6 +154,9 @@ cmd_lock() {
   missing_or_empty "$HOME/.config/landscape/chatglm-refresh-token" && [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
   [ -s "$HOME/.local/share/opencode/auth.json" ] && { cp "$HOME/.local/share/opencode/auth.json" "$stage/files/opencode-auth.json"; found=1; }
   [ -s "$HOME/.config/rclone/rclone.conf" ] && { cp "$HOME/.config/rclone/rclone.conf" "$stage/files/rclone.conf"; found=1; }
+  # Freebuff-CLI-Login (Account-Token + Fingerprint). Ohne das ist freebuff in
+  # jedem neuen Codespace ausgeloggt und verlangt erneut den Browser-Login.
+  [ -s "$HOME/.config/manicode/credentials.json" ] && { cp "$HOME/.config/manicode/credentials.json" "$stage/files/freebuff-credentials.json"; found=1; }
   [ -s ".env" ] && { cp ".env" "$stage/files/env"; found=1; }
   [ "$found" -eq 1 ] || { echo "Nichts zu sichern (kein PAT, kein opencode-Login, kein .env)."; exit 1; }
   get_passphrase
@@ -223,6 +226,10 @@ cmd_unlock() {
   if [ -f "$stage/files/rclone.conf" ] && missing_or_empty "$HOME/.config/rclone/rclone.conf"; then
     mkdir -p "$HOME/.config/rclone" && cp "$stage/files/rclone.conf" "$HOME/.config/rclone/rclone.conf" && chmod 600 "$HOME/.config/rclone/rclone.conf"
     echo "    rclone.conf (Google-Drive) wiederhergestellt."
+  fi
+  if [ -f "$stage/files/freebuff-credentials.json" ] && missing_or_empty "$HOME/.config/manicode/credentials.json"; then
+    mkdir -p "$HOME/.config/manicode" && cp "$stage/files/freebuff-credentials.json" "$HOME/.config/manicode/credentials.json" && chmod 600 "$HOME/.config/manicode/credentials.json"
+    echo "    Freebuff-Login wiederhergestellt."
   fi
   if [ -f "$stage/files/env" ] && missing_or_empty ".env"; then
     cp "$stage/files/env" ".env" && chmod 600 ".env"
