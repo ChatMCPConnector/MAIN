@@ -458,6 +458,27 @@ legt. (b) Aendert der Upstream die Konstante, meldet das Skript
 „Muster nicht gefunden“ statt still falsch zu liegen. Rueckweg:
 `cp ~/.config/manicode/freebuff.orig ~/.config/manicode/freebuff`.
 
+**Offen und bewusst nicht gebaut: der Main-Screen-Weg.** Im Bundle gibt es ein
+Flag `OTUI_USE_ALTERNATE_SCREEN` („force screen mode selection: true =
+alternate-screen, false = main-screen“). Mit `OTUI_USE_ALTERNATE_SCREEN=0` liefe
+freebuff **ohne** Alternate Screen, dann existiert Terminal-Scrollback und das
+Mausrad koennte — je nachdem, was VS Code tut — mit kleineren Schritten
+scrollen, ohne dass die App ueberhaupt etwas bekommen muesste. **Das ist
+ungetestet und nicht als Lösing behauptet:** die entscheidende Vorbedingung
+ist, ob xterm.js das Rad ueberhaupt in den Scrollback schickt, und genau das
+ist offen (siehe naechster Absatz). Solange das nicht gemessen ist, waere ein
+Wechsel des Screen-Modes geraten. Test, wenn man es angehen will: 5 s nur das
+Mausrad, danach Enter, dann `freebuff-keys.log` lesen — steht dort nichts, geht
+das Rad an den Terminal-Scrollback und der Weg ist offen; stehen Pfeile, nicht.
+
+**Die offene Messung, die alles decideet.** Ich habe aus dem Key-Log geschlossen,
+xterm.js schicke das Mausrad als `up`/`down`. Das Log **beweist es nicht**:
+dort stehen inzwischen auch getippte Zeichen als `<1B>` (Zusammenfassung statt
+Klartext), und die Pfeile koennen von Hand gekommen sein. Faellt dieser
+Nachweis positiv aus, ist die Schrittweite 0.8 (bzw. 0.5 nach dem Patch) der
+Endpunkt und der Main-Screen der Weg zu feineren Schritten. **Deshalb ist der
+Key-Logger Standard geblieben** — er beantwortet genau diese Frage in Sekunden.
+
 Feinere Schritte *gibt* es in der App:
 opentuis ScrollBox mappt `pageup` auf **0,5** und `up`/`k` auf **0,2** Viewport
 (plus eine `scrollStep`-Eigenschaft, die freebuff mit `scrollboxProps:{}` **nicht**
