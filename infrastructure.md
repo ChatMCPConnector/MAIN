@@ -57,6 +57,12 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
   Kein API-Endpoint für opencode (kein OpenAI-kompatibler Server, kein
   Headless-Modus); werbefinanziert, Prompts werden zur Ad-Personalisierung
   ausgewertet → nichts Geheimes rein.
+- `.vscode/keybindings.json`: **Mausrad = PageUp/PageDown im Terminal**
+  (`terminal.sendSequence` mit `\e[5~`/`\e[6~`, `when: terminalFocus`). Nötig,
+  weil das Mausrad nach dem Abschalten des Mouse-Reportings ein
+  Terminal-Scrollback-Ereignis ist — und Freebuff im Alternate Screen keinen
+  Scrollback hat. opencode scrollt über denselben Weg, Freebuff nicht. Details
+  und Rückweg: „Maus, Copy/Paste & Scrollen in TUIs".
 - `infra/scripts/free-models.py`: kostenlose Modelle von **Cline und NVIDIA
   NIM** in einem Skript, zentrale Funktion `fetch_models()`, Aliase
   `free-models` (beide), `cline-models`, `nvidia-models`. Default: nur kostenlose
@@ -202,9 +208,11 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
   kaskadierende Löschung + Orphan-Event-Cleanup, schützt aktive/aktuelle/geteilte
   Sessions, `confirm:true` Pflicht. Details: `infra/mcp/README.md`.
 - `agent/glm2api.md`: Arbeits-Subagent fest auf `glm2api/glm-5.3` (Haupt-Proxy).
-- `tui.json`: Maus-Capture **aus** (`mouse: false` ist Absicht — xterm.js
-  übersetzt dann das Mausrad in `up`/`down`, die auf halben Seitenwechsel
-  gemappt sind. **Nicht auf `true` ändern.**)
+- `tui.json`: Maus-Capture **aus** (`mouse: false` ist Absicht: sobald eine App
+  Mouse-Reporting einschaltet, behandelt das Terminal Mausereignisse als
+  App-Eingaben — Text markieren und kopieren geht dann nicht mehr.
+  **Nicht auf `true` ändern.**) Das Mausrad ist separat gelöst, siehe
+  „Maus, Copy/Paste & Scrollen in TUIs".
 
 ## glm2api — der LLM-Haupt-Proxy (Port 8001)
 
@@ -421,6 +429,64 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Rückweg: Commit revertieren — bzw. für Chromium-CDP: Playwright-Setup neu
   anlegen.
 
+### Maus, Copy/Paste & Scrollen in TUIs (opencode + Freebuff)
+
+Eine Klaesse Problem, zwei Loesungen — und die Reihenfolge ist wichtig, weil
+beide Enabls sich ausschliessen:
+
+| | Mouse-Reporting | Markieren/Kopieren | Mausrad scrollt |
+|---|---|---|---|
+| Default (App schaltet Maus an) | an | **nein** | ja (App-Scroll) |
+| opencode mit `mouse: false` | aus | ja | ja (Terminal-Scrollback, kein Alternate Screen) |
+| Freebuff ueber `freebuff-pty.py` | aus | ja | **nein** (Alternate Screen) |
+
+**1. Copy/Paste.** opencode: `mouse: false` in `.opencode/tui.json` (Terminal-
+Eigenheit, keine App-Abschaltung). Freebuff: den Kniff gibt es nicht — weder
+`settings.json`-Key, noch CLI-Flag, noch Env (am Binary 0.0.204 verifiziert;
+opentui kennt intern `useMouse`, Default `true`, Freebuff setzt es nicht).
+Loesung deshalb **aussen**: `infra/scripts/freebuff-pty.py` (pty-Relay) filtert
+ausschliesslich `CSI ? 1000|1001|1002|1003|1005|1006|1015|1016 (h|l)` aus dem
+Output. `?2004` bracketed Paste, `?1004`, `?1049` und Kitty-Keys bleiben
+angetastet — sonst waere Pasten kaputt. Der Wrapper `~/.local/bin/freebuff`
+startet nur bei echtem TTY ueber den Filter (`FREEBUFF_NO_PTY_FILTER=1` =
+Direktstart). Preis: Freebuffs eigene Auswahl per Drag entfaellt, kopiert wird
+wie im normalen Terminal (Maus ziehen, `Ctrl+Shift+C`).
+
+**2. Mausrad.** Nach Schritt 1 nimmt das Terminal die Rad-Events als
+Scrollback-Aktion — und **genau hier unterscheiden sich die beiden Apps:**
+opencode rendert im normalen Buffer, also scrollt das Terminal den sichtbaren
+Text mit. Freebuff nutzt den Alternate Screen (`CSI ? 1049 h`, live belegt) —
+dort existiert kein Scrollback, ein Rad-Ereignis bewegt sich sichtbar also
+**nichts**. Man kann den Rad-Event aber zu einer Taste machen, denn die App
+bindet sie ohnehin: im Binary steht `case"pageup": scrollBy(-0.5,"viewport")`
+und `case"pagedown": scrollBy(0.5,"viewport")`, der Key-Parser mappt
+`\e[5~`/`\e[6~` darauf. Also mappt **`.vscode/keybindings.json`** (neu, Repo-
+Ebene, `when: terminalFocus`):
+
+```json
+{ "key": "mousewheel up",   "command": "workbench.action.terminal.sendSequence",
+  "args": { "text": "\u001b[5~" }, "when": "terminalFocus" }
+{ "key": "mousewheel down", "command": "workbench.action.terminal.sendSequence",
+  "args": { "text": "\u001b[6~" }, "when": "terminalFocus" }
+```
+
+Das ist **anwendungsneutral** und gilt fuer jeden Terminal, auch fuer `less`,
+`vim`, `man`, `htop`. Was sich aendert: das Mausrad scrollt in TUIs jetzt
+Tastenseiten (PageUp/PageDown) statt Terminal-Scrollback — bei opencode ein
+Wechsel von „Buffer scrollen" zu „eine Nachrichtenseite" (dort in `tui.json`
+`messages_page_up`/`messages_page_down` gebunden). Wer das nicht will, loescht
+die beiden Eintraege; dann gilt wieder das alte Verhalten.
+
+**3. Reihenfolge nicht umkehren.** Wer `mouse: true` setzt, bekommt Copy/Paste
+zurueck, verliert aber das Mausrad. Wer `freebuff-pty.py` entfernt, verliert
+Copy/Paste. Die Keybinding-Zeile allein reicht nicht — sie ersetzt den
+Scrollback-Mechanismus nicht, den man fuer Copy/Paste abgeschaltet hat.
+
+**4. Ausserhalb von VS Code** (ssh, tmux, eigener Terminal-Emulator): die
+Keybinding greift nicht, dann einfach die Tastatur — `PageUp`/`PageDown`
+scrollen in beiden TUIs. `tmux`-Nutzern: Maus ist dort per `set -g mouse off`
+ohnehin deaktiviert, dieselbe Wirkung.
+
 ## Google-Drive-Backup (Repo-Sicherung unabhängig von GitHub)
 
 Szenario: GitHub-Account wird gebannt / Repo geschlossen → komplettes Repo
@@ -559,6 +625,7 @@ Proxy bei jedem Start automatisch hoch.
   - **Gemessen:** frische Installation aus dem Repo-Skript **12-24 s** (1-3 s npm + 136-MB-Binary, netzabhängig; vier Läufe: 12,3 / 12,6 / 16,3 / 23,6 s). Der Login-Roundtrip über das Bundle wurde verifiziert: `credentials.json` gelöscht → `secrets.sh unlock` → Restore **byte-identisch** (360 B, 0600), alle 8 anderen Bundle-Secrets unverändert vorhanden.
   - **Korrigiert nach dem ersten Commit (Nutzerwunsch: „unter MAIN wie opencode"):** der erste Stand legte das npm-Projekt nach `/workspaces/freebuff` und cachte das Binary zwischen `/workspaces` und `$HOME` hin und her (Rebuild-Restore 3,3 s statt Download). Das war persistent, aber ein fremdes Zuständigkeitsmodell im Repo — opencode ist ephemer in `$HOME` und wird bei jedem Codespace neu gebaut. Jetzt identisch zu opencode: `$HOME/.local/share/freebuff` + Wrapper `~/.local/bin/freebuff`, **kein** `/workspaces`-Pfad und kein Cache mehr. **Der Gewinn des Caches ist damit weg — bewusst gegen diesen Preis:** jeder neue Codespace lädt 136 MB neu (12-24 s, läuft in setup.sh). Ein Zwischending aus beiden Welten (npm-Manifest im Repo, `node_modules` ephemer) wäre möglich, brächte aber einen zweiten Zustandspfad ohne Nutzen.
   - **Nebenbefund:** `/workspaces/fb-probe` (32 KB) lag als Rest eines Testlaufs mit gesetzter `FREEBUFF_CONFIG_DIR` herum — nur ein WARN-Log (`No auth token available`) plus anonyme Analytics-ID, keine Credentials. Gelöscht. Lehre: das native Binary kennt `FREEBUFF_CONFIG_DIR`, der npm-Launcher **nicht** — beide auf verschiedene Pfade zu setzen erzeugt genau solche „ausgeloggt"-Symptome, ohne Fehlermeldung.
+  - **Mausrad-FiX (Nachtrag):** Copy/Paste fixt und das Mausrad ist tot — die andere Hälfte derselben Münze. Die alte Doku behauptete, xterm.js übersetze das Rad in `up`/`down`; das stimmt nicht, und die Erklärung lief in die falsche Richtung: **nach `mouse: false` bzw. nach dem pty-Filter ist das Mausrad ein Terminal-Scrollback-Ereignis — und Terminal-Scrollback ist im Alternate Screen unsichtbar.** opencode rendert im normalen Buffer, deshalb war dort nie etwas kaputt; Freebuff schaltet `CSI ? 1049 h` (live aus der Aufzeichnung) und hat damit keinen Scrollback. Die App kann aber nichts dagegen tun, dass das Rad ankommt — sie **bindet** die passenden Tasten ohnehin (`case"pageup": scrollBy(-0.5,"viewport")`, `case"pagedown": scrollBy(0.5,"viewport")`, Key-Parser mappt `\e[5~`/`\e[6~`). Der einzige Hebel ist deshalb eine **VS-Code-Keybinding**: neues `.vscode/keybindings.json` mappt `mousewheel up`/`down` per `workbench.action.terminal.sendSequence` auf genau diese zwei Sequenzen, `when: terminalFocus`. Anwendungsneutral (gilt auch für `less`/`vim`/`man`/`htop`) und in VS Code ohne Neustart wirksam. Gegengeprüft, dass der pty-Filter die Tasten nicht beschädigt: `\e[5~`/`\e[6~` passieren ihn unverändert (sein Regex verlangt `\e[?` + Ziffern + `h`/`l`), im selben Durchlauf verschwinden `\e[?1003h`/`\e[?1000h`. **Bewusster Trade-off, im neuen Abschnitt „Maus, Copy/Paste & Scrollen in TUIs" dokumentiert:** das Rad scrollt jetzt Tastenseiten statt Terminal-Scrollback, bei opencode also eine Nachrichtenseite statt drei Zeilen; wer das nicht will, löscht die zwei Einträge in der Keybinding-Datei. Der Abschnitt ist als eigene Übersetzung geschrieben, weil das Problem in zwei Apps steckt und die Reihenfolge nicht umkehrbar ist: `mouse: true` ⇒ Copy/Paste weg, pty-Filter weg ⇒ Copy/Paste weg, und die Keybinding allein ersetzt den abgeschalteten Scrollback-Mechanismus nicht.
   - **Copy/Paste-Fix (Nachtrag derselben Sitzung):** „ich kann nichts markieren und kopieren" — dieselbe Klasse wie bei opencode, dort per `mouse: false` in `.opencode/tui.json` gelöst. Für Freebuff existiert dieser Kniff **nicht** (settings.json-Reader akzeptiert nur `mode`/`adsEnabled`/`freebuffModel`; keine CLI-Flags, keine Env-Variablen; opentui's `useMouse` wird nicht gesetzt). Daher der äußere Eingriff: `infra/scripts/freebuff-pty.py` startet das TUI auf einem pty und entfernt aus dem Output ausschließlich `CSI ? 1000|1001|1002|1003|1005|1006|1015|1016 (h|l)`. **Bewusst nicht entfernt:** `?2004` (bracketed Paste — sonst wäre Pasten kaputt), `?1004`, `?1049`, Kitty-Keys. Bidirektional-Relay, SIGWINCH-Durchreichung und Exit-Code sind implementiert und getestet (Kind liest eine Zeile, Exit 42 kommt durch), Fenstergröße wird beim Start und bei Resize gesetzt. **Beleg statt Behauptung:** TUI-Aufzeichnung mit leerem Config-Dir (damit keine Session-Slot verbraucht wird) — mit Filter null Maus-Modi im Stream, ohne Filter `?1000h ?1002h ?1003h ?1006h`, TUI rendert in beiden Fällen. Damit ist zusätzlich ausgeschlossen, dass das Entfernen der Sequenzen das TUI blockiert (es wartet an keiner Stelle auf Mausereignisse). Der Wrapper wird bei **jedem** `setup.sh`-Lauf neu erzeugt, damit der Repo-Pfad nicht driftet — deshalb wandert `write_wrapper` auch in den Idempotenz-Pfad (vorher wäre der Wrapper nach einem Repo-Umzug still veraltet geblieben). **Für den Nutzer heißt das: laufende Freebuff-Session einmal beenden und neu starten**, der Filter hängt am Startpfad.
   - **Bewusst nicht gebaut:** ein API-Provider für opencode. Es gibt keinen OpenAI-kompatiblen Endpoint, kein Headless-Modus (einziges CLI-Kommando ist `login`) — die interne `codebuff.com/api/v1/freebuff/session`-Admission nachzubauen wäre ein Shim gegen das werbefinanzierte Geschäftsmodell, kein Weg. Für gratis-Modelle in opencode bleiben die BYOK-Pools.
 
