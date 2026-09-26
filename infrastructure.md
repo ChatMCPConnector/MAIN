@@ -55,25 +55,6 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
   Kein API-Endpoint für opencode (kein OpenAI-kompatibler Server, kein
   Headless-Modus); werbefinanziert, Prompts werden zur Ad-Personalisierung
   ausgewertet → nichts Geheimes rein.
-- `.vscode/keybindings.json`: **Mausrad = PageUp/PageDown im Terminal**
-  (`terminal.sendSequence` mit `\e[5~`/`\e[6~`, `when: terminalFocus`). Nötig,
-  weil das Mausrad nach dem Abschalten des Mouse-Reportings ein
-  Terminal-Scrollback-Ereignis ist — und Freebuff im Alternate Screen keinen
-  Scrollback hat. opencode scrollt über denselben Weg, Freebuff nicht. Weil
-  freebuff pro Tastendruck nur 10 Zeilen scrollt (der Chat-Handler ruft
-  `preventDefault` und unterdrückt opentuis 0,5-Viewport-Schritt), sendet die
-  Keybinding **dreimal** PageUp/PageDown — die `3` ist eine Magic Number, die
-  bei freebuff-Updates nachgezogen werden muss. Der Kommando-Output-Block in
-  einer Nachricht ist dagegen **nur mit der Maus** scrollbar (freebuff setzt
-  `focusable` nirgends, `onMouseWheel` kommt nicht vor) — das Rad dort ist ein
-  Entweder-oder gegen Copy/Paste, umschaltbar mit
-  `FREEBUFF_NO_PTY_FILTER=1 freebuff`. Details: „Maus, Copy/Paste & Scrollen
-  in TUIs".
-## Secrets-Modell (bewusst: Komfort > Sicherheit)
-
-Repo ist shared für mehrere **eigene** Accounts. Automatik hat Vorrang vor
-Secret-Schutz-Purismus:
-
 - `config/passphrase`: Entschlüsselungs-Passphrase als Klartext im Repo → jeder
   eigene Codespace entsperrt sich beim Start selbst. Sie ist NUR ein
   Entschlüsselungswort — nie ein Secret/PAT als Passphrase zweckentfremden
@@ -157,8 +138,16 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 - `tui.json`: Maus-Capture **aus** (`mouse: false` ist Absicht: sobald eine App
   Mouse-Reporting einschaltet, behandelt das Terminal Mausereignisse als
   App-Eingaben — Text markieren und kopieren geht dann nicht mehr.
-  **Nicht auf `true` ändern.**) Das Mausrad ist separat gelöst, siehe
-  „Maus, Copy/Paste & Scrollen in TUIs".
+  **Nicht auf `true` ändern.**)
+- **Das Mausrad lässt sich in VS Code nicht umleiten.** Ohne Mouse-Reporting
+  übersetzt **xterm.js das Rad in `up`/`down`** (live gemessen: die Testsession
+  bekam `ESC[A`/`ESC[B`, siehe `infra/scripts/freebuff-pty.py`-Log). Eine
+  Keybinding auf `mousewheel up/down` ist **kein gültiges Keybinding** — laut
+  VS-Code-Referenz besteht die `key`-Liste aus Buchstaben, Ziffern, Pfeilen,
+  `pageup`/`pagedown`, `home`/`end`, `tab`/`enter`/`escape`/`space`/`backspace`/
+  `delete` und Nummernblock; `mousewheel` steht nicht darin, wird also nicht
+  dispatcht. **Diese Keybinding wurde probeweise eingefügt, hat nie gefeuert und
+  wurde wieder entfernt** — der Versuch steht im Changelog, die Lehre unten.
 
 ## glm2api — der LLM-Haupt-Proxy (Port 8001)
 
