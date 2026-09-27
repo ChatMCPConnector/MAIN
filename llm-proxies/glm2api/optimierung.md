@@ -1122,6 +1122,91 @@ hätte den halben Teil des Problems vergrößert: `build_response()` filtert
 durchaus, nur die *Abschluss*-Kette fehlt — und die S-13-Regel
 (`content is None` bei Calls) hätte dabei verteidigt werden müssen.
 
+### Offene Grenzen und Messlücken (Stand 2026-09-27, nach S-15…S-18)
+
+S-15…S-18 sind erledigt. Was folgt, ist **kein Rest von deren Arbeit**, sondern
+die Punkte, die die neue Messbasis sichtbar gemacht hat und die bewusst so
+gelassen wurden. Jeder ist mit einer Messung belegt, damit die nächste Session
+nicht raten muss.
+
+#### 1. S-14-Rest: Wortrest vor der ersten Werkzeug-Marke (akzeptiert)
+
+`sweep2`, Szenario `selbst-steuerung+call`: bei 2 von 6 Chunkgrößen entkommt
+der Wortrest vor der ersten Marke (`'D'`/`'De'`/`'Der'` von
+„Der \`open\`-Aufruf …"). `leak_probe` zeigt dasselbe: **4/215**, Antworttext
+0/104 verändert.
+
+**Warum akzeptiert:** die Selbst-Steuerung steht dort am *Anfang* des Turns. Es
+gibt also keinen fertigen Satz davor, den S-15 hätte retten können — der Rest
+ist der erste Teil des ersten Narration-Satzes. Ein Schnitt davor hieße, auf
+ein unvollständiges Wort zu raten, kostet also **Wortlänge Latenz in jedem
+Turn mit Narration**. Beide Messwerkzeuge führen ihn als `KNOWN`, damit er
+nicht als „bekannt vergessen" endet.
+
+Wer ihn angeht, löst nicht die Frage „wie schneide ich ab", sondern „woran
+erkenne ich, dass der erste Satz *fertig* ist" — dieselbe Frage wie bei S-14,
+und die Antwort war dort ein zweiter Auslöser, kein schärferer Schnitt.
+
+#### 2. S-08-Politik: Selbst-Steuerung nur mit Aufrufen filtern (bewusst)
+
+Empirisch gemessen, Text-only-Turn, Chunk 5, Stream gegen Body:
+
+| Fall | Stream | Body |
+|---|---|---|
+| Selbst-Steuerung | `'Der \`open\`-Aufruf funktioniert hier nicht…'` | **identisch** |
+| Präambel DE | `'Ich lese die Datei jetzt.'` | identisch |
+| Protokoll-Meta | `''` | `''` |
+| Limit erfunden | `''` | `''` |
+| Echter `open`-Hinweis | Text | Text |
+
+**Nach dem S-16-Fix gibt es in diesen Klassen keine Stream/Body-Asymmetrie
+mehr.** `build_response()` ruft `strip_meta_chatter()` (4×) und nicht die
+Einzelfilter — das ist kein Fehler, `strip_meta_chatter` kapselt die Kette.
+
+Was bleibt, ist eine **Entscheidung, keine Lücke**: die S-08-Regel bindet die
+Selbst-Steuerung an Aufrufe, weil eine Aussage über `open` in einem echten
+Bericht Inhalt ist. In einem Turn **ohne** Aufrufe wird die Narration deshalb
+in beiden Pfaden ausgegeben — gewollt.
+
+#### 3. S-16-Rest: die `finalize`-Kette läuft im Non-Stream-Body nicht
+
+`chat_completion` ruft `finalize()` nie, `build_response()` rendert neu aus den
+Parts. Für die vier getesteten Klassen ist die Parität jetzt hergestellt
+(Abschnitt 2). **Nicht** nachgezogen wurden die Teile der `finalize`-Kette,
+die im Body nicht entstehen *können*: die S-12-Freigabe, die S-06-Leerzeilen
+und die Absatz-Formatierung sind **Stream-Reihenfolge-Artefakte** — im Body
+gibt es keine Zwischenchunks, in denen ein Artefakt entstehen könnte.
+
+**Nicht** behaupten, „der Non-Stream-Pfad filtert nichts". Das war die alte,
+falsche Zuspitzung; sie hätte den halben Teil des Problems vergrößert. Richtig
+ist: er filtert eine andere Menge als der Stream, und die schädliche Klasse
+ist abgedeckt.
+
+#### 4. Messlücke: kein Layout „Absatzumbruch **und** nativer Aufruf"
+
+`order_matrix` hat `nur-prosa-ohne-call` (S-11) und `prosa-call-prose` (S-06),
+aber **kein** Layout, in dem ein Absatzumbruch direkt neben einem nativen
+Aufruf steht. Genau dort schneiden `_needs_paragraph_break` (S-11/S-17/S-18)
+und die S-06-Leerzeilenlogik zusammen — die drei Regeln haben sich bisher nur
+getrennt vermessen.
+
+Ansatz: Layout `[PROSE_A + "\n\n", call(), PROSE_B]`, Erwartung
+`PROSE_A + PARA + PROSE_B`, 10 Chunkgrößen. **Vorher den Harness an einem
+alten Stand rot verifizieren** (`GLM_SRC` auf einen alten Worktree), sonst ist
+es wieder ein grüner Test, der nichts beweist.
+
+#### 5. Messlücke: kein Szenario „Selbst-Steuerung im reinen Text-Turn"
+
+`leak_probe` misst den **Stream** (4/215). Für den **Body** bei
+Selbst-Steuerung ohne Aufrufe gibt es kein Szenario in `sweep2`: alle
+`selbst-steuerung-*`-Szenarien haben einen Aufruf, und dort ist `content is
+None` (S-13), also nichts nachprüfbar. Die Zelle ist leer, und die Entscheidung
+aus Abschnitt 2 ist damit nur an einem Ad-hoc-Skript belegt, nicht im Repo.
+
+Ansatz: Szenario in `sweep2` **ohne** Aufruf, Erwartung = **bewusst der volle
+Text** (so wird Abschnitt 2 festgeschrieben), plus ein Test, der genau das
+als gewollt pinnt. Sonst repariert die nächste Session das versehentlich.
+
 ### Verifikation
 
 - **1599 Tests grün** (1426 + 173 neue aus S-15…S-18; Suite 11,8 s → 12,5 s).
@@ -1206,6 +1291,14 @@ Non-Stream-Response per OpenAI-Vertrag `None`, sobald Tool-Calls da sind:
 für reine Stream-Aussagen dort also nichts nachprüfbar. Das ist eine
 **bewusste Entscheidung** (S-13), mit zwei Tests festgenagelt — sie steht
 nicht zufällig da und soll auch nicht beim Aufräumen verschwinden.
+
+Und die Reihenfolge der Prüfung bei einer neuen Filterklasse: erst messen,
+dann behaupten. Die Zuspitzung „der Non-Stream-Pfad filtert nichts" aus S-16
+war **halb wahr** — `build_response()` filtert durchaus (`strip_meta_chatter`),
+nur die *Abschluss*-Kette fehlt. Wer die Behauptung ungeprüft übernimmt,
+vergrößert den halben Teil des Problems und greift dabei die S-13-Regel
+(`content is None` bei Calls) an. Die gemessene Tabelle steht im Abschnitt
+„Offene Grenzen und Messlücken", Punkt 2.
 
 Und der Nachsatz aus S-15, der beim Bauen des Fixes drei Stunden gekostet hat:
 `_preamble_narration_probe` prüft gegen den **Upstream**-Text
@@ -1323,8 +1416,8 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - Stream/Non-Stream-Parität bei Text neben Calls: Asymmetrie entschieden und gepinnt (S-13) — DONE 2026-09-27
 - Beim Call-Eintreffen zurückgehaltener Rest (Carry/Parser) ging im Aufruf-Turn verloren (S-12) — DONE 2026-09-27
 - Erstes Fragment einer zerschnittenen Narration entkam (Nebenbefund aus S-13): angefangener Werkzeug-Token als Holdback-Auslöser (S-14) — DONE 2026-09-27
-- Mess-Harnesses lagen nur in `/tmp` und waren nach Neustart weg — jetzt in `llm-proxies/glm2api/harness/` — DONE 2026-09-27- Vier Funde aus dem Harness-Neuaufbau (alle vorbestehend, gegengeprüft an `02ceca2`/`9054325`) — **DONE 2026-09-27**: S-15 Präambel wird satzweise statt pauschal erkannt (der linke Rand des zurückgehaltenen Textes kam als S-15-Rest noch dazu, `_owed_lead_edge`), S-16 erfundene Limit-Behauptung greift auch ohne Calls (Stream **und** Body), S-17 Apostroph ist kein Satzende, S-18 DSML über viele Parts leckt nicht mehr (Absatzregel **und** angefangener Opener)
-- Harnesses lagen nur in `/tmp` und waren nach Neustart weg — jetzt in `llm-proxies/glm2api/harness/`, mit `trace_stream.py` und `common.py` — DONE 2026-09-27
+- Mess-Harnesses lagen nur in `/tmp` und waren nach Neustart weg — jetzt in `llm-proxies/glm2api/harness/`, mit `trace_stream.py` und `common.py` — DONE 2026-09-27
+- Vier Funde aus dem Harness-Neuaufbau (alle vorbestehend, gegengeprüft an `02ceca2`/`9054325`) — **DONE 2026-09-27**: S-15 Präambel wird satzweise statt pauschal erkannt (der linke Rand des zurückgehaltenen Textes kam als S-15-Rest noch dazu, `_owed_lead_edge`), S-16 erfundene Limit-Behauptung greift auch ohne Calls (Stream **und** Body), S-17 Apostroph ist kein Satzende, S-18 DSML über viele Parts leckt nicht mehr (Absatzregel **und** angefangener Opener)
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).
