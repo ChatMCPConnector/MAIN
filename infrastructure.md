@@ -617,10 +617,15 @@ Freebuff besitzt keine Keybinding-Konfigurationsdatei. Deshalb wird die Trennung
      - **Agenten-Fragen (`ask_user` / OptionsList, 1..N Fragen):**
        Erkannt über Screen-Muster (`Enter select`, `Type your own answer`, `(Select multiple options)`, `↑↓ navigate`).
        Pfeiltasten bleiben nativ.
-     - **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):**
-       Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2, 3 etc. springt!).
-       Erst wenn alle Fragen abgeschlossen sind (`Your answer:`, `Your answers:`) oder der Nutzer mit Esc / Strg+C
-       abbricht, schaltet der Filter zurück auf PageUp/Down im Chat.
+      - **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):**
+        Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2, 3 etc. springt!).
+        Erst wenn alle Fragen abgeschlossen sind (`Your answer:`, `Your answers:`) oder der Nutzer mit Esc / Strg+C
+        abbricht, schaltet der Filter zurück auf PageUp/Down im Chat.
+    * **Wort-Navigation und Wort-Löschung (Strg+Links/Rechts, Strg+Backspace):**
+      - Standard-Terminals (xterm.js / VS Code) senden `Strg+Links` als `\x1b[1;5D`, `Strg+Rechts` als `\x1b[1;5C` und `Strg+Backspace` als `\x08` (ASCII BS).
+      - Freebuff (opentui) unterstützt intern Wortsprünge nur über Alt/Option (`\x1b[1;3D`, `\x1b[1;3C`) und Wortlöschen über `Ctrl+W` (`\x17`) / Alt+Backspace (`\x1b\x7f`).
+      - Der PTY-Filter übersetzt `Strg+Links` auf `Alt+Links`, `Strg+Rechts` auf `Alt+Rechts` und `Strg+Backspace` auf `\x17`.
+      - Bleibt in allen Modi (Chat, Menüs, Modals) aktiv, ohne das Binary anzufassen.
 
 **4. Umleiten des Rads selbst geht nicht.** `.vscode/keybindings.json` mit
 `mousewheel up`/`down` ist **kein gültiges Keybinding**: VS Code listet als
@@ -796,6 +801,10 @@ glm2api selbst kommt komplett mit (Code im Repo).
 Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
+- 2026-09-27: **Freebuff Wort-Navigation (`Strg+Links`/`Strg+Rechts`) und Wort-Löschen (`Strg+Backspace`):** Auslöser war Nutzerbefund „ich kann bei freebuff mit strg+ pfeiltaste links und rechts nicht über wörter springen und strg + backspace löscht auch keine ganze wörter“. Analyse des Bundles (`RJ`, `pP`) belegt die Ursache:
+  - Freebuff implementiert Wort-Sprünge (`moveWordForward`/`moveWordBackward`, `cqA`/`lqA`) intern ausschließlich für `Alt`/`Option` (`\x1b[1;3D`, `\x1b[1;3C`, `\x1bb`, `\x1bf`). Die Standard-Terminal-Sequenzen für `Strg+Links`/`Strg+Rechts` (`\x1b[1;5D`, `\x1b[1;5C`) liefen ins Leere.
+  - Wort-Löschen (`deleteWordBackward`) war an `Alt+Backspace` und `Ctrl+W` (`\x17`) gebunden. Standard-Terminals (xterm.js / VS Code) senden bei `Strg+Backspace` jedoch `\x08` (ASCII BS), was Freebuffs Parser als einzelnes Zeichen (`backspace`) ohne `ctrl` behandelte.
+  - **Lösung ohne Struktur-Änderung:** `infra/scripts/freebuff-pty.py` übersetzt die Sequenzen im PTY-Eingangsstrom transparent: `\x1b[1;5D` (Strg+Links) → `\x1b[1;3D` (Alt+Links), `\x1b[1;5C` (Strg+Rechts) → `\x1b[1;3C` (Alt+Rechts), `\x08` / CSI u (Strg+Backspace) → `\x17` (Ctrl+W) und `\x1b[3;5~` (Strg+Delete) → `\x1b[3;3~`. `track_input` berücksichtigt `\x17` für die Slash-Menü-Erkennung, `PARTIAL_PREFIXES` sichert fragmentierte Terminal-Reads ab.
 - 2026-09-27: **Autosave-Daemon abgeschaltet — er kam beiden schaden, und es war messbar.** Der Nutzer nutzt `save.sh` selbst am Ende jedes Arbeitsgangs; der Daemon lief zusätzlich alle 30 Min und tat drei Dinge, von denen zwei schadeten:
   - **`git add -A` mutierte den Index, den der auslösende Agent danach committet.** In der Freebuff-Sitzung hat das konkret schiefgegangen: Der Daemon hatte `infra/scripts/free-models.py` (905 Zeilen, Löschung aus einer parallel laufenden Refactor-Arbeit) **gestaged**, und mein pfadbegrenztes `git commit -- infrastructure.md` war eigentlich gedacht, genau solche Fremdänderungen nicht mitzunehmen — der Commit nimmt aber den **Index**, nicht die genannten Pfade, also flog die Löschung mit in `afed24f`. **Die Lehre war danach „pfadbegrenzt committen“, die eigentliche Ursache ist das `add -A` eines Dritten.**
   - **Halb-Zustände wurden als eigener Arbeitsgang verbucht:** 42 Commits mit Namen `autosave <Zeitstempel>` im Log, darunter `2eec781 autosave 2026-09-26T21:29Z`, das den glm2api-Refactor mitten im Arbeiten eingefroren hat. Die Commit-Nachricht transportiert keine Information, und der Zwischenstand ist im Verlauf schwer wiederzufinden.

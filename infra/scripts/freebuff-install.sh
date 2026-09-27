@@ -97,7 +97,9 @@ fi
 #   * das Mausrad kommt als up/down an; das freebuff-Binary mappt history-up/down
 #     intern per Patch direkt auf onScrollUp/Down (opencode-Prinzip).
 #     Damit scrollt das Rad die Unterhaltung, und Pfeiltasten in Menues
-#     (/history, Slash-Menue, Model-Picker) bleiben 100% nativ bedienbar.
+#     (/history, Slash-Menue, Model-Picker) bleiben 100% nativ bedienbar; und
+#   * Strg+Links/Rechts springt ueber Woerter (Uebersetzung auf Alt+Links/Rechts),
+#     Strg+Backspace loescht ganze Woerter (Uebersetzung auf Ctrl+W).
 # Preis dieser Konfiguration: freebuff bekommt keine Mausklicks, also
 # sind Output-Bloecke (5/10 Zeilen) nicht per Klick aufklappbar. Der volle
 # Output liegt trotzdem in der Zwischenablage: /copy (Alias copy-chat) legt den

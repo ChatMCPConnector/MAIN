@@ -24,6 +24,16 @@ vor dieser Aktion ab und bleiben damit **vollstaendig nativ bedienbar**.
 Der Filter muss Pfeile daher per Default **gar nicht mehr anfassen**:
 sie gehen 100% nativ mit 0 ms Latenz an das Kind durch.
 
+**Wort-Navigation und Wort-Loeschung:**
+Freebuff (opentui) unterstuetzt intern Alt/Option+Links/Rechts (word-backward/forward)
+und Ctrl+W (delete-word-backward). Standard-Terminals (insb. xterm.js / VS Code)
+senden bei Strg+Links ESC[1;5D, bei Strg+Rechts ESC[1;5C und bei Strg+Backspace \x08.
+Der Filter uebersetzt diese Sequenzen transparent:
+  * Strg + Links (ESC[1;5D, ESC[5D)   -> Alt + Links (ESC[1;3D)  [Wort zurueck]
+  * Strg + Rechts (ESC[1;5C, ESC[5C)  -> Alt + Rechts (ESC[1;3C) [Wort vor]
+  * Strg + Backspace (\x08, CSI u)    -> Ctrl+W (\x17)           [Wort loeschen]
+  * Strg + Delete (ESC[3;5~)          -> Alt + Delete (ESC[3;3~) [Wort vorwaerts loeschen]
+
 Schalter: `FREEBUFF_ARROW_PAGE=1` = Pauschal-Umleitung aller Pfeile auf
 PageUp/PageDown (nur fuer Diagnose/Notausgang). Default: nativ (`off`).
 
@@ -69,20 +79,38 @@ if DEBUG_LOG.lower() in ("off", "0", "none", "false"):
     DEBUG_LOG = ""
 
 
+CONTROL_RE = re.compile(
+    rb"\x1b\[[0-9;?]*[ -/]*[@-~]"
+    rb"|\x1b[\]P][^\x07\x1b]*[\x07\x1b\x5c]"
+    rb"|[\x00-\x1f\x7f]"
+)
+
+
 def summarize(data):
     """Nur Steuer-/Esc-Sequenzen fuer die Diagnose, NIEMALS getippten Text.
 
     Der Log soll beweisen, welche Taste angekommen ist — nicht den Inhalt
     speichern. Alles Druckbare wird deshalb zu Laengenangaben zusammengefasst.
     """
-    parts, buf = [], bytearray()
-    for chunk in re.findall(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[\]P][^\x07\x1b]*[\x07\x1b\\]|[\x00-\x1f\x7f]", data):
-        if buf:
-            parts.append(f"<{len(buf)}B text>")
-            buf = bytearray()
-        parts.append(chunk.decode("latin1").replace("\x1b", "ESC"))
-    if buf:
-        parts.append(f"<{len(buf)}B text>")
+    parts = []
+    pos = 0
+    for m in CONTROL_RE.finditer(data):
+        if m.start() > pos:
+            parts.append(f"<{m.start() - pos}B text>")
+        chunk = m.group()
+        if chunk in (b"\r", b"\n"):
+            parts.append("ENTER")
+        elif chunk == b"\x08":
+            parts.append("BS")
+        elif chunk == b"\x17":
+            parts.append("CTRL+W")
+        elif chunk == b"\x7f":
+            parts.append("DEL")
+        else:
+            parts.append(chunk.decode("latin1", "replace").replace("\x1b", "ESC"))
+        pos = m.end()
+    if pos < len(data):
+        parts.append(f"<{len(data) - pos}B text>")
     return " ".join(parts) if parts else f"<{len(data)}B>"
 
 
@@ -97,17 +125,61 @@ def debug(msg):
         pass
 
 
-# Pfeil rechts/links bleiben unangetastet; nur hoch/runter werden geprueft.
+# Pfeil rechts/links bleiben bei einfacher Pfeil-Navigation unangetastet;
+# nur hoch/runter werden fuer PageUp/Down geprueft.
 ARROW_PAGE = {
     b"\x1b[A": b"\x1b[5~",   # up    -> PageUp
     b"\x1b[B": b"\x1b[6~",   # down  -> PageDown
     b"\x1bOA": b"\x1b[5~",   # up    (SS3, Application-Modus)
     b"\x1bOB": b"\x1b[6~",   # down  (SS3)
 }
-# Ein Escape-Sequenz darf ueber zwei Reads zerrissen werden; das letzte
+
+# Wort-Navigation und Wort-Loeschung (Strg+Links / Strg+Rechts / Strg+Backspace):
+# Freebuff (opentui) unterstuetzt intern Alt/Option+Links/Rechts (word-backward/forward)
+# und Ctrl+W / Alt+Backspace (delete-word-backward).
+# Terminals (insb. xterm.js / VS Code) senden bei Strg+Links ESC[1;5D,
+# bei Strg+Rechts ESC[1;5C und bei Strg+Backspace \x08 (ASCII BS).
+WORD_KEYS = {
+    # Strg + Pfeil links -> Option/Alt + Links (freebuff: word-backward)
+    b"\x1b[1;5D": b"\x1b[1;3D",
+    b"\x1b[5D": b"\x1b[1;3D",
+    b"\x1b[1;6D": b"\x1b[1;3D",
+    # Strg + Pfeil rechts -> Option/Alt + Rechts (freebuff: word-forward)
+    b"\x1b[1;5C": b"\x1b[1;3C",
+    b"\x1b[5C": b"\x1b[1;3C",
+    b"\x1b[1;6C": b"\x1b[1;3C",
+    # Strg + Backspace -> Ctrl+W (\x17, freebuff: delete-word-backward)
+    b"\x08": b"\x17",
+    b"\x1b[127;5u": b"\x17",
+    b"\x1b[27;5;127~": b"\x17",
+    b"\x1b[27;5;8~": b"\x17",
+    b"\x1b[8;5~": b"\x17",
+    b"\x1b\x08": b"\x17",
+    # Strg + Delete -> Option + Delete (freebuff: delete-word-forward)
+    b"\x1b[3;5~": b"\x1b[3;3~",
+}
+
+WORD_KEY_RE = re.compile(
+    rb"|".join(re.escape(k) for k in sorted(WORD_KEYS, key=len, reverse=True))
+)
+
+
+def rewrite_word_keys(data):
+    """Uebersetzt Strg+Links/Rechts und Strg+Backspace in opentui-kompatible Sequenzen."""
+    if not data:
+        return data
+    return WORD_KEY_RE.sub(lambda m: WORD_KEYS[m.group()], data)
+
+
+# Eine Escape-Sequenz darf ueber zwei Reads zerrissen werden; das letzte
 # unvollstaendige Praefix wird zurueckgehalten und mit dem naechsten Read
-# zusammengesetzt. Sonst wuerde ein geteilter Pfeil durchrutschen.
-PARTIAL_PREFIXES = (b"\x1b", b"\x1b[", b"\x1bO")
+# zusammengesetzt.
+_full_seqs = list(ARROW_PAGE.keys()) + list(WORD_KEYS.keys())
+_prefixes = set()
+for _seq in _full_seqs:
+    for _i in range(1, len(_seq)):
+        _prefixes.add(_seq[:_i])
+PARTIAL_PREFIXES = tuple(sorted(_prefixes, key=len, reverse=True))
 
 # Default 25 ms: Reserve-Konstante fuer timing-basierte Steuerung.
 DEFAULT_WHEEL_GAP_MS = 25.0
@@ -115,7 +187,7 @@ DEFAULT_WHEEL_GAP_MS = 25.0
 ESC_SEQ_RE = re.compile(
     rb"\x1b\[[0-9;?]*[ -/]*[@-~]"
     rb"|\x1bO[@-~]"
-    rb"|\x1b[\]P][^\x07\x1b]*[\x07\x1b\\]"
+    rb"|\x1b[\]P][^\x07\x1b]*[\x07\x1b\x5c]"
     rb"|\x1b[ -/]*[@-~]"
 )
 
@@ -178,6 +250,11 @@ def track_input(data, text="", history_modal=False, question_modal=False):
         elif byte in (0x7F, 0x08):  # Backspace
             if buf:
                 del buf[-1]
+        elif byte == 0x17:  # Ctrl+W / Ctrl+Backspace (Wort loeschen)
+            while buf and buf[-1:] in b" \t":
+                del buf[-1]
+            while buf and buf[-1:] not in b" \t":
+                del buf[-1]
         elif byte >= 0x20:
             buf.append(byte)
         if len(buf) > 512:
@@ -220,6 +297,7 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
             carry = data[-len(pref):]
             data = data[: -len(pref):]
             break
+    data = rewrite_word_keys(data)
     if state is None:
         state = new_arrow_state()
     if last_page is None:
@@ -435,6 +513,14 @@ def main(argv):
                             debounce, last_page, always=always_page, text=text,
                             history_modal=history_modal, question_modal=question_modal)
                     else:
+                        data = carry + data
+                        carry = b""
+                        for pref in sorted(PARTIAL_PREFIXES, key=len, reverse=True):
+                            if data.endswith(pref) and data != pref:
+                                carry = data[-len(pref):]
+                                data = data[: -len(pref):]
+                                break
+                        data = rewrite_word_keys(data)
                         text, history_modal, question_modal = track_input(
                             data, text, history_modal, question_modal)
                     if not data:
