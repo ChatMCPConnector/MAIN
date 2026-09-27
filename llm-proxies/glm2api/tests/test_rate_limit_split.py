@@ -251,6 +251,23 @@ def test_rate_limit_abbruch_bei_erreichter_request_deadline(monkeypatch):
     assert excinfo.value.status_code == 429
 
 
+def test_rate_limit_backoff_passt_in_request_deadline(monkeypatch):
+    """Eine noch nicht abgelaufene Deadline reicht nicht: wenn der
+    naechste Backoff laenger als die Restzeit ist, sofort den 429 liefern."""
+    calls = {"count": 0}
+    client, waits = _make_client(monkeypatch, RATE_LIMIT_BODY, calls=calls)
+    client.config.glm_request_deadline_seconds = 10.0
+    client._rate_limit_backoff_seconds = lambda attempt: 30.0
+
+    with pytest.raises(UpstreamAPIError) as excinfo:
+        _open(client)
+
+    assert calls["count"] == 1
+    assert waits == []
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.transient is False
+
+
 def test_rate_limit_gibt_keinen_zusatzlichen_stream_retry(monkeypatch):
     """Der fluss nach dem 429: `transient=False` ist die ganze garantie. Ein
     transientes flag wuerde den stream-retry (2x, 1s) wieder in gang

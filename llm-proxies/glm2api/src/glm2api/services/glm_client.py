@@ -1756,19 +1756,27 @@ class GLMWebClient:
                     if (
                         throttle == "rate_limit"
                         and rate_limit_attempts < self.config.glm_rate_limit_max_retries
-                        and not self._deadline_exceeded(deadline)
                     ):
-                        rate_limit_attempts += 1
-                        wait_seconds = self._rate_limit_backoff_seconds(rate_limit_attempts)
-                        self.logger.warning(
-                            "GLM upstream rate limit hit (code 10061), backing off instead of hammering attempt=%s/%s wait=%.1fs account=%s",
-                            rate_limit_attempts,
-                            self.config.glm_rate_limit_max_retries,
-                            wait_seconds,
-                            account_index,
+                        wait_seconds = self._rate_limit_backoff_seconds(rate_limit_attempts + 1)
+                        enough_deadline = (
+                            deadline is None
+                            or time.monotonic() + wait_seconds < deadline
                         )
-                        time.sleep(wait_seconds)
-                        continue
+                        if not enough_deadline:
+                            # Kein Retry, dessen Backoff die verbleibende
+                            # Request-Deadline bereits ueberschreitet.
+                            wait_seconds = 0.0
+                        else:
+                            rate_limit_attempts += 1
+                            self.logger.warning(
+                                "GLM upstream rate limit hit (code 10061), backing off instead of hammering attempt=%s/%s wait=%.1fs account=%s",
+                                rate_limit_attempts,
+                                self.config.glm_rate_limit_max_retries,
+                                wait_seconds,
+                                account_index,
+                            )
+                            time.sleep(wait_seconds)
+                            continue
                     if (
                         throttle == "busy"
                         and busy_attempts < self.config.glm_busy_max_retries
