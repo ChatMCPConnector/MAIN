@@ -52,9 +52,19 @@ fi
 
 if push_cmd; then
   echo "Gepusht -> $slug/main"
-  # Google-Drive-Backup-Hook (2-Generationen-Rotation). Fehlt die rclone-Auth,
-  # überspringt sich das Skript selbst — Push-Erfolg wird nie gefährdet.
-  ./infra/scripts/gdrive-backup.sh backup || true
+  # Google-Drive-Backup (2-Generationen-Rotation). Der Push-Erfolg wird nie
+  # gefährdet, aber ein FEHLGESCHLAGENES Backup wird nicht mehr verschwiegen:
+  # bis 2026-09-27 stand hier `|| true` ohne jede Ausgabe, sodass ein totes
+  # Drive-Backup wie ein erfolgreicher Save aussah. Drive ist die einzige Kopie
+  # ausserhalb von GitHub — ein stilles Scheitern ist der teuerste Fehler, den
+  # diese Repo-Sicherung haben kann.
+  if ! ./infra/scripts/gdrive-backup.sh backup; then
+    echo
+    echo "WARNUNG: Push ok, aber das Google-Drive-Backup ist FEHLGESCHLAGEN."
+    echo "         Drive ist damit die veraltete Generation — nicht vergessen:"
+    echo "         ./infra/scripts/gdrive-backup.sh backup --force"
+    echo
+  fi
 else
   echo "PUSH FEHLGESCHLAGEN. Einmalig: ./infra/scripts/auth.sh setup (oder LANDSCAPE_PAT als Codespaces-Secret setzen)."
   exit 1
