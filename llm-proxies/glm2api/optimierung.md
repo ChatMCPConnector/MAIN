@@ -810,16 +810,112 @@ erkennt erst den Rest. Gemessen: `narration + call` liefert `'The \`'` im
 Stream, vor wie nach S-12 identisch. Ein echter Leck, aber klein (ein
 Fragment), und die Reparatur wäre ein Holdback für „Satz noch offen plus
 Werkzeug-Token im Fragment" — das kostt Latenz auf *jedem* Satz mit
-Backtick und ist eine eigene Entscheidung, keine Nebenbei.
+Backtick und ist eine eigene Entscheidung, keine Nebenbei. → **S-14 unten.**
+
+### S-14 — das erste Fragment einer zerschnittenen Narration (Nebenbefund aus S-13)
+
+**Symptom.** Der S-09-Holdback kennt das Werkzeug-Token nur in
+*vollständiger* Form: `` `read` ``. Schneidet der Upstream früher — und das
+tut er bei `'The \`open\` tool only works …'` —, trägt das erste Fragment noch
+gar keinen Namen, der Auslöser greift nicht, und der Text ist unwiderruflich
+beim Client. `finalize` kann nichts zurückholen, was schon draußen ist.
+
+**Messung** (`harness/leak_probe.py`, **alle** 215 Chunk-Größen, nicht
+Stichproben — genau die Fragmentgrenze löst den Fehler aus; Layout
+`narration + nativer call`):
+
+| Chunk | vorher | nachher |
+|---|---|---|
+| 1 | `'Der \`'` | `'D'` |
+| 2 | `'De'` | `'De'` |
+| 3 | `'Der'` | `'Der'` |
+| 4 | `'Der'` | `'Der'` |
+| 5 | `'Der \`'` | *(leer)* |
+| 6…215 | *(leer)* | *(leer)* |
+
+Vorher **5** von 215 Chunk-Größen mit sichtbarem Narration-Rest, nachher
+**4** — und die vier sind ausschließlich der Wortrest **vor** der ersten
+Werkzeug-Marke. Der Tool-Token-Rest ist vollständig weg, der Aufruf kam in
+allen 215 Fällen an.
+
+**Fix.** Zwei neue Bausteine, ein eigener Auslöser:
+
+1. `_NARRATION_TOOL_NAMES` + `_build_begun_token_regex()` →
+   `_NARRATION_BEGUN_TOKEN_RE`: **alle echten und abgeschnittenen** Anfänge
+   der Werkzeug-Namen, hinter einem noch offenen Backtick, verankert am
+   Satzende. Das blanke Backtick gehört dazu — das ist der Fall `'The \`'`
+   (Chunk 5), in dem noch gar kein Namenteil angekommen ist. Zweifache
+   Backticks reichen (Anfang eines `` ``read`` ``-Spans); ein drittes wäre
+   der Anfang eines Code-Fences und gehört nicht hierher.
+2. `_begun_tool_token_holdback()` als **eigener** Auslöser in
+   `consume_event`, plus `_split_open_sentence()`: gehalten wird nur der
+   **offene** Satz, der fertige davor geht sofort an den Parser.
+
+**Warum Punkt 2 ein eigener Auslöser sein muss.** Der erste Versuch zog den
+Schnitt auf die bestehende Holdback-Bedingung — das kostete **3 Alt-Tests**:
+
+- `test_stream_preserves_order_across_code_fences[8]`: `'…alpha\nbeta…'` kam
+  als `'…alphabeta…'` an. Der fertige Teil wanderte in den S-05-Puffer, und
+  der Abschluss strippt ihn weg (`final_text = cleaned_text.strip()`).
+- `test_s10_space_between_streamed_text_and_finalize_tail_survives[11,20]`:
+  `'Der Bericht ist fuer Sie.Ich'` — der Rand-links des Carries geht über
+  `_lead_source` in `finalize` ein und war leer.
+- `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`:
+  `'我将创建文件。\n\n'` streamte, statt gepuffert zu bleiben. Die
+  T-07-Präambel muss den Text *sehen*, um ihn verwerfen zu können.
+
+Diese drei Pfade sind gepinnt und behalten deshalb unverändert „ganzer Text
+zurückhalten". `_begun_tool_token_holdback` greift nur, wenn
+`_self_steering_holdback` **nicht** greift — steht ein vollständiges Token im
+offenen Satz, entscheidet weiterhin S-09. Der Fence-Fall ist übrigens
+genau der, an dem der Schnitt nötig *war*: `…alpha\nbeta\n\`\`` — ohne ihn
+ging die Zeilenwende zwischen zwei Code-Zeilen verloren.
+
+**Was bewusst bleibt.** Der Wortrest vor der ersten Marke (`'D'`, `'De'`,
+`'Der'`) ist nicht reparierbar, ohne die erste Satzhälfte *jedes* Parts zu
+puffern — Verzögerung auf jeder Antwort, auch ohne Calls. Entschieden wurde
+Option (a) „nur der reparierbare Rest" gegen Option (b) „auch der Wortrest,
+mit Latenzpreis". Der Rest ist als `_S14_RESIDUE = ("", "D", "De", "Der")` in
+den Tests festgeschrieben, damit eine spätere Ausweitung eine bewusste
+Entscheidung sein muss und keine stille Verbesserung.
+
+**Preis.** Jeder Satz, der mit einem Backtick endet, wartet jetzt bis zur
+Satzgrenze. Das ist Verzögerung, kein Textverlust — dieselbe Zusicherung,
+die schon S-09 gibt. Gemessen an echtem Antworttext mit `` `read` ``/`` `bash` ``
+und Fence: **0 von 104** Chunk-Größen verändert.
+
+**Positivkontrolle** (gegen `02ceca2`, S-12 ohne S-14): **4** der neuen
+Tests schlagen fehl — `s14_narration_fragment_never_reaches_the_client[1]`
+und `[5]` mit echten Assertion-Fehlern (das ist der Leck selbst), die beiden
+Regel-Tests mit `ImportError` (die Helfer existieren dort nicht). 568 der
+572 neuen Tests sind gegen beide Stände grün: die Gegenproben (Aufruf kommt
+an, Antworttext unverändert, Fence-Neubruch bleibt) beweisen Unverändertheit.
+
+**Harnesses liegen jetzt im Repo** (`harness/`, mit README). Sie lagen nur
+unter `/tmp/glmtest/` und waren nach dem Codespace-Neustart weg — die
+Messbasis der S-10…S-13-Arbeit war damit nicht reproduzierbar. Das
+`GLM_SRC=`-Schema für die Positivkontrolle steht dort dokumentiert.
+
+**Merksatz:** Ein Auslöser, der ein *vollständiges* Merkmal sucht, ist an
+jeder Schnittstelle unvollständig — das Fragment, in dem das Merkmal noch
+unvollständig ist, ist genau das Fragment, das durchrutscht. Und: wer einen
+Holdback einführt, muss *jede* Stelle entscheiden, die er in den Schnitt
+einbezieht; „verzögert statt gelöscht" gilt für den neuen Pfad, nicht für
+die drei gepinnten daneben.
 
 ### Verifikation
 
-- **839 Tests grün** (794 + 45 neue aus S-10), mit S-11 **848** (+ 9), mit S-12
+- **1426 Tests grün** (854 + 572 neue aus S-14; Suite 8,5 s → 11,1 s).
+  Historie: 839 (794 + 45 aus S-10), mit S-11 **848** (+ 9), mit S-12
   **852** (+ 4), mit S-13 **854** (+ 2, Verhaltens-neutral).
 - S-11 gegen den Vorher-Stand (Positivkontrolle): **8** der 9 neuen Tests
   schlagen fehl — alle sechs Chunk-Unabhängigkeits-Fälle, der
   Doppelumbruch und der Regel-Test. Die Anti-Kleb-Gegenprobe
   (`…_still_separated_by_a_blank_line`) ist gegen **beide** Stände grün.
+- S-14 gegen den Vorher-Stand `02ceca2` (**Positivkontrolle**): **4** der 572
+  neuen Tests schlagen fehl — der Leck selbst bei Chunk 1 und 5 (echte
+  Assertion-Fehler) und die zwei Regel-Tests (`ImportError`). Die 568
+  Gegenproben sind gegen beide Stände grün.
 - S-10 gegen den Vorher-Stand `9054325` (**Positivkontrolle**): **13** der 45
   neuen Tests schlagen fehl, und zwar je Fehlerklasse mindestens einer —
   `prose … cut mid word[7]`, `preamble pattern … word prefix`,
@@ -984,6 +1080,8 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - Absatzumbrüche des Part-Merges hingen an der Part-Aufteilung (S-11) — DONE 2026-09-27
 - Stream/Non-Stream-Parität bei Text neben Calls: Asymmetrie entschieden und gepinnt (S-13) — DONE 2026-09-27
 - Beim Call-Eintreffen zurückgehaltener Rest (Carry/Parser) ging im Aufruf-Turn verloren (S-12) — DONE 2026-09-27
+- Erstes Fragment einer zerschnittenen Narration entkam (Nebenbefund aus S-13): angefangener Werkzeug-Token als Holdback-Auslöser (S-14) — DONE 2026-09-27
+- Mess-Harnesses lagen nur in `/tmp` und waren nach Neustart weg — jetzt in `llm-proxies/glm2api/harness/` — DONE 2026-09-27
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).

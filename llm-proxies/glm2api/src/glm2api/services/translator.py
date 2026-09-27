@@ -1724,6 +1724,30 @@ def _pending_sentence(text: str) -> str:
     return probe[boundary:]
 
 
+def _split_open_sentence(text: str) -> tuple[str, str]:
+    """(fertiger anteil, offener satz) — die umkehrung von `_pending_sentence`.
+
+    S-14: der holdback muss nur den OFFENEN satz zurueckhalten. Alles
+    davor ist entschieden und darf sofort an den parser. Wird stattdessen
+    der ganze text zurueckgehalten, wandert eine fertige zeilenwende in
+    den S-05-puffer, und der abschluss strippt sie weg
+    (`final_text = cleaned_text.strip()`) — das trennzeichen zwischen
+    zwei code-zeilen faellt dann ersatzlos weg. Gemessen: 'Vorher
+    ```\\nalpha\\nbeta\\n```\\nNachher' kam als 'alpha**beta**' an
+    (chunk-groesse 8, ein roter alt-test).
+    """
+    tail = _pending_sentence(text)
+    if not tail:
+        # nichts zu halten: der text ist leer, oder der offene satz ist
+        # laenger als der deckel (`_pending_sentence` gibt dann "" zurueck)
+        return text, ""
+    if len(tail) == len(text):
+        # der GANZE text ist der offene satz — das ist der normale
+        # fall des holdbacks und es bleibt beimalten
+        return "", text
+    return text[: len(text) - len(tail)], tail
+
+
 def _self_steering_holdback(text: str) -> bool:
     """S-09: muss dieser text noch vor dem parser warten?
 
@@ -1731,13 +1755,6 @@ def _self_steering_holdback(text: str) -> bool:
     das in einer selbst-narration vorkommt (`_NARRATION_TOKEN_RE`). Ein
     text, der mit einem vollständigen satz endet, braucht nie zu warten.
 
-    S-14: derselbe Auslöser gilt für den ANGEFANGEN Werkzeug-Token
-    (`_NARRATION_BEGUN_TOKEN_RE`). Sonst verliert genau die erste
-    Fragmenthälfte einer über Teile geschnittenen Narration ihren
-    Schutz: 'The `' trägt noch keinen Namen, ist aber unwiderruflich
-    raus, sobald es den Parser passiert. Der Satz ist zu dem Zeitpunkt
-    noch offen — das ist die Bedingung, unter der hier überhaupt
-    gewartet wird.
 
     **Nie bei Werkzeug-Markup** (`{"tool_calls":…}`, DSML): da gibt es
     keinen offenen Satz zu Ende zu bringen, sondern einen Aufruf, den der
@@ -1752,8 +1769,31 @@ def _self_steering_holdback(text: str) -> bool:
         return False
     if contains_tool_markup(pending):
         return False
-    if _NARRATION_TOKEN_RE.search(pending):
-        return True
+    return bool(_NARRATION_TOKEN_RE.search(pending))
+
+
+def _begun_tool_token_holdback(text: str) -> bool:
+    """S-14: derselbe auslöser wie `_self_steering_holdback`, aber fuer den
+    ANGEFANGEN werkzeug-token (`_NARRATION_BEGUN_TOKEN_RE`).
+
+    Warum ein eigener auslöser und nicht eine vierte alternative in der
+    holdback-bedingung von `consume_event`: der S-14-fall schneidet anders.
+    Gehalten wird nur der OFFENE satz (`_split_open_sentence`), während
+    die drei gepinnten auslöser weiterhin den GANZEN text zurueckhalten —
+    inklusive des rand-links, den der abschluss ueber `_lead_source`
+    wieder anhaengt (S-10), und inklusive des textes, den die T-07-
+    praeambel noch puffern muss (der chinesische praeambel-faell von
+    `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`).
+    Beide gehen kaputt, wenn man den schnitt auf sie ausdehnt — gemessen,
+    beide rot. Sobald ein VOLLSTAENDIGES token im offenen satz steht,
+    entscheidet `_self_steering_holdback` und der alte pfad gilt: der
+    S-14-auslöser greift dann bewusst nicht.
+    """
+    pending = _pending_sentence(text)
+    if not pending:
+        return False
+    if contains_tool_markup(pending):
+        return False
     return bool(_NARRATION_BEGUN_TOKEN_RE.search(pending))
 
 
@@ -3075,7 +3115,17 @@ class GLMEventAccumulator:
         # ist. Erst dann können `_SELF_STEERING_RE`/`_LIMIT_CLAIM_RE` beide
         # hälfte überhaupt in einem string sehen; bei delta-weiser-prüfung
         # lief die narration komplett durch (repro M).
-        if text_delta and (
+        if (
+            text_delta
+            and _begun_tool_token_holdback(text_delta)
+            and not _self_steering_holdback(text_delta)
+        ):
+            # S-14: der ANGEFANGENE werkzeug-token. Nur der OFFENE satz
+            # wartet, der fertige davor geht sofort an den parser — sonst
+            # landet eine fertige zeilenwende im S-05-puffer, wo der
+            # abschluss sie wegstrippt (`_split_open_sentence`).
+            text_delta, self._narration_carry = _split_open_sentence(text_delta)
+        elif text_delta and (
             _PROTOCOL_META_NARRATION_TAIL_RE.search(text_delta)
             or _self_steering_holdback(text_delta)
             # S-10: und solange der text auf einem unvollstaendigen

@@ -4887,3 +4887,128 @@ def test_s11_paragraph_break_rules_directly():
     # S-06: leere part (neben jedem nativen call)
     assert not _needs_paragraph_break("Punkte.", "")
     assert not _needs_paragraph_break("Punkte.", "   ")
+
+
+# --- S-14: das ERSTE fragment einer zerschnittenen narration ----------------
+#
+# Der S-09-holdback kennt das werkzeug-token nur in vollstaendiger form
+# (`` `read` ``). Schneidet der upstream vorher, traegt das erste fragment
+# noch gar keinen namen — der ausloesser greift nicht, und der text ist
+# unwiderruflich beim client. Gemessen ueber ALLE chunk-groessen
+# (harness/leak_probe.py, 215 messungen): vorher 'Der `', 'De', 'Der',
+# 'Der', 'Der `' bei chunk 1-5. Gegengeprueft an `02ceca2~1` — der fehler
+# ist vorbestehend, nicht von S-10/S-11/S-12 verursacht.
+_S14_NARRATION = _S09_NARRATION
+
+# Der wortrest VOR der ersten werkzeug-marke. Der kann nur weg, wenn die
+# erste satzhaelfte eines jeden parts gepuffert wird (verzoegerung auf
+# JEDER antwort) — bewusst nicht gemacht, siehe optimierung.md S-14.
+_S14_RESIDUE = ("", "D", "De", "Der")
+
+
+def test_s14_begun_tool_token_is_held_back():
+    """Der neue ausloeser: ein noch offener werkzeug-token am satzende."""
+    from glm2api.services.translator import (
+        _begun_tool_token_holdback,
+        _self_steering_holdback,
+    )
+
+    for text in (
+        "The `",
+        "The `o",
+        "The `op",
+        "The `open",
+        "Vorher\n```",
+        "Vorher\n``",
+    ):
+        assert _begun_tool_token_holdback(text), text
+    # der ausloeser ist am SATZENDE verankert: ein vollstaendiges token
+    # mitten im satz entscheidet `_self_steering_holdback`, nicht diesen
+    for text in (
+        "Der Bericht ist fuer Sie.",
+        "Der `read`-Aufruf",
+        "The `xyz`-Attribut",
+        "Nichts weiter.",
+        "",
+    ):
+        assert not _begun_tool_token_holdback(text), text
+    # ein vollstaendiges token matcht beide ausloeser (es endet ja auch auf
+    # einem backtick). entschieden wird das nicht hier, sondern in
+    # `consume_event`: `_self_steering_holdback` hat vorrang und haelt den
+    # ganzen text — der S-14-schnitt greift nur, wenn es NUR ein
+    # angefangener token ist.
+    assert _begun_tool_token_holdback("`read`")
+    assert _self_steering_holdback("`read`")
+
+
+def test_s14_split_open_sentence_releases_only_the_finished_part():
+    """Gehalten wird der OFFENE satz; der fertige davor geht sofort raus.
+
+    Das ist der gegenentwurf zum S-09-carry: haelt der das ganze delta
+    zurueck, wandert eine fertige zeilenwende in den S-05-puffer und der
+    abschluss strippt sie weg (`final_text.strip()`). Gemessen: 'alpha
+    beta' kam als 'alphabeta' an (chunk 8, ein roter alt-test).
+    """
+    from glm2api.services.translator import _split_open_sentence
+
+    assert _split_open_sentence("Vorher\nalpha\nbeta") == ("Vorher\nalpha\n", "beta")
+    assert _split_open_sentence("ganz offen") == ("", "ganz offen")
+    # der rand nach dem satzende ist selbst ein "offener" rest und wird
+    # mitgehalten — bis zum naechsten satz, also um einen tick spaeter
+    assert _split_open_sentence("fertig. ") == ("fertig.", " ")
+    # nichts zu halten: der offene satz ist laenger als der deckel
+    long_open = "alpha " * 200
+    assert _split_open_sentence(long_open) == (long_open, "")
+
+
+@pytest.mark.parametrize("chunk_size", range(1, len(_S14_NARRATION) + 1))
+def test_s14_narration_fragment_never_reaches_the_client(chunk_size):
+    """DER leak. Ueber alle chunk-groessen, weil genau die fragmentgrenze
+    ihn ausloest — vier stichproben hätten genau die faelle übersehen."""
+    streamed, _ = _s10_stream([_S14_NARRATION, _s10_native_event("c1")], chunk_size)
+
+    assert streamed.strip() in _S14_RESIDUE, (chunk_size, streamed)
+    for marker in ("`", "open", "read", "funktioniert", "nur das", "Pfade"):
+        assert marker not in streamed, (chunk_size, marker, streamed)
+
+
+@pytest.mark.parametrize("chunk_size", range(1, len(_S14_NARRATION) + 1))
+def test_s14_call_behind_a_split_narration_still_arrives(chunk_size):
+    """Gegenprobe zum neuen holdback: verzoegerung ist erlaubt, textverlust
+    nicht — und ein aufruf, der hinter der narration liegt, muss ankommen."""
+    streamed, accumulator = _s10_stream([_S14_NARRATION, _s10_native_event("c1")], chunk_size)
+    message = accumulator.build_response("finish")["choices"][0]["message"]
+
+    assert [call["function"]["name"] for call in message["tool_calls"]] == ["read"], (
+        chunk_size,
+        streamed,
+    )
+
+
+_S14_ANSWER = (
+    "Die Datei hat drei Zeilen. Nutze `read` mit dem Pfad, dann `bash` fuer "
+    "den Rest.\n```bash\nls -la\n```\nFertig."
+)
+
+_S14_FENCE = "Vorher\n```\nalpha\nbeta\n```\nNachher"
+
+
+@pytest.mark.parametrize("chunk_size", range(1, len(_S14_ANSWER) + 1))
+def test_s14_answer_with_tool_mentions_survives_every_chunk_size(chunk_size):
+    """Der preis des neuen ausloesers: jeder satz, der mit einem backtick
+    endet, wartet jetzt auf die satzgrenze. Das ist verzoegerung — der
+    text selbst muss unveraendert ankommen."""
+    streamed, _ = _s10_stream([_S14_ANSWER, _s10_native_event("c1")], chunk_size)
+
+    assert streamed.strip() == _S14_ANSWER.strip(), (chunk_size, streamed)
+
+
+@pytest.mark.parametrize("chunk_size", range(1, len(_S14_FENCE) + 1))
+def test_s14_open_fence_line_does_not_swallow_the_newline(chunk_size):
+    """Der fall, an dem der schnitt auf den offenen satz noetig war: ein
+    fence, das ueber die delta-grenz laeuft. Ohne `_split_open_sentence`
+    ging die zeilenwende zwischen zwei code-zeilen verloren (chunk 8:
+    'alpha\nbeta' -> 'alphabeta')."""
+    streamed, _ = _s10_stream([_S14_FENCE], chunk_size)
+
+    assert streamed.split() == _S14_FENCE.split(), (chunk_size, streamed)
