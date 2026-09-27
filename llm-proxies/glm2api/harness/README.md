@@ -2,9 +2,9 @@
 
 Skripte, mit denen Verhalten des Translators **gemessen** wurde, bevor es
 geändert wurde. Sie sind keine Tests — die pinnen den Zustand als
-`tests/test_translator.py` (S-10 … S-18). Der Unterschied: ein Harness
-misst über *alle* Chunkgrößen (Schnittkante des Upstreams) und liefert ein
-Protokoll zum Nachlesen; ein Test pinnt eine Aussage.
+`tests/test_translator.py` (S-10 … S-19). Der Unterschied: ein Harness
+misst über *alle* Chunkgrößen und liefert ein Protokoll zum Nachlesen; ein
+Test pinnt eine Aussage.
 
 Bis 2026-09-27 lagen diese Skripte nur unter `/tmp/glmtest/` und waren nach
 dem Codespace-Neustart weg — die Messbasis der S-10…S-13-Arbeit war damit
@@ -28,7 +28,7 @@ cd llm-proxies/glm2api
 ## Positivkontrolle (Pflicht)
 
 Ein Harness-Bug sieht aus wie ein Proxy-Bug — in dieser Session waren es
-drei Stück. Vor jeder "gemessenen" Änderung gehört daher dieselbe Messung
+drei Stück. Vor jeder "gemessenen" Änderung gehört dieselbe Messung
 gegen den Vorzustand gefahren:
 
 ```bash
@@ -45,8 +45,8 @@ Messung auch dort grün, ist entweder die Messung blind oder der Fix wirkungslos
 
 | Skript | Misst | Stand |
 |---|---|---|
-| `leak_probe.py` | Narration-Rest, der den Client erreicht, je Chunkgröße 1…215; dazu die Gegenprobe „echter Antworttext mit `` `read` ``/`` `bash` ``/Fence" | 4/215 (nur Wortrest vor der ersten Marke, bewusst so), Antworttext 0/104 verändert |
-| `order_matrix.py` | Reihenfolge-Invariante über 13 Text/Call-Layouts × 10 Chunkgrößen: Soll-Vergleich, Chunk-Invariante; `absatz-vor-call` vergleicht Whitespace exakt | 130 Messungen, **0** unbekannte Verstöße (vor dem S-15-Fix waren 4/120 falsch) |
+| `leak_probe.py` | Narration-Rest, der den Client erreicht, je Chunkgröße 1…215; dazu die Gegenprobe „echter Antworttext mit `` `read` ``/`` `bash` ``/Fence" | 4/215 sichtbare Präfixe (`D`, `De`, `Der `, `Der ` bei Chunk 1–4), Antworttext 0/104 verändert |
+| `order_matrix.py` | Reihenfolge-Invariante über 17 Text/Call-Layouts × 10 Chunkgrößen; fünf Absatz/Call-Layouts prüfen Whitespace exakt; zusätzlich S-14-Rest über alle 215 Chunkgrößen | 170 Layout-Messungen + 215 S-14-Messungen, **0** unbekannte Abweichungen (vor S-19: 10/150 Layout-Verstöße durch verdoppelten Trenner) |
 | `sweep2.py` | Vertrags-Sweep: 23 Szenarien × 6 Chunkgrößen, Stream- **und** Non-Stream-Pfad (Text, Aufrufe, `finish_reason`, Body) | 138 Messungen, **0** unbekannte Verstöße, 1 bekannter Befund (S-14-Rest, 2/6) |
 | `trace_stream.py` | Delta-für-Delta-Trace, wenn ein Fall unklar ist | Werkzeug, kein Soll |
 
@@ -55,31 +55,25 @@ Sweeps müssen an einem alten Stand **rot** werden. `order_matrix` meldet
 an `9054325` 14 unbekannte Verstöße, `sweep2` 7 — dort sind sie grün, wo
 sie heute grün sind.
 
-## Bekannte Befunde (im Code als `KNOWN` hinterlegt)
+## Bekannte Befunde
 
-**S-15…S-18 sind behoben** (2026-09-27). Sie standen hier eine Sitzung lang als
-`KNOWN`-Tabelle — sie waren der Grund, warum diese Sweeps überhaupt gebaut
-wurden. Die Messungen, die sie belegt haben, stehen in `../optimierung.md`,
-Abschnitt „S-15 bis S-18"; dort auch die Positivkontrolle (127 der 173 neuen
-Testfälle fallen an `02ceca2` um).
-
-Ein `KNOWN`-Eintrag für ein Szenario, das **nicht** mehr verstößt, wird
-gestrichen, nicht mitgeführt: der Harness zählt die Treffer selbst mit, und
-eine Tabelle, die „grün wegen der Ausnahmeliste" meldet, ist ein Messgerät,
-das nichts mehr misst.
+**S-15…S-19 sind behoben** (2026-09-27). S-15…S-18 waren die Funde aus dem
+Harness-Neuaufbau und sind an `02ceca2` und `9054325` gegengeprüft:
+vorbestehend, nicht von S-10…S-14 verursacht. Die Messungen und die
+Positivkontrollergebnisse (127 von 173 neuen Testfällen rot an `02ceca2`)
+stehen in `../optimierung.md`.
 
 | Befund | Kurzfassung | Stand |
 |---|---|---|
-| **S-15** | Die S-12-Freigabeschranke (`_emitted_visible_text`) verwarf alles, was nur vom Turn-Anfang zurücklag — auch einen **fertigen, legitimen Satz** (`'Der Bericht ist fuer Sie. Ich'` → `''` bei Chunk 1000). Der Rest war der linke Rand des Carrys: Punkt und Leerraum, die den gesendeten Satz abschließen, starben mit der Narration (4/10 Chunkgrößen). | behoben: `strip_turn_start_narration()` + `_owed_lead_edge()` |
-| **S-16** | Die erfundene Limit-Behauptung durchbrach den reinen Text-Turn — im Stream **und** im Body, weil die Beschränkung „nur bei Calls" aus S-08 für die Selbst-Steuerung gilt, nicht für diese Klasse. | behoben: `_strip_invented_limit_claim()` ohne Call-Bedingung, plus Body-Kette in `build_response()` |
-| **S-17** | `_SENTENCE_END_CHARS` zählte `'` zu den Satzzeichen. Eine Part, die an einem Apostroph endet, galt als Satzende → der Part-Merge brach **mitten im Wort** um (`'I'\n\nll now read the file.'`). | behoben: `'` raus, `)"»` bleiben |
-| **S-18** | DSML, das über viele Parts zerschnitten ist, leckt als sichtbares Markup in den Stream (der Aufruf wird trotzdem korrekt geborgen). Zwei Ursachen: die Absatzregel im Markup, und ein Opener, der erst bei *Vollständigkeit* erkannt wird. | behoben: Regel 0 in `_needs_paragraph_break()` + `BEGUN_MARKUP_RE` |
-| **S-14-Rest** | `selbst-steuerung+call`: bei 2 von 6 Chunkgrößen entkommt der Wortrest vor der ersten Werkzeug-Marke. Bewusst akzeptiert — die Selbst-Steuerung steht am *Anfang* des Turns, es gibt also keinen fertigen Satz davor, den S-15 retten könnte. | `KNOWN`, zählt nicht als Verstoß |
+| **S-15** | Die S-12-Freigabeschranke verwarf auch einen fertigen, legitimen Satz; der Punkt und Leerraum am Carry-Rand starben mit der Narration. | behoben: `strip_turn_start_narration()` + `_owed_lead_edge()` |
+| **S-16** | Erfundenen Limit-Behauptungen gingen im Text-only-Turn durch — Stream und Body. | behoben: Limit-Filter auch ohne Calls + Body-Kette |
+| **S-17** | Apostroph als Satzende erzeugte Absatzumbruch mitten im Wort. | behoben: Apostroph aus Satzendzeichen entfernt |
+| **S-18** | Über Parts zerschnittenes DSML leckte im Stream; Ursache: Absatzregel im Markup und fehlender Holdback für angefangene Opener. | behoben: Markup-Grenze + `BEGUN_MARKUP_RE` |
+| **S-14-Rest** | 4/215 Chunkgrößen lassen vor dem ersten Backtick `'D'`, `'De'` oder `'Der '` durch (Chunk 1–4); ab Chunk 5 kein sichtbarer Rest. Höchstens vier Präfixzeichen in diesem Repro, keine generelle Wortlänge-Latenz in jedem Turn. | bewusst akzeptiert; im `sweep2` als `KNOWN` |
+| **S-19** | Trenner auf beiden Seiten eines unsichtbaren Calls verdoppelten Absatz-Newlines; auch zwei einzelne Newlines müssen sich über einen Call zu einem Absatz ergänzen. | behoben und mit vier Call-Layouts plus späterer Absatz-Gegenprobe über alle Chunkgrößen geprüft |
 
-Die vier erledigten Befunde waren an `02ceca2` und `9054325` gegengeprüft:
-**vorbestehend**, nicht von S-10…S-14 verursacht. Die beiden neuen
-Coverage-Fälle wurden ebenfalls am Vorher-Stand `02ceca2` geprüft:
-`absatz-vor-call` 10/10 und `selbst-steuerung+nur-text` 6/6 sind dort bereits
-grün. Das sind bewusst gepinnte Verträge und Messlücken, keine neu entdeckten
-Defekte. Details und Positivkontroll-Ergebnis stehen in `../optimierung.md`,
-THEMA 8.
+Die ursprünglichen Coverage-Fälle `absatz-vor-call`/`absatz-nach-call`
+(20 Fälle) und `selbst-steuerung+nur-text` (7 Fälle) pinnen bestehende
+Verträge und waren an `02ceca2` bereits grün. S-19 hatte vor der ersten
+Gegenprobe 10/150 Layout-Verstöße im neuen Doppeltrenner-Fall; nach der
+Erweiterung auf fünf Absatz/Call-Layouts sind 170/170 Layout-Messungen grün.

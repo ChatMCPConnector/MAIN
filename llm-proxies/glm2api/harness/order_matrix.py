@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import sys
 
-from common import native_event, stream
+from common import ALLOWED, NARRATION, native_event, stream
 
 PROSE_A = "Der Bericht nennt drei Punkte."
 PROSE_B = "Zweiter Absatz mit Erklaerung."
@@ -62,21 +62,25 @@ LAYOUTS: list[tuple[str, list, str, int]] = [
     ("rand-links-im-carry", [SPACE, call()], SPACE_ERWARTET, 1),
     ("leerraum-artefakt", [PROSE_A, WS, call(), PROSE_B], PROSE_A + WS + PROSE_B, 1),
     ("nur-prosa-ohne-call", [PROSE_A, PROSE_B], PROSE_A + PARA + PROSE_B, 0),
-    # Luecke A (2026-09-27): der Absatztrenner faellt in eine Folge mit
-    # nativen Calls. Die whitespace-only-part liegt direkt vor dem Call;
-    # der Absatzumbruch muss genau einmal erhalten bleiben, nicht durch
-    # S-06 entfernt oder vervielfacht werden.
+    # Absatztrenner direkt vor einem Call: exakt einmal sichtbar erhalten.
     ("absatz-vor-call", [PROSE_A, PARA, call(), PROSE_B], PROSE_A + PARA + PROSE_B, 1),
+    # Spiegel: Absatztrenner direkt nach einem Call.
+    ("absatz-nach-call", [PROSE_A, call(), PARA, PROSE_B], PROSE_A + PARA + PROSE_B, 1),
+    # S-19: explizite Trenner auf beiden Seiten eines unsichtbaren Calls
+    # muessen EINEN Absatzwechsel bilden, keine vier Newlines.
+    ("absatz-beide-seiten-call", [PROSE_A, PARA, call(), PARA, PROSE_B], PROSE_A + PARA + PROSE_B, 1),
+    ("einzelnewline-beide-seiten-call", [PROSE_A, "\n", call(), "\n", PROSE_B], PROSE_A + PARA + PROSE_B, 1),
+    # Gegenprobe: späterer Absatz nach sichtbarer Folgeprosa bleibt Absatz 2.
+    ("späterer-absatz-nach-call", [PROSE_A, PARA, call(), PARA, PROSE_B, PARA, PROSE_C], PROSE_A + PARA + PROSE_B + PARA + PROSE_C, 1),
 ]
 
 CHUNK_SIZES = (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000)
+S14_PREFIXES = {1: "D", 2: "De", 3: "Der ", 4: "Der "}
 
 # Vorbestehende, bereits bewertete Befunde — hier wird der SOLL-wert des
 # layouts verletzt, die verletzung liegt also in der abweichung.
-# Stand 2026-09-27 nach S-15…S-18: **leer**. S-15 hat den verlust am
-# turn-anfang beseitigt (der layout erwartet jetzt nur noch den echten
-# satz, weil `Ich` als praeambel-Anfang faellt), S-17 den absatzumbruch
-# mitten im wort, S-18 das markup-leck ueber viele parts.
+# Stand 2026-09-27 nach S-15…S-19: **leer**. Der S-14-Rest wird separat
+# vermessen und exakt gegen seine bewusst akzeptierte Chunk-Praefixe geprueft.
 KNOWN: dict[str, str] = {}
 
 
@@ -86,13 +90,12 @@ def check(parts: list, expected: str, expected_calls: int, chunk: int, label: st
 
     if streamed.split() != expected.split():
         problems.append(f"soll-vergleich: IST {streamed!r} != SOLL {expected!r}")
-    if label == "absatz-vor-call" and streamed != expected:
-        # Luecke A: bei diesem Layout ist Whitespace Teil des Vertrags —
+    if label in {"absatz-vor-call", "absatz-nach-call", "absatz-beide-seiten-call", "einzelnewline-beide-seiten-call", "späterer-absatz-nach-call"} and streamed != expected:
+        # Bei diesen Layouts ist Whitespace Teil des Vertrags —
         # der Absatztrenner muss vor UND nach dem Call genau einmal erhalten
         # bleiben. Der allgemeine Vergleich normalisiert sonst Leerraum.
         problems.append(f"absatz-exakt: IST {streamed!r} != SOLL {expected!r}")
     if "\n\n\n" in streamed:
-        # S-06: das leerzeilen-artefakt neben nativen calls
         problems.append(f"leerzeilen-artefakt im stream: {streamed!r}")
 
     message = accumulator.build_response()["choices"][0]["message"]
@@ -106,6 +109,22 @@ def check(parts: list, expected: str, expected_calls: int, chunk: int, label: st
         if not (entry.get("function") or {}).get("arguments"):
             problems.append(f"aufruf ohne argumente: {entry}")
     return problems
+
+
+def check_s14_residuals() -> list[tuple[int, str]]:
+    """S-14-Ausnahme als exakte Chunk-Messung, nicht pauschal als KNOWN."""
+    failures = []
+    for chunk in range(1, len(NARRATION) + 1):
+        streamed, _body, accumulator = stream(
+            [NARRATION, call()], chunk, allowed=ALLOWED
+        )
+        expected = S14_PREFIXES.get(chunk, "")
+        if streamed != expected:
+            failures.append((chunk, streamed))
+        calls = accumulator.build_response()["choices"][0]["message"].get("tool_calls") or []
+        if len(calls) != 1:
+            failures.append((chunk, f"call-count={len(calls)}"))
+    return failures
 
 
 def main() -> int:
@@ -128,7 +147,7 @@ def main() -> int:
             if label in KNOWN:
                 known_hits[label].append(chunk)
                 if not quiet:
-                    print(f"{label:<28} {chunk:>6}  bekannt (S-15)")
+                    print(f"{label:<28} {chunk:>6}  bekannt")
                 continue
             unknown += 1
             print(f"{label:<28} {chunk:>6}  VERSTOSS")
@@ -136,6 +155,14 @@ def main() -> int:
                 print(f"{'':<37} - {problem}")
     print("-" * 78)
     print(f"Messungen: {measurements}, unbekannte Verstoesse: {unknown}")
+    residual_failures = check_s14_residuals()
+    if residual_failures:
+        print(f"S-14-Praefix-Messung: {len(residual_failures)} Abweichungen")
+        for chunk, actual in residual_failures[:10]:
+            print(f"  chunk={chunk}: {actual!r}")
+        unknown += len(residual_failures)
+    else:
+        print("S-14-Praefix-Messung: 215/215 exakt (4 akzeptierte Präfixe, Calls 215/215)")
     for label, chunks in known_hits.items():
         if chunks:
             print(f"  bekannt: {label} — {len(chunks)}/{len(CHUNK_SIZES)} chunk-groessen")

@@ -835,8 +835,11 @@ Stichproben — genau die Fragmentgrenze löst den Fehler aus; Layout
 
 Vorher **5** von 215 Chunk-Größen mit sichtbarem Narration-Rest, nachher
 **4** — und die vier sind ausschließlich der Wortrest **vor** der ersten
-Werkzeug-Marke. Der Tool-Token-Rest ist vollständig weg, der Aufruf kam in
-allen 215 Fällen an.
+Werkzeug-Marke. Genau gemessen: Chunk 1 → `'D'`, 2 → `'De'`, 3–4 → `'Der '`;
+ab Chunk 5 kommt nichts sichtbar an. Der Tool-Token-Rest ist vollständig weg,
+der Aufruf kam in allen 215 Fällen an. Das ist ein präfixabhängiger Rest von
+maximal vier Zeichen in diesem konkreten Live-Repro, nicht „Wortlänge Latenz
+in jedem Turn".
 
 **Fix.** Zwei neue Bausteine, ein eigener Auslöser:
 
@@ -871,13 +874,18 @@ offenen Satz, entscheidet weiterhin S-09. Der Fence-Fall ist übrigens
 genau der, an dem der Schnitt nötig *war*: `…alpha\nbeta\n\`\`` — ohne ihn
 ging die Zeilenwende zwischen zwei Code-Zeilen verloren.
 
-**Was bewusst bleibt.** Der Wortrest vor der ersten Marke (`'D'`, `'De'`,
-`'Der'`) ist nicht reparierbar, ohne die erste Satzhälfte *jedes* Parts zu
-puffern — Verzögerung auf jeder Antwort, auch ohne Calls. Entschieden wurde
-Option (a) „nur der reparierbare Rest" gegen Option (b) „auch der Wortrest,
-mit Latenzpreis". Der Rest ist als `_S14_RESIDUE = ("", "D", "De", "Der")` in
-den Tests festgeschrieben, damit eine spätere Ausweitung eine bewusste
-Entscheidung sein muss und keine stille Verbesserung.
+**Was bewusst bleibt.** Im gemessenen Repro entkommen nur die Präfixe
+`'D'`, `'De'`, `'Der '` bei Chunk 1–4; ab Chunk 5 hält der begonnene Backtick-
+Token den offenen Satz zurück. Die Regel `_S14_RESIDUE = ("", "D", "De", "Der")`
+prüft die Klassengrenze im gepinnten Test; der Harness misst die vollständigen
+sichtbaren Ausgaben exakt. Eine strengere Garantie „kein Narrationszeichen vor
+der Marke" erforderte, auch den Wortanfang vor dem Backtick zu halten. Das
+würde nicht pauschal „Wortlänge Latenz in jedem Turn" bedeuten: die aktuelle
+Regel kann an einem Turn ohne Werkzeug-Aufruf keine Call-Narration erkennen;
+für die stärkere Garantie müsste man daher vorsorglich Text halten, bis
+Aufruf oder Antwort-Satzgrenze entschieden ist. Der konkrete Trade-off ist
+Verzögerung bis zu diesem Signal versus höchstens vier sichtbare Präfixzeichen
+in diesem Repro. Der Rest bleibt vorerst akzeptiert.
 
 **Preis.** Jeder Satz, der mit einem Backtick endet, wartet jetzt bis zur
 Satzgrenze. Das ist Verzögerung, kein Textverlust — dieselbe Zusicherung,
@@ -1069,7 +1077,7 @@ der Carry Markup festhalten konnte, während der Parser die folgende Prosa
 verschluckte. `_TOOL_MARKUP_RE` bekam die DSML-Alternative
 (`r"<\|?\s*dsml\|"`).
 
-**Ergebnis nach den Fixes (alle drei Harnesses, 2026-09-27)**
+**Historisches Ergebnis nach S-15…S-18, vor der Coverage-Erweiterung (2026-09-27)**
 
 | Harness / Szenario | vorher | nachher |
 |---|---|---|
@@ -1122,26 +1130,28 @@ hätte den halben Teil des Problems vergrößert: `build_response()` filtert
 durchaus, nur die *Abschluss*-Kette fehlt — und die S-13-Regel
 (`content is None` bei Calls) hätte dabei verteidigt werden müssen.
 
-### Offene Grenzen und Messlücken (Stand 2026-09-27, nach S-15…S-18)
+### Offene Grenzen und Messlücken (Stand 2026-09-27, nach S-15…S-19)
 
-S-15…S-18 sind erledigt. Was folgt, ist **kein Rest von deren Arbeit**, sondern
+S-15…S-19 sind erledigt. Was folgt, ist **kein Rest von deren Arbeit**, sondern
 die Punkte, die die neue Messbasis sichtbar gemacht hat und die bewusst so
 gelassen wurden. Jeder ist mit einer Messung belegt, damit die nächste Session
 nicht raten muss.
 
 #### 1. S-14-Rest: Wortrest vor der ersten Werkzeug-Marke (akzeptiert)
 
-`sweep2`, Szenario `selbst-steuerung+call`: bei 2 von 6 Chunkgrößen entkommt
-der Wortrest vor der ersten Marke (`'D'`/`'De'`/`'Der'` von
-„Der \`open\`-Aufruf …"). `leak_probe` zeigt dasselbe: **4/215**, Antworttext
-0/104 verändert.
+`leak_probe`, alle 215 Chunkgrößen: nur bei Chunk 1–4 entkommt ein Präfix
+vor dem ersten Backtick — `'D'`, `'De'`, `'Der '`, `'Der '`; ab Chunk 5 ist
+nichts sichtbar. `sweep2` beobachtet dasselbe gröber bei **2/6** Chunkgrößen.
+Antworttext bleibt 0/104 verändert, und alle 215 Calls kommen an.
 
-**Warum akzeptiert:** die Selbst-Steuerung steht dort am *Anfang* des Turns. Es
-gibt also keinen fertigen Satz davor, den S-15 hätte retten können — der Rest
-ist der erste Teil des ersten Narration-Satzes. Ein Schnitt davor hieße, auf
-ein unvollständiges Wort zu raten, kostet also **Wortlänge Latenz in jedem
-Turn mit Narration**. Beide Messwerkzeuge führen ihn als `KNOWN`, damit er
-nicht als „bekannt vergessen" endet.
+**Warum akzeptiert:** die Selbst-Steuerung steht dort am *Anfang* des Turns.
+Es gibt also keinen fertigen Satz davor, den S-15 hätte retten können — der
+Rest ist der erste Teil des ersten Narration-Satzes. Eine stärkere Garantie
+„kein Präfix vor dem Marker" müsste vorsorglich Text puffern, bis Aufruf oder
+Antwort-Satzgrenze das Verhalten entscheidet. Das ist eine Latenz-vs.-Leck-
+Entscheidung; sie bedeutet nicht pauschal „Wortlänge Latenz in jedem Turn".
+Der konkrete gemessene Rest ist hier höchstens vier Zeichen. `sweep2` führt
+ihn als `KNOWN`, damit er nicht als „bekannt vergessen" endet.
 
 Wer ihn angeht, löst nicht die Frage „wie schneide ich ab", sondern „woran
 erkenne ich, dass der erste Satz *fertig* ist" — dieselbe Frage wie bei S-14,
@@ -1182,21 +1192,36 @@ falsche Zuspitzung; sie hätte den halben Teil des Problems vergrößert. Richti
 ist: er filtert eine andere Menge als der Stream, und die schädliche Klasse
 ist abgedeckt.
 
-#### 4. Absatzumbruch plus nativer Aufruf — **Messlücke geschlossen**
+#### 4. Absatzumbruch plus nativer Aufruf — **Messlücke geschlossen, S-19 gefunden**
 
 `order_matrix` hatte `nur-prosa-ohne-call` (S-11) und `prosa-call-prose` (S-06),
 aber kein Layout, in dem Absatztrenner, Aufruf und Folgeprosa zusammenkommen.
-Jetzt ergänzt: `absatz-vor-call` mit
-`[PROSE_A, "\\n\\n", call(), PROSE_B]`, Erwartung `PROSE_A + PARA + PROSE_B`.
-Der Harness prüft für dieses Layout **exakte** Whitespace-Gleichheit (der
-allgemeine Vergleich normalisiert Whitespace), genau einen `\\n\\n`-Trenner,
-kein `\\n\\n\\n`-Artefakt und genau einen nativen Call.
+Die erste Ergänzung prüfte `absatz-vor-call` mit
+`[PROSE_A, "\\n\\n", call(), PROSE_B]`; der Spiegel `absatz-nach-call`
+prüft `[PROSE_A, call(), "\\n\\n", PROSE_B]`. Beide erhalten den einzelnen
+expliziten Absatztrenner exakt über alle **10/10** Chunkgrößen.
 
-Messung: **10/10 Chunkgrößen grün** (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000);
-das gesamte `order_matrix` ist jetzt **13 × 10 = 130**, 0 unbekannte
-Verstöße. Positivkontrolle an `02ceca2`: **10/10 ebenfalls grün**. Das ist
-absichtlich kein neuer Bug-Fund, sondern eine dokumentierte Vertrags-Kombination,
-die vorher nicht als Messfall existierte.
+Beim Testen der kombinierten Variante auf beiden Seiten (`absatz-beide-seiten-call`)
+kam ein echter Defekt zutage: `[PROSE_A, "\\n\\n", call(), "\\n\\n", PROSE_B]`
+ergab **vier** Newlines zwischen den Absätzen statt zwei — der Call hat keinen
+sichtbaren Inhalt, also treffen die Whitespace-Parts unmittelbar aufeinander.
+Die Duplikation trat bei **10/10** Chunkgrößen auf. S-19 koalesziert jetzt
+den zweiten expliziten Absatztrenner bis zum sichtbaren Zweizeilen-Trenner,
+wenn ein nativer Call vorliegt: ein einzelnes vorheriges Newline wird ergänzt,
+ein bereits vollständiges `\\n\\n` nicht verdoppelt. Nicht-Call-Weißraum
+bleibt unverändert.
+
+Eine zweite Gegenprobe nimmt auf beiden Seiten nur ein einzelnes `\\n`:
+`[PROSE_A, "\\n", call(), "\\n", PROSE_B]`. Auch das muss genau einen
+Absatzwechsel bilden; die zwei Trenner ergänzen sich, statt dass ein
+whitespace-only Part durch S-06 verschwindet. Der Harness prüft für alle fünf
+Layouts **exakte** Whitespace-Gleichheit (der allgemeine Vergleich normalisiert
+Whitespace), genau einen `\\n\\n`-Trenner direkt um den Call, kein `\\n\\n\\n`-
+Artefakt und genau einen nativen Call. Ein fünftes Layout stellt sicher, dass
+ein späterer Absatz nach dem koaleszierten Call-Absatz erhalten bleibt. Die
+Matrix umfasst damit **17 × 10 = 170** Layout-Messungen plus 215 S-14-
+Messungen. Nach dem Fix sind alle **0 unbekannten Verstöße**; der S-14-Rest
+stimmt exakt mit den vier akzeptierten Präfixen überein.
 
 #### 5. Selbst-Steuerung im reinen Text-Turn — **Verhaltensentscheidung gepinnt**
 
@@ -1223,24 +1248,53 @@ geprüft worden; beide Harness-Fälle waren über alle ihre Chunkgrößen grün.
 
 ### Verifikation
 
-- **1616 Tests grün** (1426 + 173 neue aus S-15…S-18 + 17 Coverage-Tests für die vorherigen Messlücken; letzter Lauf 11,6 s).
-  Historie: 839 (794 + 45 aus S-10), mit S-11 **848** (+ 9), mit S-12
-  **852** (+ 4), mit S-13 **854** (+ 2, Verhaltens-neutral), mit S-14
-  **1426** (+ 572).
-- **S-15…S-18 gegen den Vorher-Stand `02ceca2` (Positivkontrolle): 127 der 173
-  neuen Fälle schlagen fehl**, die 46 Gegenproben sind gegen beide Stände grün.
+#### Aktueller Stand (2026-09-27; nach S-19)
+
+- **1656 Tests grün** im vollständigen Lauf nach der vollständigen S-19-
+  Parametrisierung (pytest `tests/`, letzter vollständiger Lauf 12,34 s).
+  Die 50 Absatz/Call-Fälle decken fünf Layouts über je 10 Chunkgrößen ab;
+  dazu kommen 7 Text-only-Policy-Fälle. Frühere Gesamtzahlen sind unten
+  historische Meilensteine, keine konkurrierenden aktuellen Angaben.
+- `order_matrix`: **170** Messungen (17 Layouts × 10 Chunkgrößen), **0
+  unbekannte Verstöße** nach S-19. `sweep2`: **138** Messungen (23 × 6), 0
+  unbekannte Verstöße und 1 bewusst bekannter S-14-Befund (2/6 Chunkgrößen).
+  `leak_probe`: **4/215** sichtbare Präfix-Leaks (`D`, `De`, `Der ` bei Chunk
+  1–4), 0/104 Antworttexte verändert; alle 215 Calls zugestellt.
+  `order_matrix` und `sweep2` nach S-19 erneut grün; `leak_probe` endet
+  erwartungsgemäß mit Exit 1, weil der akzeptierte Rest gezählt wird.
+
+#### Historische Meilensteine (nicht aktueller Gesamtstand)
+
+- S-10: 839 Tests (794 + 45 neue); S-11: **848** (+ 9); S-12: **852**
+  (+ 4); S-13: **854** (+ 2, Verhaltens-neutral); S-14: **1426** (+ 572).
+  S-15…S-18 brachten 173 neue Testfälle und hoben den damaligen Stand auf
+  1599; die nächste veröffentlichte Summe war **1616**. Danach kamen 30
+  parametrische Fälle hinzu (je 10 für Absatz nach Call, Trenner auf beiden
+  Seiten und zwei einzelne Newlines über dem Call). Die spätere
+  Kontrollvariante „Absatz nach dem Call-Absatz" fügte 10 Fälle hinzu.
+  Aktuell: **1656 pytest-Fälle**, davon 50 Absatz/Call-Fälle (5 Layouts × 10
+  Chunkgrößen) und 7 Text-only-Policy-Fälle.
+- Vor S-10: **794 Tests** (718 vor dem Nachtrag + 76 neue; die frühere
+  Basis wiederum 532 + 143 aus S-05/06/07). Die weiteren historischen Zahlen
+  (788 nach THEMA 9; 794 vor S-10; 839/848/852/854/1426 in den S-Meilensteinen)
+  sind Stände ihrer jeweiligen Zeit, keine konkurrierenden Angaben zum
+  aktuellen Lauf.
+- Alte Harnesses (`holdback_probe.py`, frühere `sweep2.py`-Fassung und
+  Differenzmessungen mit 7818 Fällen) gehören zu früheren Messständen. Aktuell
+  sind ausschließlich die versionierten Skripte unter `harness/` maßgeblich;
+  die damaligen Zahlen bleiben unten als historische Verifikation erhalten.
+
+- **Historisch, S-15…S-18 gegen den Vorher-Stand `02ceca2` (Positivkontrolle):
+  127 der 173 neuen Fälle schlagen fehl**, die 46 Gegenproben sind gegen beide
+  Stände grün.
   Aufschlüsselung im Abschnitt oben. Zwei Klassen, die man beim Lesen der Zahl
   nicht erwartet: `s17_contraction` ist nur 2 von 23 rot (der Wortumbruch ist im
   Stream erst bei ganz kleinen Chunkgrößen sichtbar), und
   `s18_dsml_split_over_many_parts` 3 von 7 (genau die Chunkgrößen 1–3 — der
   Rest war schon vorher in Ordnung). Beides ist gemessen, nicht geschätzt.
-- Harnesses (nach den Fixes und der Coverage-Erweiterung): `order_matrix`
-  **130** Messungen / **0** unbekannte Verstöße (vor dem S-15-Fix 4 Fehler in
-  der alten Matrix), `sweep2` **138** / **0** unbekannte (vor der Erweiterung
-  132). Der bekannte S-14-Rest bleibt 2/6 in `selbst-steuerung+call`.
-  `leak_probe` unverändert 4/215 + 0/104. Die zwei neuen Coverage-Fälle waren
-  am alten Stand `02ceca2` ebenfalls grün (Matrix 10/10; Text-only-Sweep 6/6),
-  denn sie pinnen bestehende Korrektheit/Politik statt einen Defekt zu melden.
+- Historisch vor S-19: `order_matrix` 130 Messungen / 0 unbekannte
+  Verstöße, `sweep2` 138 / 0 unbekannte und ein bekannter S-14-Rest (2/6),
+  `leak_probe` 4/215 + 0/104. Die aktuellen Zahlen stehen oben.
 - S-11 gegen den Vorher-Stand (Positivkontrolle): **8** der 9 neuen Tests
   schlagen fehl — alle sechs Chunk-Unabhängigkeits-Fälle, der
   Doppelumbruch und der Regel-Test. Die Anti-Kleb-Gegenprobe
@@ -1260,16 +1314,12 @@ geprüft worden; beide Harness-Fälle waren über alle ihre Chunkgrößen grün.
   „Selbst-Steuerung ohne Call" (7 Chunkgrößen) sind gegen `02ceca2`
   **17/17 grün** — erwartet, da sie vorher ungedeckte Kombinationen bzw. eine
   bestehende Verhaltensentscheidung pinnen, nicht neu behobene Defekte.
-- Die zwei neuen Coverage-Klassen: „Absatzumbruch + nativer Aufruf" 10/10
-  grün (am alten Stand ebenfalls grün) und „Selbst-Steuerung ohne Aufruf"
-  7/7 grün (ebenfalls am alten Stand grün). Das sind gepinnte Verträge, keine
-  Fehlerkorrekturen.
-- Die historischen `holdback_probe.py`- und `sweep2.py`-Zahlen gehören zum
-  älteren Messstand vor dem Harness-Neuaufbau; maßgeblich für den aktuellen
-  Stand sind `order_matrix` (130) und `sweep2` (138) oben. Die 794 Alt-Tests
-  sind die historische Basis vor S-10…S-14.
-- **794 Tests grün** (718 vor dem Nachtrag + 76 neue; Basis der Übergabe
-  wiederum 532 + 143 aus S-05/06/07).
+- Die ursprünglichen Coverage-Klassen (Absatz vor/nach Call und Text-only)
+  pinnten mit 20 + 7 Fällen bestehende Verträge und waren am alten Stand
+  ebenfalls grün. S-19 ergänzt 10 Regressionstests für den doppelten Trenner;
+  positivkontrolliert am alten Stand wurden diese nicht.
+- Die 794 Alt-Tests und frühere Harness-Zahlen sind historische Basisstände,
+  nicht aktuelle Verifikation (siehe Meilenstein-Tabelle oben).
 - Jede neue Testklasse wurde gegen den **Vorher-Stand** laufen gelaufen, wie
   schon bei S-05/S-07: gegen `4af494e~1` (ohne S-09) schlagen **20** der
   neuen Tests fehl (6× Mid-Run-Narration, 14× gesperrter Aufruf über
@@ -1288,7 +1338,7 @@ geprüft worden; beide Harness-Fälle waren über alle ihre Chunkgrößen grün.
   eingestuft — nicht Proxy-Seite.
 - `.env`-Korrektur (THEMA 9) live bestätigt: der Dienst startet wieder mit
   `token_source=.env GLM_REFRESH_TOKEN` und ohne `IGNORED`-Warnung.
-- **Differenzmessung** (31 Szenarien × 2 Pfade × 3 Zerschnittenheits-Achsen ×
+- **Historische Differenzmessung vor dem versionierten Harness** (31 Szenarien × 2 Pfade × 3 Zerschnittenheits-Achsen ×
   jede Chunk-Größe = 7818 Messungen, inklusive **nativer** `tool_calls`-Parts
   in Dict- und Listenform sowie **Denk-Parts** als eigene Teile): vor dem
   Markup-Fix 210 Abweichungen, alle DSML; nach dem Fix **null**. Erweitert um
@@ -1402,7 +1452,7 @@ man erst bemerkt, wenn ein Dienst nicht mehr kommt.
    die Dateien dürfen keine Dubletten haben, und die stillen Tippfehler
    müssen gemeldet werden.
 
-### Verifikation
+### Verifikation (historischer THEMA-9-Meilenstein, Stand 2026-09-26)
 
 - 788 Tests grün (davon 11 neue in `test_config.py`).
 - `GLM_REFRESH_TOKENS` / `REQUEST_TIMEOUT` / `REQUEST_SOCKET_TIMEOUT` einzeln

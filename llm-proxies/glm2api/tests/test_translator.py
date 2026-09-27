@@ -5313,33 +5313,69 @@ def test_s18_begun_markup_opener_is_held_by_the_parser():
     assert not BEGUN_MARKUP_RE.search("Der Bericht ist da"), "prosa"
 
 
-# --- Coverage-Luecken aus der S-15…S-18-Nacharbeit ------------------
+# --- Coverage-Luecken aus der S-15…S-19-Nacharbeit ------------------
 
 
 @pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 8, 11, 13, 20, 1000])
-def test_order_matrix_paragraph_break_survives_next_to_native_call(chunk_size):
-    """Coverage-Luecke A: Absatztrenner, nativer Aufruf und Folgeprosa im
-    selben Layout.
+@pytest.mark.parametrize(
+    "layout",
+    ["before-call", "after-call", "both-sides", "single-newline-both-sides", "later-paragraph"],
+)
+def test_order_matrix_paragraph_break_survives_next_to_native_call(chunk_size, layout):
+    """S-19: Absatztrenner und nativer Call plus Folgeprosa.
 
-    Die alte Matrix hatte Absatz ohne Call und Prosa/Call/Prosa, aber nicht
-    den Absatztrenner direkt vor dem Call. Hier wird Whitespace NICHT
-    normalisiert: genau ein `\\n\\n` muss erhalten bleiben, kein drittes
+    Die alte Matrix hatte Absatz ohne Call und Prosa/Call/Prosa, aber weder
+    den Trenner vor/nach dem Call, noch den verdoppelten oder geteilten
+    Trenner um einen unsichtbaren Call. Whitespace wird nicht normalisiert:
+    genau ein `\\n\\n` muss bleiben, kein drittes
     Newline-Artefakt entstehen, die Folgeprosa muss in Reihenfolge kommen,
     und der native Call muss genau einmal im Non-Stream-Response stehen.
     """
-    streamed, accumulator = _s10_stream(
-        [_S10_PROSE_A, "\n\n", _s10_native_event("c1"), _S10_PROSE_B],
-        chunk_size,
-    )
+    if layout == "before-call":
+        parts = [_S10_PROSE_A, "\n\n", _s10_native_event("c1"), _S10_PROSE_B]
+    elif layout == "after-call":
+        parts = [_S10_PROSE_A, _s10_native_event("c1"), "\n\n", _S10_PROSE_B]
+    elif layout == "both-sides":
+        parts = [
+            _S10_PROSE_A,
+            "\n\n",
+            _s10_native_event("c1"),
+            "\n\n",
+            _S10_PROSE_B,
+        ]
+    elif layout == "single-newline-both-sides":
+        # zwei einzelne, explizite Newlines sollen sich am unsichtbaren Call
+        # zu genau einem Absatztrenner ergänzen.
+        parts = [
+            _S10_PROSE_A,
+            "\n",
+            _s10_native_event("c1"),
+            "\n",
+            _S10_PROSE_B,
+        ]
+    else:
+        parts = [
+            _S10_PROSE_A,
+            "\n\n",
+            _s10_native_event("c1"),
+            "\n\n",
+            _S10_PROSE_B,
+            "\n\n",
+            _S10_PROSE_A,
+        ]
+    streamed, accumulator = _s10_stream(parts, chunk_size)
     response = accumulator.build_response("finish")
     choice = response["choices"][0]
     message = choice["message"]
 
     expected = _S10_PROSE_A + "\n\n" + _S10_PROSE_B
-    assert streamed == expected, (chunk_size, repr(streamed), repr(expected))
-    assert streamed.count("\n\n") == 1, (chunk_size, repr(streamed))
-    assert "\n\n\n" not in streamed, (chunk_size, repr(streamed))
-    assert [call["function"]["name"] for call in message.get("tool_calls", [])] == ["read"]
+    if layout == "later-paragraph":
+        expected += "\n\n" + _S10_PROSE_A
+    assert streamed == expected, (layout, chunk_size, repr(streamed), repr(expected))
+    expected_breaks = 2 if layout == "later-paragraph" else 1
+    assert streamed.count("\n\n") == expected_breaks, (layout, chunk_size, repr(streamed))
+    assert "\n\n\n" not in streamed, (layout, chunk_size, repr(streamed))
+    assert [call["function"]["name"] for call in message.get("tool_calls", [])] == ["read"], (layout, chunk_size, message)
     # S-13: bei Calls ist Body-Content bewusst None; hier wird der
     # Absatzvertrag ueber den Stream geprueft, der Call im Response.
     assert message.get("content") is None

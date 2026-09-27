@@ -2616,6 +2616,11 @@ class GLMEventAccumulator:
     _server_side_tool_calls: list[dict[str, object]] = field(default_factory=list)
     _server_side_tool_call_ids: set[str] = field(default_factory=set)
     _server_side_tool_call_signatures: set[str] = field(default_factory=set)
+    # S-19: nur Absatztrenner unmittelbar um einen unsichtbaren nativen
+    # Call zusammenführen; ordinary whitespace und spätere Absätze bleiben.
+    _native_call_paragraph_newlines: int = -1
+    _native_call_separator_pending: bool = False
+    _native_call_separator_rank: int = -1
     # T-04: wie oft dieselbe signatur in diesem turn schon vorkam
     _server_side_signature_counts: dict[str, int] = field(default_factory=dict)
     # T-25 (live 2026-09-26): der loop guard hat bisher OHNE rueckmeldung
@@ -2824,6 +2829,8 @@ class GLMEventAccumulator:
     def consume_event(self, payload: dict[str, object]) -> tuple[list[str], str | None]:
         # D-05: siehe die verwendung unten.
         blocked_native_seen: list[bool] | None = None
+        call_count_before = len(self._server_side_tool_calls)
+        native_call_ranks: list[int] = []
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE parsed event", payload)
         if not self.conversation_id and payload.get("conversation_id"):
             self.conversation_id = str(payload["conversation_id"])
@@ -2935,6 +2942,9 @@ class GLMEventAccumulator:
                                 ):
                                     self.blocked_tool_attempt_names.append(entry_name)
                                     continue
+                                native_call_ranks.append(
+                                    self._logic_id_rank.get(str(part.get("logic_id", "")), -1)
+                                )
                                 self._server_side_tool_calls.append(
                                     {
                                         "id": _coerce_call_id(entry.get("id"))
@@ -3146,6 +3156,9 @@ class GLMEventAccumulator:
                                 self._server_side_signature_counts[signature] = repeat + 1
                                 self._server_side_tool_call_signatures.add(signature)
                                 self._server_side_tool_call_ids.add(tool_id)
+                                native_call_ranks.append(
+                                    self._logic_id_rank.get(str(part.get("logic_id", "")), -1)
+                                )
                                 self._server_side_tool_calls.append(
                                     {
                                         "id": tool_id,
@@ -3179,6 +3192,9 @@ class GLMEventAccumulator:
                                             tool_name,
                                         )
                                     continue
+                                native_call_ranks.append(
+                                    self._logic_id_rank.get(str(part.get("logic_id", "")), -1)
+                                )
                                 self._server_side_tool_calls.append(
                                     {
                                         "id": local_id,
@@ -3191,6 +3207,10 @@ class GLMEventAccumulator:
                                     }
                                 )
 
+        if len(self._server_side_tool_calls) > call_count_before:
+            self._native_call_separator_pending = True
+            self._native_call_paragraph_newlines = -1
+            self._native_call_separator_rank = max(native_call_ranks, default=-1)
         text_delta, reasoning_delta = self._compute_deltas()
         self.last_full_text = self._cached_full_text
         self.last_full_reasoning = self._cached_full_reasoning
@@ -5017,16 +5037,51 @@ class GLMEventAccumulator:
                     # nachricht in der TUI und ballast im kontext. Der
                     # trenner ist zwischen zwei echten absaetzen richtig,
                     # vor einem leeren part ist er reiner muell.
+                    # S-19: ein nativer Call ist im sichtbaren Text
+                    # unsichtbar. Koalesziere deshalb nur LF-Parts, die
+                    # nach dem Call-Part kommen, auf einen sichtbaren
+                    # Absatztrenner von genau zwei Newlines.
+                    delta_text = rendered_text
+                    after_native_call = (
+                        self._native_call_separator_pending
+                        and self._logic_id_rank.get(logic_id, -1)
+                        > self._native_call_separator_rank
+                    )
+                    if after_native_call and rendered_text:
+                        if not rendered_text.strip() and set(rendered_text) == {"\n"}:
+                            if self._native_call_paragraph_newlines < 0:
+                                visible_prefix = self._emitted_text_tail + "".join(
+                                    text_delta_parts
+                                )
+                                self._native_call_paragraph_newlines = len(
+                                    visible_prefix
+                                ) - len(visible_prefix.rstrip("\n"))
+                            delta_text = rendered_text[
+                                : max(0, 2 - self._native_call_paragraph_newlines)
+                            ]
+                        else:
+                            self._native_call_separator_pending = False
+                            self._native_call_paragraph_newlines = -1
                     if (
                         (text_delta_parts or self._part_text_sent)
-                        and rendered_text.strip()
+                        and delta_text.strip()
                         and not self._emitted_text_needs_continuation()
                         and _needs_paragraph_break(
-                            self._emitted_text_tail, rendered_text
+                            self._emitted_text_tail, delta_text
                         )
                     ):
                         text_delta_parts.append("\n\n")
-                    text_delta_parts.append(rendered_text)
+                    text_delta_parts.append(delta_text)
+                    if (
+                        after_native_call
+                        and self._native_call_separator_pending
+                        and delta_text
+                        and set(delta_text) == {"\n"}
+                    ):
+                        self._native_call_paragraph_newlines = min(
+                            2,
+                            self._native_call_paragraph_newlines + len(delta_text),
+                        )
                 elif len(rendered_text) > prev_len:
                     text_delta_parts.append(rendered_text[prev_len:])
                 self._part_text_sent[logic_id] = len(rendered_text)
