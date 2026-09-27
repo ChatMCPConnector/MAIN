@@ -48,6 +48,14 @@ def _native_open_event(call_id: str, target: str = TARGET):
     }
 
 
+def _native_open_list_event(call_id: str, target: str = TARGET):
+    event = _native_open_event(call_id, target)
+    event["parts"][0]["content"][0]["tool_calls"] = [
+        event["parts"][0]["content"][0]["tool_calls"]
+    ]
+    return event
+
+
 def _feed(acc, count: int, target: str = TARGET, tag: str = "c"):
     for index in range(count):
         acc.consume_event(_native_open_event(f"call_{tag}{index}", target))
@@ -67,6 +75,26 @@ def test_loop_guard_liefert_nur_zwei_und_zaehlt_die_drops():
     assert len(acc._server_side_tool_calls) == 2, "zwei identische calls sind erlaubt"
     assert acc.loop_guard_dropped_count == 8
     assert acc.blocked_tool_attempt_names == [], "der guard ist KEIN blocked-tool-fall"
+
+
+def test_loop_guard_haelt_auch_native_tool_calls_listenform_auf_zwei():
+    acc = _acc()
+    for index in range(10):
+        acc.consume_event(_native_open_list_event(f"call_list{index}"))
+
+    assert len(acc._server_side_tool_calls) == 2
+    assert acc.loop_guard_dropped_count == 8
+    assert acc.loop_guard_dropped_tools == ["open"]
+
+
+def test_loop_guard_gilt_ueber_dict_und_listenform_gemeinsam():
+    acc = _acc()
+    _feed(acc, 1, tag="dict")
+    for index in range(9):
+        acc.consume_event(_native_open_list_event(f"call_list{index}"))
+
+    assert len(acc._server_side_tool_calls) == 2
+    assert acc.loop_guard_dropped_count == 8
 
 
 def test_unterschiedliche_ziele_werfen_den_guard_nicht_aus():

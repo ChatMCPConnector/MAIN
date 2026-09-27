@@ -2910,6 +2910,7 @@ class GLMEventAccumulator:
                                 if not isinstance(entry, dict):
                                     continue
                                 entry_name = str(entry.get("name", "")).strip()
+                                native_entry_name = entry_name
                                 if not entry_name or entry_name.lower() in {
                                     "finish", "intervene", "cancel", "none"
                                 }:
@@ -2942,13 +2943,57 @@ class GLMEventAccumulator:
                                 ):
                                     self.blocked_tool_attempt_names.append(entry_name)
                                     continue
+                                call_id = _coerce_call_id(entry.get("id")) or (
+                                    f"native-list-{len(self._server_side_tool_calls)}"
+                                )
+                                if call_id in self._server_side_tool_call_ids:
+                                    continue
+                                # T-04/T-25: dieselbe Signaturbegrenzung wie
+                                # fuer die dict-Form. Sonst umgeht ein Upstream,
+                                # der `tool_calls` als Liste sendet, den Loop-Guard
+                                # vollstaendig und kann identische Calls beliebig
+                                # oft an den Client weiterreichen.
+                                if isinstance(entry_arguments, str):
+                                    args_str = entry_arguments
+                                else:
+                                    args_str = safe_json_dumps(entry_arguments)
+                                try:
+                                    normalized = json.dumps(
+                                        json.loads(args_str),
+                                        ensure_ascii=False,
+                                        sort_keys=True,
+                                        separators=(",", ":"),
+                                    )
+                                except json.JSONDecodeError:
+                                    normalized = args_str
+                                signature = f"{entry_name}:{normalized}"
+                                if signature in self.history_tool_call_signatures:
+                                    if self.logger:
+                                        self.logger.info(
+                                            "Dropped echoed native tool_call (history signature match) tool=%s",
+                                            entry_name,
+                                        )
+                                    continue
+                                repeat = self._server_side_signature_counts.get(signature, 0)
+                                if repeat >= _MAX_IDENTICAL_NATIVE_CALLS:
+                                    if self.logger:
+                                        self.logger.info(
+                                            "Dropped identical native tool_call (loop guard) tool=%s repeats=%s",
+                                            entry_name,
+                                            repeat,
+                                        )
+                                    self.loop_guard_dropped_count += 1
+                                    if native_entry_name not in self.loop_guard_dropped_tools:
+                                        self.loop_guard_dropped_tools.append(native_entry_name)
+                                    continue
+                                self._server_side_signature_counts[signature] = repeat + 1
+                                self._server_side_tool_call_ids.add(call_id)
                                 native_call_ranks.append(
                                     self._logic_id_rank.get(str(part.get("logic_id", "")), -1)
                                 )
                                 self._server_side_tool_calls.append(
                                     {
-                                        "id": _coerce_call_id(entry.get("id"))
-                                        or f"native-list-{len(self._server_side_tool_calls)}",
+                                        "id": call_id,
                                         "type": "function",
                                         "index": len(self._server_side_tool_calls),
                                         "function": {
