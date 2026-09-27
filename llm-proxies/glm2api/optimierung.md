@@ -903,11 +903,92 @@ Holdback einführt, muss *jede* Stelle entscheiden, die er in den Schnitt
 einbezieht; „verzögert statt gelöscht" gilt für den neuen Pfad, nicht für
 die drei gepinnten daneben.
 
+### S-15 bis S-18 — vier Funde aus dem Harness-Neuaufbau (**OFFEN, nicht behoben**)
+
+Am 2026-09-27 wurden `order_matrix` und `sweep2` neu gebaut (die alten Fassungen
+lagen nur unter `/tmp` und waren weg). Beide melden heute **0 unbekannte
+Verstöße** — und haben dabei vier Befunde zutage gefördert, die kein Test sah.
+Alle vier sind an `02ceca2` und `9054325` gegengeprüft: **vorbestehend**, nicht
+von S-10…S-14 verursacht. In `harness/` als `KNOWN` hinterlegt, damit sie
+auffallen, ohne den Exit-Code zu fälschen.
+
+**S-15 — die S-12-Freigabeschranke frisst legitimen Text am Turn-Anfang.**
+S-12 gibt beim Aufruf-Eintreffen nur heraus, was „als Fortsetzung von bereits
+Gesendetem" zurücklag (`self._emitted_visible_text`). Gemessen:
+
+| Eingabe (Text-Part, dann nativer `read`) | Chunk 1 | Chunk 7 | Chunk 1000 |
+|---|---|---|---|
+| `'Der Bericht ist fuer Sie. Ich'` | `'Der Bericht ist fuer Sie. Ich'` | — | **`''`** |
+| `'Der Bericht ist da. Ich nutze jetzt \`read\` fuer den Rest.'` | `'Der Bericht ist da'` (ohne Punkt) | `'Der Ber'` (mitten im Wort) | **`''`** |
+
+Ein **fertiger, unauffälliger Satz** verschwindet in einem Turn mit
+Tool-Call — komplett, wenn er in einem Delta kommt, und abhängig davon, wo der
+Upstream schneidet. Dieselbe Schranke frisst auch die Prosa, die einem
+DSML-Aufruf folgt (`dsml-aufruf+prosa`): Stream `''`, Body `None` — der Client
+bekommt einen Aufruf und sonst nichts, obwohl das Modell einen Satz
+geschrieben hat. Die Schranke ist zu grob: „steht am Turn-Anfang" heißt
+„Präambel" ist nur für Text *vor* einem Call richtig, nicht für Text, der
+erst durch ein Protokoll-Fragment in den Puffer kam.
+
+**S-16 — der Non-Stream-Pfad filtert den Antworttext überhaupt nicht.**
+`chat_completion` (der Non-Stream-Einstieg, `glm_client.py` Z. 491–795) ruft
+`accumulator.finalize()` **nie**; er gibt `build_response()` zurück, und das
+rendert den Text neu aus den Parts (`_render_full_output()`). Die gesamte
+Filterkette des Abschlusses — `strip_meta_chatter`,
+`strip_invented_limit_claim`, `strip_protocol_meta_narration`,
+Halluzinations-Echo, Fence-Unwrap, S-06-Leerzeilen, die S-12-Freigabe — hängt
+an `finalize()` und gilt damit **nur für den Stream**. Gemessen, rein
+text-Turn, Text `'Tool-Limit erreicht — hier die Analyse.'`:
+
+| | Ergebnis |
+|---|---|
+| `strip_invented_limit_claim(...)` direkt | `''` (der Filter kann sie) |
+| `strip_meta_chatter(...)` direkt | `''` |
+| Stream | `'Tool-Limit erreicht — hier die Analyse.'` |
+| Body (`build_response()` **und** `build_response('finish')`) | `'Tool-Limit erreicht — hier die Analyse.'` |
+
+Das ist genau die Form, vor der S-08 gebaut wurde („die schädlichste Form: das
+Modell hört auf zu arbeiten und legt dem Client eine fertige Antwort samt
+Grund für den Abbruch hin"). Die Doku behauptet seit S-08, der finale Bericht
+gehe durch `finalize`/`strip_meta_chatter` — für den Body stimmt das nicht.
+**Wichtig:** die Test-Hilfen rufen `finalize()` *vor* `build_response()` auf.
+Diese Reihenfolge gibt es in Produktion nicht, deshalb blieb die ganze
+Body-Pfad-Klasse ungetestet.
+
+**S-17 — ein Apostroph gilt als Satzende.** `_SENTENCE_END_CHARS = ".!?…。'\"' )»"`
+enthält `'` (und `"`, `)`, `»`). Eine Part, die an einem Kontraktions-Apostroph
+endet, gilt `_ends_sentence()` als Satzende, und `_needs_paragraph_break()`
+setzt daraufhin einen **Absatzumbruch mitten im Wort**:
+`"I'll now read the file."` bei Chunk 1 → `"I'\n\nll now read the file."`.
+Vorhanden seit S-11 (dort wurde die Regel nur umsortiert, das Zeichen war
+schon vorher ein Satzende) und an `9054325` identisch. Die Gegenprobe ohne
+Apostroph ist unauffällig.
+
+**S-18 — DSML über viele Parts leckt als Markup.** Bei Chunk-Größen 1–3 leckt
+das DSML als sichtbarer Text in den Stream, obwohl der Aufruf korrekt geborgen
+wird. Der Midstream-Guard prüft auf `{"tool_calls"` und auf die nackte
+Objektform, nicht auf DSML — der DSML-Pfad greift nur bei zusammenhängenden
+Parts. Vorhanden an allen geprüften Ständen.
+
+**Reihenfolge der Reparatur (Vorschlag, nicht ausgeführt).** S-16 zuerst: es
+ist die Ursache hinter einer ganzen Filterklasse, und die Diagnose ist
+eindeutig (`build_response` müsste den in `finalize` berechneten Text
+übernehmen statt neu zu rendern — mit Rücksicht auf die S-13-Regel
+`content is None` bei Calls). S-15 als zweites: die Schranke muss unterscheiden
+„stand am Turn-Anfang **und** ist Präambel" von „kam erst durch ein
+Protokoll-Fragment in den Puffer". S-17 ist ein Einzeiler
+(`'` aus `_SENTENCE_END_CHARS` streichen, mit Gegenprobe), S-18 eine
+Ergänzung des Midstream-Guards um DSML.
+
 ### Verifikation
 
 - **1426 Tests grün** (854 + 572 neue aus S-14; Suite 8,5 s → 11,1 s).
   Historie: 839 (794 + 45 aus S-10), mit S-11 **848** (+ 9), mit S-12
   **852** (+ 4), mit S-13 **854** (+ 2, Verhaltens-neutral).
+- Harnesses (nach dem Neuaufbau): `order_matrix` 120 Messungen / 0 unbekannte
+  Verstöße, `sweep2` 132 / 0. Eigenprüfung: an `9054325` melden sie 14 bzw. 7
+  unbekannte Verstöße, an `02ceca2` 0 — sie sehen also echte Fehler und
+  verschlucken keine.
 - S-11 gegen den Vorher-Stand (Positivkontrolle): **8** der 9 neuen Tests
   schlagen fehl — alle sechs Chunk-Unabhängigkeits-Fälle, der
   Doppelumbruch und der Regel-Test. Die Anti-Kleb-Gegenprobe
@@ -1082,6 +1163,7 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - Beim Call-Eintreffen zurückgehaltener Rest (Carry/Parser) ging im Aufruf-Turn verloren (S-12) — DONE 2026-09-27
 - Erstes Fragment einer zerschnittenen Narration entkam (Nebenbefund aus S-13): angefangener Werkzeug-Token als Holdback-Auslöser (S-14) — DONE 2026-09-27
 - Mess-Harnesses lagen nur in `/tmp` und waren nach Neustart weg — jetzt in `llm-proxies/glm2api/harness/` — DONE 2026-09-27
+- **OFFEN** aus dem Harness-Neuaufbau (alle vorbestehend, gegengeprüft an `02ceca2`/`9054325`): S-15 S-12-Schranke frisst legitimen Text am Turn-Anfang, S-16 Non-Stream filtert den Antworttext nicht, S-17 Apostroph gilt als Satzende, S-18 DSML über viele Parts leckt
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).

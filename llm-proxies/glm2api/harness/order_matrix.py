@@ -1,0 +1,142 @@
+"""order_matrix: Reihenfolge-Invariante der nativen Parts, gemessen ueber
+Text/Call-Layouts × Chunk-Groessen.
+
+Zwei Pruefungen je Fall, und die zweite ist die wertvollere:
+
+1. **Soll-Vergleich.** Der sichtbare Stream muss genau der im Layout
+   hinterlegten Erwartung entsprechen. Die Erwartungen sind aus den
+   gepinnten Tests abgeleitet (S-05 `_S05_TEXTS`, S-10 `_S10_PROSE_*`),
+   plus der S-11-Regel: zwischen zwei GETRENNTEN text-parts setzt der
+   part-merge einen absatzumbruch — nicht zu verwechseln mit dem
+   S-06-leerzeilen-artefakt, das zwischen zwei sichtbaren wörtern
+   erhalten bleibt.
+2. **Chunk-Invariante.** Alle Chunk-Groessen muessen denselben Text
+   ergeben. Das ist die eigentliche Invariante: der Client darf nicht
+   davon abhaengen, wo der upstream schneidet. Diese Pruefung braucht
+   keine handgeschriebene Erwartung und hat deshalb 2026-09-27 den
+   S-15-fund gefunden, den kein Test sah (siehe `KNOWN`).
+
+`KNOWN` listet vorbestehende, bereits bewertete Befunde. Sie werden
+ausgewiesen, nicht versteckt — aber sie zitausieren nicht den Exit-Code,
+sonst ist der harness nach der ersten Meldung unbrauchbar.
+
+    python3 order_matrix.py            # Tabelle + Protokoll
+    python3 order_matrix.py --quiet    # nur Verstoesse und bekannte Befunde
+"""
+
+from __future__ import annotations
+
+import sys
+
+from common import native_event, stream
+
+PROSE_A = "Der Bericht nennt drei Punkte."
+PROSE_B = "Zweiter Absatz mit Erklaerung."
+PROSE_C = "Dritter Absatz schliesst ab."
+PREAMBLE = "Ich lese die Datei jetzt."  # T-07: wird im aufruf-turn verworfen
+FENCED = "Hier der Aufruf:\n```bash\nls -la\n```\nDann weiter."
+SPACE = "Der Bericht ist fuer Sie. Ich"  # S-10: der rand-links des carries
+WS = "  \n  "  # S-06: leerraum zwischen zwei sichtbaren werten bleibt
+PARA = "\n\n"  # S-11: absatzumbruch zwischen zwei getrennten text-parts
+
+
+def call(logic_id="c1", name="read", path="/a.py"):
+    return native_event(logic_id, name=name, filePath=path)
+
+
+# (label, parts, erwarteter sichtbarer text, erwartete anzahl calls)
+LAYOUTS: list[tuple[str, list, str, int]] = [
+    ("prose-vor-call", [PROSE_A, call()], PROSE_A, 1),
+    ("call-dann-prose", [call(), PROSE_A], PROSE_A, 1),
+    ("prose-call-prose", [PROSE_A, call(), PROSE_B], PROSE_A + PARA + PROSE_B, 1),
+    ("call-prose-call", [call("c1"), PROSE_A, call("c2")], PROSE_A, 2),
+    ("prose-call-call-prose", [PROSE_A, call("c1"), call("c2"), PROSE_B], PROSE_A + PARA + PROSE_B, 2),
+    ("prose-call-prose-call-prose", [PROSE_A, call("c1"), PROSE_B, call("c2"), PROSE_C], PROSE_A + PARA + PROSE_B + PARA + PROSE_C, 2),
+    ("praeambel-wird-verworfen", [PREAMBLE, call()], "", 1),
+    ("praeambel-call-prose", [PREAMBLE, call(), PROSE_B], PARA + PROSE_B, 1),
+    ("gefencet-vor-call", [FENCED, call()], FENCED, 1),
+    ("rand-links-im-carry", [SPACE, call()], SPACE, 1),
+    ("leerraum-artefakt", [PROSE_A, WS, call(), PROSE_B], PROSE_A + WS + PROSE_B, 1),
+    ("nur-prosa-ohne-call", [PROSE_A, PROSE_B], PROSE_A + PARA + PROSE_B, 0),
+]
+
+CHUNK_SIZES = (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000)
+
+# Vorbestehende, bereits bewertete Befunde. `erwartung` ist der soll-wert,
+# den das layout hat — die verletzung liegt in der abweichung davon.
+KNOWN: dict[str, str] = {
+    "rand-links-im-carry": (
+        "S-15: textverlust am turn-anfang. Ein fertiger, vollstaendiger "
+        "satz am anfang des turns, der mit einem narration-anfangswort "
+        "endet ('... Ich'), geht im aufruf-turn GANZ verloren, wenn er in "
+        "einem delta ankommt (chunk 1000 -> ''), bei kleinen chunk-groessen "
+        "nur sein letztes fragment. Ursache: die S-12-freigabeschranke "
+        "`self._emitted_visible_text` — was nur vom turn-anfang zuruecklag, "
+        "gilt ihr als praeambel und wird verworfen. Gegengeprueft an "
+        "02ceca2 und 9054325: vorbestehend, nicht von S-14 verursacht "
+        "(an 9054325 zusaetzlich sichtbar: der text kam als "
+        "'... \\n\\nIch' durch)."
+    ),
+}
+
+
+def check(parts: list, expected: str, expected_calls: int, chunk: int) -> list[str]:
+    streamed, _body, accumulator = stream(parts, chunk)
+    problems: list[str] = []
+
+    if streamed.split() != expected.split():
+        problems.append(f"soll-vergleich: IST {streamed!r} != SOLL {expected!r}")
+    if "\n\n\n" in streamed:
+        # S-06: das leerzeilen-artefakt neben nativen calls
+        problems.append(f"leerzeilen-artefakt im stream: {streamed!r}")
+
+    message = accumulator.build_response()["choices"][0]["message"]
+    calls = message.get("tool_calls") or []
+    if len(calls) != expected_calls:
+        problems.append(
+            f"{len(calls)} aufrufe, erwartet {expected_calls}: "
+            f"{[entry['function']['name'] for entry in calls]}"
+        )
+    for entry in calls:
+        if not (entry.get("function") or {}).get("arguments"):
+            problems.append(f"aufruf ohne argumente: {entry}")
+    return problems
+
+
+def main() -> int:
+    quiet = "--quiet" in sys.argv
+    measurements = 0
+    unknown = 0
+    known_hits: dict[str, list[int]] = {label: [] for label in KNOWN}
+
+    print(f"{len(LAYOUTS)} layouts × {len(CHUNK_SIZES)} chunk-groessen")
+    print(f"{'layout':<28} {'chunk':>6}  ergebnis")
+    print("-" * 78)
+    for label, parts, expected, expected_calls in LAYOUTS:
+        for chunk in CHUNK_SIZES:
+            measurements += 1
+            problems = check(parts, expected, expected_calls, chunk)
+            if not problems:
+                if not quiet:
+                    print(f"{label:<28} {chunk:>6}  ok")
+                continue
+            if label in KNOWN:
+                known_hits[label].append(chunk)
+                if not quiet:
+                    print(f"{label:<28} {chunk:>6}  bekannt (S-15)")
+                continue
+            unknown += 1
+            print(f"{label:<28} {chunk:>6}  VERSTOSS")
+            for problem in problems:
+                print(f"{'':<37} - {problem}")
+    print("-" * 78)
+    print(f"Messungen: {measurements}, unbekannte Verstoesse: {unknown}")
+    for label, chunks in known_hits.items():
+        if chunks:
+            print(f"  bekannt: {label} — {len(chunks)}/{len(CHUNK_SIZES)} chunk-groessen")
+            print(f"    {KNOWN[label]}")
+    return 1 if unknown else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
