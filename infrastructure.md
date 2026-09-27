@@ -494,30 +494,35 @@ TUI-Stream verifiziert: alle vier Maus-Sequenzen weg, `?2004h` und `?1004h`
 da. Bidirektional-Relay, SIGWINCH-Durchreichung und Exit-Code sind
 implementiert und getestet.
 
-**3. Die Pfeiltasten-Frage — final und bewusst anders gelöst.**
-Ohne Mouse-Reporting schickt xterm.js das Mausrad als `up`/`down` — im Key-Log
-belegt: **ein Radschwung ≈ 30 Ereignisse pro Sekunde, ein Tastendruck = ein
-einzelnes.** An den Bytes ist ein *einzelner* Rad-Klick damit nicht von einem
-Tastendruck zu unterscheiden, nur am Takt.
+**3. Die Pfeiltasten-Frage, und warum sie nicht sauber lösbar ist.** Ohne
+Mouse-Reporting schickt xterm.js das Mausrad als `up`/`down` — im Key-Log belegt:
+**ein Radschwung ≈ 30 Ereignisse pro Sekunde, ein Tastendruck = ein
+einzelnes.** Ein *einzelner* Rad-Klick ist damit byte- und taktgleich zu einem
+Tastendruck; an den Bytes ist nichts zu unterscheiden, nur am Takt. Die
+Burst-Heuristik (25-ms-Fenster: über dem Rad-Takt sub-ms, unter dem
+Wiederholungstakt ~33 ms) trennt **Gesten** von Tastendrücken, aber nicht den
+Einzelklick vom Einzeldruck. Dazu der Zielkonflikt: In freebuff ist `up` auf
+leerer Eingabe per Definition `history-up` — „letzte Nachricht holen". Das Rad
+soll das nicht, der Pfeil schon.
 
-**Nutzerwunsch (2026-09-27): Pfeiltasten bedienen die Menüs, nicht das Scrollen.**
-Deshalb ist die Regel jetzt **burst-only**:
+**Lösung: kontextabhängig nach Eingabe-Inhalt.** Der Filter zählt den
+Zeichenstand aus den **eigenen Tastatur-Bytes** (`track_input`: Enter → 0,
+Backspace −1, Ctrl+U → 0, Paste zählt mit, UTF-8-Fortsetzungsbytes nicht) — und
+**pro Position im Chunk**, nicht pro Chunk:
 
-| Eingangsbild | Filter | Folge |
+| Eingabe | Pfeil / Rad | Folge |
 |---|---|---|
-| **1 Tastendruck** (Pfeil) | nativ, nach 25 ms freigegeben | Slash-Menü und Auswahl bedienbar — **das ist der Auftrag** |
-| **≥ 2 gleichgerichtete Ereignisse binnen 25 ms** (Rad-Geste) | `PageUp` / `PageDown` | das Rad blättert die Unterhaltung |
-| echte `PageUp`/`PageDown` | unverändert durchgereicht | Tastaturscrollen bleibt |
-| `FREEBUFF_ARROW_PAGE=1` | jeder Pfeil wird Seite | alte Pauschal-Umleitung für Fehlersuche |
+| **leer** (Nachricht abgeschickt) | sofort `PageUp`/`PageDown`, ohne Burst-Fenster | kein `history-up` durchs Rad, ~0 ms Latenz |
+| **nicht leer** (Slash-Menü offen, Cursor im Text) | nativ bzw. Burst-Test | Slash-Menü bedienbar, Rad-Geste blättert trotzdem |
 
-**Preis, bewusst akzeptiert:** Ein **einzelner** Rad-Klick (keine Geste) läuft
-nativ durch — auf leerer Eingabe rollt das in freebuff die Prompt-Historie
-zurück (`history-up`). Bis 2026-09-27 wurde genau dieser Fall über den
-Eingabe-Inhalt abgefangen (`track_input`, entfernt); die Regel ist gewichen,
-weil **Menü-Bedienung wichtiger ist** als ein sauberer Einzelklick. Wer den
-Klick nicht riskieren will, senkt `FREEBUFF_WHEEL_GAP_MS` — dann zählt auch ein
-Einzelklick als Geste. Die 25 ms liegen über dem Rad-Takt (sub-ms) und unter dem
-Tastenwiederholungs-Takt (~33 ms).
+**Preis, bewusst akzeptiert:** Auf leerer Eingabe holt `up` nicht mehr die letzte
+Nachricht — dafür gibt es `/history`. Ohne diese Regel müsste man eines von
+beidem opfern. Zwei echte Bugs hat die Testarbeit dabei gefunden: Backspace
+(`0x7f`/`0x08`) wurde als druckbares Zeichen **gezählt** (ein Backspace machte
+die Eingabe länger), und der Kontext wurde **pro Chunk statt pro Position**
+ausgewertet (Tippen und Pfeil im selben Read → Slash-Menü kaputt). Beide als
+Testfälle festgehalten, 22 Funktionstests grün, end-to-end am pty belegt:
+`Hey ␍ ␍ Bye ␍` + zwei Radklicks → `ESC[5~ ESC[5~`.
 
 **4. Umleiten des Rads selbst geht nicht.** `.vscode/keybindings.json` mit
 `mousewheel up`/`down` ist **kein gültiges Keybinding**: VS Code listet als
@@ -727,6 +732,9 @@ Proxy bei jedem Start automatisch hoch.
 - 2026-09-27: **Pfeiltasten zurück an die Menüs, und der Scroll-Patch lernt aus seinem eigenen Tod: Mustersuche statt Name.** Zwei Nutzeraufträge: (a) „Pfeiltasten gehören dem Scrollen — das soll nicht sein, Pfeiltasten sollen die Menüs bedienen können, nur die Pfeiltasten rausnehmen", (b) „keine Versionsnummern mehr, die aktualisieren immer schnell — und ich will die Scrollgeschwindigkeit wie zuvor".
   **(a)** Die Regel ist jetzt **burst-only**: ein einzelner Tastendruck läuft nativ durch (Slash-Menü, Auswahl — der Auftrag), eine **Geste** (≥ 2 gleichgerichtete Ereignisse binnen 25 ms) wird zu `PageUp`/`PageDown` (das Rad blättert die Unterhaltung), echte `PageUp`/`PageDown` gehen unverändert durch. Damit ist die Kontextlogik (`track_input`, 512-Zeichen-Inhalt, Erkennung des Slash-Menüs) **überflüssig geworden und entfernt** — sie diente nur dazu, den *einzelnen* Rad-Klick abzufangen, und genau der weicht jetzt dem Auftrag. **Preis, bewusst akzeptiert:** ein einzelner Rad-Klick (keine Geste) ist byte- und taktgleich zu einem Tastendruck und läuft nativ durch, rollt auf leerer Eingabe also die Prompt-Historie zurück. Das ist der Fall, der den Nutzer zuletzt gestört hat — er ist dem Wunsch nach Menü-Bedienung gewichen, und wer ihn nicht riskieren will, senkt `FREEBUFF_WHEEL_GAP_MS` (dann zählt auch der Einzelklick als Geste). Verifiziert: 1× hoch = nativ, 1× runter = nativ, Geste 2/4/6 und gemischt = Seiten, `links`/`rechts` unberührt, `FREEBUFF_ARROW_PAGE=1` erzwingt Seiten, zerrissene Sequenz über zwei Reads korrekt; end-to-end am pty: 8 Rad-Ereignisse → 8 `ESC[5~`, echte `ESC[5~`/`ESC[6~` unverändert.
   **(b)** **Versions-Pin entfernt** — `freebuff-install.sh` installiert `freebuff@latest` und überspringt nur, wenn die installierte Version der aktuellsten aus `npm view` entspricht. **Und der Scroll-Patch ist auf Mustersuche umgebaut**, weil sein Tod die Ursache exakt belegt: 0.0.204 hieß die Faktor-Variable `fOA`, 0.1.0 heißt sie `$hA` — beide mit dem Wert 0.8, und der namensbasierte Patch (`fOA=0.8`) war beim ersten Update tot. Jetzt sucht er die Struktur: `Math.floor(<A>*<VAR>)` neben `viewport.height` → Definition `<VAR>=<0.x>` → genau diese eine Zahl ersetzen. Ein Rename killt ihn damit nicht mehr; bricht die Struktur ab, meldet er `Struktur nicht erkannt` und lässt das Binary unangetastet. Am echten Binary verifiziert: erkannte Variable `$hA`, Definitionsstelle 1, `0.8 → 0.5`, gepatchtes Binary startet (0.1.0), Größe unverändert, Idempotenz bestätigt.
+- 2026-09-27: **Pfeiltasten-Änderung zurückgenommen — der Stand vor dem Auftrag war der richtige.** Der Nutzerwunsch war, Pfeiltasten aus dem Scroll-Pfad zu nehmen (Menüs bedienen). Umgesetzt als **burst-only**: einzelne Tastendrücke nativ, nur Gesten werden zu `PageUp`/`PageDown`. Das Ergebnis war schlechter: **das Rad scrollte den Text wieder hoch und runter** — also genau das, was zwei Runden vorher als Fehler gemeldet und behoben war. Der Nutzer ordnete an: **auf den Stand davor zurück**. `infra/scripts/freebuff-pty.py` ist wieder exakt der Commit `918f26b` (kontextabhängige Umleitung nach Eingabe-Inhalt, `track_input` wieder da, `flush_pending` mit lokaler Variable gegen die Fehlermeldung des Type-Checkers).
+  **Was dabei bewusst NICHT zurückgenommen wurde**, weil es zwei getrennte Aufträge waren: **kein Versions-Pin** (Installiert wird `freebuff@latest`) und der **Scroll-Patch per Mustersuche** (`0.8 → 0.5`, rename-robust). Beides hat der Nutzer ausdrücklich gewollt.
+  **Die Lehre, die ich dazuschreibe, weil sie das eigentliche Problem ist:** Ich habe „Pfeiltasten rausnehmen" als *die* Änderung gelesen und die beiden anderen Aufträge desselben Satzes mit erledigt — und dann das Ganze als geschlossen gemeldet, ohne die eine Sache zu prüfen, auf die es ankam: **scrollt das Rad noch in der richtigen Richtung?** Bei einem TUI-Problem ist „Filterlogik umgebaut" kein Ergebnis, sondern nur die Voraussetzung; das Ergebnis ist „Rad blättert, Menü bedienbar, Historie unberührt", und das prüft man am laufenden TUI, nicht am Test.
 ## Changelog
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.
