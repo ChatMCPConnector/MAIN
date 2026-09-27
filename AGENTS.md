@@ -7,10 +7,12 @@
 - Erste Pflichtlektüre: `infrastructure.md` (Layout „was wozu", Betrieb, Proxies, Secrets-Modell, Changelog). `README.md` ist nur die kurze öffentliche GitHub-Übersicht.
 - Repo ist shared für mehrere eigene Accounts. Alles Bleibende liegt unter `/workspaces/MAIN` und wird per `./infra/scripts/save.sh` gepusht. Einmal pro Account: PAT + Passphrase als Codespaces-Secrets hinterlegen, danach ist alles automatisch.
 - **Gilt für jeden Agenten, unabhängig vom Client:** Diese Datei ist die
-  Referenz. Clients, die sie nicht lesen, haben hier eine Datei mit derselben
-  Kurzfassung: `GEMINI.md` (Gemini CLI), `.github/copilot-instructions.md` (Copilot). Neue
-  Clients bekommen dieselbe Kurzfassung — siehe
-  `infrastructure.md`, Abschnitt „Agenten-Anweisungen“.
+  einzige Quelle — es gibt bewusst **keine** Client-Kopien (`GEMINI.md`,
+  `CLAUDE.md`, `.cursorrules` sind entfernt; neu anzulegen verhindert nur
+  Driften). Gemini CLI liest diese Datei, weil `infra/scripts/gemini-context.sh`
+  `context.fileName=["AGENTS.md"]` in `~/.gemini/settings.json` setzt (siehe
+  `infrastructure.md`, Abschnitt „Agenten-Anweisungen"). Einzige verbleibende
+  Ausnahme: Copilot mit dem Zeiger `.github/copilot-instructions.md`.
 - **Sicherheitsmodell: Komfort > Sicherheit.** Alle Accounts sind eigene. Die Secrets-Passphrase liegt absichtlich im Repo (`config/passphrase`). Kein „Geheimnis-Schutz"-Purismus, Automatik hat Vorrang.
 
 ## 1. Session-Start

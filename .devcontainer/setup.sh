@@ -188,6 +188,17 @@ bash "$REPO_ROOT/infra/scripts/freebuff-install.sh" \
   && echo "    freebuff bereit: $(freebuff --version 2>/dev/null | tail -1)" \
   || echo "    WARN: freebuff-Install fehlgeschlagen, manuell: ./infra/scripts/freebuff-install.sh"
 
+echo "==> [landscape] Gemini-CLI-Kontext prüfen (AGENTS.md)..."
+# Nutzerentscheidung 2026-09-27: im Repo gibt es nur AGENTS.md, keine
+# Client-Kopien mehr. Gemini CLI liest per Default NUR GEMINI.md (PR #24913
+# mit AGENTS.md als Default wurde ohne Merge geschlossen) -- ohne dieses
+# Skript laeuft sie mit leerem Kontext. Das Skript schreibt daher
+# context.fileName=["AGENTS.md"] nach ~/.gemini/settings.json (ephemer, daher
+# bei jedem neuen Codespace erneut). Laeuft auch, wenn gemini nicht
+# installiert ist: die Config ist dann eben nur vorbereitet.
+bash "$REPO_ROOT/infra/scripts/gemini-context.sh" apply \
+  || echo "    WARN: Gemini-CLI-Kontext nicht gesetzt, manuell: ./infra/scripts/gemini-context.sh apply"
+
 echo "==> [landscape] Browser-Runtime (Firefox) prüfen..."
 # Firefox (Mozilla-Tarball, gepinnt) als leichtgewichtige Desktop-Browser-Runtime
 if [ ! -x "$REPO_ROOT/.runtime/firefox/firefox" ]; then

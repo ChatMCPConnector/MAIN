@@ -394,21 +394,57 @@ den Client-Dateien, die der Client liest:
 
 | Datei | Client |
 |---|---|
-| `AGENTS.md` | **Referenz** — opencode, Codex, jeder Agent, der `AGENTS.md` liest |
-| `GEMINI.md` | Gemini CLI |
-| `.github/copilot-instructions.md` | GitHub Copilot |
+| `AGENTS.md` | **Referenz und einzige Quelle** — opencode, Codex, jeder Agent, der `AGENTS.md` liest |
+| `~/.gemini/settings.json` | Gemini CLI — kein Repo-File, sondern `context.fileName=["AGENTS.md"]` (siehe unten) |
+| `.github/copilot-instructions.md` | GitHub Copilot — einzige verbleibende Kopie (kurzer Zeiger, 25 Zeilen) |
 
-Die Client-Dateien sind bewusst kurz und verweisen als **verbindlich** auf
-`AGENTS.md` — doppelte lange Regeln driften auseinander, eine kurze Kopie mit
-Zeiger nicht. In `AGENTS.md` selbst stehen die drei Zusätze, die diese Sitzung
-erzwungen hat: **nur eigene Pfade committen** (`git commit -- <pfad>`, weil
-`save.sh` vorher `git add -A` macht und das Repo shared ist), **kein
-Autosave-Daemon** (womit der Save-Aufruf der einzige Auslöser für Commit *und*
-Backup ist) und **Testläufe nicht committten**.
+**Nutzervorgabe (2026-09-27, später als die Client-Dateien):** Im Repo soll
+**nur `AGENTS.md`** liegen. `CLAUDE.md` und `.cursorrules` waren bereits raus,
+jetzt auch `GEMINI.md`. Grund ist nicht Geschmack, sondern die Fehlerquelle
+selbst: jede Kopie ist ein zweiter Regeltext, der auseinanderdriftet (in der
+Historie standen `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` als 104-Zeilen-Duplikate
+mit einem Port, den drei andere Dateien anders nannten). Ein Cursor, eine
+komplett neue Regel oder ein geändertes `save.sh` erreicht eine Kopie nur, wenn
+sie jemand mitdenkt.
+
+**Gemini CLI liest `AGENTS.md` — über die User-Config, nicht über eine Kopie.**
+Gemini CLI nimmt per Default **nur** `GEMINI.md` als Kontextdatei. Der PR, der
+`AGENTS.md` als Default aufnehmen wollte (google-gemini/gemini-cli#24913), wurde
+am 2026-05-12 **ohne Merge** geschlossen; Issue #28227 bestätigt den aktuellen
+Stand (`DEFAULT_CONTEXT_FILENAME = 'GEMINI.md'` in
+`packages/core/src/tools/memoryTool.ts`). Wer `GEMINI.md` einfach löscht,
+bekommt also **leeren Kontext** — keine Warnung, keine Fehlermeldung, nur ein
+Agent ohne Repo-Regeln und ohne Save-Pflicht. Der dokumentierte Ausweg ist
+`context.fileName` in `~/.gemini/settings.json` (geminicli.com/docs/cli/gemini-md/).
+`infra/scripts/gemini-context.sh` (neu, idempotent, `apply|status|unapply`)
+setzt genau das, `setup.sh` ruft es bei jedem Codespace-Start auf. Damit ist die
+Client-Zuordnung **Konfiguration in `$HOME`** statt Datei im Repo — dort gehört
+sie hin, weil sie sich nicht mit dem Code ändert.
+
+Das Skript merged über Python in die bestehende Datei (andere Schlüssel bleiben),
+legt vorher ein `.bak` an und überschreibt **nichts**, wenn die Datei kaputt ist.
+Getestet: frische Datei, Doppelaufruf, Merge mit bestehendem `"theme"`,
+`unapply`, kaputte Datei (Exit 1, Datei unverändert).
+
+**Copilot bleibt die Ausnahme.** `.github/copilot-instructions.md` ist kein
+Duplikat, sondern ein 25-Zeilen-Zeiger auf `AGENTS.md`; Copilot liest diese Datei
+nativ. Wird sie irgendwann überflüssig, ist das dieselbe Konfigurations-Frage wie
+bei Gemini — nicht das Löschen einer Regelquelle.
+
+Komplett entfernt, weil die zweite Kopie die Fehlerquelle war — gestrichen ist
+dabei die **Drift-Gefahr**, nicht die Information. Die drei Zusätze, die
+diese Sitzung in `AGENTS.md` selbst erzwungen hat, stehen dort nach wie vor:
+**nur eigene Pfade committen** (`git commit -- <pfad>`, weil `save.sh` vorher
+`git add -A` macht und das Repo shared ist), **kein Autosave-Daemon** (womit der
+Save-Aufruf der einzige Auslöser für Commit *und* Backup ist) und **Testläufe
+nicht committten**.
 
 **Gegen das Auseinanderlaufen gibt es einen Check:** `verify-codespace.sh`
-prüft, dass alle fünf Client-Dateien existieren und die Save-Regel enthalten, und
-bricht sonst durch. Ein neuer Client braucht genau eine Datei nach diesem Muster
+prüft, dass `AGENTS.md` existiert und die Save-Regel enthält, dass Copilot-Zeiger
+sie auch enthält, dass **keine** Client-Kopien zurückgekommen sind
+(`GEMINI.md`/`CLAUDE.md`/`.cursorrules`/`AGENT.md`) und dass Gemini CLIs
+`context.fileName` wirklich auf `AGENTS.md` zeigt. Ein neuer Client braucht
+entweder eine solche User-Config oder eine kurze Kopie nach dem Copilot-Muster
 plus eine Zeile im Check.
 
 ### Drive-Backup: Fehler werden nicht mehr verschluckt
@@ -779,6 +815,8 @@ Proxy bei jedem Start automatisch hoch.
     * Model-Picker und alle anderen Menüs funktionieren 100% nativ mit Pfeiltasten!
     * PTY-Filter bleibt rein für Maus-Reporting-Filterung (Maus aus → native Terminal-Textauswahl, Strg+C / Strg+V funktionieren). Pfeile werden per Default gar nicht mehr angefasst (100% nativ, 0 ms Latenz).
 ## Changelog
+
+- 2026-09-27: **`GEMINI.md` gelöscht — im Repo bleibt genau eine Agenten-Datei, und Gemini CLI läuft trotzdem nicht mit leerem Kontext.** Der Nutzerwunsch war eindeutig („ich will aber kein GEMINI.md — alle sollen nur AGENTS.md nutzen"), die Umsetzung brauchte aber den Umweg über die User-Config. **Gemini CLI liest per Default ausschließlich `GEMINI.md`:** `DEFAULT_CONTEXT_FILENAME = 'GEMINI.md'` in `packages/core/src/tools/memoryTool.ts`. Der PR, der `AGENTS.md` als Default aufnehmen wollte (#24913), wurde am 2026-05-12 **geschlossen, ohne gemergt** zu werden; Issue #28227 bestätigt den Stand auch für das aktuelle `main`, und die Doku (`geminicli.com/docs/cli/gemini-md/`) nennt weiterhin nur `GEMINI.md`. **Ein bloßes Löschen wäre also ein stiller Totalausfall gewesen:** kein Fehler, keine Warnung, nur ein Agent ohne `AGENTS.md` — und damit ohne die Save-Pflicht, an deren Fehlen sich eine ganze Agentenstunde nicht abholen ließe. **Gelöst mit dem einen dafür vorgesehenen Hebel**, `context.fileName` in `~/.gemini/settings.json`. Neu: `infra/scripts/gemini-context.sh` (`apply|status|unapply`, idempotent), aufgerufen von `setup.sh` an der Stelle zwischen Freebuff und Browser-Runtime — es läuft auch dann durch, wenn `gemini` gar nicht installiert ist, denn `$HOME` ist ephemer und die Config muss bei jedem neuen Codespace wieder da sein. **Warum die Zuordnung in `$HOME` und nicht ins Repo:** die Client-Zuordnung ist eine Eigenschaft des *Clients*, nicht des Codes — sie ändert sich nicht mit dem Code, und als Datei im Repo wäre sie genau die Kopie, die man nicht pflegen wollte. Ein CLI-Skript ist damit gleichzeitig die Quelle und der Check-Punkt. **Merge statt Überschreiben, mit Beleg:** `apply` schreibt nur `context.fileName` und lässt den Rest der Datei stehen (gegenprobiert mit vorhandenem `"theme": "Dracula"` — bleibt erhalten), legt vorher ein `.bak` an und **verweigert** das Überschreiben bei kaputter Datei (Exit 1, Meldung nennt das `.bak`) statt zu raten. Getestet: frische Datei, Doppelaufruf (Idempotenz), Merge mit Fremdschlüssel, `unapply` entfernt `context` samt Restcontainer, kaputte Datei. `bash -n` grün. **Der Check in `verify-codespace.sh` (Abschnitt 8) wurde in vier Punkten nachgezogen:** `GEMINI.md` aus der Client-Datei-Liste raus, ein **neues** `check „keine Client-Kopien mehr"` (schlägt fehl, sobald `GEMINI.md`/`CLAUDE.md`/`.cursorrules`/`AGENT.md` zurückkommen — die Korrektur trifft also auch eine spätere Wiedervorlage), ein neues `check „Gemini CLI liest AGENTS.md"` über `gemini-context.sh status` (fällt genau dann durch, wenn der Kontext leer wäre) und der Pfad-Check unverändert. **Copilot bleibt bewusst die einzige Kopie im Repo:** `.github/copilot-instructions.md` ist ein 25-Zeilen-Zeiger auf `AGENTS.md`, keine Regelquelle — Copilot liest die Datei nativ, und eine Datei zu löschen, die nur verweist, würde den Zeiger ins Leere zeigen lassen, statt etwas zu vereinfachen. **Ein Punkt bleibt offen und ist hier ausdrücklich nicht erledigt:** Antigravity CLI (`agy`, der sanktionierte Nachfolger, siehe `infra/docs/free-cli-agents-2026-09.md`) wurde auf seinen Kontext-Dateinamen nicht geprüft. Er ist nicht Teil von `setup.sh`; falls er installiert wird, gehört er in denselben Hebel.
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.
 

@@ -117,12 +117,23 @@ check "AGENTS.md (Referenz)" bash -c '
   echo "hat die Save-Regel"'
 check "Save-Regel in allen Client-Dateien" bash -c '
   missing=""
-  for f in GEMINI.md .github/copilot-instructions.md; do
+  for f in .github/copilot-instructions.md; do
     [ -f "$REPO_ROOT/$f" ] || { missing="$missing $f:fehlt"; continue; }
     grep -q "save.sh" "$REPO_ROOT/$f" || missing="$missing $f:ohne-Regel"
   done
   [ -z "$missing" ] || { echo "$missing"; exit 1; }
-  echo "GEMINI/Copilot informiert"'
+  echo "Copilot informiert"'
+check "keine Client-Kopien mehr" bash -c '
+  found=""
+  for f in GEMINI.md CLAUDE.md .cursorrules AGENT.md; do
+    [ -e "$REPO_ROOT/$f" ] && found="$found $f"
+  done
+  [ -z "$found" ] || { echo "wieder da:$found"; exit 1; }
+  echo "nur AGENTS.md"'
+check "Gemini CLI liest AGENTS.md" bash -c '
+  bash "$REPO_ROOT/infra/scripts/gemini-context.sh" status >/dev/null 2>&1 \
+    || { echo "context.fileName != [AGENTS.md] - Gemini CLI haette leeren Kontext"; exit 1; }
+  echo "context.fileName=[AGENTS.md]"'
 check "Pfadbegrenztes Commit dokumentiert" bash -c '
   grep -q "git commit -- <pfad>" "$REPO_ROOT/AGENTS.md" || { echo "fehlt"; exit 1; }
   echo "nur eigene Pfade"'
