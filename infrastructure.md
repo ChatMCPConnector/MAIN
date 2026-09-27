@@ -387,89 +387,78 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
 
 ### Maus, Copy/Paste & Scrollen in TUIs (opencode + Freebuff)
 
-**Kurzfassung, weil das viermal umgebaut wurde:** opencode ist **tastatur-first**,
-freebuff 0.1.0 ist **maus-first**. Bei opencode ist die Maus optional, bei
-freebuff ist sie der Primaerkanal. Daraus folgt der Default: **freebuff laeuft
-ohne pty-Filter (Maus an)**, der Filter ist Opt-in.
+**Es gibt genau eine Betriebsart, und sie ist die mit dem pty-Filter (Maus aus).**
+Nach vier Umbau-Runden entschieden, weil sie die einzige ist, die
+`Ctrl+C`/`Ctrl+V` **und** Mausrad-Scrollen gemeinsam liefert.
 
-| | opencode | Freebuff (Default) | Freebuff mit `FREEBUFF_PTY_FILTER=1` |
-|---|---|---|---|
-| Maus-Reporting | aus (`mouse: false`) | **an** | aus (Filter entfernt `?1000/1002/1003/1006/1015/1016`) |
-| Copy/Paste | Terminal nativ | freebuff selbst: Ziehen kopiert, `/copy` = ganzer Chat | Terminal nativ |
-| Rad im Chat | blättert (Keybinding/Scrollback) | App-eigen | wird zu `PageUp`/`PageDown` (Filter) |
-| Rad im Output-Block | entfällt (kein Cap) | **ja** (App-eigen) | **nein** |
-| Block aufklappen | entfällt | **ja** (Klick) | **nein** |
+| Fähigkeit | Zustand | Wie |
+|---|---|---|
+| `Ctrl+C` kopiert | ✅ | Terminal-Auswahl per Maus-Drag, dann `Ctrl+C`. xterm.js kopiert **nur mit Auswahl**; ohne Auswahl geht `Ctrl+C` als `^C` an die App = Interrupt |
+| `Ctrl+V` fügt ein | ✅ | bracketed Paste (`?2004h` bleibt vom Filter unangetastet), live geprüft: `ESC[200~textESC[201~` landet in der Eingabe |
+| Mausrad scrollt | ✅ | ohne Mouse-Reporting schickt xterm.js das Rad als `up`/`down`; der Filter hängt sie **kontextabhängig** auf `PageUp`/`PageDown` um |
+| Output-Block aufklappen | ❌ | nur per Klick, und Klicks kommen nicht durch (siehe Punkt 1) |
 
-**1. Warum der Filter nicht mehr Default ist (Nutzerentscheidung 2026-09-27).**
+**Warum genau das die richtige Wahl ist — und nicht die Maus.** Beide Wege
+wurden gebaut und am echten TUI-Stream verifiziert:
+
+| | Maus an (Filter aus) | **Maus aus (Filter an, Default)** |
+|---|---|---|
+| `Ctrl+C` | ✗ Interrupt der App | ✅ **kopiert** |
+| `Ctrl+V` | ✅ | ✅ |
+| Rad scrollt die Unterhaltung | ✅ | ✅ (über die Umleitung) |
+| Rad scrollt den Output-Block | ✅ | ✗ |
+| Block aufklappen (5 → voll) | ✅ | ✗ |
+
+Die Entscheidung fiel gegen die Maus, weil **Kopieren im Alltag häufiger ist als
+ein langer Output-Block** — und weil der Verlust bei der Maus *auch* das
+Kopieren betrifft, während der Verlust bei der Maus-aus-Variante nur den
+Block betrifft, dessen vollständigen Inhalt es trotzdem gibt: `/copy` (Alias
+`copy-chat`) legt den **gesamten** Chat in die Zwischenablage, `/export`
+(Alias `export-chat`) schreibt ihn als Datei.
+
+**1. Was die Maus ausliefert — und warum sie den Filter nicht überlebt.**
 Belegt am Bundle, nicht vermutet:
 
-* Output-Bloecke werden von `wAH` gerendert —
-  `expandable$=!0, maxVisibleLines:L` mit `J = L ?? (expandable ? 5 : 10)`, also
-  **5 Zeilen collapsed, 10 bei nicht aufklappbarem Block**. Der Ausklapp-Trigger
-  ist `onClick`; in der ganzen App gibt es **keine** Tasten-Action
-  `expand`/`collapse`/`scroll-block` (die vollstaendige Action-Liste:
-  `toggle-agent-mode`, `toggle-all`, `toggle-dock-panel`, `toggle-sponsored-dock`).
+* Output-Bloecke rendert `wAH` — `expandable$=!0, maxVisibleLines:L` mit
+  `J = L ?? (expandable ? 5 : 10)`, also **5 Zeilen collapsed, 10 bei nicht
+  aufklappbarem Block**. Ausklappen: `onClick`.
 * opentui vergibt Fokus **per Klick**:
   `processMouseEvent($), this.autoFocus && $.type==="down" && $.button===0 … while(L){if(L.focusable){L.focus();break}L=L.parent}`
-  Der ScrollBox hat `_focusable=!0` per Default, und **nur ein fokussierter
-  ScrollBox** uebersetzt `pageup`/`up` in `scrollBy` (0,5 bzw. 0,2 Viewport).
-* freebuff setzt nirgends `focusable` und fokussiert ausschliesslich die
-  Eingabe (`.focus()` auf `inputRef`).
+  und **nur ein fokussierter ScrollBox** übersetzt `pageup`/`up` in `scrollBy`
+  (0,5 bzw. 0,2 Viewport).
+* freebuff setzt nirgends `focusable` und fokussiert nur die Eingabe
+  (`.focus()` auf `inputRef`), und die **vollständige** Action-Liste der App
+  lautet `toggle-agent-mode`, `toggle-all`, `toggle-dock-panel`,
+  `toggle-sponsored-dock` — **kein `expand`, kein `collapse`, kein `scroll-block`**.
 
-**Folge:** Der Fokus im Output-Block entsteht **nur per Klick**. Der pty-Filter
-entfernt genau diese Klicks und macht damit Output-Bloecke unbenutzbar — 5/10
-Zeilen, kein Aufklappen, kein Scrollen. Genau das war der Nutzerbefund: das Rad
-blätterte die Nachrichtenliste und erst danach den Bereich darüber, weil
-`PageUp` ohne Fokus an die Liste geht und der Block gar keinen Tastenpfad hat.
+**Der Fokus im Output-Block entsteht also ausschließlich per Klick, und der
+Filter entfernt genau diese Klicks.** Das ist der Preis der Wahl — und er ist
+begrenzt: der Inhalt ist vollständig erreichbar, nur nicht *im TUI*
+sichtbar.
 
-**Die beiden Betriebsarten — ein Schalter, weil sie sich ausschliessen:**
+**2. Was der Filter tut (und was er unangetastet lässt).** `freebuff-pty.py`
+ist ein pty-Relay, das ausschließlich Mouse-Reporting entfernt
+(`?1000/1001/1002/1003/1005/1006/1015/1016 (h|l)`). Unangetastet: `?2004`
+bracketed Paste, `?1004` Fokus, `?1049` Alternate Screen, Kitty-Keys. Am echten
+TUI-Stream verifiziert: alle vier Maus-Sequenzen weg, `?2004h` und `?1004h`
+da. Bidirektional-Relay, SIGWINCH-Durchreichung und Exit-Code sind
+implementiert und getestet.
 
-```bash
-freebuff              # Maus AN  (Default): Rad + Klick im Output-Block
-freebuff -c           # Maus AUS: Terminal-Auswahl, Ctrl+C kopiert
-```
+**3. Die Pfeiltasten-Frage, und warum sie nicht sauber lösbar ist.** Ohne
+Mouse-Reporting schickt xterm.js das Mausrad als `up`/`down` — im Key-Log
+belegt: **ein Radschwung ≈ 30 Ereignisse pro Sekunde, ein Tastendruck = ein
+einzelnes.** Ein *einzelner* Rad-Klick ist damit byte- und taktgleich zu einem
+Tastendruck; an den Bytes ist nichts zu unterscheiden, nur am Takt. Die
+Burst-Heuristik (25-ms-Fenster: über dem Rad-Takt sub-ms, unter dem
+Wiederholungstakt ~33 ms) trennt **Gesten** von Tastendrücken, aber nicht den
+Einzelklick vom Einzeldruck. Dazu der Zielkonflikt: In freebuff ist `up` auf
+leerer Eingabe per Definition `history-up` — „letzte Nachricht holen“. Das Rad
+soll das nicht, der Pfeil schon.
 
-**Was in jeder Betriebsart gilt, gemessen statt behauptet:**
-
-* **`Ctrl+V` funktioniert in beiden.** freebuff schaltet Bracketed Paste
-  (`?2004`) frei, und der eingefuegte Text landet in der Eingabe — live
-  geprueft: `ESC[200~eingefuegter text ESC[201~` erscheint im TUI-Output.
-* **`Ctrl+C` kopiert nur mit Auswahl**, und eine Auswahl entsteht im Terminal
-  nur per Maus-Drag. Mit Maus an gehoert die Maus der App, also ist `Ctrl+C`
-  dort der Interrupt-Befehl der App (doppelt = beenden) — **das ist
-  Terminal-Mechanik, kein freebuff-Bug**, und es laesst sich nur beheben, indem
-  man die Auswahl wiederherstellt — das kostet die Bloecke. Fuer Copy im TUI
-  mit Maus an gilt dann: **Ziehen mit der Maus** (freebuff kopiert selbst) oder
-  `/copy` fuer den gesamten Chat inkl. voller Outputs. Mit `-c` ist die native
-  Auswahl da und `Ctrl+C` kopiert wie im normalen Terminal.
-* Der Filter umhuelt ohnehin nur freebuff — in anderen Tabs und Sheets bleibt
-  die native Auswahl in **beiden** Betriebsarten erhalten.
-
-**2. Was der Filter (Opt-in) weiterhin leistet.** `infra/scripts/freebuff-pty.py`
-ist ein pty-Relay, das ausschliesslich Mause-Reporting aus dem Output entfernt;
-`?2004` bracketed Paste, `?1004` Fokus, `?1049` Alternate Screen und
-Kitty-Keys bleiben unangetastet — sonst waere Pasten kaputt. Zusaetzlich haengt
-es im Filter `up`/`down` auf `PageUp`/`PageDown` um, **kontextabhaengig nach
-Eingabe-Inhalt** (siehe naechster Absatz). Bidirektional-Relay, SIGWINCH und
-Exit-Code sind implementiert und getestet. Mit `FREEBUFF_PTY_DEBUG=<datei>`
-protokolliert es nur Esc-/Steuersequenzen (getippter Text nur als Byte-Laenge
-`<12B text>`) — damit sind Tastatur-Fragen in Sekunden beantwortet, statt ein
-136-MB-Bundle zu sezieren.
-
-**3. Die Pfeiltasten-Frage, und warum sie nicht sauber loesbar ist.** Ohne
-Mouse-Reporting schickt xterm.js das Mausrad als `up`/`down` — im Key-Log belegt:
-**ein Radschwung ≈ 30 Ereignisse pro Sekunde, ein Tastendruck = ein einzelnes.**
-Ein *einzelner* Rad-Klick ist damit byte- und taktgleich zu einem Tastendruck;
-an den Bytes ist nichts zu unterscheiden, nur am Takt. Die Burst-Heuristik
-(25-ms-Fenster: ueber dem Rad-Takt sub-ms, unter dem Wiederholungstakt ~33 ms)
-trennt **Gesten** von Tastendruecken, aber nicht den Einzelklick vom Einzeldruck.
-Dazu der Zielkonflikt: In freebuff ist `up` auf leerer Eingabe per Definition
-`history-up` — „letzte Nachricht holen“. Das Rad soll das nicht, der Pfeil schon.
-
-**Loesung (im Filter, also nur bei `FREEBUFF_PTY_FILTER=1`):** Der Filter zaehlt
-den Zeichenstand der Eingabe aus den **eigenen Tastatur-Bytes** (`track_input`:
-Enter → 0, Backspace −1, Ctrl+U → 0, Paste zaehlt mit, UTF-8-Fortsetzungsbytes
-nicht) — und **pro Position im Chunk**, nicht pro Chunk:
+**Lösung: kontextabhängig nach Eingabe-Inhalt.** Der Filter zählt den
+Zeichenstand aus den **eigenen Tastatur-Bytes** (`track_input`: Enter → 0,
+Backspace −1, Ctrl+U → 0, Paste zählt mit, UTF-8-Fortsetzungsbytes nicht) — und
+**pro Position im Chunk**, nicht pro Chunk:
 
 | Eingabe | Pfeil/Rad | Folge |
 |---|---|---|
@@ -477,36 +466,36 @@ nicht) — und **pro Position im Chunk**, nicht pro Chunk:
 | **nicht leer** (Slash-Menü offen, Cursor im Text) | nativ bzw. Burst-Test | Slash-Menü bedienbar, Rad-Geste blättert trotzdem |
 
 **Preis, bewusst akzeptiert:** Auf leerer Eingabe holt `up` nicht mehr die letzte
-Nachricht — dafuer gibt es `/history`. Ohne diese Regel muesste man eines von
+Nachricht — dafür gibt es `/history`. Ohne diese Regel müsste man eines von
 beidem opfern. Zwei echte Bugs hat die Testarbeit dabei gefunden: Backspace
-(`0x7f`/`0x08`) wurde als druckbares Zeichen **gezaehlt** (ein Backspace machte
-die Eingabe laenger), und der Kontext wurde **pro Chunk statt pro Position**
-ausgewertet (Tippen und Pfeil im selben Read → Slash-Menue kaputt). Beide als
-Testfaelle festgehalten, 22 Funktionstests gruen, end-to-end am pty belegt.
+(`0x7f`/`0x08`) wurde als druckbares Zeichen **gezählt** (ein Backspace machte
+die Eingabe länger), und der Kontext wurde **pro Chunk statt pro Position**
+ausgewertet (Tippen und Pfeil im selben Read → Slash-Menü kaputt). Beide als
+Testfälle festgehalten, 22 Funktionstests grün, end-to-end am pty belegt.
 
 **4. Umleiten des Rads selbst geht nicht.** `.vscode/keybindings.json` mit
-`mousewheel up`/`down` ist **kein gueltiges Keybinding**: VS Code listet als
+`mousewheel up`/`down` ist **kein gültiges Keybinding**: VS Code listet als
 akzeptierte `key`-Werte Buchstaben, Ziffern, Pfeile, `pageup`/`pagedown`,
 `home`/`end`, `tab`/`enter`/`escape`/`space`/`backspace`/`delete` und
 Nummernblock — `mousewheel` steht nicht darin und wird nicht dispatcht. Die
-probeweise eingefuegte Datei ist entfernt; der Weg ist in diesem Changelog
-dokumentiert, damit ihn niemand wieder geht.
+probeweise eingefügte Datei ist entfernt; der Weg ist im Changelog dokumentiert,
+damit ihn niemand wieder geht.
 
 **5. Offen: die Scroll-Schrittweite.** freebuff hat sich **selbst auf 0.1.0**
 aktualisiert (npm-Paket bleibt 0.0.204, der Launcher zieht das Binary immer
 neu). Der Anker des Halbseiten-Patches (`fOA=0.8` → `0.5`) existiert in 0.1.0
-nicht mehr — `fOA` ist dort ein React-`memo`-Bezeichner, und das Muster
-`viewport.height * Faktor` kommt nicht mehr vor. `scrollLines` in 0.1.0 ist
-**intern** (Split-Footer-Übergänge), keine Config. Der Patch scheitert **laut**
-(„Muster nicht gefunden → unangetastet“) und der Backup-Datei-Mechanismus
-greift, statt still falsch zu liegen. **Naechster Schritt, wenn es gebraucht
-wird:** den Faktor **mustersuche-basiert** finden statt namensbasiert, damit ein
-Rename ihn nicht killt.
+nicht mehr — `fOA` ist dort ein React-`memo`-Bezeichner, `viewport.height *
+Faktor` kommt nicht mehr vor, `scrollLines` ist **intern** (Split-Footer), keine
+Config. Der Patch scheitert **laut** („Muster nicht gefunden → unangetastet")
+statt still falsch zu liegen. **Nächster Schritt, wenn es gebraucht wird:** den
+Faktor **mustersuche-basiert** finden statt namensbasiert, damit ein Rename ihn
+nicht killt.
 
-**6. Ausserhalb von VS Code** (ssh, tmux, eigener Terminal-Emulator): die
-Keybinding greift nicht, dort einfach die Tastatur — `PageUp`/`PageDown`
-scrollen in beiden TUIs. Mit Maus an scrollt das Rad ueberall dort, wo die App
-es auswertet.
+**6. Messen statt Behaupten.** `FREEBUFF_PTY_DEBUG=<datei>` protokolliert nur
+Esc-/Steuersequenzen, die das Kind liest (getippter Text nur als Byte-Laenge
+`<12B text>`). Damit ist in Sekunden beantwortbar, ob eine Taste ankommt —
+statt einen 136-MB-Bundle zu sezieren. Genau dieser Logger hat in dieser
+Sitzung zwei Fehldiagnosen verhindert und zwei echte Fehler gefunden.
 
 
 ## Google-Drive-Backup (Repo-Sicherung unabhängig von GitHub)
@@ -659,6 +648,9 @@ Proxy bei jedem Start automatisch hoch.
   **Umsetzung:** Der generierte Wrapper startet freebuff direkt und nimmt den Filter nur noch bei `FREEBUFF_PTY_FILTER=1`; `FREEBUFF_NO_PTY_FILTER=1` bleibt als explizites Ausschalten erhalten. Verifiziert an echten Startsequenzen: Default lässt `?1000l ?1002l ?1003l ?1006l` durch (Maus an), mit Filter bleiben nur `?1004l` (Fokus) und `?2004l` (bracketed Paste) — beide Modi starten freebuff 0.1.0.
   **Nebenbefund mit Sprengkraft:** freebuff hat sich **selbst auf 0.1.0 aktualisiert**, das npm-Paket bleibt gepinnt bei 0.0.204. Damit ist der Anker des Halbseiten-Patches (`fOA=0.8`) weg — `fOA` ist in 0.1.0 ein React-`memo`-Bezeichner, und `scrollLines` ist intern (Split-Footer), keine Config. Der Patch scheitert laut statt still, und der naechste Anbindungsversuch sollte **mustersuche-basiert** (`viewport.height * Faktor`) statt namensbasiert erfolgen, damit ein Rename ihn nicht erneut killt.
 - 2026-09-27: **Copy/Paste mit Maus an: `Ctrl+V` geht, `Ctrl+C` kann nicht — beides ist gemessen, nicht vermutet.** Nach dem Default-Wechsel auf Maus kam der Befund „copy paste mit Strg+C und Strg+V geht nicht“. Zwei getrennte Sachen, die man trennen muss: **`Ctrl+V` funktioniert** — freebuff schaltet Bracketed Paste (`?2004`) frei, und live geprueft erscheint `ESC[200~eingefuegter text ESC[201~` im TUI-Output, der Text landet also in der Eingabe. **`Ctrl+C` kopiert nur mit Auswahl**, und eine Auswahl kann im Terminal nur per Maus-Drag entstehen; die Maus hat jetzt freebuff, also ist `Ctrl+C` dort der Interrupt-Befehl der App (doppelt = beenden). Das ist xterm.js-Mechanik und **nicht behebbar**, ohne die Auswahl wiederherzustellen — was die Output-Bloecke wieder unbedienbar macht. **Deshalb als ein Schalter statt als zwei Betriebsarten im Alltag:** `freebuff -c` startet mit pty-Filter (Maus aus, Terminal-Auswahl, `Ctrl+C` kopiert), `freebuff` bleibt Default (Maus an, Rad und Klick im Block). Der Wrapper filtert das Flag selbst heraus; `--version`/`--continue`/`--cwd` werden unveraendert durchgereicht, an echten Startsequenzen verifiziert (Default laesst `?1000l` durch, `-c` entfernt es, beide starten 0.1.0 sauber). **Copy im TUI mit Maus an:** freebuff kopiert beim Ziehen selbst, `/copy` legt den gesamten Chat inkl. voller Outputs in die Zwischenablage.
+- 2026-09-27: **Eine Betriebsart, und sie ist die mit Maus aus — der Default-Wechsel von eben wurde zurückgenommen.** Der Nutzerwunsch war eindeutig: `Ctrl+C` kopieren, `Ctrl+V` einfügen **und** Mausrad-Scrollen, alles in **einer** Version, ohne Schalter. Genau das liefert der pty-Filter: Maus aus heißt, das Terminal kann auswählen, also kopiert `Ctrl+C` (xterm.js kopiert nur mit Auswahl), `Ctrl+V` läuft über bracketed Paste (beides am echten TUI-Stream verifiziert: alle vier Maus-Sequenzen entfernt, `?2004h` und `?1004h` bleiben), und das Mausrad kommt als `up`/`down` an und wird kontextabhängig auf `PageUp`/`PageDown` umgehängt. **Der zwischenzeitlich eingebaute Schalter `freebuff -c` ist wieder entfernt**, samt der Dokuzeile „Default umgedreht“ als aktuelle Empfehlung — bleibt aber im Changelog als Historie stehen, weil die Begründung (Blöcke sind ausschließlich mausbedienbar) gültig bleibt.
+  **Die Entscheidung fällt bewusst gegen die Maus**, obwohl die Maus mehr kann: Rad im Output-Block ja, Block aufklappen ja. Denn der Verlust bei „Maus an“ betrifft **das Kopieren** (Häufigkeit im Alltag: hoch), der Verlust bei „Maus aus“ betrifft **nur das Aufklappen eines Blocks** — und dessen vollständiger Inhalt ist trotzdem erreichbar: `/copy` legt den gesamten Chat in die Zwischenablage, `/export` schreibt ihn als Datei. Andersherum gilt: `Ctrl+C` ist in jedem TUI der Interrupt-Befehl, „Strg+C kopiert“ ist Terminal-Muskelgedächtnis, und das Terminal kopiert nur mit Auswahl — Auswahl braucht die Maus, die Maus braucht die App. Diese Kette ist der eigentliche Grund, warum es keine Konfiguration mit beidem für einen Cursor gibt.
+  **Ein Irrtum, der mitkorrigiert wurde:** bei der Verifikation hatte ich das Binary direkt statt über den Wrapper gestartet und „Maus-Sequenzen vorhanden“ gemeldet — der Wrapper war umgangen. Nach Korrektur über `freebuff` exakt das erwartete Bild. (Dieselbe Sorte Fehler wie zuvor: nicht am Instrument, sondern am Aufrufpfad messen.)
 ## Changelog
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.

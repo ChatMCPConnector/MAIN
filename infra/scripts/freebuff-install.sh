@@ -32,8 +32,8 @@
 # geladen, patcht das naechste setup.sh erneut.
 FREEBUFF_SCROLL_STEP="${FREEBUFF_SCROLL_STEP:-0.5}"   # 0.5 = wie opencode
 #
-# Maus: Default ist AUS (freebuff laeuft direkt, der pty-Filter nur per
-# FREEBUFF_PTY_FILTER=1). Begruendung und Beleg im Wrapper-Kommentar.
+# Maus: AUS, immer, ueber den pty-Filter. Es gibt genau eine Betriebsart.
+# Begruendung und Beleg im Wrapper-Kommentar.
 #
 # Login: kommt NICHT von hier. ~/.config/manicode/credentials.json wird ueber
 # infra/scripts/secrets.sh aus config/secrets.enc wiederhergestellt — deshalb
@@ -73,37 +73,31 @@ if [ ! -f "\$launcher" ]; then
   echo "  Reparieren: bash ./infra/scripts/freebuff-install.sh   (im MAIN-Repo)" >&2
   exit 127
 fi
-# Zwei Betriebsarten, per Schalter — weil sie sich technisch ausschliessen:
-# Maus an  = Output-Bloecke scrollen/aufklappen (Klick + Rad), Kopieren im TUI
-#            ueber Ziehen (freebuff kopiert selbst) und /copy (ganzer Chat).
-#            Ctrl+C ist dann der Interrupt-Befehl der App, Ctrl+V funktioniert
-#            (Bracketed Paste, live gemessen: Text landet in der Eingabe).
-# Maus aus = Terminal-Auswahl mit der Maus, und damit Ctrl+C = Kopieren wie im
-#            normalen Terminal. Preis: Output-Bloecke bleiben bei 5/10 Zeilen
-#            und sind nicht aufklappbar.
-#   freebuff                    -> Maus an  (Default)
-#   freebuff -c                 -> Maus aus (pty-Filter, Terminal-Copy)
-#   FREEBUFF_PTY_FILTER=1 ...   -> dieselbe Wahl ueber die Variable
-filter=0
-args=()
-for a in "\$@"; do
-  case "\$a" in
-    -c|--terminal-copy) filter=1 ;;
-    *) args+=("\$a") ;;
-  esac
-done
-if [ "\$filter" = "1" ] || [ "\${FREEBUFF_PTY_FILTER:-0}" = "1" ]; then
-  [ "\${FREEBUFF_NO_PTY_FILTER:-0}" = "1" ] && filter=0
-fi
-if [ "\$filter" = "1" ] && [ -t 0 ] && [ -t 1 ] \\
+# EIN Modus, Filter immer an (Nutzerentscheidung 2026-09-27, nach vier
+# Umbau-Runden): Maus aus heisst, das Terminal kann auswaehlen — damit
+#   * Strg+C kopiert die Auswahl (xterm.js kopiert nur MIT Auswahl; ohne
+#     Auswahl geht Strg+C als ^C an die App = Interrupt), und
+#   * Strg+V fuegt ein (freebuff schaltet Bracketed Paste frei, live geprueft:
+#     ESC[200~textESC[201~ landet in der Eingabe), und
+#   * das Mausrad kommt als up/down an und wird hier auf PageUp/PageDown
+#     umgehaengt, also scrollt es die Unterhaltung. Kontextabhaengig: leere
+#     Eingabe -> Seite (damit das Rad nicht die Prompt-Historie zurueckrollt),
+#     Text in der Eingabe -> Pfeil nativ (Slash-Menue bedienbar).
+# Preis dieser einen Konfiguration: freebuff bekommt keine Mausklicks, also
+# sind Output-Bloecke (5/10 Zeilen) nicht per Klick aufklappbar. Der volle
+# Output liegt trotzdem in der Zwischenablage: /copy (Alias copy-chat) legt den
+# GESAMTEN Chat hinein, /export schreibt ihn als Datei.
+# Notausgang nur fuer Fehlersuche: FREEBUFF_NO_PTY_FILTER=1
+if [ -t 0 ] && [ -t 1 ] && [ "\${FREEBUFF_NO_PTY_FILTER:-0}" != "1" ] \\
    && command -v python3 >/dev/null 2>&1 && [ -f "\$pty_filter" ]; then
-  # Der Filter protokolliert dann, welche Esc-Sequenzen das Kind liest, damit
-  # sich Tastatur-Fragen in Sekunden beantworten lassen. Getippter Text wird
-  # NICHT protokolliert (nur Byte-Laenge). Abschalten: FREEBUFF_PTY_DEBUG=off
+  # Der Filter protokolliert, welche Esc-Sequenzen das Kind liest — damit sind
+  # Tastatur-Fragen in Sekunden beantwortet statt im Binary zu suchen. Getippter
+  # Text wird NICHT protokolliert (nur Byte-Laenge). Abschalten:
+  # FREEBUFF_PTY_DEBUG=off
   export FREEBUFF_PTY_DEBUG="\${FREEBUFF_PTY_DEBUG:-/tmp/opencode/freebuff-keys.log}"
-  exec python3 "\$pty_filter" -- node "\$launcher" "\${args[@]}"
+  exec python3 "\$pty_filter" -- node "\$launcher" "\$@"
 fi
-exec node "\$launcher" "\${args[@]}"
+exec node "\$launcher" "\$@"
 WRAPPER_EOF
   chmod +x "$WRAPPER"
 }
