@@ -115,17 +115,9 @@ check "AGENTS.md (Referenz)" bash -c '
   [ -f "$REPO_ROOT/AGENTS.md" ] || { echo "FEHLT"; exit 1; }
   grep -q "save.sh" "$REPO_ROOT/AGENTS.md" || { echo "Save-Regel fehlt"; exit 1; }
   echo "hat die Save-Regel"'
-check "Save-Regel in allen Client-Dateien" bash -c '
-  missing=""
-  for f in .github/copilot-instructions.md; do
-    [ -f "$REPO_ROOT/$f" ] || { missing="$missing $f:fehlt"; continue; }
-    grep -q "save.sh" "$REPO_ROOT/$f" || missing="$missing $f:ohne-Regel"
-  done
-  [ -z "$missing" ] || { echo "$missing"; exit 1; }
-  echo "Copilot informiert"'
 check "keine Client-Kopien mehr" bash -c '
   found=""
-  for f in GEMINI.md CLAUDE.md .cursorrules AGENT.md; do
+  for f in GEMINI.md CLAUDE.md .cursorrules AGENT.md .github/copilot-instructions.md; do
     [ -e "$REPO_ROOT/$f" ] && found="$found $f"
   done
   [ -z "$found" ] || { echo "wieder da:$found"; exit 1; }

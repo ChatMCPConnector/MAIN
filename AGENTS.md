@@ -8,11 +8,11 @@
 - Repo ist shared für mehrere eigene Accounts. Alles Bleibende liegt unter `/workspaces/MAIN` und wird per `./infra/scripts/save.sh` gepusht. Einmal pro Account: PAT + Passphrase als Codespaces-Secrets hinterlegen, danach ist alles automatisch.
 - **Gilt für jeden Agenten, unabhängig vom Client:** Diese Datei ist die
   einzige Quelle — es gibt bewusst **keine** Client-Kopien (`GEMINI.md`,
-  `CLAUDE.md`, `.cursorrules` sind entfernt; neu anzulegen verhindert nur
-  Driften). Gemini CLI liest diese Datei, weil `infra/scripts/gemini-context.sh`
-  `context.fileName=["AGENTS.md"]` in `~/.gemini/settings.json` setzt (siehe
-  `infrastructure.md`, Abschnitt „Agenten-Anweisungen"). Einzige verbleibende
-  Ausnahme: Copilot mit dem Zeiger `.github/copilot-instructions.md`.
+  `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md` sind entfernt;
+  neu anzulegen verhindert nur Driften). Gemini CLI liest diese Datei, weil
+  `infra/scripts/gemini-context.sh` `context.fileName=["AGENTS.md"]` in
+  `~/.gemini/settings.json` setzt (siehe `infrastructure.md`, Abschnitt
+  „Agenten-Anweisungen"). Copilot wird nicht benutzt.
 - **Sicherheitsmodell: Komfort > Sicherheit.** Alle Accounts sind eigene. Die Secrets-Passphrase liegt absichtlich im Repo (`config/passphrase`). Kein „Geheimnis-Schutz"-Purismus, Automatik hat Vorrang.
 
 ## 1. Session-Start

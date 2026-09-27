@@ -396,16 +396,20 @@ den Client-Dateien, die der Client liest:
 |---|---|
 | `AGENTS.md` | **Referenz und einzige Quelle** — opencode, Codex, jeder Agent, der `AGENTS.md` liest |
 | `~/.gemini/settings.json` | Gemini CLI — kein Repo-File, sondern `context.fileName=["AGENTS.md"]` (siehe unten) |
-| `.github/copilot-instructions.md` | GitHub Copilot — einzige verbleibende Kopie (kurzer Zeiger, 25 Zeilen) |
 
-**Nutzervorgabe (2026-09-27, später als die Client-Dateien):** Im Repo soll
-**nur `AGENTS.md`** liegen. `CLAUDE.md` und `.cursorrules` waren bereits raus,
-jetzt auch `GEMINI.md`. Grund ist nicht Geschmack, sondern die Fehlerquelle
-selbst: jede Kopie ist ein zweiter Regeltext, der auseinanderdriftet (in der
-Historie standen `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` als 104-Zeilen-Duplikate
-mit einem Port, den drei andere Dateien anders nannten). Ein Cursor, eine
-komplett neue Regel oder ein geändertes `save.sh` erreicht eine Kopie nur, wenn
-sie jemand mitdenkt.
+**Nutzervorgabe (2026-09-27, später als die Client-Dateien):** Im Repo liegt
+**nur `AGENTS.md`** — und damit ist der Punkt erreicht, an dem es nichts mehr
+zu pflegen gibt. `CLAUDE.md` und `.cursorrules` waren zuerst raus, dann
+`GEMINI.md`, zuletzt `.github/copilot-instructions.md` (Copilot wird nicht
+benutzt). Grund ist nicht Geschmack, sondern die Fehlerquelle selbst: jede Kopie
+ist ein zweiter Regeltext, der auseinanderdriftet (in der Historie standen
+`AGENTS.md`/`CLAUDE.md`/`GEMINI.md` als 104-Zeilen-Duplikate mit einem Port, den
+drei andere Dateien anders nannten). Ein Cursor, eine komplett neue Regel oder
+ein geändertes `save.sh` erreicht eine Kopie nur, wenn sie jemand mitdenkt.
+**Und der Preis dieser Regel ist ehrlich benannt:** ein Client, der
+`AGENTS.md` nicht von selbst liest und keine User-Config dafür kennt, ist in
+dieser Landschaft nicht abgedeckt — für Gemini und Claude ist das geprüft und
+gelöst, für Copilot ist es irrelevant, weil der Client nicht verwendet wird.
 
 **Gemini CLI liest `AGENTS.md` — über die User-Config, nicht über eine Kopie.**
 Gemini CLI nimmt per Default **nur** `GEMINI.md` als Kontextdatei. Der PR, der
@@ -426,10 +430,15 @@ legt vorher ein `.bak` an und überschreibt **nichts**, wenn die Datei kaputt is
 Getestet: frische Datei, Doppelaufruf, Merge mit bestehendem `"theme"`,
 `unapply`, kaputte Datei (Exit 1, Datei unverändert).
 
-**Copilot bleibt die Ausnahme.** `.github/copilot-instructions.md` ist kein
-Duplikat, sondern ein 25-Zeilen-Zeiger auf `AGENTS.md`; Copilot liest diese Datei
-nativ. Wird sie irgendwann überflüssig, ist das dieselbe Konfigurations-Frage wie
-bei Gemini — nicht das Löschen einer Regelquelle.
+**Copilot ist raus, weil der Client nicht benutzt wird (Nutzerentscheidung
+2026-09-27).** `.github/copilot-instructions.md` war zwar nur ein 25-Zeilen-Zeiger
+auf `AGENTS.md` und damit kein Duplikat — aber eine Zeigerdatei für einen Client,
+den es in dieser Landschaft nicht gibt, ist nur noch ein Pflegeposten ohne
+Nutzen. Der Unterschied zu Gemini ist der entscheidende: bei Gemini war der
+Default-Dateiname falsch, den man nicht wegkriegt, ohne es zu ersetzen; Copilot
+liest die Datei nativ, also **behebt das Löschen hier nichts und bricht nichts**,
+es räumt nur auf. `.github/` verschwindet damit aus dem Repo (es enthielt
+nur diese eine Datei).
 
 **Claude braucht nichts — weder eine Datei im Repo noch eine Config in `$HOME`.**
 Die Claude-Modelle laufen hier über den antigravity-Proxy **innerhalb von
@@ -464,12 +473,12 @@ Save-Aufruf der einzige Auslöser für Commit *und* Backup ist) und **Testläufe
 nicht committten**.
 
 **Gegen das Auseinanderlaufen gibt es einen Check:** `verify-codespace.sh`
-prüft, dass `AGENTS.md` existiert und die Save-Regel enthält, dass Copilot-Zeiger
-sie auch enthält, dass **keine** Client-Kopien zurückgekommen sind
-(`GEMINI.md`/`CLAUDE.md`/`.cursorrules`/`AGENT.md`) und dass Gemini CLIs
-`context.fileName` wirklich auf `AGENTS.md` zeigt. Ein neuer Client braucht
-entweder eine solche User-Config oder eine kurze Kopie nach dem Copilot-Muster
-plus eine Zeile im Check.
+prüft, dass `AGENTS.md` existiert und die Save-Regel enthält, dass **keine**
+Client-Kopien zurückgekommen sind (`GEMINI.md`/`CLAUDE.md`/`.cursorrules`/
+`AGENT.md`/`.github/copilot-instructions.md`) und dass Gemini CLIs
+`context.fileName` wirklich auf `AGENTS.md` zeigt. Ein Client, der `AGENTS.md`
+nicht von selbst liest, braucht **keine** Kopie, sondern eine User-Config
+(wie Gemini) — eine Kopie im Repo ist ab jetzt der Fehlerfall, kein Muster.
 
 ### Drive-Backup: Fehler werden nicht mehr verschluckt
 
@@ -839,6 +848,8 @@ Proxy bei jedem Start automatisch hoch.
     * **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):** Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2 springt). Der Fragenmodus schließt erst, wenn Freebuff `Your answer:` / `Your answers:` ausgibt oder der Nutzer Esc / Strg+C drückt.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
+
+- 2026-09-27: **`.github/copilot-instructions.md` gelöscht — damit ist die Client-Datei-Regel abgeschlossen: im Repo liegt nur noch `AGENTS.md`.** Nutzerentscheidung: Copilot wird nicht benutzt. Die Datei war kein Duplikat, sondern ein 25-Zeilen-Zeiger auf `AGENTS.md` — und genau darin liegt der Unterschied zum Gemini-Fall von zwei Stunden vorher: **bei Gemini war der Default-Dateiname falsch und musste durch eine User-Config ersetzt werden, weil ein leerer Konzept-Kontext ein stiller Totalausfall ist; Copilot liest seine Datei nativ, also räumt das Löschen hier nur auf und bricht nichts.** Ein Pflegeposten ohne Nutzen ist trotzdem ein Pflegeposten, und die Datei stand in vier Stellen: in `AGENTS.md` als „einzige verbleibende Ausnahme", in der Client-Tabelle und in zwei Absätzen dieses Abschnitts, als Check-Liste in `verify-codespace.sh` und als einziger Eintrag des gestrichenen Copilot-Musters. **Der Check hat sich dadurch selbst abgeschafft:** `Save-Regel in allen Client-Dateien` iterierte genau über eine Datei — mit deren Verschwinden war der Check sinnlos, also ist er raus; übrig bleiben `AGENTS.md (Referenz)`, `keine Client-Kopien mehr` (dessen Liste jetzt **auch** `.github/copilot-instructions.md` verbietet, also prüft er die vollständige Negativliste), `Gemini CLI liest AGENTS.md` und der Pfad-Check. **Eine Kopie im Repo ist damit nicht mehr Muster, sondern Fehlerfall** — der Abschnitt sagt das jetzt ausdrücklich, damit der nächste neue Client nicht wieder auf „kurze Kopie plus Check-Zeile" zurückfällt, sondern auf eine User-Config wie bei Gemini. Nebenwirkung: `.github/` verschwindet aus dem Repo, es enthielt nur diese Datei. **Und der Preis ist mitprotokolliert, statt ihn zu verschweigen:** ein Client ohne AGENTS.md-Support und ohne User-Config wäre ab jetzt nicht abgedeckt. Für Gemini und Claude ist das geprüft und gelöst, für Copilot irrelevant, weil der Client nicht verwendet wird — falls er doch einmal genutzt wird, ist `.github/copilot-instructions.md` in zwei Minuten wieder da und der Check schlägt dann sogar an.
 
 - 2026-09-27: **`Revision.md` und `research/` gelöscht — mit der ganzen Kette, die daran hing.** Nutzerwunsch: „die beiden brauche ich nicht mehr". `Revision.md` war der statische Audit-Trail vom 24.09. (5606 Zeilen, 523 KB, Anhänge A–V), `research/` eine einzige Notiz vom 26.09. zu Cline-Free-Modellen — zu einem Provider, der inzwischen aus `opencode.json` raus ist. **Ein Löschen allein hätte die Kette kaputt gemacht, deshalb mitgelöscht:** `infra/scripts/validate-revision.sh` prüfte ausschließlich die Struktur *dieser einen Datei* (genau eine H1, 22 `BEGIN/END PART`-Marker in Reihenfolge, balancierte Code-Fences) und wäre ohne ihr Prüfobjekt toter Code gewesen; `infra/scripts/verify-verifier-selftest.sh` ist der Selbsttest genau dieses Verifiers (baut eine Regression ein, erwartet `exit != 0` mit `FAILED`, stellt wieder her, erwartet `exit 0`) und wäre ohne ihn eine Landmine gewesen — er schreibt in `validate-revision.sh` hinein und scheitert dann an der fehlenden Textstelle. **Deren Tod hat eine sichtbare Folge, und die ist Absicht:** `verify-codespace.sh` hatte in Abschnitt 9 als einzigen Check diesen Validator, der Abschnitt fiel damit leer und ist ersatzlos entfallen; die verbleibenden neun Abschnitte (Secrets, Ports, Provider, Daemons, Browser, Drive, Agenten-Anweisungen, Provider live) prüfen weiter dieselbe Kette, jetzt 23 statt 24 Checks. **Ein toter Verifier ist schlimmer als keiner:** er meldet grün, ohne irgendetwas zu prüfen — dieselbe Fehlerklasse, die im Repo bei `gdrive-backup.sh` schon einmal teuer war. **Zwei Doku-Stellen aufgeräumt, weil sie ins Leere zeigten:** der Schnellstart nannte `validate-revision.sh` als read-only Einstieg (jetzt `verify-codespace.sh`, der mehr abdeckt), und der Layout-Eintrag für `infra/` listete das Skript. Die Changelog-Einträge, die `Revision.md` erwähnen, sind **Bewusst nicht** angetastet — sie protokollieren, was damals gegolten hat, und Umschreiben von Historie ist hier derselbe Fehler wie bei den Agenten-Dateien. Aus demselben Grund lebt `llm-proxies/glm2api/glm2api-revision.md` weiter: das ist der Audit des **Proxys**, nicht des Repo, und wird von `validate-revision.sh` nie gelesen. **Ein Verweis musste trotzdem neu geschrieben werden, weil er eine gelöschte Datei als Beleg benutzt hat:** die Secrets-Sektion zeigte für zwei getrackte Literalwerte in `opencode.json` auf `Revision.md, SEC-02`. Der Befund ist am Live-File geprüft und **stimmt noch** — TokenRouter trägt einen echten `sk-…`-Key in `options.apiKey` (Provider ungenutzt, Whitelist hat ein einziges `stealth/union-alpha`), Antigravity den selbst erzeugten Admin-Key des lokalen Proxys auf `127.0.0.1:9878`. Die Stelle steht jetzt ausgeschrieben im Repo, statt auf ein totes Dokument zu zeigen. Der TokenRouter-Key ist damit eine offene Entscheidung (Provider raus oder Key ins Bundle wie bei allen anderen) und **bewusst nicht** in diesem Arbeitsgang geändert — das ist eine Secrets-Änderung, keine Dokumentationspflege.
 
