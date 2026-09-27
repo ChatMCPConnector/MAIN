@@ -161,8 +161,54 @@ def pending_timeout(state, now, cap=1.0):
     return max(0.0, min([cap] + waits))
 
 
+# --- Eingabe-Zustand --------------------------------------------------------
+# Ein einzelner Rad-Klick ist byte- und taktgleich zu einem einzelnen
+# Tastendruck (im Key-Log belegt: Geste ~30 Ereignisse/s, Tastendruck 1). Der
+# Filter kann die beiden nicht unterscheiden — ausser ueber den Zustand der
+# Eingabe, den er selbst aus den Tastatur-Bytes mitzaehlt:
+#   * Eingabe LEER  -> ein Pfeil wuerde bei freebuff `history-up` ausloesen, also
+#     die Prompt-Historie zurueckrollen. Genau das soll das Rad nie. Also wird
+#     der Pfeil sofort zur Seite (PageUp/PageDown) — ohne Burst-Fenster, also
+#     auch ohne 25 ms Verzoegerung.
+#   * Eingabe NICHT leer -> der Pfeil bleibt nativ: das Slash-Menue geht nur bei
+#     getipptem "/" auf, und im Text sollen die Pfeile den Cursor bewegen.
+# Der Preis, den der Nutzer akzeptiert hat: auf leerer Eingabe holt `up` nicht
+# mehr die letzte Nachricht — dafuer gibt es `/history`.
+ESC_SEQ_RE = re.compile(
+    rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[\]P][^\x07\x1b]*(?:\x07|\x1b\\)"
+    rb"|\x1b[()][0-9A-B]|\x1b[=>78]"
+)
+
+
+def track_input(data, typed):
+    """Zeichen in der Eingabe, grob aus den weitergereichten Tastatur-Bytes.
+
+    Escape-Sequenzen werden entfernt (der Text zwischen Bracketed-Paste-Markern
+    zaehlt mit, die Marker selbst nicht), Enter setzt zurueck, Backspace zieht
+    ab, Ctrl+U leert die Zeile. Mehrbyte-UTF-8 wird ueber die Fortsetzungsbytes
+    (0x80-0xBF) auf ein Zeichen normalisiert.
+
+    Wichtig: `0x7f`/`0x08` sind Backspace und **keine** druckbaren Zeichen — der
+    erste Wurf behandelte sie als `>= 0x20` und zaehlte sie, sodass ein
+    Backspace die Eingabe *laenger* machte. Der Test "Backspace zieht ab" hat
+    das gefangen.
+    """
+    for byte in ESC_SEQ_RE.sub(b"", data):
+        if byte in (0x0D, 0x0A):          # Enter: abgeschickt
+            typed = 0
+        elif byte == 0x15:                # Ctrl+U: Zeile loeschen
+            typed = 0
+        elif byte in (0x7F, 0x08):        # Backspace (xterm sendet 0x7f)
+            typed = max(0, typed - 1)
+        elif 0x80 <= byte <= 0xBF:        # UTF-8-Fortsetzung: kein neues Zeichen
+            continue
+        elif byte >= 0x20:                # druckbar (Backspace 0x7f ist abgefangen)
+            typed += 1
+    return typed
+
+
 def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0,
-                   last_page=None, always=False):
+                   last_page=None, always=False, typed=0):
     """Rad-Burst -> PageUp/PageDown, einzelne Pfeiltaste bleibt nativ.
 
     Mausrad und Pfeiltaste erzeugen dieselben Bytes; unterschieden werden sie
@@ -181,7 +227,21 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
     `always=True` schaltet den Burst-Test ab und schickt **jeden** Pfeil als
     Seite (Modus `FREEBUFF_ARROW_PAGE=1`, das alte Verhalten).
 
-    Gibt (neue_daten, rest, state, last_page) zurueck.
+    `typed` ist die Zahl der Zeichen in der freebuff-Eingabe (siehe
+    `track_input`) **vor** diesem Chunk, und wird hier pro Position im Chunk
+    fortgeschrieben: bei `typed == 0` (Eingabe leer) geht jeder Pfeil sofort
+    als Seite raus, denn ein Pfeil wuerde sonst `history-up` ausloesen und die
+    Prompt-Historie zurueckrollen — das darf das Rad nie. Ist die Eingabe
+    **nicht** leer, gilt der Burst-Test wie beschrieben, damit das Slash-Menue
+    bedienbar bleibt.
+
+    **Pro Position, nicht pro Chunk:** Tippen und Pfeil koennen im selben Read
+    ankommen (schnelles Tippen, Paste gefolgt von Pfeil, trager Terminal).
+    Wuerde der Zustand nur einmal je Chunk ausgewertet, kaeme ein Pfeil im
+    selben Chunk wie das getipptes `/ne` als Seiten-Sprung an — der Test
+    "Slash-Menue im selben Read" hat genau das gefangen.
+
+    Gibt (neue_daten, rest, state, last_page, typed) zurueck.
     """
     data = carry + data
     carry = b""
@@ -210,7 +270,7 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
             pos = match.end()
             out += _page(seq, now, last_page, debounce)
         out += data[pos:]
-        return bytes(out), carry, state, last_page
+        return bytes(out), carry, state, last_page, track_input(data, typed)
 
     pos = 0
     for match in sorted(
@@ -220,10 +280,22 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
         if match.start() < pos:      # bereits von einer anderen Sequenz konsumiert
             continue
         seq = match.group()
+        # Kontext bis zu diesem Pfeil: alles davor im selben Chunk mitzaehlen.
+        typed = track_input(data[pos:match.start()], typed)
         out += data[pos:match.start()]
         pos = match.end()             # in JEDEM Fall konsumieren
         st = state[seq]
-        if st["burst_until"] > now:
+        if typed == 0:
+            # Eingabe leer: Pfeil sofort zur Seite, ohne Fenster. Auch ein noch
+            # wartendes Einzelereignis wird Seite, nicht nativ — sonst roellt
+            # es beim Leeren der Eingabe doch noch die Historie zurueck.
+            for other, ost in state.items():
+                if ost["pending"] is not None:
+                    out += _page(other, now, last_page, debounce)
+                    ost["pending"] = None
+                    ost["burst_until"] = 0.0
+            out += _page(seq, now, last_page, debounce)
+        elif st["burst_until"] > now:
             # Mitten im Rad-Schwung: sofort als Seite, ohne Fenster.
             out += _page(seq, now, last_page, debounce)
         elif st["pending"] is not None and now < st["deadline"]:
@@ -240,9 +312,10 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
             out += flush_pending(state, now)
             st["pending"] = seq
             st["deadline"] = now + gap
+    typed = track_input(data[pos:], typed)
     out += data[pos:]
     out += flush_pending(state, now)
-    return bytes(out), carry, state, last_page
+    return bytes(out), carry, state, last_page, typed
 
 
 def window_size(fd):
@@ -337,6 +410,7 @@ def main(argv):
     carry = b""
     arrow_state = new_arrow_state()
     last_page = dict.fromkeys(ARROW_PAGE, -1e9)
+    typed = 0   # Zeichen in der freebuff-Eingabe, aus den Tastatur-Bytes gezaehlt
     debug(f"arrow_page={arrow_page} always_page={always_page} gap={gap}s debounce={debounce}s")
     try:
         while True:
@@ -385,9 +459,11 @@ def main(argv):
                     # Das ist die Sicht auf die Tastatur-Kette: was hier landet,
                     # hat das Kind als Tastendruck gelesen.
                     if arrow_page:
-                        data, carry, arrow_state, last_page = rewrite_arrows(
+                        data, carry, arrow_state, last_page, typed = rewrite_arrows(
                             data, carry, time.monotonic(), arrow_state, gap,
-                            debounce, last_page, always=always_page)
+                            debounce, last_page, always=always_page, typed=typed)
+                    else:
+                        typed = track_input(data, typed)
                     if not data:
                         continue
                     debug(f" -> {summarize(data)}")
@@ -400,8 +476,10 @@ def main(argv):
                     # sehen, aber wir lesen nicht weiter.
                     stdin_open = False
 
-            if arrow_page and not always_page:
-                # Wartenden Einzelpfeil ausgeben, auch wenn kein Read kam.
+            if arrow_page and not always_page and typed > 0:
+                # Wartenden Einzelpfeil ausgeben, auch wenn kein Read kam. Bei
+                # leerer Eingabe gibt es nichts auszugeben: dort wird ein Pfeil
+                # sofort zur Seite und es wartet nie etwas.
                 data = flush_pending(arrow_state, time.monotonic())
                 if data:
                     debug(f" -> {summarize(data)} (Fenster abgelaufen)")
