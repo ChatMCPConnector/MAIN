@@ -130,8 +130,8 @@ DEFAULT_WHEEL_GAP_MS = 25.0
 
 
 def new_arrow_state():
-    """Je Eingangssequenz: Ende der Burst-Phase (Rad-Schwung ueber Reads)."""
-    return {seq: {"burst_until": 0.0} for seq in ARROW_PAGE}
+    """Je Eingangssequenz: letzter Zeitpunkt + Ende der Burst-Phase."""
+    return {seq: {"last_seen": 0.0, "burst_until": 0.0} for seq in ARROW_PAGE}
 
 
 def _page(seq, now, last_page, debounce):
@@ -144,20 +144,24 @@ def _page(seq, now, last_page, debounce):
 
 def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0,
                    last_page=None, always=False):
-    """Pfeiltasten sofort nativ, nur eine **Geste** wird PageUp/PageDown.
+    """Pfeiltasten sofort nativ, Rad-Gesten werden PageUp/PageDown.
 
-    Die Regel ist radikal einfach: innerhalb eines einzigen Reads zaehlen wir,
-    wie viele gleiche Pfeile ankommen.
+    **Hybrid-Erkennung** — kein Delay, kein Pending:
 
-      * **>=2 gleiche** in einem Read  -> das ist ein Rad-Schwung (Geste).
-        Alle werden zu `PageUp`/`PageDown` — auch das erste.
-      * **genau 1** in einem Read      -> das ist ein Tastendruck.
-        Geht **sofort, ohne Verzoegerung** nativ an die App.
-      * `links`/`rechts` werden nie angefasst (nicht in `ARROW_PAGE`).
+      1. **Im selben Read >=2 gleiche Pfeile:** Mausrad liefert viele Events in
+         einem read(). Alle werden sofort zu PageUp/PageDown.
+      2. **Ueber Reads hinweg:** Erster Pfeil geht sofort nativ durch, aber
+         wir merken den Zeitpunkt (`last_seen`). Kommt der naechste gleiche
+         Pfeil innerhalb `gap` Sekunden, wechseln wir in den Geste-Modus
+         (`burst_until`) und senden PageUp/PageDown.
+      3. **Einzelner Pfeil (keine Wiederholung in gap):** Nativ, sofort, null
+         Verzoegerung. Genau das braucht das Slash-Menue.
+      4. `links`/`rechts` werden nie angefasst (nicht in `ARROW_PAGE`).
 
-    Zusaetzlich: `burst_until` ueberbrueckt den Fall, dass ein Rad-Schwung
-    ueber mehrere Reads geht (die kommen im Abstand < gap Sekunden). Ist
-    `burst_until` noch aktiv, zaehlt auch ein einzelner Pfeil als Geste.
+    **Preis:** Das allererste Rad-Event pro Schwung geht als nativer Pfeil
+    durch (history-up). Ab dem zweiten Event (< gap spaeter) kommen alle als
+    PageUp/PageDown. Bei einem typischen Schwung mit 10-30 Events ist das
+    unmerklich.
 
     `always=True` schickt jeden Pfeil als Seite (FREEBUFF_ARROW_PAGE=1).
 
@@ -212,14 +216,25 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
         pos = match.end()
 
         st = state[seq]
-        is_gesture = count.get(seq, 0) >= 2 or st["burst_until"] > now
-        if is_gesture:
-            # Geste (Rad-Schwung): als Seite melden.
+
+        # Geste? Drei Wege:
+        # (a) burst_until noch aktiv (mitten im Rad-Schwung)
+        # (b) >=2 gleiche im selben Read (Rad liefert viele auf einmal)
+        # (c) letzter gleicher Pfeil < gap Sekunden her (Rad ueber Reads)
+        in_burst = st["burst_until"] > now
+        multi_in_read = count.get(seq, 0) >= 2
+        rapid_repeat = (now - st["last_seen"]) < gap and st["last_seen"] > 0
+
+        if in_burst or multi_in_read or rapid_repeat:
+            # Geste: PageUp/PageDown, burst verlaengern
             st["burst_until"] = now + max(gap * 4, 0.12)
             out += _page(seq, now, last_page, debounce)
         else:
-            # Einzelner Tastendruck: SOFORT nativ, ohne Verzoegerung.
+            # Einzelner Tastendruck: sofort nativ
             out += seq
+
+        st["last_seen"] = now
+
     out += data[pos:]
     return bytes(out), carry, state, last_page
 
