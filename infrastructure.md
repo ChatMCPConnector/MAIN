@@ -262,6 +262,27 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Profil `.runtime/firefox-profile/` enthält evtl. Logins — nie committen.
 - **Systempakete** via setup.sh (idempotent): nodejs, npm, xvfb, x11vnc, novnc,
   websockify, sqlite3, dbus-x11, build-essential, python3-* etc.
+- **Commit-Signierung: SSH statt Codespaces-Token.** `setup.sh` setzt repo-lokal
+  `gpg.format=ssh`, `user.signingkey=~/.ssh/codespaces.auto.pub`,
+  `gpg.ssh.allowedSignersFile=.runtime/git-allowed-signers` und
+  `commit.gpgsign=true`. **Warum nicht der Codespaces-Signierer:**
+  `/.codespaces/bin/gh-gpgsign` benutzt den Codespaces-`GITHUB_TOKEN`, ein
+  App-/Integrationstoken, und lehnt jede Signatur ab: **`403 Author is
+  invalid`**. In zwei Wegwerf-Repos reproduziert — **nicht** an Identität oder
+  Token-Scope: Commit-Autor `tadeuslol <334215299+tadeuslol@…>`, GitHub-Account
+  `login=tadeuslol id=334215299`, PAT gehört demselben Account, und trotzdem
+  403, auch mit `GH_TOKEN`/`GITHUB_TOKEN` auf den PAT. Beleg für die
+  Integrations-Art: `gh api user/emails` → `Resource not accessible by
+  integration`. **SSH-Signierung läuft rein lokal**, braucht keine API und
+  keinen Token. Verifiziert: Commit mit `sig=G`, Key
+  `SHA256:jWmmf21DqioRG6oW/xFE8S5I3NG57BVKXQ79a1suSbA`.
+  Die `allowedSignersFile` liegt in `.runtime/` (gitignoriert), weil der
+  Codespace-Key pro Codespace neu sein kann — sie enthält nur den **öffentlichen**
+  Schlüssel, ist also kein Secret. **Offen:** GitHub zeigt „Verified" erst, wenn
+  der Key einmalig als **Signing key** im Account registriert ist
+  (`user/ssh_signing_keys` ist derzeit leer); die Signatur ist gültig, aber
+  serverseitig unbestätigt.
+
 - **Freebuff CLI** (werbefinanzierter, kostenloser Coding-Agent von CodebuffAI),
   Version **0.0.204 gepinnt** in `infra/scripts/freebuff-install.sh`, automatisch
   via setup.sh — **nach** dem Secrets-Schritt, weil der Login aus dem Bundle
@@ -722,6 +743,10 @@ Proxy bei jedem Start automatisch hoch.
   - **Nützlich war nur das Drive-Backup** — GitHub allein ist kein Backup, der Codespace ist ephemer. Genau daran hat es in dieser Sitzung gelitten: Das Backup von 01:27 enthielt `690e891`, mein Commit `6ab56c0` (Rechte-Korrektur am freebuff-Skript) fehlte und musste nachgeholt werden.
   **Umsetzung:** `.devcontainer/autosave-daemon.sh` gelöscht, die Startblöcke in `setup.sh` und `start-on-boot.sh` sowie der Neustart-Posten im `proxy-watchdog.sh` entfernt, der `autosave`-Alias aus `aliases.sh` und der Check in `verify-codespace.sh` drauf. `save.sh` bleibt unverändert und macht weiter Commit, Push **und** Drive-Backup in einem.
   **Die bewusste Konsequenz, die daraus folgt:** Was zwischen zwei `save.sh`-Aufrufen entsteht, ist nur noch über den Arbeitsbaum geschützt. Für verlorene Commits gilt weiter das alte Argument — der Codespace ist selbst ephemer, deshalb ist das Drive-Backup genau das, was der Daemon lieferte und jetzt `save.sh` liefert. Ein Workflow, in dem ein Agent minutenlang ohne Abschluss arbeitet und dann der Codespace wegfällt, verliert diesen Zwischenstand; das ist jetzt dokumentiert statt kaschiert.
+- 2026-09-27: **Git-Signierung war kaputt und ist jetzt über SSH gelöst.** Symptom: jeder `git commit` bricht ab mit `gpg failed to sign the data … 403 | Author is invalid`. Ursache ist **nicht** die Identität, wie der Fehlertext suggeriert: Autor ist `tadeuslol <334215299+tadeuslol@users.noreply.github.com>`, GitHub-Account ist `login=tadeuslol id=334215299`, und selbst der PAT (`LANDSCAPE_PAT`) gehört demselben Account. `gh api user/emails` liefert dagegen `Resource not accessible by integration` — der Codespaces-`GITHUB_TOKEN` ist ein **App-/Integrationstoken**, und der Signierer `/.codespaces/bin/gh-gpgsign` (aus `/etc/gitconfig`) lehnt damit jede Signatur ab. In **zwei Wegwerf-Repos** A/B getestet: mit `GH_TOKEN=PAT` und mit `GITHUB_TOKEN=PAT` identisch 403, mit **SSH-Signierung** sofort `sig=G`.
+  **Umsetzung:** `setup.sh` konfiguriert repo-lokal `gpg.format=ssh`, `user.signingkey=~/.ssh/codespaces.auto.pub`, `gpg.ssh.allowedSignersFile=.runtime/git-allowed-signers`, `commit.gpgsign=true` — der ED25519-Key gehört jedem Codespace und wird **lokal** benutzt, also ohne API und ohne Token. Die `allowedSignersFile` liegt bewusst in `.runtime/` statt im Repo: der Key kann pro Codespace neu sein, und sie enthält ohnehin nur den öffentlichen Schlüssel. Ohne sie meldet Git `%G? = N` („needs to be configured"), mit ihr `G`.
+  **Was gelöst ist und was nicht:** Commit-Signaturen sind gültig und lokal prüfbar. GitHub wird sie aber als **signed, nicht verified** anzeigen, bis der Key einmalig unter *Settings → SSH and GPG keys* als **Signing key** registriert ist (`user/ssh_signing_keys` ist leer). Das ist ein Account-Schritt, der nicht im Codespace passiert — und die Wurzel, an der ein späterer Versuch wieder ansetzt.
+  **Nebenbefund, wichtig für die Historie:** Bis dahin ist **jeder Commit unsigniert** (`%G? = N`), auch die aus der Parallel-Session. Ein nachträgliches Signieren historischer Commits ist nicht möglich; ab hier sind sie es.
 ## Changelog
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.

@@ -139,6 +139,34 @@ else
   echo "    kein Token gefunden. Einmalig: ./infra/scripts/auth.sh setup  (oder LANDSCAPE_PAT als Codespaces-Secret setzen)"
 fi
 
+echo "==> [landscape] Commit-Signierung einrichten (SSH-Signatur)..."
+# Warum SSH und nicht der Codespaces-Signierer: /.codespaces/bin/gh-gpgsign
+# nutzt den Codespaces-GITHUB_TOKEN, ein App-/Integrationstoken. Der lehnt jede
+# Signatur ab: "403 Author is invalid" — unabhaengig von Identitaet und PAT, live
+# in zwei Test-Repos reproduziert (der Code-Account passt, /user/emails liefert
+# "Resource not accessible by integration"). SSH-Signierung laeuft dagegen rein
+# lokal, braucht keine API und keinen Token.
+# Der Codespace-Key ~/.ssh/codespaces.auto (ED25519) existiert in jedem
+# Codespace automatisch. Die allowedSignersFile liegt in .runtime/, weil der
+# Key pro Codespace neu sein kann und sie darum nicht ins Repo gehoert;
+# enthaelt nur den oeffentlichen Schluessel, ist also kein Secret.
+SIGN_KEY="$HOME/.ssh/codespaces.auto"
+if [ -f "$SIGN_KEY" ]; then
+  mkdir -p "$REPO_ROOT/.runtime"
+  printf '%s %s\n' "$(git -C "$REPO_ROOT" config user.email 2>/dev/null || echo tadeuslol@users.noreply.github.com)" \
+         "$(cut -d' ' -f1,2 "$SIGN_KEY.pub")" > "$REPO_ROOT/.runtime/git-allowed-signers"
+  chmod 600 "$REPO_ROOT/.runtime/git-allowed-signers" 2>/dev/null || true
+  git -C "$REPO_ROOT" config gpg.format ssh
+  git -C "$REPO_ROOT" config user.signingkey "$SIGN_KEY.pub"
+  git -C "$REPO_ROOT" config gpg.ssh.allowedSignersFile "$REPO_ROOT/.runtime/git-allowed-signers"
+  git -C "$REPO_ROOT" config commit.gpgsign true
+  echo "    SSH-Signatur aktiv (Key $(ssh-keygen -lf "$SIGN_KEY.pub" 2>/dev/null | awk '{print $2}' | cut -c1-24)…)."
+  echo "    Hinweis: GitHub zeigt 'Verified' erst, wenn der Key einmalig unter"
+  echo "    Settings > SSH und GPG keys als SIGNING key registriert ist."
+else
+  echo "    WARN: kein $SIGN_KEY — Commits bleiben unsigniert (nicht fatal)."
+fi
+
 echo "==> [landscape] rclone (Google-Drive-Backup) installieren..."
 # rclone für gdrive-backup.sh (Repo-Sicherung nach Drive, unabhängig von GitHub).
 # Auth (rclone.conf mit Refresh-Token) kommt aus dem Secrets-Bundle via secrets.sh unlock.
