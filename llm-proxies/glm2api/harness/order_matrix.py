@@ -14,14 +14,14 @@ Zwei Pruefungen je Fall, und die zweite ist die wertvollere:
    ergeben. Das ist die eigentliche Invariante: der Client darf nicht
    davon abhaengen, wo der upstream schneidet. Diese Pruefung braucht
    keine handgeschriebene Erwartung und hat deshalb 2026-09-27 den
-   S-15-fund gefunden, den kein Test sah (siehe `KNOWN`).
+   S-15-fund gefunden, den kein Test sah.
 
-`KNOWN` listet vorbestehende, bereits bewertete Befunde. Sie werden
-ausgewiesen, nicht versteckt — aber sie zitausieren nicht den Exit-Code,
-sonst ist der harness nach der ersten Meldung unbrauchbar.
+Die aktuell akzeptierten Whitespace-Outputs sind pro Layout und
+Chunkgroesse exakt hinterlegt. Alle anderen Abweichungen (einschliesslich
+Call-Zahl und Protokollfehlern) bleiben unbekannt und schlagen fehl.
 
     python3 order_matrix.py            # Tabelle + Protokoll
-    python3 order_matrix.py --quiet    # nur Verstoesse und bekannte Befunde
+    python3 order_matrix.py --quiet    # Zusammenfassung und Verstoesse
 """
 
 from __future__ import annotations
@@ -77,18 +77,22 @@ LAYOUTS: list[tuple[str, list, str, int]] = [
 CHUNK_SIZES = (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000)
 S14_PREFIXES = {1: "D", 2: "De", 3: "Der ", 4: "Der "}
 
-# Vorbestehende, bewusst akzeptierte Layout-Befunde. Die Whitelist gilt
-# fuer konkrete Outputs, nicht pauschal fuer jedes Problem eines Labels.
-KNOWN: dict[str, str] = {}
-
-# Die Sollprüfung dieses Layouts ignoriert Rand-Whitespace per `.split()`,
-# der neue exakte Chunkvergleich macht die bestehende Chunk-Variation sichtbar.
-# Beide Outputs haben denselben sichtbaren Satz; genau diese zwei Werte sind
-# bekannt. Ein dritter/anderer Output wird weiterhin als unbekannt rot.
-KNOWN_CHUNK_OUTPUTS: dict[str, frozenset[str]] = {
-    "rand-links-im-carry": frozenset(
-        {"Der Bericht ist fuer Sie. ", "Der Bericht ist fuer Sie."}
-    ),
+# Das Layout liefert je nach Chunkgrenze exakt bekannte Rand-Whitespace-
+# Varianten. Ein dritter Output oder ein zusätzlicher Call-/Protokollfehler
+# bleibt unbekannt und schlägt fehl.
+KNOWN_CHUNK_OUTPUTS: dict[str, dict[int, str]] = {
+    "rand-links-im-carry": {
+        1: "Der Bericht ist fuer Sie. ",
+        2: "Der Bericht ist fuer Sie. ",
+        3: "Der Bericht ist fuer Sie. ",
+        5: "Der Bericht ist fuer Sie. ",
+        7: "Der Bericht ist fuer Sie.",
+        8: "Der Bericht ist fuer Sie. ",
+        11: "Der Bericht ist fuer Sie.",
+        13: "Der Bericht ist fuer Sie. ",
+        20: "Der Bericht ist fuer Sie.",
+        1000: "Der Bericht ist fuer Sie.",
+    },
 }
 
 
@@ -104,10 +108,10 @@ def check(
     streamed, _body, accumulator = stream(parts, chunk)
     problems: list[str] = []
 
-    if streamed.split() != expected.split():
-        problems.append(f"soll-vergleich: IST {streamed!r} != SOLL {expected!r}")
-    if label in KNOWN_CHUNK_OUTPUTS and streamed not in KNOWN_CHUNK_OUTPUTS[label]:
-        problems.append(f"chunk-output-unbekannt: {streamed!r}")
+    if streamed != expected:
+        problems.append(f"soll-exakt: IST {streamed!r} != SOLL {expected!r}")
+    if label in KNOWN_CHUNK_OUTPUTS and streamed != KNOWN_CHUNK_OUTPUTS[label].get(chunk):
+        problems.append(f"chunk-output-unbekannt: IST {streamed!r}")
     if expected_stream is not None and streamed != expected_stream:
         problems.append(
             f"chunk-invariante: IST {streamed!r} != REFERENZ {expected_stream!r}"
@@ -159,7 +163,6 @@ def main() -> int:
     quiet = "--quiet" in sys.argv
     measurements = 0
     unknown = 0
-    known_hits: dict[str, list[int]] = {label: [] for label in KNOWN}
     known_chunk_hits: dict[str, list[int]] = {
         label: [] for label in KNOWN_CHUNK_OUTPUTS
     }
@@ -181,27 +184,42 @@ def main() -> int:
             )
             if reference_stream is None:
                 reference_stream = streamed
-            known_chunk_variation = (
+            whitespace_problems = [
+                problem
+                for problem in problems
+                if problem.startswith(("soll-exakt:", "chunk-invariante:"))
+            ]
+            other_problems = [
+                problem for problem in problems if problem not in whitespace_problems
+            ]
+            known_chunk_output = (
                 label in KNOWN_CHUNK_OUTPUTS
-                and streamed in KNOWN_CHUNK_OUTPUTS[label]
-                and any(problem.startswith("chunk-invariante:") for problem in problems)
+                and streamed == KNOWN_CHUNK_OUTPUTS[label].get(chunk)
+                and bool(whitespace_problems)
+                and not other_problems
             )
-            if known_chunk_variation:
-                problems = [
-                    problem
+            if (
+                label in KNOWN_CHUNK_OUTPUTS
+                and streamed != KNOWN_CHUNK_OUTPUTS[label].get(chunk)
+                and not any(
+                    problem.startswith("chunk-output-unbekannt:")
                     for problem in problems
-                    if not problem.startswith("chunk-invariante:")
-                ]
-                known_chunk_hits[label].append(chunk)
+                )
+            ):
+                problems.append(f"chunk-output-unbekannt: {streamed!r}")
+            known_chunk_variation = (
+                known_chunk_output
+                and reference_stream is not None
+                and streamed != reference_stream
+            )
+            if known_chunk_output:
+                problems = other_problems
+                if known_chunk_variation:
+                    known_chunk_hits[label].append(chunk)
             if not problems:
                 if not quiet:
                     result = "bekannt" if known_chunk_variation else "ok"
                     print(f"{label:<28} {chunk:>6}  {result}")
-                continue
-            if label in KNOWN:
-                known_hits[label].append(chunk)
-                if not quiet:
-                    print(f"{label:<28} {chunk:>6}  bekannt")
                 continue
             unknown += 1
             print(f"{label:<28} {chunk:>6}  VERSTOSS")
@@ -217,20 +235,16 @@ def main() -> int:
         unknown += len(residual_failures)
     else:
         print("S-14-Praefix-Messung: 215/215 exakt (4 akzeptierte Präfixe, Calls 215/215)")
-    for label, chunks in known_hits.items():
-        if chunks:
-            print(f"  bekannt: {label} — {len(chunks)}/{len(CHUNK_SIZES)} chunk-groessen")
-            print(f"    {KNOWN[label]}")
     for label, chunks in known_chunk_hits.items():
         if chunks:
             print(
                 f"  bekannte chunk-variante: {label} — "
-                f"{len(chunks)}/{len(CHUNK_SIZES)} chunk-groessen"
+                f"{len(chunks)}/{len(CHUNK_SIZES)} abweichende chunk-groessen"
             )
-            outputs = " | ".join(
-                repr(value) for value in sorted(KNOWN_CHUNK_OUTPUTS[label])
+            print(
+                "    exakt akzeptierte Chunk-Outputs: "
+                f"{KNOWN_CHUNK_OUTPUTS[label]}"
             )
-            print(f"    zugelassene Outputs: {outputs}")
     return 1 if unknown else 0
 
 

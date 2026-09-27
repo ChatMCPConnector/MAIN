@@ -20,9 +20,9 @@ Jedes Szenario nennt seine Erwartung ausdrücklich. Sie stammen aus den
 gepinnten Tests, nicht aus dem, was der Proxy gerade tut — ein Sweep, der
 nur aufzählt, ist eine sehr teure Kopie der Testsuite.
 
-`KNOWN` listet offene, bewusst akzeptierte Befunde. S-15…S-18 sind behoben;
-übrig bleibt eine bewusst akzeptierte S-14-Grenze. Sie wird ausgewiesen, nicht
-versteckt, zitiert aber nicht den Exit-Code.
+`KNOWN` listet offene, bewusst akzeptierte Streamtexte mit exakter
+Szenario-/Chunk-/Output-Zuordnung. Andere Abweichungen im selben Szenario
+bleiben Verstöße und beeinflussen den Exit-Code.
 
     python3 sweep2.py            # Tabelle + Protokoll
     python3 sweep2.py --quiet    # nur Verstoesse
@@ -66,7 +66,7 @@ SCENARIOS: list[tuple[str, list, set, str, list[str], str, str | None]] = [
     # wortrest, der bis S-15 noch davor entkam ('D'/'De'/'Der'), faellt
     # seit der filterkette in `strip_turn_start_narration` mit.
     ("praeambel-cn-eigener-part", ["我将创建文件。\n\n", CALL], READ, "我将创建文件。\n\n", ["read"], "tool_calls", None),
-    ("praeambel+call+prosa", ["Ich lese die Datei jetzt.", CALL, PROSE], READ, PROSE, ["read"], "tool_calls", None),
+    ("praeambel+call+prosa", ["Ich lese die Datei jetzt.", CALL, PROSE], READ, "\n\n" + PROSE, ["read"], "tool_calls", None),
     # --- selbst-steuerung (S-08/S-09) ------------------------------------
     ("selbst-steuerung+call", ["Der `open`-Tool-Aufruf funktioniert hier nicht, ich nutze `read`.", CALL], READ, "", ["read"], "tool_calls", None),
     ("selbst-steuerung-mittelteil", ["Der Bericht ist da. Ich nutze jetzt `read` fuer den Rest.", CALL], READ, "Der Bericht ist da.", ["read"], "tool_calls", None),
@@ -98,21 +98,47 @@ SCENARIOS: list[tuple[str, list, set, str, list[str], str, str | None]] = [
 
 CHUNK_SIZES = (1, 3, 7, 13, 29, 10_000)
 
-# Vorbestehende, am 2026-09-27 gefundene und noch nicht behobene Befunde.
-# Stand nach S-15…S-18: **ein** eintrag uebrig. Die anderen fuenf sind
-# behoben und deshalb aus der tabelle gestrichen — ein `KNOWN`-eintrag fuer
-# ein sauberes szenario waere eine luege, die den harness unbrauchbar macht
-# (er zaehlt die treffer ja selbst mit). Die messungen, die die befunde
-# belegt haben, stehen in optimierung.md.
-KNOWN: dict[str, str] = {
+# Offene Abweichungen mit exakten Szenario-/Chunk-/Output-Zuordnungen.
+# Eintrag nur fuer den Streamtext; alle uebrigen Vertragsfelder muessen
+# trotzdem stimmen.
+KNOWN: dict[str, dict[int, tuple[str, ...]]] = {
+    # Exakte, bereits verifizierte Varianten. Andere Fehler desselben
+    # Szenarios (Calls, finish_reason oder Body) bleiben unbekannt/rot.
+    "selbst-steuerung+call": {
+        1: ("D",),
+        3: ("Der ",),
+    },
+    # Das Leerzeichen wurde vor Erkennung/Abschluss der folgenden Narration
+    # bereits gestreamt; nachtraegliches Zuruecknehmen wuerde den Stream aendern.
+    "selbst-steuerung-mittelteil": {
+        1: ("Der Bericht ist da. ",),
+        3: ("Der Bericht ist da. ",),
+    },
+}
+KNOWN_DETAILS = {
     "selbst-steuerung+call": (
-        "S-14 (bewusst akzeptiert, nicht S-15): nur der wortrest vor der "
-        "ersten werkzeug-marke entkommt. Die selbst-steuerung steht hier am "
-        "ANFANG des turns, es gibt also keinen fertigen satz davor, den "
-        "S-15 retten koennte — der rest ist der erste teil des ersten "
-        "satzes der narration."
+        "S-14: exakt dokumentierter Narrationsrest; nur die folgenden "
+        "Chunk-zu-Output-Zuordnungen werden akzeptiert."
+    ),
+    "selbst-steuerung-mittelteil": (
+        "S-15: bereits gestreamtes abschliessendes Leerzeichen; nur die "
+        "folgenden Chunk-zu-Output-Zuordnungen werden akzeptiert."
     ),
 }
+
+
+def _is_known_stream_only_difference(label, chunk, streamed, expected_stream, problems):
+    expected_streams = KNOWN.get(label, {}).get(chunk, ())
+    return (
+        bool(expected_streams)
+        and streamed in expected_streams
+        and problems
+        and all(
+            problem.startswith("stream: IST ")
+            and problem.endswith(f" != SOLL {expected_stream!r}")
+            for problem in problems
+        )
+    )
 
 
 def check(label, parts, allowed, expect_stream, expect_calls, expect_finish, expect_body, chunk):
@@ -124,7 +150,7 @@ def check(label, parts, allowed, expect_stream, expect_calls, expect_finish, exp
     )
     names = [entry["function"]["name"] for entry in (message.get("tool_calls") or [])]
 
-    if streamed.split() != expect_stream.split():
+    if streamed != expect_stream:
         problems.append(f"stream: IST {streamed!r} != SOLL {expect_stream!r}")
     if names != expect_calls:
         problems.append(f"aufrufe: IST {names} != SOLL {expect_calls}")
@@ -134,7 +160,7 @@ def check(label, parts, allowed, expect_stream, expect_calls, expect_finish, exp
         problems.append(
             f"body: IST {message.get('content')!r} != SOLL {expect_body!r}"
         )
-    return problems
+    return streamed, problems
 
 
 def main() -> int:
@@ -148,12 +174,14 @@ def main() -> int:
     for label, parts, allowed, expect_stream, expect_calls, expect_finish, expect_body in SCENARIOS:
         for chunk in CHUNK_SIZES:
             measurements += 1
-            problems = check(
+            streamed, problems = check(
                 label, parts, allowed, expect_stream, expect_calls,
                 expect_finish, expect_body, chunk,
             )
             if problems:
-                if label in KNOWN:
+                if _is_known_stream_only_difference(
+                    label, chunk, streamed, expect_stream, problems
+                ):
                     known_hits[label].append(chunk)
                     if not quiet:
                         print(f"{label:<30} {chunk:>6}  bekannt")
@@ -169,7 +197,8 @@ def main() -> int:
     for label, chunks in known_hits.items():
         if chunks:
             print(f"  bekannt: {label} — {len(chunks)}/{len(CHUNK_SIZES)} chunk-groessen")
-            print(f"    {KNOWN[label]}")
+            print(f"    {KNOWN_DETAILS[label]}")
+            print(f"    exakt akzeptierte Outputs je Chunk: {KNOWN[label]}")
     return 1 if violations else 0
 
 

@@ -18,6 +18,15 @@ import sys
 
 from common import ALLOWED, NARRATION, native_event, stream
 
+# Die einzigen aktuell akzeptierten Reste des S-14-Narration-Holdbacks,
+# exakt nach Chunkgroesse; jeder andere sichtbare Text ist ein Leak.
+KNOWN_NARRATION_RESIDUES = {
+    1: "D",
+    2: "De",
+    3: "Der ",
+    4: "Der ",
+}
+
 CONTROL_ANSWER = (
     "Die Datei hat 3 Zeilen. Nutze `read` mit dem Pfad, dann `bash` fuer "
     "den Rest.\n```bash\nls -la\n```\nFertig."
@@ -39,7 +48,7 @@ def main() -> int:
     short = "--short" in sys.argv
     total = len(NARRATION)
     leaks = 0
-    control_broken = 0
+    known_residues = 0
     calls_lost = 0
     print(f"narration = {total} zeichen, {len(NARRATION.splitlines())} zeilen")
     print(f"{'chunk':>5} | {'sichtbar':<52} | call")
@@ -48,13 +57,20 @@ def main() -> int:
         visible, _body, names = probe_narration(chunk_size)
         if not names:
             calls_lost += 1
-        leak = visible.strip()
-        if leak:
+        expected_residue = KNOWN_NARRATION_RESIDUES.get(chunk_size)
+        is_known_residue = visible == expected_residue
+        if visible and not is_known_residue:
             leaks += 1
-        if not short or leak or not names:
-            print(f"{chunk_size:>5} | {leak[:52]!r:<52} | {','.join(names) or '—'}")
+        elif is_known_residue:
+            known_residues += 1
+        if not short or visible and not is_known_residue or not names:
+            print(
+                f"{chunk_size:>5} | {visible[:52]!r:<52} | "
+                f"{','.join(names) or '—'}"
+            )
     print("-" * 90)
-    print(f"LEAK: {leaks}/{total} chunk-groessen mit sichtbarem narration-rest")
+    print(f"UNBEKANNTE LEAKS: {leaks}/{total} chunk-groessen")
+    print(f"Bekannte S-14-Reste: {known_residues}/{total}")
     print(f"Aufruf verloren: {calls_lost}/{total}")
 
     print()
@@ -62,13 +78,12 @@ def main() -> int:
     broken = 0
     for chunk_size in range(1, len(CONTROL_ANSWER) + 1):
         visible = probe_control(chunk_size)
-        if visible.strip() != CONTROL_ANSWER.strip():
+        if visible != CONTROL_ANSWER:
             broken += 1
             if not short or broken <= 5:
                 print(f"  chunk={chunk_size:>3} -> {visible[:70]!r}")
     print(f"  veraendert: {broken}/{len(CONTROL_ANSWER)}")
-    control_broken = broken
-    return 1 if (leaks or control_broken or calls_lost) else 0
+    return 1 if (leaks or broken or calls_lost) else 0
 
 
 if __name__ == "__main__":

@@ -25,6 +25,10 @@ cd llm-proxies/glm2api
 `eigen:<text>` (mit `\n` für Umbruch). Gibt je Delta Carry, S-05-Puffer,
 `tool_parser.pending_text` und den wirklich rausgehenden SSE-Text aus.
 
+Die Harness-Ausnahmen sind exakt pro Chunk und erwartetem Output erfasst.
+Andere Streamtexte oder Abweichungen bei Calls, Finish-Grund oder Body
+werden weiterhin als Verstöße gemeldet.
+
 ## Positivkontrolle (Pflicht)
 
 Ein Harness-Bug sieht aus wie ein Proxy-Bug — in dieser Session waren es
@@ -45,9 +49,9 @@ Messung auch dort grün, ist entweder die Messung blind oder der Fix wirkungslos
 
 | Skript | Misst | Stand |
 |---|---|---|
-| `leak_probe.py` | Narration-Rest, der den Client erreicht, je Chunkgröße 1…215; dazu die Gegenprobe „echter Antworttext mit `` `read` ``/`` `bash` ``/Fence" | 4/215 sichtbare Präfixe (`D`, `De`, `Der `, `Der ` bei Chunk 1–4), Antworttext 0/104 verändert |
-| `order_matrix.py` | Reihenfolge-Invariante über 17 Text/Call-Layouts × 10 Chunkgrößen; fünf Absatz/Call-Layouts prüfen Whitespace exakt; zusätzlich S-14-Rest über alle 215 Chunkgrößen | 170 Layout-Messungen + 215 S-14-Messungen, **0** unbekannte Abweichungen (vor S-19: 10/150 Layout-Verstöße durch verdoppelten Trenner) |
-| `sweep2.py` | Vertrags-Sweep: 23 Szenarien × 6 Chunkgrößen, Stream- **und** Non-Stream-Pfad (Text, Aufrufe, `finish_reason`, Body) | 138 Messungen, **0** unbekannte Verstöße, 1 bekannter Befund (S-14-Rest, 2/6) |
+| `leak_probe.py` | Narration-Rest je Chunkgröße 1…215; Antwort-Gegenprobe mit `read`/`bash`/Fence | 0 unbekannte Leaks; 4 exakt bekannte S-14-Präfixreste (`D`, `De`, `Der `, `Der `), 0/215 Calls verloren, Antworttext exakt 0/104 verändert |
+| `order_matrix.py` | Exakter Soll- und Chunk-Invarianzvergleich über 17 Text/Call-Layouts × 10 Chunkgrößen; zusätzlich S-14-Rest über alle 215 Chunkgrößen | 170 Layout-Messungen + 215 S-14-Messungen, 0 unbekannte Abweichungen; 4/10 exakte, dokumentierte Whitespacevarianten nur in `rand-links-im-carry` |
+| `sweep2.py` | Exakter Vertrags-Sweep: 23 Szenarien × 6 Chunkgrößen, Stream- **und** Non-Stream-Pfad (Text, Aufrufe, `finish_reason`, Body) | 138 Messungen, 0 unbekannte Verstöße; exakte Ausnahmen: S-14 (2/6) und S-15-Schlussleerzeichen (2/6); sonst alle Vertragsfelder geprüft |
 | `trace_stream.py` | Delta-für-Delta-Trace, wenn ein Fall unklar ist | Werkzeug, kein Soll |
 
 **Eigenprüfung der Harnesses** (Pflicht, sonst misst man nichts): beide
@@ -57,7 +61,14 @@ sie heute grün sind.
 
 ## Bekannte Befunde
 
-**S-15…S-19 sind behoben** (2026-09-27). S-15…S-18 waren die Funde aus dem
+**Der S-15-Produktionsrand ist nicht vollständig invariant:** bei dem
+`rand-links-im-carry`-Layout unterscheidet sich je nach Chunkgrenze ein
+abschließendes Leerzeichen. Exakte Messwerte stehen oben und in der
+Harness-Whitelist. Eine nachträgliche Korrektur im Stream wurde bewusst
+nicht vorgenommen, weil bereits ausgegebene Bytes nicht rücknehmbar sind.
+
+Die früheren S-15…S-19-Produktionsbefunde waren an den damaligen Fällen
+behoben (2026-09-27). S-15…S-18 waren die Funde aus dem
 Harness-Neuaufbau und sind an `02ceca2` und `9054325` gegengeprüft:
 vorbestehend, nicht von S-10…S-14 verursacht. Die Messungen und die
 Positivkontrollergebnisse (127 von 173 neuen Testfällen rot an `02ceca2`)
@@ -65,15 +76,15 @@ stehen in `../optimierung.md`.
 
 | Befund | Kurzfassung | Stand |
 |---|---|---|
-| **S-15** | Die S-12-Freigabeschranke verwarf auch einen fertigen, legitimen Satz; der Punkt und Leerraum am Carry-Rand starben mit der Narration. | behoben: `strip_turn_start_narration()` + `_owed_lead_edge()` |
+| **S-15** | Die S-12-Freigabeschranke verwarf auch einen fertigen, legitimen Satz; der Punkt und Leerraum am Carry-Rand starben mit der Narration. | Satzinhalt behoben mit `strip_turn_start_narration()` + `_owed_lead_edge()`; das Rand-Whitespace-Layout bleibt für Chunk 7/11/20/1000 abweichend und ist exakt dokumentiert |
 | **S-16** | Erfundenen Limit-Behauptungen gingen im Text-only-Turn durch — Stream und Body. | behoben: Limit-Filter auch ohne Calls + Body-Kette |
 | **S-17** | Apostroph als Satzende erzeugte Absatzumbruch mitten im Wort. | behoben: Apostroph aus Satzendzeichen entfernt |
 | **S-18** | Über Parts zerschnittenes DSML leckte im Stream; Ursache: Absatzregel im Markup und fehlender Holdback für angefangene Opener. | behoben: Markup-Grenze + `BEGUN_MARKUP_RE` |
-| **S-14-Rest** | 4/215 Chunkgrößen lassen vor dem ersten Backtick `'D'`, `'De'` oder `'Der '` durch (Chunk 1–4); ab Chunk 5 kein sichtbarer Rest. Höchstens vier Präfixzeichen in diesem Repro, keine generelle Wortlänge-Latenz in jedem Turn. | bewusst akzeptiert; im `sweep2` als `KNOWN` |
+| **S-14-Rest** | 4/215 Chunkgrößen lassen vor dem ersten Backtick `'D'`, `'De'` oder `'Der '` durch (Chunk 1–4); ab Chunk 5 kein sichtbarer Rest. Höchstens vier Präfixzeichen in diesem Repro, keine generelle Wortlänge-Latenz in jedem Turn. | bewusst akzeptiert; beide Harnesses erlauben ausschließlich exakte Chunk-/Output-Zuordnungen |
 | **S-19** | Trenner auf beiden Seiten eines unsichtbaren Calls verdoppelten Absatz-Newlines; auch zwei einzelne Newlines müssen sich über einen Call zu einem Absatz ergänzen. | behoben und mit vier Call-Layouts plus späterer Absatz-Gegenprobe über alle Chunkgrößen geprüft |
 
-Die ursprünglichen Coverage-Fälle `absatz-vor-call`/`absatz-nach-call`
-(20 Fälle) und `selbst-steuerung+nur-text` (7 Fälle) pinnen bestehende
-Verträge und waren an `02ceca2` bereits grün. S-19 hatte vor der ersten
-Gegenprobe 10/150 Layout-Verstöße im neuen Doppeltrenner-Fall; nach der
-Erweiterung auf fünf Absatz/Call-Layouts sind 170/170 Layout-Messungen grün.
+Der exakte Streamvergleich kann dokumentierte Whitespace-Reste nicht
+weg-normalisieren: `rand-links-im-carry` weicht für Chunk 7, 11, 20 und
+1000 nur beim abschließenden Leerzeichen von seiner Sollausgabe ab. Die
+Harness-Ausnahme gilt für vollständigen Output und exakte Chunkgröße, nicht
+für beliebige Probleme dieses Szenarios.
