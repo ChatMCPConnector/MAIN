@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # freebuff-install.sh: Installiert die Freebuff CLI (werbefinanzierter, kostenloser
 # Coding-Agent von CodebuffAI) nach $HOME/.local/share/freebuff.
-# Kanonisch: FREEBUFF_VERSION unten pinnen + dieses Skript ist der einzige Weg.
+# Kanonisch: dieses Skript ist der einzige Weg (keine Versions-Pin, s.u.).
 # setup.sh ruft es bei jedem neuen Codespace automatisch auf (idempotent).
 #
 # Modell bewusst wie opencode: Das Repo VERWALTET die Installation, die Dateien
@@ -43,7 +43,12 @@ set -euo pipefail
 
 # Muss zu `npm view freebuff version` passen, sonst zieht der Launcher sofort ein
 # neueres Binary und schreibt beim Start die .part-Reste.
-FREEBUFF_VERSION="0.0.204"
+# KEINE gepinnte Version (Nutzerentscheidung 2026-09-27): freebuff aktualisiert
+# sich so schnell, dass ein Pin ständig veraltet und die Abhaengigkeit nur
+# aergerlich macht. Installiert wird immer `latest`; ueber den Takt entscheidet
+# `setup.sh` (einmal je Codespace). Der Launcher zieht das native Binary ohnehin
+# selbst nach — ein Pin koennte das ohnehin nicht verhindern.
+FREEBUFF_SCROLL_STEP_VERSION="latest"
 readonly APP_DIR="$HOME/.local/share/freebuff"
 readonly WRAPPER="$HOME/.local/bin/freebuff"
 readonly NATIVE_DIR="$HOME/.config/manicode"
@@ -55,6 +60,17 @@ installed_version() {
   [ -f "${APP_DIR}/node_modules/freebuff/package.json" ] || return 1
   sed -nE 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
     "${APP_DIR}/node_modules/freebuff/package.json" | head -1
+}
+
+# Ohne Pin heisst "installiert": das Paket ist die aktuellste veroeffentlichte
+# Version. `npm view` kostet ~200 ms und wird nur beim Build ausgefuehrt.
+is_latest_installed() {
+  local have want
+  have="$(installed_version || true)"
+  [ -n "$have" ] || return 1
+  want="$(npm view freebuff version 2>/dev/null || true)"
+  [ -n "$want" ] || return 1
+  [ "$have" = "$want" ]
 }
 
 write_wrapper() {
@@ -111,10 +127,9 @@ patch_scroll_step() {
   [ -f "$bin" ] || return 0
   # Ein laufendes Executable laesst sich unter Linux nicht ueberschreiben
   # (ETXTBSY). Solange eine Session laeuft, wird der Patch uebersprungen und
-  # beim naechsten Lauf ohne Session nachgeholt — genau der Fall nach einem
-  # Auto-Update, den der Idempotenz-Pfad ohnehin abdeckt.
+  # beim naechsten Lauf ohne Session nachgeholt.
   if pgrep -f "$bin" >/dev/null 2>&1; then
-    echo "[freebuff] Session laeuft -> Scroll-Patch erst nach deren Ende (Rad bleibt bis dahin bei 80 %)"
+    echo "[freebuff] Session laeuft -> Scroll-Patch erst nach deren Ende (Rad springt bis dahin in 0.8-Seiten)"
     return 0
   fi
   case "$want" in
@@ -122,31 +137,66 @@ patch_scroll_step() {
     *) echo "[freebuff] FREEBUFF_SCROLL_STEP='${want}' ignoriert (muss 0.x sein)"; want=0.5 ;;
   esac
   if ! command -v python3 >/dev/null 2>&1; then
-    echo "[freebuff] WARN: kein python3 -> Scroll-Patch uebersprungen (Rad bleibt bei 80 %)"
+    echo "[freebuff] WARN: kein python3 -> Scroll-Patch uebersprungen (Rad springt in 0.8-Seiten)"
     return 0
   fi
   python3 - "$bin" "$want" "${NATIVE_DIR}/freebuff.orig" <<'PYEOF'
-import shutil, sys
+"""Schrittweite des Seitenscrolls per Mustersuche patchen.
+
+Der Faktor ist im Bundle eine Variable, die an BEIDEN Scrollrichtungen sitzt:
+
+    X = P.viewport.height,  v = Math.floor(X * <VAR>),  ...
+
+0.0.204 hiess sie `fOA`, 0.1.0 `$hA`. Der namensbasierte Patch (`fOA=0.8`) war
+dadurch beim ersten Update tot — deshalb jetzt **Mustersuche statt Namenssuche**,
+damit ein Rename nichts killt:
+
+  1. Use-Stelle: `Math.floor(<A>*<VAR>)` im Kontext von `viewport.height`.
+  2. Definition: `<VAR>=<0.x>` — genau eine Stelle, sonst unangetastet.
+  3. Diese eine Zahl ersetzen, gleiche Laenge (0.8 -> 0.5).
+
+Bricht die Struktur kuenftig ab, meldet das Skript "Struktur nicht erkannt"
+und laesst das Binary unangetastet — nie still falsch.
+"""
+import os, re, shutil, sys
+
 path, want, backup = sys.argv[1], sys.argv[2], sys.argv[3]
-old, new = b"fOA=0.8", b"fOA=" + want.encode()
-if len(old) != len(new):
-    print("  Laengendifferenz -> nicht gepatcht"); sys.exit(0)
 data = open(path, "rb").read()
-n = data.count(old)
-if n == 0:
-    print("  " + ("bereits gepatcht" if data.count(new) else
-                  "Muster nicht gefunden (Upstream umbenannt) -> unangetastet"))
+
+use = re.compile(rb"Math\.floor\(([A-Za-z0-9_$]{1,4})\*([A-Za-z0-9_$]{1,6})\)")
+cands = {m.group(2) for m in use.finditer(data)
+         if b"viewport.height" in data[max(0, m.start() - 200):m.start() + 200]}
+if not cands:
+    print("  Struktur nicht erkannt (kein Math.floor(X*VAR) neben viewport.height) -> unangetastet")
     sys.exit(0)
-if n != 1:
-    print(f"  {n} Treffer -> Abbruch, unangetastet"); sys.exit(0)
-if not __import__("os").path.exists(backup):
+
+targets = []
+for var in cands:
+    for m in re.finditer(re.escape(var) + rb"=(0\.[0-9]+)(?![0-9A-Za-z_$])", data):
+        targets.append((m.start(1), m.group(1)))
+if len(targets) != 1:
+    names = sorted(c.decode() for c in cands)
+    print(f"  {len(targets)} Definitionsstellen fuer {names} -> unangetastet (statt zu raten)")
+    sys.exit(0)
+
+off, old = targets[0]
+if old.decode() == want:
+    print(f"  Schrittweite bereits {want}")
+    sys.exit(0)
+new = want.encode()
+if len(new) != len(old):
+    print("  Laengendifferenz -> unangetastet")
+    sys.exit(0)
+if not os.path.exists(backup):
     shutil.copy2(path, backup)
+out = bytearray(data)
+out[off:off + len(old)] = new
 try:
-    open(path, "wb").write(data.replace(old, new))
+    open(path, "wb").write(bytes(out))
 except OSError as exc:
-    # Z. B. ETXTBSY, wenn zwischen Pruefung und Schreiben eine Session startet.
-    print(f"  nicht geschrieben: {exc}"); sys.exit(0)
-print(f"  gepatcht: 0.8 -> {want} (Backup: {backup})")
+    print(f"  nicht geschrieben: {exc}")
+    sys.exit(0)
+print(f"  Schrittweite {old.decode()} -> {want} (Backup: {backup})")
 PYEOF
 }
 
@@ -171,25 +221,25 @@ cleanup_partial_downloads() {
 # write_wrapper laeuft auch im "schon da"-Fall: der Wrapper haelt Repo-Pfade
 # (pty-Filter) und wird bei jedem Build neu erzeugt, sonst driftet er still
 # weiter, wenn sich der Repo-Pfad aendert.
-if [ -x "$WRAPPER" ] && [ "$(installed_version || true)" = "$FREEBUFF_VERSION" ] && [ -s "${NATIVE_DIR}/freebuff" ]; then
+if [ -x "$WRAPPER" ] && is_latest_installed && [ -s "${NATIVE_DIR}/freebuff" ]; then
   write_wrapper
   cleanup_partial_downloads
   # Auch im "schon da"-Fall: ein Auto-Update hat das Binary ersetzt, dann ist der
   # Patch weg und muss neu drauf.
   patch_scroll_step
   verify_after_patch
-  echo "[freebuff] v${FREEBUFF_VERSION} bereits installiert (${APP_DIR}); Wrapper: ${WRAPPER}"
+  echo "[freebuff] v$(installed_version) (aktuellste) bereits installiert (${APP_DIR}); Wrapper: ${WRAPPER}"
   exit 0
 fi
 
-echo "[freebuff] Installiere v${FREEBUFF_VERSION} nach ${APP_DIR}..."
+echo "[freebuff] Installiere freebuff@latest nach ${APP_DIR}..."
 mkdir -p "$APP_DIR"
 if [ ! -f "${APP_DIR}/package.json" ]; then
   (cd "$APP_DIR" && npm init -y >/dev/null)
 fi
 # Kein Lockfile-Drift: die Version ist gepinnt, das Lockfile wird nur bei der
 # Neuinstallation geschrieben (liegt in $HOME, ist damit ephemer).
-(cd "$APP_DIR" && npm install --no-audit --no-fund --loglevel=error "freebuff@${FREEBUFF_VERSION}")
+(cd "$APP_DIR" && npm install --no-audit --no-fund --loglevel=error "freebuff@${FREEBUFF_SCROLL_STEP_VERSION}")
 write_wrapper
 
 # Erststart holt das native Binary (~136 MB) nach ~/.config/manicode. Timeout,
@@ -208,4 +258,4 @@ if [ -s "${NATIVE_DIR}/credentials.json" ]; then
 else
   echo "[freebuff] KEIN Login: einmalig 'freebuff login' (Browser-URL), dann ./infra/scripts/secrets.sh lock"
 fi
-echo "[freebuff] OK v${FREEBUFF_VERSION}. Start: cd <projekt> && freebuff"
+echo "[freebuff] OK v$(installed_version). Start: cd <projekt> && freebuff"

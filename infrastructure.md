@@ -494,53 +494,30 @@ TUI-Stream verifiziert: alle vier Maus-Sequenzen weg, `?2004h` und `?1004h`
 da. Bidirektional-Relay, SIGWINCH-Durchreichung und Exit-Code sind
 implementiert und getestet.
 
-**3. Die Pfeiltasten-Frage, und warum sie nicht sauber lösbar ist.** Ohne
-Mouse-Reporting schickt xterm.js das Mausrad als `up`/`down` — im Key-Log
+**3. Die Pfeiltasten-Frage — final und bewusst anders gelöst.**
+Ohne Mouse-Reporting schickt xterm.js das Mausrad als `up`/`down` — im Key-Log
 belegt: **ein Radschwung ≈ 30 Ereignisse pro Sekunde, ein Tastendruck = ein
-einzelnes.** Ein *einzelner* Rad-Klick ist damit byte- und taktgleich zu einem
-Tastendruck; an den Bytes ist nichts zu unterscheiden, nur am Takt. Die
-Burst-Heuristik (25-ms-Fenster: über dem Rad-Takt sub-ms, unter dem
-Wiederholungstakt ~33 ms) trennt **Gesten** von Tastendrücken, aber nicht den
-Einzelklick vom Einzeldruck. Dazu der Zielkonflikt: In freebuff ist `up` auf
-leerer Eingabe per Definition `history-up` — „letzte Nachricht holen“. Das Rad
-soll das nicht, der Pfeil schon.
+einzelnes.** An den Bytes ist ein *einzelner* Rad-Klick damit nicht von einem
+Tastendruck zu unterscheiden, nur am Takt.
 
-**Lösung: 1:1 die opencode-Regel, angewandt auf den Eingabe-Inhalt.**
-opencode löst es per Config (`.opencode/tui.json`): `messages_half_page_up: up`
-— die Pfeiltasten gehören dem Scrollen — plus `input_move_up/down: "none"`, damit
-der Input sie nicht sieht, plus `history_previous: ctrl+up`, weil die Historie
-umziehen musste. **Diese drei Zeilen sind der Fix, auf den sich der Nutzer
-berufen hat, und sie sind 1:1 übertragbar — nur nicht per Config**, weil
-freebuff keine Keybind-Config hat. Der Filter ist die Stelle, an der die drei
-Zeilen nachgebaut werden. Der relevante Zustand ist **der Inhalt** der Eingabe,
-nicht ihre Länge: das Slash-Menü ist genau dann offen, wenn die Eingabe mit
-`/` beginnt.
+**Nutzerwunsch (2026-09-27): Pfeiltasten bedienen die Menüs, nicht das Scrollen.**
+Deshalb ist die Regel jetzt **burst-only**:
 
-| Eingabe | Pfeil / Rad | Folge |
+| Eingangsbild | Filter | Folge |
 |---|---|---|
-| **beginnt mit `/`** (Menü offen) | nativ, bzw. Burst-Test bei Geste | Slash-Menü bedienbar, Rad-Geste blättert trotzdem |
-| **alles andere** (leer, Entwurf, Text, nach Enter) | **immer** sofort `PageUp`/`PageDown`, ohne Fenster | das Rad **scrollt die Unterhaltung und nie die Prompt-Historie** |
+| **1 Tastendruck** (Pfeil) | nativ, nach 25 ms freigegeben | Slash-Menü und Auswahl bedienbar — **das ist der Auftrag** |
+| **≥ 2 gleichgerichtete Ereignisse binnen 25 ms** (Rad-Geste) | `PageUp` / `PageDown` | das Rad blättert die Unterhaltung |
+| echte `PageUp`/`PageDown` | unverändert durchgereicht | Tastaturscrollen bleibt |
+| `FREEBUFF_ARROW_PAGE=1` | jeder Pfeil wird Seite | alte Pauschal-Umleitung für Fehlersuche |
 
-**Die Regel war vorher zu eng — das war der verbliebene Fehler.** Zuerst galt die
-Umleitung nur bei *leerer* Eingabe; sobald Text stand, wurde der Pfeil
-durchgelassen, und freebuffs `history-up` konnte doch zuschlagen. Der Nutzer sah
-genau das („manchmal scrollt das Rad die Chatbox mit“). Bei einer einzeiligen
-Eingabe gibt es für vertikale Bewegung ohnehin nichts Vernünftliches — `up`/`down`
-sind dort entweder Historie oder gar nichts. Also: **Pfeiltasten gehören dem
-Scrollen, der Input sieht sie nicht** — dieselbe Aussage wie
-`input_move_up: "none"`, nur per Filter statt per Config.
-
-**Preise, bewusst akzeptiert:** Auf der leeren Eingabe holt `up` nicht mehr die
-letzte Nachricht (dafür `/history`); bei einem *befüllten* Entwurf scrollt `up`
-statt in der Zeile zu navigieren — bei einzeiligem Entwurf ist der Verlust
-Leerlauf. Zwei echte Bugs hat die Testarbeit zu diesem Teil gefunden: Backspace
-(`0x7f`/`0x08`) wurde als druckbares Zeichen **gezählt** (ein Backspace machte die
-Eingabe länger), und der Kontext wurde **pro Chunk statt pro Position**
-ausgewertet (Tippen und Pfeil im selben Read → Slash-Menü kaputt). Beide als
-Testfälle festgehalten, Testabdeckung: Inhalt statt Länge, Enter/Backspace/Ctrl+U/
-Paste/leer/Entwurf, `Hey Bye` im Chat, Slash-Menü, `Enter`+Pfeil im selben Read,
-`links`/`rechts` unangetastet — end-to-end am pty belegt:
-`Hey ␍ ␍ Bye ␍` + zwei Radklicks → `ESC[5~ ESC[5~`.
+**Preis, bewusst akzeptiert:** Ein **einzelner** Rad-Klick (keine Geste) läuft
+nativ durch — auf leerer Eingabe rollt das in freebuff die Prompt-Historie
+zurück (`history-up`). Bis 2026-09-27 wurde genau dieser Fall über den
+Eingabe-Inhalt abgefangen (`track_input`, entfernt); die Regel ist gewichen,
+weil **Menü-Bedienung wichtiger ist** als ein sauberer Einzelklick. Wer den
+Klick nicht riskieren will, senkt `FREEBUFF_WHEEL_GAP_MS` — dann zählt auch ein
+Einzelklick als Geste. Die 25 ms liegen über dem Rad-Takt (sub-ms) und unter dem
+Tastenwiederholungs-Takt (~33 ms).
 
 **4. Umleiten des Rads selbst geht nicht.** `.vscode/keybindings.json` mit
 `mousewheel up`/`down` ist **kein gültiges Keybinding**: VS Code listet als
@@ -550,15 +527,34 @@ Nummernblock — `mousewheel` steht nicht darin und wird nicht dispatcht. Die
 probeweise eingefügte Datei ist entfernt; der Weg ist im Changelog dokumentiert,
 damit ihn niemand wieder geht.
 
-**5. Offen: die Scroll-Schrittweite.** freebuff hat sich **selbst auf 0.1.0**
-aktualisiert (npm-Paket bleibt 0.0.204, der Launcher zieht das Binary immer
-neu). Der Anker des Halbseiten-Patches (`fOA=0.8` → `0.5`) existiert in 0.1.0
-nicht mehr — `fOA` ist dort ein React-`memo`-Bezeichner, `viewport.height *
-Faktor` kommt nicht mehr vor, `scrollLines` ist **intern** (Split-Footer), keine
-Config. Der Patch scheitert **laut** („Muster nicht gefunden → unangetastet")
-statt still falsch zu liegen. **Nächster Schritt, wenn es gebraucht wird:** den
-Faktor **mustersuche-basiert** finden statt namensbasiert, damit ein Rename ihn
-nicht killt.
+**5. Scroll-Schrittweite: kein Versions-Pin, Patch per Mustersuche.**
+freebuff aktualisiert sich so schnell, dass ein Pin ständig veraltet — der
+Nutzer hat ihn am 2026-09-27 abgeschafft. `freebuff-install.sh` installiert
+jetzt `freebuff@latest` und überspringt nur, wenn die installierte Version
+**gleich** der aktuellsten aus `npm view` ist.
+
+Die Schrittweite selbst (`0.8` Bildschirmhöhe pro Tastendruck) bleibt ein
+**Vendor-Patch**, aber **mustersuche- statt namensbasiert** — das war die
+Lehre aus dem ersten Update:
+
+| | 0.0.204 | 0.1.0 |
+|---|---|---|
+| Faktor-Variable | `fOA` | `$hA` |
+| Definition | `fOA=0.8` | `$hA=0.8` |
+| namensbasierter Patch | ✅ | ❌ **tot** (Rename) |
+
+Der Patch findet jetzt die **Struktur**, nicht den Namen:
+`Math.floor(<A>*<VAR>)` im Kontext von `viewport.height` → Definition
+`<VAR>=<0.x>` → **genau diese eine** Zahl ersetzen (0.8 → 0.5, gleiche Länge).
+Damit überlebt er ein Rename. Bricht die Struktur künftig ab, meldet das Skript
+`Struktur nicht erkannt` und lässt das Binary **unangetastet** — nie still
+falsch. `FREEBUFF_SCROLL_STEP` steuert den Zielwert (Default **0.5**, also
+halbe Seite). Weitere Sicherheitskette wie gehabt: Patch nur bei genau einer
+Definitionsstelle, Backup unter `~/.config/manicode/freebuff.orig`, und
+`verify_after_patch` startet das Binary und **spielt das Backup zurück**, wenn es
+nicht mehr startet. Läuft gerade eine Session, wird der Patch übersprungen
+(ETXTBSY) und beim nächsten Build nachgeholt. Rückweg jederzeit:
+`cp ~/.config/manicode/freebuff.orig ~/.config/manicode/freebuff`.
 
 **6. Messen statt Behaupten.** `FREEBUFF_PTY_DEBUG=<datei>` protokolliert nur
 Esc-/Steuersequenzen, die das Kind liest (getippter Text nur als Byte-Laenge
@@ -728,6 +724,9 @@ Proxy bei jedem Start automatisch hoch.
   **(a)** Der Backup-Hook stand auf `./infra/scripts/gdrive-backup.sh backup || true` — ein totes Backup war damit unsichtbar, und Drive ist die einzige Kopie außerhalb von GitHub. Jetzt: Warnblock nach dem Push mit dem Nachhol-Befehl `backup --force`; der Push-Erfolg bleibt unangetastet. Mit absichtlich kaputtem Backup-Skript verifiziert (Warnung erscheint, Save meldet Erfolg).
   **(b)** Nur `AGENTS.md` enthielt die Regel — die liest aber nur opencode/Codex. Claude Code liest `CLAUDE.md`, Gemini CLI `GEMINI.md`, Cursor `.cursorrules`, Copilot `.github/copilot-instructions.md`. **Neu angelegt:** `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.github/copilot-instructions.md` — jeweils kurz, mit **verbindlichem** Zeiger auf `AGENTS.md` (doppelte lange Regeln driften auseinander, eine kurze Kopie mit Zeiger nicht). In `AGENTS.md` selbst drei Zusätze aus dieser Sitzung ergänzt: **nur eigene Pfade committen** (`git commit -- <pfad>` — `save.sh` macht vorher `git add -A`, und das Repo ist shared, live passiert), **kein Autosave-Daemon** (macht den Save-Aufruf zum einzigen Auslöser für Commit *und* Backup) und **Testläufe nicht committten**. **Gegen das Auseinanderlaufen prüft `verify-codespace.sh`** jetzt in einem neuen Abschnitt, dass alle fünf Client-Dateien existieren, die Save-Regel enthalten und die Pfad-Regel dokumentiert ist; ein neuer Client braucht eine Datei nach dem Muster plus eine Zeile im Check.
   **Und ein Fehler, den ich dabei selbst gemacht habe:** Mein Verifikationstest für (a) lief über `save.sh` mit einer Message — und erzeugte damit einen **echten Commit auf `origin/main`**, der das `gdrive-backup.sh` als 2-Zeilen-Stub enthielt. Behoben: Commit auf den echten Inhalt umgeschrieben und mit `--force-with-lease` gepusht (Nutzungsfreigabe), Message korrigiert. Die Lehre steht jetzt als eigene Regel in `AGENTS.md` unter „Testläufe nicht committten“ — ich hätte den Test mit einem Wegwerf-Repo fahren müssen, nicht über den echten Save.
+- 2026-09-27: **Pfeiltasten zurück an die Menüs, und der Scroll-Patch lernt aus seinem eigenen Tod: Mustersuche statt Name.** Zwei Nutzeraufträge: (a) „Pfeiltasten gehören dem Scrollen — das soll nicht sein, Pfeiltasten sollen die Menüs bedienen können, nur die Pfeiltasten rausnehmen", (b) „keine Versionsnummern mehr, die aktualisieren immer schnell — und ich will die Scrollgeschwindigkeit wie zuvor".
+  **(a)** Die Regel ist jetzt **burst-only**: ein einzelner Tastendruck läuft nativ durch (Slash-Menü, Auswahl — der Auftrag), eine **Geste** (≥ 2 gleichgerichtete Ereignisse binnen 25 ms) wird zu `PageUp`/`PageDown` (das Rad blättert die Unterhaltung), echte `PageUp`/`PageDown` gehen unverändert durch. Damit ist die Kontextlogik (`track_input`, 512-Zeichen-Inhalt, Erkennung des Slash-Menüs) **überflüssig geworden und entfernt** — sie diente nur dazu, den *einzelnen* Rad-Klick abzufangen, und genau der weicht jetzt dem Auftrag. **Preis, bewusst akzeptiert:** ein einzelner Rad-Klick (keine Geste) ist byte- und taktgleich zu einem Tastendruck und läuft nativ durch, rollt auf leerer Eingabe also die Prompt-Historie zurück. Das ist der Fall, der den Nutzer zuletzt gestört hat — er ist dem Wunsch nach Menü-Bedienung gewichen, und wer ihn nicht riskieren will, senkt `FREEBUFF_WHEEL_GAP_MS` (dann zählt auch der Einzelklick als Geste). Verifiziert: 1× hoch = nativ, 1× runter = nativ, Geste 2/4/6 und gemischt = Seiten, `links`/`rechts` unberührt, `FREEBUFF_ARROW_PAGE=1` erzwingt Seiten, zerrissene Sequenz über zwei Reads korrekt; end-to-end am pty: 8 Rad-Ereignisse → 8 `ESC[5~`, echte `ESC[5~`/`ESC[6~` unverändert.
+  **(b)** **Versions-Pin entfernt** — `freebuff-install.sh` installiert `freebuff@latest` und überspringt nur, wenn die installierte Version der aktuellsten aus `npm view` entspricht. **Und der Scroll-Patch ist auf Mustersuche umgebaut**, weil sein Tod die Ursache exakt belegt: 0.0.204 hieß die Faktor-Variable `fOA`, 0.1.0 heißt sie `$hA` — beide mit dem Wert 0.8, und der namensbasierte Patch (`fOA=0.8`) war beim ersten Update tot. Jetzt sucht er die Struktur: `Math.floor(<A>*<VAR>)` neben `viewport.height` → Definition `<VAR>=<0.x>` → genau diese eine Zahl ersetzen. Ein Rename killt ihn damit nicht mehr; bricht die Struktur ab, meldet er `Struktur nicht erkannt` und lässt das Binary unangetastet. Am echten Binary verifiziert: erkannte Variable `$hA`, Definitionsstelle 1, `0.8 → 0.5`, gepatchtes Binary startet (0.1.0), Größe unverändert, Idempotenz bestätigt.
 ## Changelog
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.
