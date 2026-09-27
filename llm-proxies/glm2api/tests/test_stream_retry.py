@@ -827,6 +827,19 @@ def test_no_notice_when_nothing_was_blocked():
     """Echte Gegenprobe: ein turn ganz ohne blockierten versuch darf
     keine notice erzeugen — sonst sendet der proxy bei jedem normalen
     tool-loop eine alarmmeldung."""
+    client, calls = _make_client([[_finish_event("plain answer")]])
+
+    chunks = list(
+        client.stream_chat_completion(
+            {"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]}
+        )
+    )
+    text = "".join(chunk.decode("utf-8") for chunk in chunks)
+
+    assert calls["count"] == 1
+    assert "plain answer" in text
+    assert "[blocked_tool_notice]" not in text
+    assert "[loop_guard_notice]" not in text
 
 
 # --- P4: C-08, C-15, C-19, C-20 ------------------------------------------

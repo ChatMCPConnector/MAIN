@@ -77,20 +77,48 @@ LAYOUTS: list[tuple[str, list, str, int]] = [
 CHUNK_SIZES = (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000)
 S14_PREFIXES = {1: "D", 2: "De", 3: "Der ", 4: "Der "}
 
-# Vorbestehende, bereits bewertete Befunde — hier wird der SOLL-wert des
-# layouts verletzt, die verletzung liegt also in der abweichung.
-# Stand 2026-09-27 nach S-15…S-19: **leer**. Der S-14-Rest wird separat
-# vermessen und exakt gegen seine bewusst akzeptierte Chunk-Praefixe geprueft.
+# Vorbestehende, bewusst akzeptierte Layout-Befunde. Die Whitelist gilt
+# fuer konkrete Outputs, nicht pauschal fuer jedes Problem eines Labels.
 KNOWN: dict[str, str] = {}
 
+# Die Sollprüfung dieses Layouts ignoriert Rand-Whitespace per `.split()`,
+# der neue exakte Chunkvergleich macht die bestehende Chunk-Variation sichtbar.
+# Beide Outputs haben denselben sichtbaren Satz; genau diese zwei Werte sind
+# bekannt. Ein dritter/anderer Output wird weiterhin als unbekannt rot.
+KNOWN_CHUNK_OUTPUTS: dict[str, frozenset[str]] = {
+    "rand-links-im-carry": frozenset(
+        {"Der Bericht ist fuer Sie. ", "Der Bericht ist fuer Sie."}
+    ),
+}
 
-def check(parts: list, expected: str, expected_calls: int, chunk: int, label: str = "") -> list[str]:
+
+def check(
+    parts: list,
+    expected: str,
+    expected_calls: int,
+    chunk: int,
+    label: str = "",
+    *,
+    expected_stream: str | None = None,
+) -> tuple[str, list[str]]:
     streamed, _body, accumulator = stream(parts, chunk)
     problems: list[str] = []
 
     if streamed.split() != expected.split():
         problems.append(f"soll-vergleich: IST {streamed!r} != SOLL {expected!r}")
-    if label in {"absatz-vor-call", "absatz-nach-call", "absatz-beide-seiten-call", "einzelnewline-beide-seiten-call", "späterer-absatz-nach-call"} and streamed != expected:
+    if label in KNOWN_CHUNK_OUTPUTS and streamed not in KNOWN_CHUNK_OUTPUTS[label]:
+        problems.append(f"chunk-output-unbekannt: {streamed!r}")
+    if expected_stream is not None and streamed != expected_stream:
+        problems.append(
+            f"chunk-invariante: IST {streamed!r} != REFERENZ {expected_stream!r}"
+        )
+    if label in {
+        "absatz-vor-call",
+        "absatz-nach-call",
+        "absatz-beide-seiten-call",
+        "einzelnewline-beide-seiten-call",
+        "späterer-absatz-nach-call",
+    } and streamed != expected:
         # Bei diesen Layouts ist Whitespace Teil des Vertrags —
         # der Absatztrenner muss vor UND nach dem Call genau einmal erhalten
         # bleiben. Der allgemeine Vergleich normalisiert sonst Leerraum.
@@ -108,7 +136,7 @@ def check(parts: list, expected: str, expected_calls: int, chunk: int, label: st
     for entry in calls:
         if not (entry.get("function") or {}).get("arguments"):
             problems.append(f"aufruf ohne argumente: {entry}")
-    return problems
+    return streamed, problems
 
 
 def check_s14_residuals() -> list[tuple[int, str]]:
@@ -132,17 +160,43 @@ def main() -> int:
     measurements = 0
     unknown = 0
     known_hits: dict[str, list[int]] = {label: [] for label in KNOWN}
+    known_chunk_hits: dict[str, list[int]] = {
+        label: [] for label in KNOWN_CHUNK_OUTPUTS
+    }
 
     print(f"{len(LAYOUTS)} layouts × {len(CHUNK_SIZES)} chunk-groessen")
     print(f"{'layout':<28} {'chunk':>6}  ergebnis")
     print("-" * 78)
     for label, parts, expected, expected_calls in LAYOUTS:
+        reference_stream: str | None = None
         for chunk in CHUNK_SIZES:
             measurements += 1
-            problems = check(parts, expected, expected_calls, chunk, label)
+            streamed, problems = check(
+                parts,
+                expected,
+                expected_calls,
+                chunk,
+                label,
+                expected_stream=reference_stream,
+            )
+            if reference_stream is None:
+                reference_stream = streamed
+            known_chunk_variation = (
+                label in KNOWN_CHUNK_OUTPUTS
+                and streamed in KNOWN_CHUNK_OUTPUTS[label]
+                and any(problem.startswith("chunk-invariante:") for problem in problems)
+            )
+            if known_chunk_variation:
+                problems = [
+                    problem
+                    for problem in problems
+                    if not problem.startswith("chunk-invariante:")
+                ]
+                known_chunk_hits[label].append(chunk)
             if not problems:
                 if not quiet:
-                    print(f"{label:<28} {chunk:>6}  ok")
+                    result = "bekannt" if known_chunk_variation else "ok"
+                    print(f"{label:<28} {chunk:>6}  {result}")
                 continue
             if label in KNOWN:
                 known_hits[label].append(chunk)
@@ -167,6 +221,16 @@ def main() -> int:
         if chunks:
             print(f"  bekannt: {label} — {len(chunks)}/{len(CHUNK_SIZES)} chunk-groessen")
             print(f"    {KNOWN[label]}")
+    for label, chunks in known_chunk_hits.items():
+        if chunks:
+            print(
+                f"  bekannte chunk-variante: {label} — "
+                f"{len(chunks)}/{len(CHUNK_SIZES)} chunk-groessen"
+            )
+            outputs = " | ".join(
+                repr(value) for value in sorted(KNOWN_CHUNK_OUTPUTS[label])
+            )
+            print(f"    zugelassene Outputs: {outputs}")
     return 1 if unknown else 0
 
 

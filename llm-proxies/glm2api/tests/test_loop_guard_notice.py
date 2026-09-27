@@ -1,11 +1,13 @@
-"""T-25: der loop guard war fuer das modell unsichtbar.
+"""T-25: verworfene Tool-Calls muessen fuer das Modell sichtbar sein.
 
-Live-Fall 2026-09-26 (`ses_f21fbf23…`): das modell rief 10x in EINEM turn
-`open` mit identischem ziel `/workspaces/MAIN/glm2api`. Der proxy mappt
-`open` auf `read` (translator.map_native_open_tool_call), der loop guard
-lässt 2 durch und verwirft 8 — **ohne jede rueckmeldung**. Das modell sah
-10 calls und 2 ergebnisse, schloss auf ein nicht existentes limit
-("Tool-Limit (8/8 Runden) erreicht"), brach ab und verlangte einen neustart.
+Historischer Live-Fall 2026-09-26 (`ses_f21fbf23…`): das modell rief 10x in
+EINEM turn `open` mit identischem ziel `/workspaces/MAIN/glm2api`. Der proxy
+mappt `open` auf `read` (translator.map_native_open_tool_call), der loop
+guard ließ 2 durch und verwarf 8. Die damalige Version gab dazu keine
+Rueckmeldung; das modell schloss auf ein nicht existentes Limit ("Tool-Limit
+(8/8 Runden) erreicht"), brach ab und verlangte einen Neustart. Der Guard
+liefert inzwischen eine sichtbare Notice; die Tests darunter schützen sowohl
+das Verwerfen als auch die Rueckmeldung.
 
 Diese tests halten fest:
   - der guard verwirft weiter (doppelt ausgefuehrt wird nicht),
