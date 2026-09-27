@@ -1646,9 +1646,17 @@ def _sentence_end_after(text: str, position: int) -> int:
 # leere ERFOLG, den T-06 abstellen sollte. Deshalb die reihenfolge:
 # markup wird zuerst ausgeschlossen (siehe `contains_tool_markup`), der
 # narration-holdback fasst danach nur noch Prosa an.
+# S-14: die werkzeug-namen, an denen die narration festgemacht wird. Aus
+# dieser einen liste werden BEIDE ausloeser gebaut: das vollstaendige
+# token (`_NARRATION_TOKEN_RE`) und der angefangene
+# (`_NARRATION_BEGUN_TOKEN_RE`).
+_NARRATION_TOOL_NAMES = (
+    "open", "open_url", "read", "write", "edit", "bash", "webfetch", "glob", "grep",
+)
+
 _NARRATION_TOKEN_RE = re.compile(
     r"(?i)(?:"
-    r"`(?:open|open_url|read|write|edit|bash|webfetch|glob|grep)`"
+    r"`(?:" + "|".join(_NARRATION_TOOL_NAMES) + r")`"
     r"|\bopen[_-]?(?:url)?\b"
     r"|\b(?:tool|werkzeug)[-_ ]*(?:calls?|aufrufe?|limit)?\b"
     r"|\baufr(?:u|ü)f"
@@ -1657,6 +1665,39 @@ _NARRATION_TOKEN_RE = re.compile(
     r"|\bich\b|\bstattdessen\b|\binstead\b"
     r")"
 )
+
+
+def _build_begun_token_regex(names: tuple[str, ...]) -> re.Pattern[str]:
+    """Der ANGEFANGENE werkzeug-token: alle (echten und abgeschnittenen)
+    anfaenge von `names`, direkt hinter einem noch offenen backtick.
+
+    S-14: `_NARRATION_TOKEN_RE` braucht den vollstaendigen namen in
+    backticks. Schneidet der upstream vorher — und genau das tut er bei
+    'The `open` tool only works…' — ist der erste name-teil noch gar
+    nicht da, der ausloeser greift nicht, und das ERSTE fragment der
+    narration erreicht den client unwiderruflich (gemessen: 'Der `',
+    'De', 'Der' bei chunk-groessen 1-5 von 215, harness/leak_probe.py;
+    gegengeprueft an `02ceca2~1` — der fehler ist vorbestehend, nicht von
+    S-10/S-11/S-12 verursacht).
+
+    Der ausloeser ist derselbe billige tast wie `_NARRATION_TOKEN_RE`:
+    gehalten wird, solange der satz offen ist UND das ende ein
+    angefangener werkzeug-token ist. Was er zu viel zurueckhaelt (jeder
+    satz, der mit einem backtick endet), kommt mit der naechsten
+    satzgrenze ungekuerzt wieder raus — verzoegerung, kein textverlust.
+    Das blanke backtick gehoert dazu: es ist der fall 'The `' (chunk 5),
+    in dem noch gar kein name-teil angekommen ist.
+    """
+    fragments = {name[:length] for name in names for length in range(1, len(name) + 1)}
+    alternation = "|".join(sorted(fragments, key=len, reverse=True))
+    # zwei backticks reichen: ein doppel-backtick am delta-ende ist der
+    # anfang eines `` ``read`` ``-spans, kein drittes noetig (das waere
+    # der anfang eines code-fences — der hat mit der narration nichts zu
+    # tun und wird von der S-05-fence-logik gehalten).
+    return re.compile(r"`{1,2}(?:" + alternation + r")?\Z", re.IGNORECASE)
+
+
+_NARRATION_BEGUN_TOKEN_RE = _build_begun_token_regex(_NARRATION_TOOL_NAMES)
 
 # zeichen-deckel. ab dieser länge ist der „offene satz" so lang, dass es
 # keinen grund mehr gibt zu warten (der upstream setzt satzgrenzen weit
@@ -1690,6 +1731,14 @@ def _self_steering_holdback(text: str) -> bool:
     das in einer selbst-narration vorkommt (`_NARRATION_TOKEN_RE`). Ein
     text, der mit einem vollständigen satz endet, braucht nie zu warten.
 
+    S-14: derselbe Auslöser gilt für den ANGEFANGEN Werkzeug-Token
+    (`_NARRATION_BEGUN_TOKEN_RE`). Sonst verliert genau die erste
+    Fragmenthälfte einer über Teile geschnittenen Narration ihren
+    Schutz: 'The `' trägt noch keinen Namen, ist aber unwiderruflich
+    raus, sobald es den Parser passiert. Der Satz ist zu dem Zeitpunkt
+    noch offen — das ist die Bedingung, unter der hier überhaupt
+    gewartet wird.
+
     **Nie bei Werkzeug-Markup** (`{"tool_calls":…}`, DSML): da gibt es
     keinen offenen Satz zu Ende zu bringen, sondern einen Aufruf, den der
     Parser in diesem Moment sehen MUSS. Der Parser hat mit D-01/D-03 seinen
@@ -1703,7 +1752,9 @@ def _self_steering_holdback(text: str) -> bool:
         return False
     if contains_tool_markup(pending):
         return False
-    return bool(_NARRATION_TOKEN_RE.search(pending))
+    if _NARRATION_TOKEN_RE.search(pending):
+        return True
+    return bool(_NARRATION_BEGUN_TOKEN_RE.search(pending))
 
 
 def strip_meta_chatter(text: str) -> str:
