@@ -12,34 +12,20 @@ Deshalb dieser Filter: das Programm läuft auf einem pty, wir geben seinen Outpu
 an das echte Terminal weiter — nur ohne die Maus-Sequenzen. Der Terminal steht
 damit im selben Zustand wie bei opencode mit `mouse: false`.
 
-**Pfeiltasten und Mausrad kommen als dieselben Bytes an — der Unterschied ist
-der Takt.** Nach dem Abschalten des Maus-Reportings schickt xterm.js das Rad als
-`up`/`down` (`ESC[A`/`ESC[B`) an die App, und die Tastatur schickt bei
-Tastendruck genau dieselben Bytes. Belegt im Key-Log (`/tmp/opencode/
-freebuff-keys.log`, 13:20:17): ein Radschwung kam als **dutzende** Ereignisse
-innerhalb einer Sekunde, ein Tastendruck als **einzelnes** Ereignis. Ohne diese
-Trennung ist eine der beiden Bedienungen tot: ohne Umschreiben scrollt das Rad
-nichts, mit Umschreiben bedienen die Pfeile das Slash-Menue nicht mehr
-(Nutzerbefund mit Screenshot, 2026-09-27).
+**Pfeiltasten und Mausrad:**
+Das Mausrad kommt im Terminal (wenn Maus-Reporting aus ist) als Up/Down-Pfeile
+an (`ESC[A`/`ESC[B`). In freebuff wird dieser Tastenbefehl bei leerem Prompt
+durch den Patch in `freebuff-install.sh` (`patch_arrow_scroll`) direkt im Binary
+auf `onScrollUp` / `onScrollDown` umgeleitet (wie in opencode:
+`messages_half_page_up: up`).
 
-Deshalb der **Read-Zaehler** statt eines pauschalen Umschreibens:
+Menues (`/history`, Slash-Menue `/...`, Model-Picker) fangen die Pfeiltasten
+vor dieser Aktion ab und bleiben damit **vollstaendig nativ bedienbar**.
+Der Filter muss Pfeile daher per Default **gar nicht mehr anfassen**:
+sie gehen 100% nativ mit 0 ms Latenz an das Kind durch.
 
-* **einzelnes** `up`/`down` in einem Read (Tastatur) -> unveraendert an die
-  App, **sofort, ohne Verzoegerung**. Sie bewegt die Auswahl im Slash-Menue.
-* **>=2 gleiche** in einem Read (Mausrad) -> PageUp/PageDown, der Chat scrollt.
-* `burst_until` ueberbrueckt den Fall, dass ein Rad-Schwung ueber mehrere Reads
-  geht: nach einer erkannten Geste zaehlt auch ein einzelner Pfeil im naechsten
-  Read als Geste, solange die Pause kuerzer als ~120 ms ist.
-
-Kein Pending, kein Hold, kein Timeout, kein Flush. Der einzelne Tastendruck
-kommt **sofort** durch — das war der Bug im alten Code, der das Slash-Menue
-blockiert hat (25 ms Zurueckhalten war offenbar genug, damit freebuffs TUI den
-Pfeil nicht sah).
-Nur die exakten Cursor-Sequenzen ohne Modifikator werden je Richtung geprueft;
-`shift+up` (`ESC[1;2A`) und `ctrl+up` (`ESC[1;5A`) sind nie beteiligt und
-werden nie verzoegert. Schalter: `FREEBUFF_ARROW_PAGE=1` = alte Pauschal-Umleitung
-(alle Pfeile -> Seite), `FREEBUFF_NO_ARROW_PAGE=1` = gar keine Umschreibung
-(Rad und Pfeile nativ, Menuesscrollen geht nicht).
+Schalter: `FREEBUFF_ARROW_PAGE=1` = Pauschal-Umleitung aller Pfeile auf
+PageUp/PageDown (nur fuer Diagnose/Notausgang). Default: nativ (`off`).
 
 Entfernt wird ausschliesslich Mause-Reporting:
     ESC [ ? <1000|1001|1002|1003|1005|1006|1015|1016> (h|l)
@@ -317,7 +303,13 @@ def main(argv):
     #   Default            Burst-Test: Rad -> Seite, einzelne Pfeiltaste nativ
     #   ARROW_PAGE=1       alte Pauschal-Umleitung: jeder Pfeil -> Seite
     #   NO_ARROW_PAGE=1    gar nicht umschreiben (Rad scrollt dann nichts)
-    mode = os.environ.get("FREEBUFF_ARROW_PAGE", "burst")
+    # Pfeil-Umschreibung ist per Default AUS ("off"), da das freebuff-Binary
+    # ueber freebuff-install.sh (patch_arrow_scroll) bereits intern
+    # history-up/down auf onScrollUp/Down gemappt hat. Damit gehen alle Pfeile
+    # 100% nativ an die App — Menues (/history, Slash-Menue, Model-Picker)
+    # funktionieren nativ, und das Mausrad scrollt die Unterhaltung.
+    # Notausgang fuer Fehlersuche: FREEBUFF_ARROW_PAGE=1 (alle Pfeile -> Seite)
+    mode = os.environ.get("FREEBUFF_ARROW_PAGE", "off")
     if os.environ.get("FREEBUFF_NO_ARROW_PAGE", "0") == "1":
         mode = "off"
     arrow_page = mode != "off"

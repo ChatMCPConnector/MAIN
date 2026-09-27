@@ -89,17 +89,16 @@ if [ ! -f "\$launcher" ]; then
   echo "  Reparieren: bash ./infra/scripts/freebuff-install.sh   (im MAIN-Repo)" >&2
   exit 127
 fi
-# EIN Modus, Filter immer an (Nutzerentscheidung 2026-09-27, nach vier
-# Umbau-Runden): Maus aus heisst, das Terminal kann auswaehlen — damit
+# EIN Modus, Filter immer an: Maus aus heisst, das Terminal kann auswaehlen — damit
 #   * Strg+C kopiert die Auswahl (xterm.js kopiert nur MIT Auswahl; ohne
 #     Auswahl geht Strg+C als ^C an die App = Interrupt), und
 #   * Strg+V fuegt ein (freebuff schaltet Bracketed Paste frei, live geprueft:
 #     ESC[200~textESC[201~ landet in der Eingabe), und
-#   * das Mausrad kommt als up/down an und wird hier auf PageUp/PageDown
-#     umgehaengt, also scrollt es die Unterhaltung. Kontextabhaengig: leere
-#     Eingabe -> Seite (damit das Rad nicht die Prompt-Historie zurueckrollt),
-#     Text in der Eingabe -> Pfeil nativ (Slash-Menue bedienbar).
-# Preis dieser einen Konfiguration: freebuff bekommt keine Mausklicks, also
+#   * das Mausrad kommt als up/down an; das freebuff-Binary mappt history-up/down
+#     intern per Patch direkt auf onScrollUp/Down (opencode-Prinzip).
+#     Damit scrollt das Rad die Unterhaltung, und Pfeiltasten in Menues
+#     (/history, Slash-Menue, Model-Picker) bleiben 100% nativ bedienbar.
+# Preis dieser Konfiguration: freebuff bekommt keine Mausklicks, also
 # sind Output-Bloecke (5/10 Zeilen) nicht per Klick aufklappbar. Der volle
 # Output liegt trotzdem in der Zwischenablage: /copy (Alias copy-chat) legt den
 # GESAMTEN Chat hinein, /export schreibt ihn als Datei.
@@ -125,13 +124,6 @@ patch_scroll_step() {
   local bin="${NATIVE_DIR}/freebuff"
   local want="${FREEBUFF_SCROLL_STEP}"
   [ -f "$bin" ] || return 0
-  # Ein laufendes Executable laesst sich unter Linux nicht ueberschreiben
-  # (ETXTBSY). Solange eine Session laeuft, wird der Patch uebersprungen und
-  # beim naechsten Lauf ohne Session nachgeholt.
-  if pgrep -f "$bin" >/dev/null 2>&1; then
-    echo "[freebuff] Session laeuft -> Scroll-Patch erst nach deren Ende (Rad springt bis dahin in 0.8-Seiten)"
-    return 0
-  fi
   case "$want" in
     0.[0-9]) : ;;
     *) echo "[freebuff] FREEBUFF_SCROLL_STEP='${want}' ignoriert (muss 0.x sein)"; want=0.5 ;;
@@ -191,12 +183,52 @@ if not os.path.exists(backup):
     shutil.copy2(path, backup)
 out = bytearray(data)
 out[off:off + len(old)] = new
-try:
-    open(path, "wb").write(bytes(out))
-except OSError as exc:
-    print(f"  nicht geschrieben: {exc}")
-    sys.exit(0)
+tmp = path + ".patched"
+with open(tmp, "wb") as f:
+    f.write(bytes(out))
+os.chmod(tmp, 0o755)
+os.replace(tmp, path)
 print(f"  Schrittweite {old.decode()} -> {want} (Backup: {backup})")
+PYEOF
+}
+
+# Pfeiltasten bei leerem Prompt: von history-up/down auf onScrollUp/Down umhaengen.
+# Damit scrollt das Mausrad (das als Up/Down-Pfeile ankommt) die Unterhaltung,
+# genau wie in opencode (messages_half_page_up: up). Menues (/history, Slash-Menue,
+# Model-Picker) fangen die Pfeile DAVOR ab und bleiben voll bedienbar.
+patch_arrow_scroll() {
+  local bin="${NATIVE_DIR}/freebuff"
+  [ -f "$bin" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[freebuff] WARN: kein python3 -> Pfeil-Scroll-Patch uebersprungen"
+    return 0
+  fi
+  python3 - "$bin" <<'PYEOF'
+import os, sys
+
+path = sys.argv[1]
+data = open(path, "rb").read()
+orig = b'case"history-up":return A.onHistoryUp(),!0;case"history-down":return A.onHistoryDown(),!0;'
+repl = b'case"history-up":return(A.onScrollUp(),!0);case"history-down":return(A.onScrollDown(),!0);'
+
+if repl in data:
+    print("  Pfeil-Scroll-Patch: bereits gepatcht (onScrollUp/Down)")
+    sys.exit(0)
+
+if data.count(orig) != 1:
+    print(f"  Pfeil-Scroll-Patch: {data.count(orig)} Treffer fuer Muster -> unangetastet")
+    sys.exit(0)
+
+assert len(orig) == len(repl), "Laengendifferenz"
+out = data.replace(orig, repl, 1)
+assert len(out) == len(data), "Dateigroesse darf sich nicht aendern"
+
+tmp = path + ".patched"
+with open(tmp, "wb") as f:
+    f.write(out)
+os.chmod(tmp, 0o755)
+os.replace(tmp, path)
+print("  Pfeil-Scroll-Patch: erfolgreich (history-up/down -> onScrollUp/Down)")
 PYEOF
 }
 
@@ -227,6 +259,7 @@ if [ -x "$WRAPPER" ] && is_latest_installed && [ -s "${NATIVE_DIR}/freebuff" ]; 
   # Auch im "schon da"-Fall: ein Auto-Update hat das Binary ersetzt, dann ist der
   # Patch weg und muss neu drauf.
   patch_scroll_step
+  patch_arrow_scroll
   verify_after_patch
   echo "[freebuff] v$(installed_version) (aktuellste) bereits installiert (${APP_DIR}); Wrapper: ${WRAPPER}"
   exit 0
@@ -251,6 +284,7 @@ if [ ! -s "${NATIVE_DIR}/freebuff" ]; then
 fi
 cleanup_partial_downloads
 patch_scroll_step
+patch_arrow_scroll
 verify_after_patch
 
 if [ -s "${NATIVE_DIR}/credentials.json" ]; then
