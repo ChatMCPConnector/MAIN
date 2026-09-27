@@ -422,12 +422,28 @@ Zeilen, kein Aufklappen, kein Scrollen. Genau das war der Nutzerbefund: das Rad
 blätterte die Nachrichtenliste und erst danach den Bereich darüber, weil
 `PageUp` ohne Fokus an die Liste geht und der Block gar keinen Tastenpfad hat.
 
-**Kopieren kostet dabei nichts:** freebuff kopiert beim Ziehen selbst
-(`Drag to select text — it copies automatically`) und `/copy` (Alias `copy-chat`)
-legt den **gesamten** Chat inkl. vollstaendigem Output in die Zwischenablage.
-Was entfaellt, ist allein die *native Terminal-Auswahl* waehrend freebuff
-laeuft — und der Filter umhuelt ohnehin nur freebuff, in anderen Tabs und
-Sheets bleibt sie unveraendert.
+**Die beiden Betriebsarten — ein Schalter, weil sie sich ausschliessen:**
+
+```bash
+freebuff              # Maus AN  (Default): Rad + Klick im Output-Block
+freebuff -c           # Maus AUS: Terminal-Auswahl, Ctrl+C kopiert
+```
+
+**Was in jeder Betriebsart gilt, gemessen statt behauptet:**
+
+* **`Ctrl+V` funktioniert in beiden.** freebuff schaltet Bracketed Paste
+  (`?2004`) frei, und der eingefuegte Text landet in der Eingabe — live
+  geprueft: `ESC[200~eingefuegter text ESC[201~` erscheint im TUI-Output.
+* **`Ctrl+C` kopiert nur mit Auswahl**, und eine Auswahl entsteht im Terminal
+  nur per Maus-Drag. Mit Maus an gehoert die Maus der App, also ist `Ctrl+C`
+  dort der Interrupt-Befehl der App (doppelt = beenden) — **das ist
+  Terminal-Mechanik, kein freebuff-Bug**, und es laesst sich nur beheben, indem
+  man die Auswahl wiederherstellt — das kostet die Bloecke. Fuer Copy im TUI
+  mit Maus an gilt dann: **Ziehen mit der Maus** (freebuff kopiert selbst) oder
+  `/copy` fuer den gesamten Chat inkl. voller Outputs. Mit `-c` ist die native
+  Auswahl da und `Ctrl+C` kopiert wie im normalen Terminal.
+* Der Filter umhuelt ohnehin nur freebuff — in anderen Tabs und Sheets bleibt
+  die native Auswahl in **beiden** Betriebsarten erhalten.
 
 **2. Was der Filter (Opt-in) weiterhin leistet.** `infra/scripts/freebuff-pty.py`
 ist ein pty-Relay, das ausschliesslich Mause-Reporting aus dem Output entfernt;
@@ -642,6 +658,7 @@ Proxy bei jedem Start automatisch hoch.
   **Was der Default jetzt kostet:** die native Terminal-Auswahl waehrend freebuff laeuft. **Was er bringt:** Rad scrollt Chat *und* Output-Bloecke, Bloecke klappen auf (5 → voll), Kopieren bleibt moeglich — freebuff kopiert beim Ziehen selbst, und `/copy` legt den **gesamten** Chat inkl. vollstaendigem Output in die Zwischenablage. Der Filter umhuelt ohnehin nur freebuff; in anderen Tabs und Sheets bleibt die native Auswahl unveraendert. Wer sie im TUI braucht: `FREEBUFF_PTY_FILTER=1` (der Filter bleibt vollstaendig, inkl. der kontextabhaengigen Pfeil-Umleitung).
   **Umsetzung:** Der generierte Wrapper startet freebuff direkt und nimmt den Filter nur noch bei `FREEBUFF_PTY_FILTER=1`; `FREEBUFF_NO_PTY_FILTER=1` bleibt als explizites Ausschalten erhalten. Verifiziert an echten Startsequenzen: Default lässt `?1000l ?1002l ?1003l ?1006l` durch (Maus an), mit Filter bleiben nur `?1004l` (Fokus) und `?2004l` (bracketed Paste) — beide Modi starten freebuff 0.1.0.
   **Nebenbefund mit Sprengkraft:** freebuff hat sich **selbst auf 0.1.0 aktualisiert**, das npm-Paket bleibt gepinnt bei 0.0.204. Damit ist der Anker des Halbseiten-Patches (`fOA=0.8`) weg — `fOA` ist in 0.1.0 ein React-`memo`-Bezeichner, und `scrollLines` ist intern (Split-Footer), keine Config. Der Patch scheitert laut statt still, und der naechste Anbindungsversuch sollte **mustersuche-basiert** (`viewport.height * Faktor`) statt namensbasiert erfolgen, damit ein Rename ihn nicht erneut killt.
+- 2026-09-27: **Copy/Paste mit Maus an: `Ctrl+V` geht, `Ctrl+C` kann nicht — beides ist gemessen, nicht vermutet.** Nach dem Default-Wechsel auf Maus kam der Befund „copy paste mit Strg+C und Strg+V geht nicht“. Zwei getrennte Sachen, die man trennen muss: **`Ctrl+V` funktioniert** — freebuff schaltet Bracketed Paste (`?2004`) frei, und live geprueft erscheint `ESC[200~eingefuegter text ESC[201~` im TUI-Output, der Text landet also in der Eingabe. **`Ctrl+C` kopiert nur mit Auswahl**, und eine Auswahl kann im Terminal nur per Maus-Drag entstehen; die Maus hat jetzt freebuff, also ist `Ctrl+C` dort der Interrupt-Befehl der App (doppelt = beenden). Das ist xterm.js-Mechanik und **nicht behebbar**, ohne die Auswahl wiederherzustellen — was die Output-Bloecke wieder unbedienbar macht. **Deshalb als ein Schalter statt als zwei Betriebsarten im Alltag:** `freebuff -c` startet mit pty-Filter (Maus aus, Terminal-Auswahl, `Ctrl+C` kopiert), `freebuff` bleibt Default (Maus an, Rad und Klick im Block). Der Wrapper filtert das Flag selbst heraus; `--version`/`--continue`/`--cwd` werden unveraendert durchgereicht, an echten Startsequenzen verifiziert (Default laesst `?1000l` durch, `-c` entfernt es, beide starten 0.1.0 sauber). **Copy im TUI mit Maus an:** freebuff kopiert beim Ziehen selbst, `/copy` legt den gesamten Chat inkl. voller Outputs in die Zwischenablage.
 ## Changelog
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.
