@@ -141,19 +141,13 @@ def _page(seq, now, last_page, debounce):
     return ARROW_PAGE[seq]
 
 
-def flush_pending(state, now, emit=True):
+def flush_pending(state, now):
     """Wartende Einzel-Ereignisse abschliessen, deren Fenster abgelaufen ist.
 
-    `emit=True` gibt sie nativ an die App — das braucht das **Slash-Menue**,
-    damit ein Tastendruck, der keinen weiteren Read ausloest, ueberhaupt
-    ankommt. `emit=False` **verwirft** sie: das ist der Fall ohne offenes
-    Menue, in dem ein einzelner Pfeil bei freebuff nichts nuetzt ausser
-    `history-up` — und das soll weder ein Tastendruck noch ein einzelner
-    Rad-Klick ausloesen.
-
-    Das *Warten* ist in beiden Modi gleich und Pflicht: nur ein wartendes
-    Ereignis erlaubt die Gestenerkennung, weil erst ein zweites gleichgerichtetes
-    Ereignis im Fenster daraus eine Rad-Geste macht.
+    Ohne das wuerde ein einzelner Tastendruck, der keinen weiteren Read
+    ausloest, nie beim Kind ankommen. Das Halten ist zugleich Pflicht fuer die
+    Gestenerkennung: erst ein zweites gleichgerichtetes Ereignis im Fenster
+    macht daraus eine Rad-Geste.
     """
     out = bytearray()
     for st in state.values():
@@ -161,8 +155,7 @@ def flush_pending(state, now, emit=True):
         # (`st["pending"] is not None` durch einen Dict-Wert verfolgt er nicht).
         pending = st["pending"]
         if pending is not None and now >= st["deadline"]:
-            if emit:
-                out += pending
+            out += pending
             st["pending"] = None
     return bytes(out)
 
@@ -186,90 +179,38 @@ def pending_timeout(state, now, cap=1.0):
 #     getipptem "/" auf, und im Text sollen die Pfeile den Cursor bewegen.
 # Der Preis, den der Nutzer akzeptiert hat: auf leerer Eingabe holt `up` nicht
 # mehr die letzte Nachricht — dafuer gibt es `/history`.
-ESC_SEQ_RE = re.compile(
-    rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[\]P][^\x07\x1b]*(?:\x07|\x1b\\)"
-    rb"|\x1b[()][0-9A-B]|\x1b[=>78]"
-)
-
-
-def track_input(data, text=""):
-    """Inhalt der freebuff-Eingabe, aus den weitergereichten Tastatur-Bytes.
-
-    Neu: nicht mehr nur die Anzahl, sondern der **Inhalt** (als Text, auf 512
-    Zeichen gekappt). Grund: die Entscheidung haengt am Slash-Menue, und das
-    ist nur offen, wenn die Eingabe mit "/" beginnt — die reine Laenge konnte
-    das nicht unterscheiden.
-
-    Escape-Sequenzen werden entfernt (der Text zwischen Bracketed-Paste-Markern
-    zaehlt mit, die Marker selbst nicht), Enter setzt zurueck, Backspace zieht
-    ab, Ctrl+U leert die Zeile. Mehrbyte-UTF-8 wird ueber die Fortsetzungsbytes
-    (0x80-0xBF) auf ein Zeichen normalisiert.
-
-    Wichtig: `0x7f`/`0x08` sind Backspace und **keine** druckbaren Zeichen — der
-    erste Wurf behandelte sie als `>= 0x20` und zaehlte sie, sodass ein
-    Backspace die Eingabe *laenger* machte. Der Test "Backspace zieht ab" hat
-    das gefangen.
-    """
-    buf = bytearray(text.encode("utf-8", "replace") if text else b"")
-    for byte in ESC_SEQ_RE.sub(b"", data):
-        if byte in (0x0D, 0x0A):          # Enter: abgeschickt
-            buf = bytearray()
-        elif byte == 0x15:                # Ctrl+U: Zeile loeschen
-            buf = bytearray()
-        elif byte in (0x7F, 0x08):        # Backspace (xterm sendet 0x7f)
-            if buf:
-                del buf[-1]
-        elif byte >= 0x20:                # druckbar
-            buf.append(byte)
-        if len(buf) > 512:                # Fuelltext nicht mitschleppen
-            del buf[:-512]
-    return buf.decode("utf-8", "replace")
-
-
 def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0,
-                   last_page=None, always=False, text=""):
-    """Rad-Burst -> PageUp/PageDown, einzelne Pfeiltaste bleibt nativ.
+                   last_page=None, always=False):
+    """Pfeiltasten nativ, nur eine **Geste** wird PageUp/PageDown.
 
-    Mausrad und Pfeiltaste erzeugen dieselben Bytes; unterschieden werden sie
-    am Takt (Burst = Rad, Einzelereignis = Tastatur, siehe Modul-Docstring).
+    Mausrad und Pfeiltaste erzeugen dieselben Bytes, unterschieden werden sie
+    nur am Takt: ein Rad-Schwung liefert Dutzende gleichgerichtete Ereignisse
+    pro Sekunde, ein Tastendruck genau eins. Deshalb **zwei Faelle, und die
+    Reihenfolge ist der Kern der ganzen Sache**:
+
+      * **Geste** (zweiter Treffer im `gap`-Fenster, oder `burst_until` noch
+        aktiv): `PageUp`/`PageDown` — beide Ereignisse werden gemeldet.
+      * **Einzelereignis**: **nativ, unveraendert.** Auch `history-up` bleibt
+        moeglich; das ist freebuffs eigenes Verhalten und wird nicht
+        weggenommen.
+      * `links`/`rechts` werden nie angefasst (stehen nicht in `ARROW_PAGE`).
+
     Das erste Ereignis einer Serie wird dafuer hoechstens `gap` Sekunden
-    zurueckgehalten: kommt bis dahin nichts Gleiches, geht es nativ an die App
-    (Slash-Menue), kommt es, sind es Rad-Ereignisse und beide werden zu
-    PageUp/PageDown.
-
-    `debounce` (Sekunden, Default 0) begrenzt optional nur die Page-Ausgabe —
-    es ist eine Ratenbegrenzung des Rads, keine Erkennung. `last_page` merkt
-    sich je Richtung den Zeitpunkt der zuletzt gesendeten Seite; verworfene
-    Ereignisse werden trotzdem konsumiert, sonst rueutscht der rohe Pfeil an
-    der App vorbei.
+    zurueckgehalten — **nicht verworfen**: ohne dieses Halten kaeme ein
+    Rad-Schwung nie als Geste an. Genau so war der Fehler, den der Nutzer
+    gemeldet hat: Einzelereignisse verwerfen macht die Pfeiltasten **tot**,
+    ohne dass das Mausrad dadurch besser wird.
 
     `always=True` schaltet den Burst-Test ab und schickt **jeden** Pfeil als
-    Seite (Modus `FREEBUFF_ARROW_PAGE=1`, das alte Verhalten).
-
-    `text` ist der **Inhalt** der freebuff-Eingabe (siehe `track_input`) **vor**
-    diesem Chunk und wird pro Position im Chunk fortgeschrieben. Die Regel ist
-    damit 1:1 die aus `.opencode/tui.json`, auf die das Repo sich beruft
-    (`Revision.md` 4.16): **Pfeiltasten gehoeren dem Scrollen, der Input
-    bekommt sie nicht** (`input_move_up/down: "none"`, und `history_previous`
-    auf `ctrl+up` umgezogen).
-
-      * Slash-Menue offen (Eingabe beginnt mit "/") — der Pfeil bleibt nativ,
-        weil nur er die Menue-Auswahl bewegt. Burst-Test wie beschrieben.
-      * Sonst — **immer** Seite, ohne Fenster: bei leerer Eingabe wuerde ein
-        Pfeil sonst `history-up` ausloesen und die Prompt-Historie
-        zurueckrollen, und bei *befuellter* Eingabe gibt es in freebuff nichts
-        Vernuetzliches fuer vertikale Bewegung (die Zeile ist einzeilig;
-        `history-nav` ist die einzige Alternative). Die frueher nur bei leerer
-        Eingabe angewandte Regel war zu eng — dadurch kam es in der Praxis
-        vor, dass das Rad doch die Historie zurueckrollte.
+    Seite (Modus `FREEBUFF_ARROW_PAGE=1`, das alte Verhalten, nur zur
+    Fehlersuche).
 
     **Pro Position, nicht pro Chunk:** Tippen und Pfeil koennen im selben Read
     ankommen (schnelles Tippen, Paste gefolgt von Pfeil, trager Terminal).
     Wuerde der Zustand nur einmal je Chunk ausgewertet, kaeme ein Pfeil im
-    selben Chunk wie das getipptes `/ne` als Seiten-Sprung an — der Test
-    "Slash-Menue im selben Read" hat genau das gefangen.
+    selben Chunk nach `/ne` als Seiten-Sprung an.
 
-    Gibt (neue_daten, rest, state, last_page, text) zurueck.
+    Gibt (neue_daten, rest, state, last_page) zurueck.
     """
     data = carry + data
     carry = b""
@@ -298,7 +239,7 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
             pos = match.end()
             out += _page(seq, now, last_page, debounce)
         out += data[pos:]
-        return bytes(out), carry, state, last_page, track_input(data, text)
+        return bytes(out), carry, state, last_page
 
     pos = 0
     for match in sorted(
@@ -308,41 +249,10 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
         if match.start() < pos:      # bereits von einer anderen Sequenz konsumiert
             continue
         seq = match.group()
-        # Kontext bis zu diesem Pfeil: alles davor im selben Chunk mitzaehlen.
-        text = track_input(data[pos:match.start()], text)
         out += data[pos:match.start()]
         pos = match.end()             # in JEDEM Fall konsumieren
         st = state[seq]
-        st = state[seq]
-        if not text.startswith("/"):
-            # Kein Slash-Menue offen: hoch/runter hat in freebuff genau EINE
-            # Funktion — `history-up`/`history-down`, die Prompt-Historie
-            # zurueckrollen. Das Rad darf das ausdruecklich nicht, und ein
-            # einzelner Tastendruck soll es auch nicht. Deshalb wird hier NICHTS
-            # umgeschrieben, sondern entschieden:
-            #   * Geste (zweiter Treffer im Fenster oder Burst laeuft) -> Seite
-            #   * einzelnes Ereignis                            -> verworfen
-            # verworfen statt nativ ist der entscheidende Unterschied: nativ
-            # wuerde ein einzelner RAD-Klick die Historie zurueckrollen, und
-            # nativ wuerde auch ein echter Tastendruck history-up loesen. Ohne
-            # offenes Menue geht durch den verworfenen Pfeil nichts verloren.
-            if st["burst_until"] > now:
-                out += _page(seq, now, last_page, debounce)
-            elif st["pending"] is not None and now < st["deadline"]:
-                # Zweites gleichgerichtetes Ereignis im Fenster -> Geste = Rad.
-                st["burst_until"] = now + max(gap * 4, 0.12)
-                out += _page(seq, now, last_page, debounce)
-                st["pending"] = None
-                out += _page(seq, now, last_page, debounce)
-            else:
-                # Einzelereignis ohne Menue: **warten, aber nicht ausgeben.**
-                # Das Warten ist Pflicht fuer die Gestenerkennung — ohne
-                # wartendes Ereignis kaeme ein zweites Rad-Ereignis nie als
-                # Geste an. Verworfen wird beim Fenster-Ablauf (flush_pending
-                # mit emit=False), nicht schon hier.
-                st["pending"] = seq
-                st["deadline"] = now + gap
-        elif st["burst_until"] > now:
+        if st["burst_until"] > now:
             # Mitten im Rad-Schwung: sofort als Seite, ohne Fenster.
             out += _page(seq, now, last_page, debounce)
         elif st["pending"] is not None and now < st["deadline"]:
@@ -355,16 +265,15 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
             st["pending"] = None
             out += _page(seq, now, last_page, debounce)
         else:
-            # Fenster vorbei: ein Althertum wartet noch, den nativ durchlassen.
-            out += flush_pending(state, now, emit=True)
+            # EINZELNES Ereignis: **immer nativ an die App.** Das ist der
+            # Tastendruck — die App soll ihn sehen, unveraendert. Das Halten
+            # fuer `gap` ist Pflicht fuer die Gestenerkennung; danach geht er
+            # nativ raus (flush_pending emittiert immer).
             st["pending"] = seq
             st["deadline"] = now + gap
-    text = track_input(data[pos:], text)
     out += data[pos:]
-    # Wartende Ereignisse nur ausgeben, wenn das Slash-Menue NOCH offen ist;
-    # wurde es inzwischen geschlossen (Enter), gehoeren sie verworfen.
-    out += flush_pending(state, now, emit=text.startswith("/"))
-    return bytes(out), carry, state, last_page, text
+    out += flush_pending(state, now)
+    return bytes(out), carry, state, last_page
 
 
 def window_size(fd):
@@ -459,7 +368,6 @@ def main(argv):
     carry = b""
     arrow_state = new_arrow_state()
     last_page = dict.fromkeys(ARROW_PAGE, -1e9)
-    text = ""   # Inhalt der freebuff-Eingabe, aus den Tastatur-Bytes verfolgt
     debug(f"arrow_page={arrow_page} always_page={always_page} gap={gap}s debounce={debounce}s")
     try:
         while True:
@@ -508,11 +416,9 @@ def main(argv):
                     # Das ist die Sicht auf die Tastatur-Kette: was hier landet,
                     # hat das Kind als Tastendruck gelesen.
                     if arrow_page:
-                        data, carry, arrow_state, last_page, text = rewrite_arrows(
+                        data, carry, arrow_state, last_page = rewrite_arrows(
                             data, carry, time.monotonic(), arrow_state, gap,
-                            debounce, last_page, always=always_page, text=text)
-                    else:
-                        text = track_input(data, text)
+                            debounce, last_page, always=always_page)
                     if not data:
                         continue
                     debug(f" -> {summarize(data)}")
@@ -527,12 +433,10 @@ def main(argv):
 
             if arrow_page and not always_page:
                 # Wartendes Einzelereignis abschliessen, auch wenn kein Read kam.
-                # Ohne offenes Slash-Menue wird dabei **verworfen** (nicht
-                # nativ, nicht Seite) — dort loest ein einzelner Pfeil bei
-                # freebuff nur `history-up` aus, und genau das soll weder ein
-                # Tastendruck noch ein einzelner Rad-Klick.
-                data = flush_pending(arrow_state, time.monotonic(),
-                                     emit=text.startswith("/"))
+                # Es geht **nativ** raus (siehe `rewrite_arrows`) — nur so
+                # kommt ein Tastendruck ueberhaupt an, der keinen weiteren
+                # Read ausloest.
+                data = flush_pending(arrow_state, time.monotonic())
                 if data:
                     debug(f" -> {summarize(data)} (Fenster abgelaufen)")
                     try:
