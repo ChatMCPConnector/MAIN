@@ -12,18 +12,33 @@ Deshalb dieser Filter: das Programm läuft auf einem pty, wir geben seinen Outpu
 an das echte Terminal weiter — nur ohne die Maus-Sequenzen. Der Terminal steht
 damit im selben Zustand wie bei opencode mit `mouse: false`.
 
-Die **Pfeiltasten-Umleitung** aus opencodes `tui.json` (`up`/`down` ->
-PageUp/PageDown, damit der Chat seitenweise scrollt) war hier bis
-2026-09-27 **eingeschaltet** und hat damit die Menues unbedienbar gemacht:
-die Pfeiltasten scrollten den Chat, statt den Slash-Befehl-Vorschlag zu
-bewegen (Nutzerbefund mit Screenshot: die Pfeile muessen das gruen markierte
-Menue bedienen). Sie ist deshalb jetzt **aus** und nur per
-``FREEBUFF_ARROW_PAGE=1`` wieder einschaltbar. Der Filter macht dann genau
-eine Sache: Maus-Reporting entfernen. Tasten, Mausrad, Text und bracketed
-Paste gehen unveraendert an das Kind.
-Umgehaengt wuerden **nur** die exakten Cursor-Sequenzen ohne Modifikator;
-`shift+up` (`ESC[1;2A`) und `ctrl+up` (`ESC[1;5A`) bleiben auch dann
-unangetastet.
+**Pfeiltasten und Mausrad kommen als dieselben Bytes an — der Unterschied ist
+der Takt.** Nach dem Abschalten des Maus-Reportings schickt xterm.js das Rad als
+`up`/`down` (`ESC[A`/`ESC[B`) an die App, und die Tastatur schickt bei
+Tastendruck genau dieselben Bytes. Belegt im Key-Log (`/tmp/opencode/
+freebuff-keys.log`, 13:20:17): ein Radschwung kam als **dutzende** Ereignisse
+innerhalb einer Sekunde, ein Tastendruck als **einzelnes** Ereignis. Ohne diese
+Trennung ist eine der beiden Bedienungen tot: ohne Umschreiben scrollt das Rad
+nichts, mit Umschreiben bedienen die Pfeile das Slash-Menue nicht mehr
+(Nutzerbefund mit Screenshot, 2026-09-27).
+
+Deshalb der **Burst-Test** statt eines pauschalen Umschreibens:
+
+* **einzelnes** `up`/`down` (Tastatur) -> unveraendert an die App, sie bewegt
+  die Auswahl im Slash-Befahl-Menue,
+* **Serie** gleicher Richtung innerhalb `FREEBUFF_WHEEL_GAP_MS` (Default 25 ms,
+  das Mausrad) -> PageUp/PageDown, der Chat scrollt.
+
+Das einzelne Ereignis wird dafuer hoechstens 25 ms zurueckgehalten — die
+Latenz ist nicht spuerbar, und sie ist der ganze Preis der Trennung. 25 ms
+liegen sicher unter dem Tastenwiederholungs-Takt (Browser ~33 ms ab 500 ms
+Haltezeit) und sicher ueber dem Abstand zweier Rad-Ereignisse (sub-ms, im selben
+Read). `FREEBUFF_WHEEL_GAP_MS` stellt den Wert, falls ein Setup anders taktet.
+Nur die exakten Cursor-Sequenzen ohne Modifikator werden je Richtung geprueft;
+`shift+up` (`ESC[1;2A`) und `ctrl+up` (`ESC[1;5A`) sind nie beteiligt und
+werden nie verzoegert. Schalter: `FREEBUFF_ARROW_PAGE=1` = alte Pauschal-Umleitung
+(alle Pfeile -> Seite), `FREEBUFF_NO_ARROW_PAGE=1` = gar keine Umschreibung
+(Rad und Pfeile nativ, Menuesscrollen geht nicht).
 
 Entfernt wird ausschliesslich Mause-Reporting:
     ESC [ ? <1000|1001|1002|1003|1005|1006|1015|1016> (h|l)
@@ -95,7 +110,7 @@ def debug(msg):
         pass
 
 
-# Pfeil rechts/links bleiben unangetastet; nur hoch/runter werden umgehaengt.
+# Pfeil rechts/links bleiben unangetastet; nur hoch/runter werden geprueft.
 ARROW_PAGE = {
     b"\x1b[A": b"\x1b[5~",   # up    -> PageUp
     b"\x1b[B": b"\x1b[6~",   # down  -> PageDown
@@ -107,32 +122,96 @@ ARROW_PAGE = {
 # zusammengesetzt. Sonst wuerde ein geteilter Pfeil durchrutschen.
 PARTIAL_PREFIXES = (b"\x1b", b"\x1b[", b"\x1bO")
 
+# Default 25 ms: ueber dem Abstand zweier Rad-Ereignisse (sub-ms), unter dem
+# Tastenwiederholungs-Takt (Browser ~33 ms ab 500 ms Haltezeit). Haelt man den
+# Pfeil gedrueckt, bleibt die Wiederholung damit im Einzelfall-Modus.
+DEFAULT_WHEEL_GAP_MS = 25.0
 
-def rewrite_arrows(data, carry=b"", now=0.0, last=None, debounce=0.2):
-    """up/down -> PageUp/PageDown, mit Burst-Drosselung.
 
-    Gibt (neue_daten, rest, last) zurueck. `last` merkt sich je Richtung den
-    Zeitpunkt des zuletzt **gesendeten** Ereignisses; ein Ereignis innerhalb von
-    `debounce` Sekunden wird verworfen — die Bytes werden aber trotzdem
-    konsumiert, sonst rueutscht der rohe Pfeil an der App vorbei (das war ein
-    echter Bug, den der Testfall „High-Resolution-Rad“ gefunden hat).
-    Wirkung mit `debounce > 0`: High-Resolution-Rad und Trackpad werden auf eine
-    Rate begrenzt. **Default ist 0 (aus)** — die Drosselung war der falsche
-    Hebel, gewuenscht war kleinere *Schrittweite*, nicht geringere Rate. Andere
-    Tasten sind nie betroffen — nur up/down, und nur die werden ohnehin
-    umgeschrieben.
+def new_arrow_state():
+    """Je Eingangssequenz: wartendes Einzel-Ereignis + Ende der Burst-Phase."""
+    return {seq: {"pending": None, "deadline": 0.0, "burst_until": 0.0} for seq in ARROW_PAGE}
+
+
+def _page(seq, now, last_page, debounce):
+    """PageUp/PageDown fuer ein Rad-Ereignis, optional ratenbegrenzt."""
+    if debounce > 0 and now - last_page[seq] < debounce:
+        return b""
+    last_page[seq] = now
+    return ARROW_PAGE[seq]
+
+
+def flush_pending(state, now):
+    """Wartende Einzel-Ereignisse ausgeben, deren Fenster abgelaufen ist.
+
+    Ohne das wuerde ein einzelner Tastendruck (der nie wieder ein Read
+    ausloest) nie beim Kind ankommen.
+    """
+    out = bytearray()
+    for st in state.values():
+        if st["pending"] is not None and now >= st["deadline"]:
+            out += st["pending"]
+            st["pending"] = None
+    return bytes(out)
+
+
+def pending_timeout(state, now, cap=1.0):
+    """Sekunden bis zum naechsten faelligen Fenster, sonst `cap`."""
+    waits = [st["deadline"] - now for st in state.values() if st["pending"] is not None]
+    return max(0.0, min([cap] + waits))
+
+
+def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0,
+                   last_page=None, always=False):
+    """Rad-Burst -> PageUp/PageDown, einzelne Pfeiltaste bleibt nativ.
+
+    Mausrad und Pfeiltaste erzeugen dieselben Bytes; unterschieden werden sie
+    am Takt (Burst = Rad, Einzelereignis = Tastatur, siehe Modul-Docstring).
+    Das erste Ereignis einer Serie wird dafuer hoechstens `gap` Sekunden
+    zurueckgehalten: kommt bis dahin nichts Gleiches, geht es nativ an die App
+    (Slash-Menue), kommt es, sind es Rad-Ereignisse und beide werden zu
+    PageUp/PageDown.
+
+    `debounce` (Sekunden, Default 0) begrenzt optional nur die Page-Ausgabe —
+    es ist eine Ratenbegrenzung des Rads, keine Erkennung. `last_page` merkt
+    sich je Richtung den Zeitpunkt der zuletzt gesendeten Seite; verworfene
+    Ereignisse werden trotzdem konsumiert, sonst rueutscht der rohe Pfeil an
+    der App vorbei.
+
+    `always=True` schaltet den Burst-Test ab und schickt **jeden** Pfeil als
+    Seite (Modus `FREEBUFF_ARROW_PAGE=1`, das alte Verhalten).
+
+    Gibt (neue_daten, rest, state, last_page) zurueck.
     """
     data = carry + data
     carry = b""
     for pref in sorted(PARTIAL_PREFIXES, key=len, reverse=True):
         if data.endswith(pref) and data != pref:
             carry = data[-len(pref):]
-            data = data[: -len(pref)]
+            data = data[: -len(pref):]
             break
-    if not data:
-        return b"", carry, last
+    if state is None:
+        state = new_arrow_state()
+    if last_page is None:
+        last_page = dict.fromkeys(ARROW_PAGE, -1e9)
 
     out = bytearray()
+    if always:
+        # Alte Pauschal-Umleitung: jedes up/down wird Seite, ohne Fenster.
+        pos = 0
+        for match in sorted(
+            (m for seq in ARROW_PAGE for m in re.finditer(re.escape(seq), data)),
+            key=lambda m: m.start(),
+        ):
+            if match.start() < pos:
+                continue
+            seq = match.group()
+            out += data[pos:match.start()]
+            pos = match.end()
+            out += _page(seq, now, last_page, debounce)
+        out += data[pos:]
+        return bytes(out), carry, state, last_page
+
     pos = 0
     for match in sorted(
         (m for seq in ARROW_PAGE for m in re.finditer(re.escape(seq), data)),
@@ -140,15 +219,30 @@ def rewrite_arrows(data, carry=b"", now=0.0, last=None, debounce=0.2):
     ):
         if match.start() < pos:      # bereits von einer anderen Sequenz konsumiert
             continue
-        direction = match.group()
+        seq = match.group()
         out += data[pos:match.start()]
         pos = match.end()             # in JEDEM Fall konsumieren
-        if now - last[direction] < debounce:
-            continue                  # Burst -> verwerfen, aber Bytes fressen
-        last[direction] = now
-        out += ARROW_PAGE[direction]
+        st = state[seq]
+        if st["burst_until"] > now:
+            # Mitten im Rad-Schwung: sofort als Seite, ohne Fenster.
+            out += _page(seq, now, last_page, debounce)
+        elif st["pending"] is not None and now < st["deadline"]:
+            # Zweites gleichgerichtetes Ereignis im Fenster -> Geste = Rad.
+            # Beide Ereignisse zaehlen: das wartende (es war das erste der
+            # Geste) und das aktuelle. Eins davon zu verschlucken hiesse, dass
+            # jeder Rad-Schwung eine Zeile weniger scrollt.
+            st["burst_until"] = now + max(gap * 4, 0.12)
+            out += _page(seq, now, last_page, debounce)
+            st["pending"] = None
+            out += _page(seq, now, last_page, debounce)
+        else:
+            # Fenster vorbei: ein Althertum wartet noch, den nativ durchlassen.
+            out += flush_pending(state, now)
+            st["pending"] = seq
+            st["deadline"] = now + gap
     out += data[pos:]
-    return bytes(out), carry, last
+    out += flush_pending(state, now)
+    return bytes(out), carry, state, last_page
 
 
 def window_size(fd):
@@ -218,16 +312,20 @@ def main(argv):
     debug(f"start argv={argv} pty={master}")
     out = sys.stdout.buffer
     stdin_open = True
-    # Default AUS (2026-09-27): Pfeiltasten muessen die Slash-Befehl-Liste
-    # bedienen, nicht den Chat scrollen. `FREEBUFF_ARROW_PAGE=1` schaltet die
-    # alte Umhaengung up/down -> PageUp/PageDown wieder frei (wer den Chat
-    # lieber mit den Pfeilen seitenweise scrollt). Die alte Schreibweise
-    # `FREEBUFF_NO_ARROW_PAGE=1` bleibt als Bypass fuer die Debug-Sessions
-    # gueltig und schaltet ebenfalls ab.
-    arrow_page = (
-        os.environ.get("FREEBUFF_ARROW_PAGE", "0") == "1"
-        and os.environ.get("FREEBUFF_NO_ARROW_PAGE", "0") != "1"
-    )
+    # Drei Betriebsarten (2026-09-27), weil Mausrad und Pfeiltaste dieselben
+    # Bytes erzeugen und nur am Takt zu unterscheiden sind:
+    #   Default            Burst-Test: Rad -> Seite, einzelne Pfeiltaste nativ
+    #   ARROW_PAGE=1       alte Pauschal-Umleitung: jeder Pfeil -> Seite
+    #   NO_ARROW_PAGE=1    gar nicht umschreiben (Rad scrollt dann nichts)
+    mode = os.environ.get("FREEBUFF_ARROW_PAGE", "burst")
+    if os.environ.get("FREEBUFF_NO_ARROW_PAGE", "0") == "1":
+        mode = "off"
+    arrow_page = mode != "off"
+    always_page = mode == "1"
+    try:
+        gap = max(0.0, float(os.environ.get("FREEBUFF_WHEEL_GAP_MS", DEFAULT_WHEEL_GAP_MS))) / 1000.0
+    except ValueError:
+        gap = DEFAULT_WHEEL_GAP_MS / 1000.0
     # Default 0 = KEINE Drosselung. Der Nutzerwunsch lautete ausdruecklich
     # „0 ms, aber weniger Zeilen pro Schritt“ — die Drosselung war der falsche
     # Hebel (sie begrenzt die Rate, nicht die Schrittweite) und ist per
@@ -237,8 +335,9 @@ def main(argv):
     except ValueError:
         debounce = 0.0
     carry = b""
-    last_arrow = dict.fromkeys(ARROW_PAGE, -1e9)
-    debug(f"arrow_page={arrow_page} debounce={debounce}s")
+    arrow_state = new_arrow_state()
+    last_page = dict.fromkeys(ARROW_PAGE, -1e9)
+    debug(f"arrow_page={arrow_page} always_page={always_page} gap={gap}s debounce={debounce}s")
     try:
         while True:
             if resize_requested:
@@ -246,8 +345,11 @@ def main(argv):
                 set_window_size(master, *window_size(0))
 
             watch = [master] + ([0] if stdin_open else [])
+            # Select-Darf nicht laenger warten als das Burst-Fenster, sonst
+            # bliebe ein einzelner Tastendruck bis zum naechsten Event liegen.
+            timeout = pending_timeout(arrow_state, time.monotonic()) if arrow_page and not always_page else 1.0
             try:
-                ready, _, _ = select.select(watch, [], [], 1.0)
+                ready, _, _ = select.select(watch, [], [], timeout)
             except InterruptedError:
                 continue
             except OSError as exc:
@@ -283,8 +385,9 @@ def main(argv):
                     # Das ist die Sicht auf die Tastatur-Kette: was hier landet,
                     # hat das Kind als Tastendruck gelesen.
                     if arrow_page:
-                        data, carry, last_arrow = rewrite_arrows(
-                            data, carry, time.monotonic(), last_arrow, debounce)
+                        data, carry, arrow_state, last_page = rewrite_arrows(
+                            data, carry, time.monotonic(), arrow_state, gap,
+                            debounce, last_page, always=always_page)
                     if not data:
                         continue
                     debug(f" -> {summarize(data)}")
@@ -296,6 +399,16 @@ def main(argv):
                     # EOF auf stdin (z.B. `freebuff < /dev/null`): Kind soll das
                     # sehen, aber wir lesen nicht weiter.
                     stdin_open = False
+
+            if arrow_page and not always_page:
+                # Wartenden Einzelpfeil ausgeben, auch wenn kein Read kam.
+                data = flush_pending(arrow_state, time.monotonic())
+                if data:
+                    debug(f" -> {summarize(data)} (Fenster abgelaufen)")
+                    try:
+                        os.write(master, data)
+                    except OSError:
+                        stdin_open = False
     finally:
         # Rest einer ueber zwei Reads zerrissenen Sequenz noch abgeben.
         if carry:
