@@ -22,18 +22,19 @@ Trennung ist eine der beiden Bedienungen tot: ohne Umschreiben scrollt das Rad
 nichts, mit Umschreiben bedienen die Pfeile das Slash-Menue nicht mehr
 (Nutzerbefund mit Screenshot, 2026-09-27).
 
-Deshalb der **Burst-Test** statt eines pauschalen Umschreibens:
+Deshalb der **Read-Zaehler** statt eines pauschalen Umschreibens:
 
-* **einzelnes** `up`/`down` (Tastatur) -> unveraendert an die App, sie bewegt
-  die Auswahl im Slash-Befahl-Menue,
-* **Serie** gleicher Richtung innerhalb `FREEBUFF_WHEEL_GAP_MS` (Default 25 ms,
-  das Mausrad) -> PageUp/PageDown, der Chat scrollt.
+* **einzelnes** `up`/`down` in einem Read (Tastatur) -> unveraendert an die
+  App, **sofort, ohne Verzoegerung**. Sie bewegt die Auswahl im Slash-Menue.
+* **>=2 gleiche** in einem Read (Mausrad) -> PageUp/PageDown, der Chat scrollt.
+* `burst_until` ueberbrueckt den Fall, dass ein Rad-Schwung ueber mehrere Reads
+  geht: nach einer erkannten Geste zaehlt auch ein einzelner Pfeil im naechsten
+  Read als Geste, solange die Pause kuerzer als ~120 ms ist.
 
-Das einzelne Ereignis wird dafuer hoechstens 25 ms zurueckgehalten — die
-Latenz ist nicht spuerbar, und sie ist der ganze Preis der Trennung. 25 ms
-liegen sicher unter dem Tastenwiederholungs-Takt (Browser ~33 ms ab 500 ms
-Haltezeit) und sicher ueber dem Abstand zweier Rad-Ereignisse (sub-ms, im selben
-Read). `FREEBUFF_WHEEL_GAP_MS` stellt den Wert, falls ein Setup anders taktet.
+Kein Pending, kein Hold, kein Timeout, kein Flush. Der einzelne Tastendruck
+kommt **sofort** durch — das war der Bug im alten Code, der das Slash-Menue
+blockiert hat (25 ms Zurueckhalten war offenbar genug, damit freebuffs TUI den
+Pfeil nicht sah).
 Nur die exakten Cursor-Sequenzen ohne Modifikator werden je Richtung geprueft;
 `shift+up` (`ESC[1;2A`) und `ctrl+up` (`ESC[1;5A`) sind nie beteiligt und
 werden nie verzoegert. Schalter: `FREEBUFF_ARROW_PAGE=1` = alte Pauschal-Umleitung
@@ -123,14 +124,14 @@ ARROW_PAGE = {
 PARTIAL_PREFIXES = (b"\x1b", b"\x1b[", b"\x1bO")
 
 # Default 25 ms: ueber dem Abstand zweier Rad-Ereignisse (sub-ms), unter dem
-# Tastenwiederholungs-Takt (Browser ~33 ms ab 500 ms Haltezeit). Haelt man den
-# Pfeil gedrueckt, bleibt die Wiederholung damit im Einzelfall-Modus.
+# Tastenwiederholungs-Takt (Browser ~33 ms ab 500 ms Haltezeit). Wird nur fuer
+# burst_until-Berechnung genutzt (gap*4 = 100 ms, min 120 ms).
 DEFAULT_WHEEL_GAP_MS = 25.0
 
 
 def new_arrow_state():
-    """Je Eingangssequenz: wartendes Einzel-Ereignis + Ende der Burst-Phase."""
-    return {seq: {"pending": None, "deadline": 0.0, "burst_until": 0.0} for seq in ARROW_PAGE}
+    """Je Eingangssequenz: Ende der Burst-Phase (Rad-Schwung ueber Reads)."""
+    return {seq: {"burst_until": 0.0} for seq in ARROW_PAGE}
 
 
 def _page(seq, now, last_page, debounce):
@@ -141,74 +142,24 @@ def _page(seq, now, last_page, debounce):
     return ARROW_PAGE[seq]
 
 
-def flush_pending(state, now):
-    """Wartende Einzel-Ereignisse abschliessen, deren Fenster abgelaufen ist.
-
-    Ohne das wuerde ein einzelner Tastendruck, der keinen weiteren Read
-    ausloest, nie beim Kind ankommen. Das Halten ist zugleich Pflicht fuer die
-    Gestenerkennung: erst ein zweites gleichgerichtetes Ereignis im Fenster
-    macht daraus eine Rad-Geste.
-    """
-    out = bytearray()
-    for st in state.values():
-        # Lokale Variable, damit der Type-Checker den Wert verengen kann
-        # (`st["pending"] is not None` durch einen Dict-Wert verfolgt er nicht).
-        pending = st["pending"]
-        if pending is not None and now >= st["deadline"]:
-            out += pending
-            st["pending"] = None
-    return bytes(out)
-
-
-def pending_timeout(state, now, cap=1.0):
-    """Sekunden bis zum naechsten faelligen Fenster, sonst `cap`."""
-    waits = [st["deadline"] - now for st in state.values() if st["pending"] is not None]
-    return max(0.0, min([cap] + waits))
-
-
-# --- Eingabe-Zustand --------------------------------------------------------
-# Ein einzelner Rad-Klick ist byte- und taktgleich zu einem einzelnen
-# Tastendruck (im Key-Log belegt: Geste ~30 Ereignisse/s, Tastendruck 1). Der
-# Filter kann die beiden nicht unterscheiden — ausser ueber den Zustand der
-# Eingabe, den er selbst aus den Tastatur-Bytes mitzaehlt:
-#   * Eingabe LEER  -> ein Pfeil wuerde bei freebuff `history-up` ausloesen, also
-#     die Prompt-Historie zurueckrollen. Genau das soll das Rad nie. Also wird
-#     der Pfeil sofort zur Seite (PageUp/PageDown) — ohne Burst-Fenster, also
-#     auch ohne 25 ms Verzoegerung.
-#   * Eingabe NICHT leer -> der Pfeil bleibt nativ: das Slash-Menue geht nur bei
-#     getipptem "/" auf, und im Text sollen die Pfeile den Cursor bewegen.
-# Der Preis, den der Nutzer akzeptiert hat: auf leerer Eingabe holt `up` nicht
-# mehr die letzte Nachricht — dafuer gibt es `/history`.
 def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0,
                    last_page=None, always=False):
-    """Pfeiltasten nativ, nur eine **Geste** wird PageUp/PageDown.
+    """Pfeiltasten sofort nativ, nur eine **Geste** wird PageUp/PageDown.
 
-    Mausrad und Pfeiltaste erzeugen dieselben Bytes, unterschieden werden sie
-    nur am Takt: ein Rad-Schwung liefert Dutzende gleichgerichtete Ereignisse
-    pro Sekunde, ein Tastendruck genau eins. Deshalb **zwei Faelle, und die
-    Reihenfolge ist der Kern der ganzen Sache**:
+    Die Regel ist radikal einfach: innerhalb eines einzigen Reads zaehlen wir,
+    wie viele gleiche Pfeile ankommen.
 
-      * **Geste** (zweiter Treffer im `gap`-Fenster, oder `burst_until` noch
-        aktiv): `PageUp`/`PageDown` — beide Ereignisse werden gemeldet.
-      * **Einzelereignis**: **nativ, unveraendert.** Auch `history-up` bleibt
-        moeglich; das ist freebuffs eigenes Verhalten und wird nicht
-        weggenommen.
-      * `links`/`rechts` werden nie angefasst (stehen nicht in `ARROW_PAGE`).
+      * **>=2 gleiche** in einem Read  -> das ist ein Rad-Schwung (Geste).
+        Alle werden zu `PageUp`/`PageDown` — auch das erste.
+      * **genau 1** in einem Read      -> das ist ein Tastendruck.
+        Geht **sofort, ohne Verzoegerung** nativ an die App.
+      * `links`/`rechts` werden nie angefasst (nicht in `ARROW_PAGE`).
 
-    Das erste Ereignis einer Serie wird dafuer hoechstens `gap` Sekunden
-    zurueckgehalten — **nicht verworfen**: ohne dieses Halten kaeme ein
-    Rad-Schwung nie als Geste an. Genau so war der Fehler, den der Nutzer
-    gemeldet hat: Einzelereignisse verwerfen macht die Pfeiltasten **tot**,
-    ohne dass das Mausrad dadurch besser wird.
+    Zusaetzlich: `burst_until` ueberbrueckt den Fall, dass ein Rad-Schwung
+    ueber mehrere Reads geht (die kommen im Abstand < gap Sekunden). Ist
+    `burst_until` noch aktiv, zaehlt auch ein einzelner Pfeil als Geste.
 
-    `always=True` schaltet den Burst-Test ab und schickt **jeden** Pfeil als
-    Seite (Modus `FREEBUFF_ARROW_PAGE=1`, das alte Verhalten, nur zur
-    Fehlersuche).
-
-    **Pro Position, nicht pro Chunk:** Tippen und Pfeil koennen im selben Read
-    ankommen (schnelles Tippen, Paste gefolgt von Pfeil, trager Terminal).
-    Wuerde der Zustand nur einmal je Chunk ausgewertet, kaeme ein Pfeil im
-    selben Chunk nach `/ne` als Seiten-Sprung an.
+    `always=True` schickt jeden Pfeil als Seite (FREEBUFF_ARROW_PAGE=1).
 
     Gibt (neue_daten, rest, state, last_page) zurueck.
     """
@@ -241,38 +192,35 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
         out += data[pos:]
         return bytes(out), carry, state, last_page
 
-    pos = 0
-    for match in sorted(
+    # --- Zaehlen, welche Pfeile wie oft in diesem Read vorkommen ---
+    matches = sorted(
         (m for seq in ARROW_PAGE for m in re.finditer(re.escape(seq), data)),
         key=lambda m: m.start(),
-    ):
-        if match.start() < pos:      # bereits von einer anderen Sequenz konsumiert
+    )
+    # Zaehler je Sequenz (nur in DIESEM Read).
+    count = {}
+    for m in matches:
+        seq = m.group()
+        count[seq] = count.get(seq, 0) + 1
+
+    pos = 0
+    for match in matches:
+        if match.start() < pos:
             continue
         seq = match.group()
         out += data[pos:match.start()]
-        pos = match.end()             # in JEDEM Fall konsumieren
+        pos = match.end()
+
         st = state[seq]
-        if st["burst_until"] > now:
-            # Mitten im Rad-Schwung: sofort als Seite, ohne Fenster.
-            out += _page(seq, now, last_page, debounce)
-        elif st["pending"] is not None and now < st["deadline"]:
-            # Zweites gleichgerichtetes Ereignis im Fenster -> Geste = Rad.
-            # Beide Ereignisse zaehlen: das wartende (es war das erste der
-            # Geste) und das aktuelle. Eins davon zu verschlucken hiesse, dass
-            # jeder Rad-Schwung eine Zeile weniger scrollt.
+        is_gesture = count.get(seq, 0) >= 2 or st["burst_until"] > now
+        if is_gesture:
+            # Geste (Rad-Schwung): als Seite melden.
             st["burst_until"] = now + max(gap * 4, 0.12)
             out += _page(seq, now, last_page, debounce)
-            st["pending"] = None
-            out += _page(seq, now, last_page, debounce)
         else:
-            # EINZELNES Ereignis: **immer nativ an die App.** Das ist der
-            # Tastendruck — die App soll ihn sehen, unveraendert. Das Halten
-            # fuer `gap` ist Pflicht fuer die Gestenerkennung; danach geht er
-            # nativ raus (flush_pending emittiert immer).
-            st["pending"] = seq
-            st["deadline"] = now + gap
+            # Einzelner Tastendruck: SOFORT nativ, ohne Verzoegerung.
+            out += seq
     out += data[pos:]
-    out += flush_pending(state, now)
     return bytes(out), carry, state, last_page
 
 
@@ -376,11 +324,8 @@ def main(argv):
                 set_window_size(master, *window_size(0))
 
             watch = [master] + ([0] if stdin_open else [])
-            # Select-Darf nicht laenger warten als das Burst-Fenster, sonst
-            # bliebe ein einzelner Tastendruck bis zum naechsten Event liegen.
-            timeout = pending_timeout(arrow_state, time.monotonic()) if arrow_page and not always_page else 1.0
             try:
-                ready, _, _ = select.select(watch, [], [], timeout)
+                ready, _, _ = select.select(watch, [], [], 1.0)
             except InterruptedError:
                 continue
             except OSError as exc:
@@ -431,18 +376,6 @@ def main(argv):
                     # sehen, aber wir lesen nicht weiter.
                     stdin_open = False
 
-            if arrow_page and not always_page:
-                # Wartendes Einzelereignis abschliessen, auch wenn kein Read kam.
-                # Es geht **nativ** raus (siehe `rewrite_arrows`) — nur so
-                # kommt ein Tastendruck ueberhaupt an, der keinen weiteren
-                # Read ausloest.
-                data = flush_pending(arrow_state, time.monotonic())
-                if data:
-                    debug(f" -> {summarize(data)} (Fenster abgelaufen)")
-                    try:
-                        os.write(master, data)
-                    except OSError:
-                        stdin_open = False
     finally:
         # Rest einer ueber zwei Reads zerrissenen Sequenz noch abgeben.
         if carry:
