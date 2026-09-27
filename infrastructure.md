@@ -552,65 +552,66 @@ TUI-Stream verifiziert: alle vier Maus-Sequenzen weg, `?2004h` und `?1004h`
 da. Bidirektional-Relay, SIGWINCH-Durchreichung und Exit-Code sind
 implementiert und getestet.
 
-**3. Die Pfeiltasten-Regel: Pfeiltasten bleiben nativ, nur eine Geste wird
-`PageUp`/`PageDown`.** Ohne Mouse-Reporting schickt xterm.js das Mausrad als
-`up`/`down`; im Key-Log belegt: **ein Rad-Schwung ≈ 30 Ereignisse pro Sekunde,
-ein Tastendruck = ein einzelnes**. Am Byte ist ein Rad-Klick damit nicht von
-einem Tastendruck zu unterscheiden, nur am Takt. Die Regel ist deshalb
-**zweiteilig**, und die Reihenfolge der Prüfung ist der Kern:
+**3. Wie Opencode und Freebuff aufgebaut sind (Pfeiltasten, PageUp/Down und Mausrad).**
+Das Fundament ist die Arbeitsweise von `xterm.js` im Browser:
+Sobald Mouse-Reporting deaktiviert ist (damit native Textauswahl und `Ctrl+C` / `Ctrl+V`
+funktionieren), sendet der Browser beim Drehen des Mausrads im Alternate Screen Buffer
+hartcodiert dieselben Bytes wie die Pfeiltasten der Tastatur:
+- Rad hoch = `\x1b[A` (Pfeil hoch)
+- Rad runter = `\x1b[B` (Pfeil runter)
 
-| Eingangsbild | Filter | Folge in freebuff |
-|---|---|---|
-| **Geste** (zweiter Treffer im 25-ms-Fenster, oder `burst_until` aktiv) | `PageUp`/`PageDown` | das Rad blättert die Unterhaltung |
-| **Einzelereignis** (echter Tastendruck) | **nativ, unverändert** | Pfeiltasten funktionieren, `history-up` inklusive |
-| echtes `PageUp`/`PageDown` | unverändert durchgereicht | Tastaturscrollen bleibt |
-| `links`/`rechts` | unangetastet | wie bisher |
-| `FREEBUFF_ARROW_PAGE=1` | jeder Pfeil wird Seite | alte Pauschal-Umleitung, nur zur Fehlersuche |
+Da xterm.js und VS Code keine Einstellung bieten, um das Mausrad im Terminal auf andere
+Sequenzen umzulegen, müssen die TUI-Anwendungen bzw. ihre Umhüllungen das Verhalten regeln:
 
-Das erste Ereignis einer Serie wird dafür höchstens `gap` (25 ms) **zurückgehalten
-— nicht verworfen**: nur so kann ein zweites gleichgerichtetes Ereignis im
-Fenster die Geste erkennen. Erst danach geht es nativ an die App. Der
-Select-Timeout der Schleife ist auf dieses Fenster begrenzt, damit ein
-Tastendruck, der keinen weiteren Read auslöst, trotzdem ankommt.
+#### A. Wie Opencode aufgebaut ist (tastatur-first, native Config)
+Opencode besitzt eine eigene Keybinding-Konfiguration (`.opencode/tui.json`):
+```json
+{
+  "mouse": false,
+  "keybinds": {
+    "messages_half_page_up": "up,ctrl+alt+u",
+    "messages_half_page_down": "down,ctrl+alt+d",
+    "input_move_up": "none",
+    "input_move_down": "none",
+    "history_previous": "ctrl+up",
+    "history_next": "ctrl+down"
+  }
+}
+```
+* **Mausrad / Pfeiltasten:** Da `messages_half_page_up: "up"` gesetzt ist, scrollen Auf-/Ab-Pfeile die Unterhaltung in Halbseiten-Schritten.
+* **Eingabezeile:** `input_move_up: "none"` verhindert, dass Pfeiltasten den Prompt oder die Prompt-Historie verschieben.
+* **Historie:** Weicht bewusst auf `ctrl+up` / `ctrl+down` aus.
+* Opencode benötigt keinen PTY-Filter für Tasten, weil es eine vollständige native Keybind-Engine besitzt.
 
-**Der Preis, der bleibt — und warum er unausweichlich ist:** Ein *einzelner*
-Rad-Klick ist byte- und taktgleich zu einem Tastendruck. Beide Fälle können nicht
-gleichzeitig „Pfeiltasten nativ" und „kein Rad-Klick löst `history-up` aus"
-sein. Der Nutzer hat entschieden: **Pfeiltasten nativ.** Ein einzelner Rad-Klick
-errollt deshalb die Prompt-Historie so, wie es freebuff auch mit der echten
-Taste tut; die Geste (also jedes normale Scrollen) blättert die Unterhaltung.
+#### B. Wie Freebuff aufgebaut ist (Mausrad 1:1 PageUp/Down + native Menüs)
+Freebuff besitzt keine Keybinding-Konfigurationsdatei. Deshalb wird die Trennung
+über zwei abgestimmte Mechanismen erreicht:
 
-**Zwei frühere Fehlfassungen, beide vom Nutzer live gemeldet — warum sie falsch
-waren:**
+1. **Vendor-Binary-Patch (`patch_arrow_scroll` in `infra/scripts/freebuff-install.sh`):**
+   Im kompilierten Bundle von `~/.config/manicode/freebuff` leitet ein atomarer 90-Byte-Patch
+   `case "history-up"` und `case "history-down"` im Action-Dispatcher direkt auf `onScrollUp()`
+   und `onScrollDown()` um.
+   *Sicherheitsnetz:* Falls ein nativer Pfeil bei leerem Prompt durchrutscht, scrollt er
+   die Unterhaltung statt die Prompt-Historie zu verändern.
 
-- *Alle Pfeile werden Seiten* (Kontextlogik): Pfeiltasten funktionierten gar
-  nicht, das Slash-Menü war nicht bedienbar. Der Filter muss am Ende **nichts**
-  über den Eingabeinhalt wissen.
-- *Einzelereignisse verwerfen* (Menü-Kontext): die Pfeiltasten waren **tot** —
-  und das Mausrad wurde dadurch **nicht besser**, weil es dieselben Bytes sendet.
-  Ein verworfener Tastendruck ist kein Gewinn, nur ein Verlust.
-
-**Verifikation (28 Byte-exakte Funktionstests + am echten pty mit einem Treiber,
-der auf Startbereitschaft wartet):**
-
-| Fall | erwartet | gemessen |
-|---|---|---|
-| 3 einzelne Pfeile, 100 ms Abstand | 3 native Pfeile | 3 native Pfeile |
-| 5× gehaltener Pfeil, 33 ms (Wiederholungstakt) | 5 native Pfeile, **keine** Geste | 5 native Pfeile, 0 Seiten |
-| Pfeil, 300 ms später entgegengesetzt | 2 native Pfeile | 2 native Pfeile |
-| `/ne` + hoch + runter | nativ | nativ |
-| Rad-Geste, 10 Events in einem Read | 10 `PageUp` | 10 `PageUp` |
-| Geste über 3 Reads (sub-ms) | 3 Seiten | 3 Seiten |
-| zwei Gesten, 300 ms Abstand | getrennt erkannt | getrennt erkannt |
-| Geste, 400 ms später ein Tastendruck | Seiten + nativer Pfeil | Seiten + nativer Pfeil |
-| `links`/`rechts`, echtes `PageUp`/`PageDown` | unverändert | unverändert |
-| Text, `Enter`, `Backspace`, `Ctrl+U`, Paste | unverändert | unverändert |
-| über zwei Reads zerrissener Pfeil | nativ | nativ |
-
-**Bekannte, gemessene Feinheit:** Der gehaltene Pfeil ist 25 ms verzögert. Wird
-innerhalb dieses Fensters weitergeschrieben (z. B. `a`, hoch, `b` in einem Read),
-verschiebt sich die Byte-Reihenfolge auf `ab` + Pfeil. Für die Navigation
-irrelevant, im Test aber bewusst mitprotokolliert statt weggetestet.
+2. **PTY-Filter (`infra/scripts/freebuff-pty.py`):**
+   * **Im Chat-Fenster (1:1 Replikation von PageUp/PageDown):**
+     Egal ob der Prompt leer ist oder Text darin getippt wird: Auf-/Ab-Pfeile werden
+     **immer und sofort zu `PageUp` (`\x1b[5~`) und `PageDown` (`\x1b[6~`)**.
+     *Hintergrund:* Freebuff ignoriert Pfeiltasten bei befülltem Prompt (`return {type: "none"}`),
+     während `PageUp`/`PageDown` immer und ausschließlich das Nachrichtenfenster scrollt und den
+     Schreibbanner nie berührt.
+   * **In Menüs & Modaldialogen (Pfeiltasten 100% nativ):**
+     - **Slash-Menü (`/`):** Erkannt über `text.startswith("/")` → Pfeiltasten nativ für die Befehlsauswahl.
+     - **Modale Screens (`/history`, `/model`):** Erkannt über Befehl und Screen-Muster
+       (`Select a chat to resume`, `Search chats...`, `choose model`) → Pfeiltasten nativ für die Listenauswahl.
+     - **Agenten-Fragen (`ask_user` / OptionsList, 1..N Fragen):**
+       Erkannt über Screen-Muster (`Enter select`, `Type your own answer`, `(Select multiple options)`, `↑↓ navigate`).
+       Pfeiltasten bleiben nativ.
+     - **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):**
+       Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2, 3 etc. springt!).
+       Erst wenn alle Fragen abgeschlossen sind (`Your answer:`, `Your answers:`) oder der Nutzer mit Esc / Strg+C
+       abbricht, schaltet der Filter zurück auf PageUp/Down im Chat.
 
 **4. Umleiten des Rads selbst geht nicht.** `.vscode/keybindings.json` mit
 `mousewheel up`/`down` ist **kein gültiges Keybinding**: VS Code listet als
