@@ -494,35 +494,62 @@ TUI-Stream verifiziert: alle vier Maus-Sequenzen weg, `?2004h` und `?1004h`
 da. Bidirektional-Relay, SIGWINCH-Durchreichung und Exit-Code sind
 implementiert und getestet.
 
-**3. Die Pfeiltasten-Frage, und warum sie nicht sauber lösbar ist.** Ohne
-Mouse-Reporting schickt xterm.js das Mausrad als `up`/`down` — im Key-Log belegt:
-**ein Radschwung ≈ 30 Ereignisse pro Sekunde, ein Tastendruck = ein
-einzelnes.** Ein *einzelner* Rad-Klick ist damit byte- und taktgleich zu einem
-Tastendruck; an den Bytes ist nichts zu unterscheiden, nur am Takt. Die
-Burst-Heuristik (25-ms-Fenster: über dem Rad-Takt sub-ms, unter dem
-Wiederholungstakt ~33 ms) trennt **Gesten** von Tastendrücken, aber nicht den
-Einzelklick vom Einzeldruck. Dazu der Zielkonflikt: In freebuff ist `up` auf
-leerer Eingabe per Definition `history-up` — „letzte Nachricht holen". Das Rad
-soll das nicht, der Pfeil schon.
+**3. Die Pfeiltasten-Regel — endgültig: Pfeiltasten werden nie zu Seiten,
+und ein einzelner Rad-Klick läuft ins Leere.** Ohne Mouse-Reporting schickt
+xterm.js das Mausrad als `up`/`down`; im Key-Log belegt: **ein Radschwung ≈ 30
+Ereignisse pro Sekunde, ein Tastendruck = ein einzelnes**. Am Byte ist ein
+Rad-Klick damit nicht von einem Tastendruck zu unterscheiden, nur am Takt — und
+am Takt gibt es drei Fälle, nicht zwei. Deshalb ist die Regel **dreiteilig**, und
+der mittlere Fall ist der, den vorherige Versionen falsch behandelt haben:
 
-**Lösung: kontextabhängig nach Eingabe-Inhalt.** Der Filter zählt den
-Zeichenstand aus den **eigenen Tastatur-Bytes** (`track_input`: Enter → 0,
-Backspace −1, Ctrl+U → 0, Paste zählt mit, UTF-8-Fortsetzungsbytes nicht) — und
-**pro Position im Chunk**, nicht pro Chunk:
-
-| Eingabe | Pfeil / Rad | Folge |
+| Eingangsbild | Filter | Folge in freebuff |
 |---|---|---|
-| **leer** (Nachricht abgeschickt) | sofort `PageUp`/`PageDown`, ohne Burst-Fenster | kein `history-up` durchs Rad, ~0 ms Latenz |
-| **nicht leer** (Slash-Menü offen, Cursor im Text) | nativ bzw. Burst-Test | Slash-Menü bedienbar, Rad-Geste blättert trotzdem |
+| **einzelnes** `up`/`down`, **Slash-Menü offen** (Eingabe beginnt mit `/`) | nativ, nach 25 ms freigegeben | Menü bedienbar — der Grund, warum der Filter existiert |
+| **einzelnes** `up`/`down`, **kein Menü** | **wird verworfen** (konsumiert, nichts gesendet) | nichts — und **kein `history-up`** |
+| **Geste** (zweiter Treffer im Fenster bzw. Burst läuft) | `PageUp` / `PageDown` | das Rad blättert die Unterhaltung |
+| echtes `PageUp`/`PageDown` | unverändert durchgereicht | Tastaturscrollen bleibt |
+| `links`/`rechts` | unangetastet | wie bisher |
+| `FREEBUFF_ARROW_PAGE=1` | jeder Pfeil wird Seite | alte Pauschal-Umleitung für Fehlersuche |
 
-**Preis, bewusst akzeptiert:** Auf leerer Eingabe holt `up` nicht mehr die letzte
-Nachricht — dafür gibt es `/history`. Ohne diese Regel müsste man eines von
-beidem opfern. Zwei echte Bugs hat die Testarbeit dabei gefunden: Backspace
-(`0x7f`/`0x08`) wurde als druckbares Zeichen **gezählt** (ein Backspace machte
-die Eingabe länger), und der Kontext wurde **pro Chunk statt pro Position**
-ausgewertet (Tippen und Pfeil im selben Read → Slash-Menü kaputt). Beide als
-Testfälle festgehalten, 22 Funktionstests grün, end-to-end am pty belegt:
-`Hey ␍ ␍ Bye ␍` + zwei Radklicks → `ESC[5~ ESC[5~`.
+**Warum der mittlere Fall verworfen und nicht durchgelassen wird — das ist der
+entscheidende Punkt.** In freebuff hat `up`/`down` **ohne offenes Menü genau eine
+Funktion**: `history-up`/`history-down`, also das Zurückrollen der
+Prompt-Historie. Genau das war der Nutzerbefund („scrollt den Text hoch und
+runter"). Ein durchgelassener einzelner Pfeil — ob Taste oder Rad-Klick — würde
+diese Historie zurückrollen. Es gibt dort also **nichts zu verlieren**, was
+verworfen würde: die Zeile ist einzeilig, vertikale Bewegung ist in freebuff
+ohne Menü entweder Historie oder nichts. Deshalb: **Pfeiltasten erreichen die App
+nur dort, wo sie etwas bewirken (das Menü) — alles andere wird verworfen, und
+Seiten entstehen ausschließlich aus einer Geste.** Damit sind die drei Bedingungen
+gleichzeitig erfüllt: Pfeiltasten steuern die Menüs, nur das Rad blättert, und
+kein Tastendruck und kein Rad-Klick rollt die Historie zurück.
+
+**Das Warten ist trotzdem Pflicht:** Ein einzelnes Ereignis wird 25 ms
+*gehalten* (nicht gesendet), damit ein zweites gleichgerichtetes Ereignis im
+Fenster als Geste erkannt wird. Ohne dieses Halten käme ein Rad-Schwung nie als
+Geste an — dieser Fehler ist beim Implementieren passiert und sofort aufgefallen,
+weil die Gestentests fehlschlugen.
+
+**Verifikation (25 Byte-exakte Funktionstests + am echten pty mit Treiber, der auf
+Startbereitschaft wartet):**
+
+| Fall | erwartet | gemessen |
+|---|---|---|
+| 3 einzelne Pfeile, 100 ms Abstand | verworfen | verworfen |
+| 5× gehaltener Pfeil, 33 ms (Wiederholungstakt) | verworfen, keine Geste | verworfen |
+| 6× im 40-ms-Takt | verworfen | verworfen |
+| Rad-Geste, 10 Events in einem Read | 10 `PageUp` | 10 `PageUp` |
+| Geste gemischt hoch/runter | Seiten je Richtung | Seiten je Richtung |
+| `links`/`rechts` | unverändert | unverändert |
+| echtes `PageUp`/`PageDown` | unverändert | unverändert |
+| `/` + einzelne Pfeile | nativ | nativ |
+| `/` + Geste | Seiten | Seiten |
+| Menü per `Enter` geschlossen, Rest-Ereignis | verworfen | verworfen |
+| Text, `Enter`, `Backspace`, `Ctrl+U`, Paste | unverändert | unverändert |
+
+**Der Preis, der bleibt:** Auf leerer Eingabe holt `up` nicht mehr die letzte
+Nachricht — dafür gibt es `/history`. Das ist dieselbe Folge wie vorher, aber
+jetzt **ohne** den Nebeneffekt, dass ein Rad-Klick die Historie zurückrollt.
 
 **4. Umleiten des Rads selbst geht nicht.** `.vscode/keybindings.json` mit
 `mousewheel up`/`down` ist **kein gültiges Keybinding**: VS Code listet als
@@ -735,6 +762,12 @@ Proxy bei jedem Start automatisch hoch.
 - 2026-09-27: **Pfeiltasten-Änderung zurückgenommen — der Stand vor dem Auftrag war der richtige.** Der Nutzerwunsch war, Pfeiltasten aus dem Scroll-Pfad zu nehmen (Menüs bedienen). Umgesetzt als **burst-only**: einzelne Tastendrücke nativ, nur Gesten werden zu `PageUp`/`PageDown`. Das Ergebnis war schlechter: **das Rad scrollte den Text wieder hoch und runter** — also genau das, was zwei Runden vorher als Fehler gemeldet und behoben war. Der Nutzer ordnete an: **auf den Stand davor zurück**. `infra/scripts/freebuff-pty.py` ist wieder exakt der Commit `918f26b` (kontextabhängige Umleitung nach Eingabe-Inhalt, `track_input` wieder da, `flush_pending` mit lokaler Variable gegen die Fehlermeldung des Type-Checkers).
   **Was dabei bewusst NICHT zurückgenommen wurde**, weil es zwei getrennte Aufträge waren: **kein Versions-Pin** (Installiert wird `freebuff@latest`) und der **Scroll-Patch per Mustersuche** (`0.8 → 0.5`, rename-robust). Beides hat der Nutzer ausdrücklich gewollt.
   **Die Lehre, die ich dazuschreibe, weil sie das eigentliche Problem ist:** Ich habe „Pfeiltasten rausnehmen" als *die* Änderung gelesen und die beiden anderen Aufträge desselben Satzes mit erledigt — und dann das Ganze als geschlossen gemeldet, ohne die eine Sache zu prüfen, auf die es ankam: **scrollt das Rad noch in der richtigen Richtung?** Bei einem TUI-Problem ist „Filterlogik umgebaut" kein Ergebnis, sondern nur die Voraussetzung; das Ergebnis ist „Rad blättert, Menü bedienbar, Historie unberührt", und das prüft man am laufenden TUI, nicht am Test.
+- 2026-09-27: **Pfeiltasten-Regel neu und endgültig: Pfeiltasten werden NIE zu `PageUp`/`PageDown`, und ein einzelner Rad-Klick läuft ins Leere statt die Historie zurückzurollen.** Der Nutzerwunsch war präzise: links/rechts funktioniert, **hoch/runter soll nicht wie PageUp/PageDown scrollen** — Pfeiltasten nativ, nur das Mausrad macht Seiten. Drei vorherige Fassungen had den Kern falsch getroffen (Burst-only ließ Einzelklicks durch → Text sprang; Kontextlogik machte *alle* Pfeile zu Seiten → Menü unbedienbar).
+  **Die Regel ist dreiteilig**, weil es am Takt **drei** Fälle gibt und nicht zwei: (a) einzelnes `up`/`down` bei **offenem Slash-Menü** (Eingabe beginnt mit `/`) → nativ, der Grund für den Filter; (b) einzelnes `up`/`down` **ohne Menü** → **wird verworfen**; (c) **Geste** (zweiter Treffer im 25-ms-Fenster) → `PageUp`/`PageDown`.
+  **Der entscheidende Punkt ist (b):** Ohne offenes Menü hat `up`/`down` in freebuff genau **eine** Funktion — `history-up`/`history-down`, also das Zurückrollen der Prompt-Historie. Genau das war der Nutzerbefund („scrollt den Text hoch und runter"). Ein *durchgelassener* einzelner Pfeil — ob Taste oder Rad-Klick — würde die Historie zurückrollen; es gibt dort aber auch **nichts zu verlieren**, weil die Zeile einzeilig ist und vertikale Bewegung ohne Menü entweder Historie oder nichts bedeutet. Also wird verworfen: **Pfeiltasten erreichen die App nur dort, wo sie etwas bewirken, Seiten entstehen ausschließlich aus einer Geste.** Damit sind alle drei Bedingungen gleichzeitig erfüllt (Menü bedienbar, nur Rad blättert, kein Tastendruck und kein Rad-Klick rollt Historie zurück).
+  **Zwei Bugs, die die Tests beim Implementieren gefangen haben, nicht das Rätselraten:** (1) Die Gestenerkennung braucht das **Halten** des Einzelereignisses — in der ersten Fassung wurde es sofort verworfen und ein zweites Rad-Ereignis kam nie als Geste an; die Gestentests fielen sofort um. (2) `flush_pending` bekam einen `emit`-Schalter: ohne offenes Menue wird **verworfen**, mit Menue **nativ ausgegeben** — sonst hätte ein Pfeil, den der Nutzer im offenen Menü drückte und 25 ms später per `Enter` schloss, doch noch die Historie zurückgerollt.
+  **Verifikation: 25 Byte-exakte Funktionstests** (statt Zählung — die zählte durchgereichte echte `PageUp` als erzeugte Seite mit) **plus ein pty-Treiber, der auf Startbereitschaft wartet.** Der Treiber war nötig, weil die erste Messung ein **Artefakt** erzeugte: ohne Wartezeit schrieb der Treiber die ersten Tasten, bevor der Filter im `select` war, die pty pufferte sie, und zwei kamen gemeinsam an — was als „gehaltener Pfeil wird fälschlich zur Geste" aussah. Mit Wartezeit: 3 einzelne Pfeile (100 ms) verworfen, 5× gehaltener Pfeil (33 ms Wiederholungstakt) verworfen, 6× im 40-ms-Takt verworfen, Rad-Geste mit 10 Events → 10 `PageUp`, `links`/`rechts` und echtes `PageUp`/`PageDown` unverändert, `/` + Pfeile nativ, `/` + Geste Seiten, Menü per `Enter` geschlossen → Rest verworfen.
+  **Und der Preis, der bleibt:** Auf leerer Eingabe holt `up` nicht mehr die letzte Nachricht — dafür gibt es `/history`.
 ## Changelog
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.

@@ -141,16 +141,28 @@ def _page(seq, now, last_page, debounce):
     return ARROW_PAGE[seq]
 
 
-def flush_pending(state, now):
-    """Wartende Einzel-Ereignisse ausgeben, deren Fenster abgelaufen ist.
+def flush_pending(state, now, emit=True):
+    """Wartende Einzel-Ereignisse abschliessen, deren Fenster abgelaufen ist.
 
-    Ohne das wuerde ein einzelner Tastendruck (der nie wieder ein Read
-    ausloest) nie beim Kind ankommen.
+    `emit=True` gibt sie nativ an die App — das braucht das **Slash-Menue**,
+    damit ein Tastendruck, der keinen weiteren Read ausloest, ueberhaupt
+    ankommt. `emit=False` **verwirft** sie: das ist der Fall ohne offenes
+    Menue, in dem ein einzelner Pfeil bei freebuff nichts nuetzt ausser
+    `history-up` — und das soll weder ein Tastendruck noch ein einzelner
+    Rad-Klick ausloesen.
+
+    Das *Warten* ist in beiden Modi gleich und Pflicht: nur ein wartendes
+    Ereignis erlaubt die Gestenerkennung, weil erst ein zweites gleichgerichtetes
+    Ereignis im Fenster daraus eine Rad-Geste macht.
     """
     out = bytearray()
     for st in state.values():
-        if st["pending"] is not None and now >= st["deadline"]:
-            out += st["pending"]
+        # Lokale Variable, damit der Type-Checker den Wert verengen kann
+        # (`st["pending"] is not None` durch einen Dict-Wert verfolgt er nicht).
+        pending = st["pending"]
+        if pending is not None and now >= st["deadline"]:
+            if emit:
+                out += pending
             st["pending"] = None
     return bytes(out)
 
@@ -301,16 +313,35 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
         out += data[pos:match.start()]
         pos = match.end()             # in JEDEM Fall konsumieren
         st = state[seq]
+        st = state[seq]
         if not text.startswith("/"):
-            # Eingabe leer: Pfeil sofort zur Seite, ohne Fenster. Auch ein noch
-            # wartendes Einzelereignis wird Seite, nicht nativ — sonst roellt
-            # es beim Leeren der Eingabe doch noch die Historie zurueck.
-            for other, ost in state.items():
-                if ost["pending"] is not None:
-                    out += _page(other, now, last_page, debounce)
-                    ost["pending"] = None
-                    ost["burst_until"] = 0.0
-            out += _page(seq, now, last_page, debounce)
+            # Kein Slash-Menue offen: hoch/runter hat in freebuff genau EINE
+            # Funktion — `history-up`/`history-down`, die Prompt-Historie
+            # zurueckrollen. Das Rad darf das ausdruecklich nicht, und ein
+            # einzelner Tastendruck soll es auch nicht. Deshalb wird hier NICHTS
+            # umgeschrieben, sondern entschieden:
+            #   * Geste (zweiter Treffer im Fenster oder Burst laeuft) -> Seite
+            #   * einzelnes Ereignis                            -> verworfen
+            # verworfen statt nativ ist der entscheidende Unterschied: nativ
+            # wuerde ein einzelner RAD-Klick die Historie zurueckrollen, und
+            # nativ wuerde auch ein echter Tastendruck history-up loesen. Ohne
+            # offenes Menue geht durch den verworfenen Pfeil nichts verloren.
+            if st["burst_until"] > now:
+                out += _page(seq, now, last_page, debounce)
+            elif st["pending"] is not None and now < st["deadline"]:
+                # Zweites gleichgerichtetes Ereignis im Fenster -> Geste = Rad.
+                st["burst_until"] = now + max(gap * 4, 0.12)
+                out += _page(seq, now, last_page, debounce)
+                st["pending"] = None
+                out += _page(seq, now, last_page, debounce)
+            else:
+                # Einzelereignis ohne Menue: **warten, aber nicht ausgeben.**
+                # Das Warten ist Pflicht fuer die Gestenerkennung — ohne
+                # wartendes Ereignis kaeme ein zweites Rad-Ereignis nie als
+                # Geste an. Verworfen wird beim Fenster-Ablauf (flush_pending
+                # mit emit=False), nicht schon hier.
+                st["pending"] = seq
+                st["deadline"] = now + gap
         elif st["burst_until"] > now:
             # Mitten im Rad-Schwung: sofort als Seite, ohne Fenster.
             out += _page(seq, now, last_page, debounce)
@@ -325,12 +356,14 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
             out += _page(seq, now, last_page, debounce)
         else:
             # Fenster vorbei: ein Althertum wartet noch, den nativ durchlassen.
-            out += flush_pending(state, now)
+            out += flush_pending(state, now, emit=True)
             st["pending"] = seq
             st["deadline"] = now + gap
     text = track_input(data[pos:], text)
     out += data[pos:]
-    out += flush_pending(state, now)
+    # Wartende Ereignisse nur ausgeben, wenn das Slash-Menue NOCH offen ist;
+    # wurde es inzwischen geschlossen (Enter), gehoeren sie verworfen.
+    out += flush_pending(state, now, emit=text.startswith("/"))
     return bytes(out), carry, state, last_page, text
 
 
@@ -492,11 +525,14 @@ def main(argv):
                     # sehen, aber wir lesen nicht weiter.
                     stdin_open = False
 
-            if arrow_page and not always_page and text.startswith("/"):
-                # Wartenden Einzelpfeil ausgeben, auch wenn kein Read kam. Ohne
-                # Slash-Menue gibt es nichts auszugeben: dort wird ein Pfeil
-                # sofort zur Seite und es wartet nie etwas.
-                data = flush_pending(arrow_state, time.monotonic())
+            if arrow_page and not always_page:
+                # Wartendes Einzelereignis abschliessen, auch wenn kein Read kam.
+                # Ohne offenes Slash-Menue wird dabei **verworfen** (nicht
+                # nativ, nicht Seite) — dort loest ein einzelner Pfeil bei
+                # freebuff nur `history-up` aus, und genau das soll weder ein
+                # Tastendruck noch ein einzelner Rad-Klick.
+                data = flush_pending(arrow_state, time.monotonic(),
+                                     emit=text.startswith("/"))
                 if data:
                     debug(f" -> {summarize(data)} (Fenster abgelaufen)")
                     try:
