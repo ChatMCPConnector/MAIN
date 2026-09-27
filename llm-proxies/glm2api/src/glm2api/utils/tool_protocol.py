@@ -375,6 +375,14 @@ _TOOL_MARKUP_RE = re.compile(
     r"\"tool_calls?\"\s*:"          # {"tool_calls": [...]}  (JSON-Protokoll)
     r"|\btool_calls?_(?:begin|end)\b"  # DSML-Marker
     r"|<\s*/?\s*tool_call[\s>/]"    # <tool_call> / </tool_call> (Legacy-XML)
+    # S-18: das DSML-aufrufprotokoll (`<|DSML|tool_calls>…`) fehlte hier.
+    # Folge: der narration-holdback im translator erkannte es nicht als
+    # markup, behielt es im carry fest und gab es dem parser ZU SPAET — der
+    # puffer des parsers enthielt dann markup UND die folgende prosa, und die
+    # ging beim flush verloren (gemessen in `harness/sweep2.py`,
+    # `dsml-aufruf+prosa`, 6 von 6 chunk-groessen: der client bekam den
+    # aufruf und sonst nichts).
+    r"|<\|?\s*dsml\|"
     r")"
 )
 

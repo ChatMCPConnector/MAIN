@@ -36,6 +36,10 @@ PROSE_C = "Dritter Absatz schliesst ab."
 PREAMBLE = "Ich lese die Datei jetzt."  # T-07: wird im aufruf-turn verworfen
 FENCED = "Hier der Aufruf:\n```bash\nls -la\n```\nDann weiter."
 SPACE = "Der Bericht ist fuer Sie. Ich"  # S-10: der rand-links des carries
+# S-15: der sichtbare anteil ist der fertige satz. `Ich` ist ein
+# praeambel-Anfang und faellt als eigener satz — vor S-15 ging der ganze
+# text verloren (chunk 1000: ''), jetzt bleibt der echte satz.
+SPACE_ERWARTET = "Der Bericht ist fuer Sie."
 WS = "  \n  "  # S-06: leerraum zwischen zwei sichtbaren werten bleibt
 PARA = "\n\n"  # S-11: absatzumbruch zwischen zwei getrennten text-parts
 
@@ -55,29 +59,20 @@ LAYOUTS: list[tuple[str, list, str, int]] = [
     ("praeambel-wird-verworfen", [PREAMBLE, call()], "", 1),
     ("praeambel-call-prose", [PREAMBLE, call(), PROSE_B], PARA + PROSE_B, 1),
     ("gefencet-vor-call", [FENCED, call()], FENCED, 1),
-    ("rand-links-im-carry", [SPACE, call()], SPACE, 1),
+    ("rand-links-im-carry", [SPACE, call()], SPACE_ERWARTET, 1),
     ("leerraum-artefakt", [PROSE_A, WS, call(), PROSE_B], PROSE_A + WS + PROSE_B, 1),
     ("nur-prosa-ohne-call", [PROSE_A, PROSE_B], PROSE_A + PARA + PROSE_B, 0),
 ]
 
 CHUNK_SIZES = (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000)
 
-# Vorbestehende, bereits bewertete Befunde. `erwartung` ist der soll-wert,
-# den das layout hat — die verletzung liegt in der abweichung davon.
-KNOWN: dict[str, str] = {
-    "rand-links-im-carry": (
-        "S-15: textverlust am turn-anfang. Ein fertiger, vollstaendiger "
-        "satz am anfang des turns, der mit einem narration-anfangswort "
-        "endet ('... Ich'), geht im aufruf-turn GANZ verloren, wenn er in "
-        "einem delta ankommt (chunk 1000 -> ''), bei kleinen chunk-groessen "
-        "nur sein letztes fragment. Ursache: die S-12-freigabeschranke "
-        "`self._emitted_visible_text` — was nur vom turn-anfang zuruecklag, "
-        "gilt ihr als praeambel und wird verworfen. Gegengeprueft an "
-        "02ceca2 und 9054325: vorbestehend, nicht von S-14 verursacht "
-        "(an 9054325 zusaetzlich sichtbar: der text kam als "
-        "'... \\n\\nIch' durch)."
-    ),
-}
+# Vorbestehende, bereits bewertete Befunde — hier wird der SOLL-wert des
+# layouts verletzt, die verletzung liegt also in der abweichung.
+# Stand 2026-09-27 nach S-15…S-18: **leer**. S-15 hat den verlust am
+# turn-anfang beseitigt (der layout erwartet jetzt nur noch den echten
+# satz, weil `Ich` als praeambel-Anfang faellt), S-17 den absatzumbruch
+# mitten im wort, S-18 das markup-leck ueber viele parts.
+KNOWN: dict[str, str] = {}
 
 
 def check(parts: list, expected: str, expected_calls: int, chunk: int) -> list[str]:

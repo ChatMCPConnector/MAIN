@@ -102,6 +102,51 @@ TAG_NAME_HINTS = [
 ]
 
 
+def _build_begun_markup_regex(markers: list[str]) -> re.Pattern[str]:
+    """Alle *angefangenen* markup-opener am textende.
+
+    S-18: `TAG_NAME_HINTS` erkennt einen opener erst, wenn er VOLLSTAENDIG
+    im puffer liegt. Bis dahin wurde jedes zeichen einzeln als sichtbarer
+    text ausgegeben — bei chunk-groesse 1 stand am ende das komplette
+    DSML-block als sichtbarer markup im stream, waehrend der aufruf
+    daneben korrekt geborgen wurde (gemessen in `harness/sweep2.py`,
+    szenario `dsml-ueber-viele-parts`, chunk 1 und 3).
+
+    Dieselbe loecke wie S-14 in der narration: der ausloeser braucht ein
+    vollstaendiges merkmal, und das fragment, in dem es noch unvollstaendig
+    ist, rutscht genau dann durch. Also hier genauso: sobald das ende ein
+    angefangener opener ist, wird gewartet.
+
+    Die opfer, die selbst ein vollstaendiger `TAG_NAME_HINTS`-eintrag sind,
+    fehlen im muster — die behandelt der normale marker-pfad. Sonst wuerde
+    der hierstehende holdback ihm zuvorkommen und einen bestehenden,
+    gepinnten pfad (\"`<|` eroeffnet den dsml-puffer\") verdecken.
+    """
+    complete = {marker.lower() for marker in markers}
+    fragments = {
+        lowered[:length]
+        for lowered in (marker.lower() for marker in markers)
+        for length in range(1, len(lowered))
+        if lowered[:length] not in complete
+    }
+    if not fragments:
+        return re.compile(r"(?!)")
+    # `re.escape` ist hier keine formalitaet: die fragmente enthalten echte
+    # regex-zeichen (`<|`, `{"`, …). Ohne escaping wird das `|` in `<|` zu
+    # einer Alternative — und leere alternativen matchen ueberall (der
+    # muster-test 'Pa' war dann ein treffer, weil `pa` nie im menge war).
+    alternation = "|".join(
+        re.escape(fragment) for fragment in sorted(fragments, key=len, reverse=True)
+    )
+    return re.compile(r"(?:" + alternation + r")\Z", re.IGNORECASE)
+
+
+# das JSON-protokoll gehoert in dieselbe liste: `{"tool_calls"` ist im
+# aufruf-`<|`-zweig nicht dabei, und ein angefangenes `{"tool` hat denselben
+# fehler.
+BEGUN_MARKUP_RE = _build_begun_markup_regex([*TAG_NAME_HINTS, '{"tool_calls"'])
+
+
 def _local_name(tag: str) -> str:
     if "}" in tag:
         tag = tag.split("}", 1)[1]
@@ -2112,6 +2157,9 @@ class StreamingToolParser:
     allowed_tool_names: set[str] | None = None
     detect_all: bool = False
     buffering_dsml: bool = False
+    # S-15: stand im zuletzt geflushten puffer prosa VOR dem aufruf-markup?
+    # siehe `flush()`.
+    flushed_markup_prefix_is_preamble: bool = False
     _holdback_warned: bool = False
     # T-06: anzahl der konsumierten, aber NICHT ausfuehrbaren
     # call-protokolle (fehlendes pflichtargument beim aufruf).
@@ -2180,6 +2228,12 @@ class StreamingToolParser:
         # wird <\u200btool_call> weder erkannt noch ausgegeben.
         if "\u200b" in self.pending_text:
             self.pending_text = self.pending_text.replace("\u200b", "")
+        # S-18: das ende ist ein ANGEFANGENER markup-opener -> warten, bis
+        # er vollstaendig da ist. Sonst geht jedes zeichen des openers als
+        # sichtbarer text raus, bevor der marker-pfad ihn ueberhaupt sehen
+        # kann (`harness/sweep2.py`, `dsml-ueber-viele-parts`).
+        if BEGUN_MARKUP_RE.search(self.pending_text):
+            return ""
         markup_starts = [
             index
             for marker in TAG_NAME_HINTS
@@ -2398,6 +2452,27 @@ class StreamingToolParser:
         return position
 
     def flush(self) -> tuple[str, list[dict[str, object]]]:
+        # S-15: der flush liefert prosa, die im selben puffer lag wie
+        # aufruf-markup. Der aufrufer muss unterscheiden koennen, **wo** sie
+        # lag: prosa VOR dem markup ist praeambel (der fall, den
+        # `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`
+        # pinnt — praeambel und DSML in einem part, praeambel chinesisch),
+        # prosa NACH dem markup ist antwort und muss heraus. Die position ist
+        # das ganze kriterium; `find_tool_calls_protocol` sieht das
+        # JSON-protokoll, die `TAG_NAME_HINTS` das DSML.
+        first_markup = -1
+        lowered = self.pending_text.lower()
+        for marker in TAG_NAME_HINTS:
+            index = lowered.find(marker.lower())
+            if index != -1 and (first_markup == -1 or index < first_markup):
+                first_markup = index
+        json_index = find_tool_calls_protocol(self.pending_text)
+        if json_index != -1 and (first_markup == -1 or json_index < first_markup):
+            first_markup = json_index
+        # > 0: es steht prosa DAVOR — die ist nie durch `consume()` gegangen
+        # (das gibt den prefix vor einem marker sofort zurueck) und stand
+        # damit am turn-anfang.
+        self.flushed_markup_prefix_is_preamble = first_markup > 0
         all_visible: list[str] = []
         while self.pending_text:
             visible, remainder, parsed_calls = _split_stream_text(

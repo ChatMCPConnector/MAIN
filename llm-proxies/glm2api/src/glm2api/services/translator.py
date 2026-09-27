@@ -9,7 +9,7 @@ from bisect import insort
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import Logger
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from ..config import AppConfig
@@ -567,7 +567,25 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
 # und die part-verkettung haette mitten im echo-präfix umgebrochen.
 # T-04: maximale anzahl identischer nativer calls pro turn
 _MAX_IDENTICAL_NATIVE_CALLS = 2
-_SENTENCE_END_CHARS = ".!?\u2026\u3002\"')\u00bb"
+# S-17: der apostroph `'` war hier ein satzzeichen — und ist es nicht. Er
+# ist im englischen der **eroeffner** eines kontrahens ("I'll", "don't",
+# "it's") und im deutschen der possessiv ("Modelle's Preise"). Eine part,
+# die an ihm endet, ist mitten im wort abgeschnitten, kein satzende. Folge
+# war ein absatzumbruch mitten im wort, abhaengig davon, wo der upstream
+# schnitt: `"I'll now read the file."` kam bei chunk-groesse 1 als
+# `"I'\n\nll now read the file."` an (gemessen in `harness/sweep2.py`,
+# szenario `praeambel-en+call`).
+#
+# `"`, `)` und `»` bleiben: die schliessen ein zitat, eine klammer, ein
+# parentheses — da ist ein satzende plausibel. Ihre *eroeffner* gehoeren
+# nicht hierher (die fuehrt `_starts_new_block` bzw. der DSML-pfad).
+_SENTENCE_END_CHARS = ".!?\u2026\u3002\")\u00bb"
+# S-15: die echten satzenden — ohne die drei schliesser `\"`, `)`, `»`.
+# Die schliessen ein zitat/eine klammer und stehen am ENDE eines satzes; am
+# anfang eines textes sind sie genau das nicht, sondern gehoeren zum
+# vorigen. Fuer den linken rand (siehe `_owed_lead_edge`) zaehlt deshalb nur
+# diese menge.
+_SENTENCE_TERMINATORS = ".!?\u2026\u3002"
 # Eine part, die mit einem dieser zeichen beginnt, eroeffnet einen neuen
 # block (markdown-tabelle, liste, ueberschrift, zitat) und ist damit KEINE
 # fortsetzung — auch wenn die vorherige mitten im satz endete.
@@ -629,6 +647,21 @@ def _needs_paragraph_break(previous: str, following: str) -> bool:
         # S-06: eine part ohne inhalt (live: eine leere text-part neben
         # jedem nativen call) bekommt keinen umbruch — 7 calls ergaben so
         # 12 leerzeilen im sichtbaren text.
+        return False
+    # S-18: die grenze liegt INNERHALB eines werkzeug-markups (nach dem
+    # letzten `>` folgt ein `<`). Ein absatzumbruch dort ist ein
+    # transportschaden, kein formatierung: er zerlegt `<|DSML|tool_calls>`
+    # in `<` + `|DSML` + `|tool_calls>`, und weil das `|` am anfang wie
+    # eine markdown-tabelle aussieht, wird an jeder dieser grenzen
+    # umgebrochen. Damit erkennt der parser das block nie — und rohes
+    # markup landet im client-text, waehrend der aufruf daneben korrekt
+    # geborgen wird. Gemessen in `harness/sweep2.py`: bei chunk-groessen
+    # 1 und 3 stand das komplette DSML-block als sichtbarer text im
+    # stream. Die abfrage sitzt hinter `rfind(">")` und ist damit
+    # auf die laenge des letzten tags begrenzt, nicht auf die laenge des
+    # texts.
+    last_closed = previous.rfind(">")
+    if previous.find("<", last_closed + 1) != -1:
         return False
     if following[:1].isspace():
         return False
@@ -1745,7 +1778,17 @@ def _split_open_sentence(text: str) -> tuple[str, str]:
         # der GANZE text ist der offene satz — das ist der normale
         # fall des holdbacks und es bleibt beimalten
         return "", text
-    return text[: len(text) - len(tail)], tail
+    prefix = text[: len(text) - len(tail)]
+    # Der rand-links des offenen satzes gehoert zum TRENNER, nicht zum
+    # satz: er stand schon im stream, und `tool_parser.flush()` strippt
+    # seinen anteil. Behaelt der carry den rand, fehlt danach der
+    # zwischenraum (gemessen: 'Der Bericht ist fuer Sie. Ich' wurde zu
+    # 'Der Bericht ist fuer Sie.Ich'). Also wandert er mit in den prefix.
+    leading = tail[: len(tail) - len(tail.lstrip())]
+    if leading:
+        prefix += leading
+        tail = tail[len(leading) :]
+    return prefix, tail
 
 
 def _self_steering_holdback(text: str) -> bool:
@@ -1844,6 +1887,119 @@ def strip_meta_chatter(text: str) -> str:
             continue
         kept_lines.append(line)
     return "".join(kept_lines).strip()
+
+
+def strip_turn_start_narration(text: str) -> str:
+    """S-15: die T-07-praeambel SATZWEISE entfernen.
+
+    Die aufruf-freigabe (S-12) gibt den beim aufruf-eintreffen
+    zurueckgehaltenen rest heraus. Ihre schranke war „es kam vorher schon
+    sichtbarer text raus" (`self._emitted_visible_text`) — und die beantwortet
+    die falsche frage. Sie ist zu grob: sie verwirft auch **legitime prosa**,
+    die nur deshalb im puffer lag, weil sie hinter einer narration oder
+    einem protokoll-fragment stand. Gemessen in `harness/order_matrix.py`
+    (layout `rand-links-im-carry`) und `harness/sweep2.py`
+    (`selbst-steuerung-mittelteil`, `dsml-aufruf+prosa`): ein fertiger,
+    unauffaelliger erste satz ging im aufruf-turn **ganz** verloren —
+    chunk 1000: `''`, chunk 13: `''`, wo der text vorher da war.
+
+    Die frage, um die es geht, ist nicht die reihenfolge, sondern ob der
+    rest eine **praeambel IST** — und das entscheidet der marker, nicht die
+    position. Deshalb hier satzweise statt pauschal: der narration-satz
+    faellt, der echte satz davor bleibt.
+
+    Das ist streng **weniger** aggressiv als der stream-pfad, wo
+    `_preamble_pending` den ganzen turn puffert und bei einem aufruf
+    verwirft — dort faellt also auch ein harmloser satz mit „ich" darin.
+    """
+    if not text:
+        return text
+    kept: list[str] = []
+    cursor = 0
+    for match in _SENTENCE_END_RE.finditer(text):
+        stop = match.end()
+        sentence = text[cursor:stop]
+        if not _PREAMBLE_NARRATION_RE.search(sentence):
+            kept.append(sentence)
+        cursor = stop
+    tail = text[cursor:]
+    if tail and not _PREAMBLE_NARRATION_RE.search(tail):
+        kept.append(tail)
+    return "".join(kept)
+
+
+def _apply_text_filters(
+    text: str,
+    steps: tuple[Callable[[str], str], ...],
+    require_complete_sentence: bool = True,
+) -> str:
+    """Filterkette auf EIN stück sichtbaren text, mit rand-erhalt.
+
+    S-08/S-09: zwei ecken, die diese hülle erst sicher machen:
+
+    1. `require_complete_sentence=True` im stream: das stück ist ein
+       delta, am publish-punkt ein puffer, der mitten im satz enden kann.
+       Ein satzweiter schnitt darauf erzeugt ein halbwort — live
+       gemessen: '…fuer Dateisystem nutze ich jetzt `bash`:' wurde zu
+       '`isystem nutze ich jetzt `bash`:'.
+
+       S-12: der abschluss gibt den beim aufruf-eintreffen
+       zurueckgehaltenen rest mit `False` frei. Dort ist der satz
+       namenslich vollstaendig — der aufruf ist da und der text nicht —
+       waehrend ein stream-delta auf einen fertigen satz warten MUSS.
+       Mit `True` blieb genau die S-09-narration stehen (sie endet auf
+       ':', der filter verweigert den schnitt), mit `False` fällt sie
+       ganz und ein antwort-rest wie 't' oder 'Punkt' bleibt unangetastet.
+    2. die rand-whitespace bleibt erhalten. Alle drei filter enden auf
+       `.strip()` (`strip_protocol_meta_narration` tut das sogar OHNE
+       muster-treffer); bei kleinen deltas sind das führungszeichen und
+       absatzumbrüche, die der client brauchte — derselbe fehler wie in
+       `test_self_steering_never_cuts_a_stream_delta_mid_sentence`
+       dokumentiert, nur dass die gegenprobe dort `stripped == stripped`
+       prüfte und ihn deshalb nie sah. Deshalb: kern filtern, ränder
+       zurückhängen, und wenn nichts getroffen hat den text UNVERÄNDERT
+       zurückgeben.
+
+    Gibt "" zurück (nicht whitespace), wenn nichts übrig bleibt, damit der
+    aufrufer keinen leeren content-part an den client gibt (S-06).
+
+    Und noch eine falle, die diese hülle lösen muss: `require_complete_
+    sentence` entscheidet am LETZTEN zeichen, ob ein satz fertig ist. Die
+    rand-whitespace — genau das, was sie hier geschäftet werden soll —
+    zerstört diese entscheidung: '…`bash`:\n' endet nach einem strip auf
+    ':', der satz gilt als unvollständig, der schnitt wird verweigert und
+    die narration bleibt stehen. Also: endet der text an einer satzgrenze,
+    bekommt die kette zwischen den stufen einen satzabschluss dazu.
+
+    S-16: `steps` ist deshalb ein parameter — die kette wird mit
+    unterschiedlicher menge gebraucht: mit aufrufen die
+    selbst-steuerung dazu, ohne aufrufe nur die limit-meldung.
+    """
+    if not text:
+        return text
+    lead = text[: len(text) - len(text.lstrip())]
+    trail = text[len(text.rstrip()) :]
+    core = text.strip()
+    if not core:
+        return ""
+    ends_sentence = bool(trail) or core[-1] in ".!?"
+
+    def with_boundary(piece: str) -> str:
+        if ends_sentence and piece and piece[-1] not in ".!?\n":
+            return piece + "\n"
+        return piece
+
+    filtered = with_boundary(core)
+    for step in steps:
+        filtered = with_boundary(step(with_boundary(filtered)))
+    if filtered.endswith("\n") and ends_sentence and not core.endswith("\n"):
+        filtered = filtered[:-1]
+    if not filtered.strip():
+        return ""
+    if filtered == core:
+        return text
+    return lead + filtered + trail
+
 
 
 def _extract_code_like(parsed: Mapping[str, object]) -> str:
@@ -2510,6 +2666,10 @@ class GLMEventAccumulator:
     _parts_epoch: int = 0
 
     _deferred_visible_text: str = ""
+    # S-15: der gepufferte text wurde am turn-anfang als „keine praeambel"
+    # erkannt (also als echter satz) — dann darf der abschluss ihn auch mit
+    # aufrufen veroeffentlichen. Siehe `_turn_start_buffer_is_preamble`.
+    _deferred_is_answer: bool = False
     # S-06: stand schon sichtbarer (nicht-rein-whitespace) text in diesem
     # turn im stream? Dann ist ein whitespace-delta ein trennzeichen
     # zwischen zwei sichtbaren stuecken und wird sofort rausgeschickt
@@ -3125,6 +3285,21 @@ class GLMEventAccumulator:
             # landet eine fertige zeilenwende im S-05-puffer, wo der
             # abschluss sie wegstrippt (`_split_open_sentence`).
             text_delta, self._narration_carry = _split_open_sentence(text_delta)
+            # S-15: war der GANZE text der offene satz, dann beginnt der
+            # carry mit dem rand, der den fertigen satz DAVOR abschliesst.
+            # Derselbe rand wie im zweig unten, nur an anderer stelle
+            # entstanden — der zweite fall, weil `_split_open_sentence`
+            # seinen eigenen rand erst am Trenner erkennt, nicht am anfang.
+            carry_edge_carrier, carry_edge = self._owed_lead_edge(
+                self._narration_carry
+            )
+            # nur wenn der fertige praefix leer ist: dann ist der rand der
+            # GANZE text_delta und kann direkt veroeffentlicht werden. Steht
+            # ein praefix davor, faehrt der rand mit durch die normale
+            # kette — dort ist die reihenfolge durch den praefix gegeben.
+            if carry_edge and not text_delta:
+                self._narration_carry = carry_edge_carrier
+                chunks.append(self._visible_content_chunk(carry_edge))
         elif text_delta and (
             _PROTOCOL_META_NARRATION_TAIL_RE.search(text_delta)
             or _self_steering_holdback(text_delta)
@@ -3135,8 +3310,44 @@ class GLMEventAccumulator:
             # stehen.
             or _preamble_narration_undecided(text_delta)
         ):
+            # S-15: hier wird bewusst der GANZE text zurueckgehalten, nicht
+            # nur der offene satz (anders als im S-14-zweig oben). Der
+            # schnitt hat zwei probleme: er nimmt dem abschluss den
+            # rand-links des Carries weg (`lead_whitespace`, S-10) und er
+            # gibt der T-07-praeambel den text nicht mehr zu sehen — beides
+            # hat `test_s10_space_between_streamed_text_and_finalize_tail_survives`
+            # und `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`
+            # zurueckgeholt. Der preis des ganzen texts ist eine einzige
+            # satzgrenze: der punkt am satzende und der leerraum davor
+            # koennen mit der narration fallen (gemessen in
+            # `harness/order_matrix.py`, layout `rand-links-im-carry`,
+            # chunk 8/11/20) — dokumentiert als S-15-Rest.
+            # S-15: der rand-links, der den schon gesendeten satz abschliesst,
+            # wird herausgenommen und sofort veroeffentlicht. Nur der
+            # inhalt wartet — das ist der unterschied zu
+            # `_split_open_sentence`, das den Schnitt an der Satzgrenze
+            # macht und darum bei einem kurzen, noch satzlosen delta
+            # ueberhaupt nichts zurueckhaelt (der T-07-praembel wuerde
+            # durchrauschen, siehe
+            # `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`).
+            # Der fruehere preis dieses verzichts war genau der hier behobene
+            # rand-verlust (layout `rand-links-im-carry`).
+            #
+            # Der rand geht an `chunks` und NICHT durch die restliche kette.
+            # Grund: die T-07-praembel prueft gegen den UPSTREAM-schwanz
+            # (`_preamble_narration_probe` -> `_emitted_text_tail`), und der
+            # enthaelt den carry, der gerade zurueckgehalten wurde. Der rand
+            # '. ' nach dem carry 'Ich' las sich dadurch als praembel
+            # ('... fuer Sie. Ich' + '. '), wurde in den S-05-puffer
+            # geschrieben und fiel im aufruf-turn mit der praembel wieder
+            # weg — der punkt am satzende, den S-15 zurueckholen wollte.
+            # Der rand ist per definition kein text: er enthaelt weder eine
+            # narration noch ein protokoll-fragment, er schliesst nur ab.
+            text_delta, owed_edge = self._owed_lead_edge(text_delta)
             self._narration_carry = text_delta
             text_delta = ""
+            if owed_edge:
+                chunks.append(self._visible_content_chunk(owed_edge))
         else:
             self._narration_carry = ""
 
@@ -3191,8 +3402,37 @@ class GLMEventAccumulator:
             if self._preamble_pending:
                 if turn_has_calls:
                     # der turn liefert aufrufe: die gepufferte praeambel ist
-                    # gegenstand und wird nicht ausgegeben
-                    self._deferred_visible_text = ""
+                    # gegenstand und wird nicht ausgegeben.
+                    #
+                    # S-15: „wird nicht ausgegeben" war zu grob und kostete
+                    # echten inhalt. Gemessen in `harness/sweep2.py`
+                    # (`selbst-steuerung-mittelteil`): 'Der Bericht ist da.
+                    # Ich nutze jetzt `read` fuer den Rest.' verlor den
+                    # ersten, vollstaendigen satz mit — der marker sitzt im
+                    # zweiten satz, der erste ist antwort. Jetzt wird die
+                    # praeambel SATZWEISE herausgefiltert, und was uebrig
+                    # bleibt, geht ueber den S-05-verlag weiter unten in
+                    # ordnung raus.
+                    #
+                    # AUSNAHME protokoll-markup: enthaelt der puffer das
+                    # aufruf-markup, ist er der abschluss-pfad zustaendig
+                    # (`parse_tool_calls_from_text` im finalize) und die
+                    # prosa davor ist per definition praeambel. Genau das
+                    # ist der fall, den
+                    # `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`
+                    # pinnt — dort ist die praeambel chinesisch und kein
+                    # muster erkennt sie.
+                    if self._turn_start_buffer_is_preamble(
+                        self._deferred_visible_text, self._narration_carry
+                    ):
+                        self._deferred_visible_text = ""
+                    else:
+                        self._deferred_visible_text = self._strip_release_narration(
+                            self._deferred_visible_text
+                        )
+                        self._deferred_is_answer = bool(
+                            self._deferred_visible_text.strip()
+                        )
                     self._preamble_pending = False
                 else:
                     self._deferred_visible_text += visible_text_delta
@@ -3270,7 +3510,7 @@ class GLMEventAccumulator:
                 (self._server_side_tool_calls or self.tool_parser.tool_calls)
                 and not self._preamble_pending
             ) or bool(self.blocked_tool_attempt_names)
-            if visible_text_delta and visible_text_delta.strip() and _filter_own_text:
+            if visible_text_delta and visible_text_delta.strip():
                 # Die filter verlangen erste-person-steuernde oder die
                 # `open`+faehigkeits-kombination, nie ein blosses nennen von
                 # `open` — ein finaler bericht bleibt unbeschaedigt
@@ -3287,7 +3527,22 @@ class GLMEventAccumulator:
                 # 1-5, der zwischenraum fiel nach dem call, davor nicht).
                 # Dieselbe folge hatte D-06 einmal fuer die
                 # zurueckhaltung.
-                visible_text_delta = self._strip_self_talk(visible_text_delta)
+                if _filter_own_text:
+                    visible_text_delta = self._strip_self_talk(visible_text_delta)
+                else:
+                    # S-16: ohne aufrufe bleibt die SCHAEDLICHE klasse
+                    # aktiv. Die selbst-steuerung bleibt an die aufrufe
+                    # gebunden (dort ist eine aussage ueber `open` echter
+                    # inhalt) — die erfundene limit-meldung nicht: die ist
+                    # so gebaut, dass sie nur greift, wenn sie am anfang
+                    # steht oder ein abbruch-wort enthaelt, und sie war
+                    # genau die form, gegen die S-08 gebaut wurde. Sie kam
+                    # durch, weil der abschluss, der sie faengt, im
+                    # stream-nachlauf zu spaet ist und `finalize()` im
+                    # non-stream-pfad nie laeuft.
+                    visible_text_delta = self._strip_invented_limit_claim(
+                        visible_text_delta
+                    )
             whitespace_only = not visible_text_delta.strip()
             if (
                 visible_text_delta
@@ -3422,74 +3677,178 @@ class GLMEventAccumulator:
         """S-08/S-09: die drei selbst-bezogenen filter auf EIN stück
         sichtbaren text (stream-delta ODER aufgegangener deferred-puffer).
 
-        Zwei ecken, die diese kette erst sicher machen:
-
-        1. `require_complete_sentence=True` in beiden fällen: im stream ist
-           das stück ein delta, am publish-punkt ein puffer, der mitten im
-           satz enden kann. Ein satzweiter schnitt darauf erzeugt ein halbwort
-           — live gemessen: '…fuer Dateisystem nutze ich jetzt `bash`:' wurde
-           zu '`isystem nutze ich jetzt `bash`:'.
-
-           S-12: der abschluss gibt den beim aufruf-eintreffen
-           zurueckgehaltenen rest mit `False` frei. Dort ist der satz
-           namenslich vollstaendig — der aufruf ist da und der text nicht —
-           waehrend ein stream-delta auf einen fertigen satz warten MUSS.
-           Mit `True` blieb genau die S-09-narration stehen (sie endet auf
-           ':', der filter verweigert den schnitt), mit `False` fällt sie
-           ganz und ein antwort-rest wie 't' oder 'Punkt' bleibt unangetastet.
-        2. die rand-whitespace bleibt erhalten. Alle drei filter enden auf
-           `.strip()` (`strip_protocol_meta_narration` tut das sogar OHNE
-           muster-treffer); bei kleinen deltas sind das führungszeichen und
-           absatzumbrüche, die der client brauchte — derselbe fehler wie in
-           `test_self_steering_never_cuts_a_stream_delta_mid_sentence`
-           dokumentiert, nur dass die gegenprobe dort `stripped == stripped`
-           prüfte und ihn deshalb nie sah. Deshalb: kern filtern, ränder
-           zurückhängen, und wenn nichts getroffen hat den text UNVERÄNDERT
-           zurückgeben.
-
-        Gibt "" zurück (nicht whitespace), wenn nichts übrig bleibt, damit der
-        aufrufer keinen leeren content-part an den client gibt (S-06).
-
-        Und noch eine falle, die diese hülle lösen muss: `require_complete_
-        sentence` entscheidet am LETZTEN zeichen, ob ein satz fertig ist. Die
-        rand-whitespace — genau das, was sie hier geschäftet werden soll —
-        zerstört diese entscheidung: '…`bash`:\n' endet nach einem strip auf
-        ':', der satz gilt als unvollständig, der schnitt wird verweigert und
-        die narration bleibt stehen. Also: endet der text an einer satzgrenze,
-        bekommt die kette zwischen den stufen einen satzabschluss dazu.
+        S-16: die aufteilung in `steps` ist keine kosmetik — der stream
+        darf die *schädliche* filterklasse auch ohne aufrufe anwenden
+        (siehe `_strip_invented_limit_claim`), die selbst-steuerung
+        weiterhin nur mit aufrufen.
         """
-        if not text:
-            return text
-        lead = text[: len(text) - len(text.lstrip())]
-        trail = text[len(text.rstrip()) :]
-        core = text.strip()
-        if not core:
-            return ""
-        ends_sentence = bool(trail) or core[-1] in ".!?"
-
-        def with_boundary(piece: str) -> str:
-            if ends_sentence and piece and piece[-1] not in ".!?\n":
-                return piece + "\n"
-            return piece
-
-        filtered = with_boundary(core)
-        for step in (
-            lambda piece: strip_self_steering(
-                piece, require_complete_sentence=require_complete_sentence
+        return _apply_text_filters(
+            text,
+            (
+                lambda piece: strip_self_steering(
+                    piece, require_complete_sentence=require_complete_sentence
+                ),
+                lambda piece: strip_invented_limit_claim(
+                    piece, require_complete_sentence=require_complete_sentence
+                ),
+                strip_protocol_meta_narration,
             ),
-            lambda piece: strip_invented_limit_claim(
-                piece, require_complete_sentence=require_complete_sentence
-            ),
-            strip_protocol_meta_narration,
+            require_complete_sentence=require_complete_sentence,
+        )
+
+    def _owed_lead_edge(self, text: str) -> tuple[str, str]:
+        """S-15: der linke rand, der dem zurueckgehaltenen text NICHT gehoert.
+
+        Ein zurueckgehaltener text (der narration-carry, S-07/S-09/S-10)
+        beginnt haeufig mit dem, was den **schon gesendeten** satz
+        abschliesst: dem punkt am satzende und dem leerraum davor. Das ist
+        keine eigener inhalt, sondern die rechte haelfte eines trenners,
+        das mit der narration in den carry wanderte und dort starb.
+
+        Gemessen in `harness/order_matrix.py`, layout `rand-links-im-carry`
+        (text 'Der Bericht ist fuer Sie. Ich' + aufruf, 10 chunk-groessen):
+        - chunk 3/8: der carry war '. Ich' -> der punkt fiel mit der
+          narration, es kam 'Der Bericht ist fuer Sie' an;
+        - chunk 11/20: der carry war ' ist fuer Sie. Ich' bzw. ' Sie. Ich'
+          -> der leerraum fiel, es kam 'Der Berichtist fuer Sie.' an.
+
+        Die konvention ist dieselbe wie in `_split_open_sentence` (S-14:
+        'der rand-links des offenen satzes gehoert zum TRENNER'). Sie wurde
+        nur an der zwischenstelle angewandt, nicht an der, wo der rand
+        entsteht — das ist der ganze rest von S-15.
+
+        Rueckgabe: (eigener anteil, geschuldeter rand). Der rand wird vom
+        aufrufer sofort veroeffentlicht, also **an seiner richtigen stelle**
+        in der reihenfolge — nicht spaeter nachgetragen, denn was einmal
+        raus ist, laesst sich nicht mehr einfuegen.
+
+        Der rand ist auf satzendezeichen und **waagerechten** leerraum
+        beschraenkt, auf keinen zeilenumbruch: der gehoert zum block, der
+        folgt, nicht zum satz davor. Ohne diese schranke riss der rand
+        einen code-fence auseinander — gemessen in
+        `test_s10_fenced_text_in_one_part_is_not_lost_before_a_native_call`
+        (chunk 3): '```bash' wanderte in den carry, waehrend der
+        davorstehende '\n' schon draussen war, und der fence kam als
+        '```bash' ohne zeilenwende plus 'ls-la' ohne gedankenstrich an.
+
+        Drei bedingungen, ohne die der rand nicht geschuldet ist:
+        * es muss schon etwas im stream stehen (`_emitted_visible_text`),
+          sonst gibt es keinen satz, den der rand abschliessen koennte, und
+          ein fuehrender punkt/leerraum waere ein artefakt am turn-anfang
+          (dort puffert die T-07-praembel, `leerraum-artefakt`);
+        * der S-05-puffer muss leer sein. Steht sichtbarer text darin, geht
+          er zuerst raus; ein jetzt veroeffentlichter rand kaeme ihm in die
+          queere;
+        * der parser darf nicht mitten in einer struktur stehen
+          (`tool_parser.pending_text` — ein offener fence, ein angebrochenes
+          protokoll). Dann gehoert der rand zum inhalt der struktur, nicht zum
+          text davor. Gemessen in
+          `test_s10_fenced_text_in_one_part_is_not_lost_before_a_native_call`
+          (chunk 3): der parser hielt '```bash\\nls', das ' ' vor '-la' war
+          der rand — abgetrennt veroeffentlicht kam 'ls-la' an, der fence
+          zusaetzlich mit fuehrendem leerraum.
+        """
+        if (
+            not text
+            or not self._emitted_visible_text
+            or self._deferred_visible_text
+            or self.tool_parser.pending_text
         ):
-            filtered = with_boundary(step(with_boundary(filtered)))
-        if filtered.endswith("\n") and ends_sentence and not core.endswith("\n"):
-            filtered = filtered[:-1]
-        if not filtered.strip():
-            return ""
-        if filtered == core:
-            return text
-        return lead + filtered + trail
+            return text, ""
+        index = 0
+        while index < len(text) and (
+            text[index] in _SENTENCE_TERMINATORS or text[index] in " \t"
+        ):
+            index += 1
+        # nichts abzutrennen, oder der ganze text ist rand (dann gibt es
+        # nichts, wohin er gehoerte — und ein alleinstehender punkt wird vom
+        # abschluss ohnehin als terminator verworfen)
+        if index == 0 or index == len(text):
+            return text, ""
+        return text[index:], text[:index]
+
+    def _turn_start_buffer_is_preamble(self, buffer: str, carry: str) -> bool:
+        """S-15: ist der gepufferte text am turn-anfang eine praeambel?
+
+        Die regel, die drei vorherige, widerspruechliche ersetzungen
+        zusammenhaelt:
+
+        * enthaelt der puffer aufruf-markup oder einen offenen fence, ist er
+          der abschluss-pfad zustaendig und der text darin praeambel
+          (die zwei faelle, die die gepinnten tests
+          `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`
+          (praeambel + DSML in einem part) und
+          `test_protocol_inside_fence_is_still_cleaned_before_it_reaches_the_client`
+          (protokoll im fence) festhalten);
+        * sonst: nur wenn der turn **nirgends** eine praeambel-marke traegt,
+          ist alles vor dem aufruf praeambel — der reine positionale regel-
+          satz, und er faellt die chinesische praeambel, die kein muster kennt;
+        * traegt der turn eine marke (meist im carry, also *hinter* dem
+          gepufferten text), ist der gepufferte text der echte satz davor und
+          darf nicht mit fallen.
+
+        Der dritte punkt ist der S-15-fix: vorher fiel er mit.
+        """
+        if _contains_protocol_fragment(buffer) or not _fences_balanced(buffer):
+            return True
+        return not _PREAMBLE_NARRATION_RE.search(buffer + carry)
+
+    def _strip_release_narration(self, text: str) -> str:
+        """S-15: die filterkette fuer einen **zurueckgehaltenen** text.
+
+        Am release-punkt ist der satz namenslich vollstaendig (der aufruf ist
+        da, der text nicht) — darum `require_complete_sentence=False`, wie
+        schon in S-12. Neu ist die praeambel-stufe vorn: sie faellt satzweise
+        statt den ganzen puffer.
+
+        Eine stelle, drei aufrufer: der preamble-verwurf am aufruf-event, der
+        S-05-verlag und die abschluss-freigabe. Dass es eine ist, ist der
+        eigentliche S-15-fix — die drei pfade entschieden vorher
+        unterschiedlich, was „praeambel" heisst.
+        """
+        return _apply_text_filters(
+            text,
+            (
+                strip_turn_start_narration,
+                lambda piece: strip_self_steering(piece, require_complete_sentence=False),
+                lambda piece: strip_invented_limit_claim(
+                    piece, require_complete_sentence=False
+                ),
+                strip_protocol_meta_narration,
+            ),
+            require_complete_sentence=False,
+        )
+
+    def _strip_invented_limit_claim(
+        self, text: str, require_complete_sentence: bool = True
+    ) -> str:
+        """S-16: nur die erfundene limit-meldung — auch OHNE aufrufe.
+
+        Die begrenzung "nur wenn der turn aufrufe hat" stammt aus S-08 und
+        gilt fuer die **selbst-steuerung**: dort ist eine aussage ueber
+        `open` (etwa in einer analyse ueber den proxy) echter inhalt. Fuer
+        die limit-meldung gilt das nicht — sie ist per konstruktion so
+        gebaut, dass sie nur greift, wenn sie am anfang steht (200 zeichen)
+        oder ein abbruch-wort enthaelt. Genau diese klasse war die
+        schaedlichste form (S-08: "das modell hoert auf zu arbeiten und legt
+        dem client eine fertige antwort samt grund fuer den abbruch hin").
+
+        Und sie kam durch: im reinen text-turn ohne aufrufe war der
+        `_filter_own_text`-schalter aus, im stream stand sie im client-text
+        und im body stand sie ungefiltert (`chat_completion` ruft
+        `finalize()` nie, wo diese filter liegen). Gemessen in
+        `harness/sweep2.py`, szenario `limit-erfunden+nur-text`, 6 von 6
+        chunk-groessen in beiden pfaden.
+        """
+        return _apply_text_filters(
+            text,
+            (
+                lambda piece: strip_invented_limit_claim(
+                    piece, require_complete_sentence=require_complete_sentence
+                ),
+            ),
+            require_complete_sentence=require_complete_sentence,
+        )
 
     def _visible_content_chunk(self, text: str) -> str:
         """S-10: ein sichtbarer text-delta als SSE-chunk (mit rollen-aufbau).
@@ -3602,7 +3961,14 @@ class GLMEventAccumulator:
         # diese beiden pfade nicht. `tool_parser.flush()` strippt seinen
         # anteil selbst, deshalb wird der rand hier VOR dem flush
         # gesichert und unten wieder angehaengt.
-        _lead_source = self._narration_carry + self._deferred_visible_text
+        # S-15: die reihenfolge, in der der gehaltene text am abschluss
+        # rausgeht, ist S-05-puffer ZUERST, dann der carry — und
+        # `tool_parser.flush()` strippt den rand des VERBUNDENEN texts. Der
+        # rand, der fehlt, ist deshalb der des PUFFERS, nicht der des
+        # carries (der rand wandert mit dem trenner in den prefix, siehe
+        # `_split_open_sentence`). Deshalb wird er aus dem verbundenen
+        # text genommen, nicht aus dem carry.
+        _lead_source = self._deferred_visible_text + self._narration_carry
         lead_whitespace = _lead_source[: len(_lead_source) - len(_lead_source.lstrip())]
         # S-07: der fruehwarn-carry muss noch an den parser, sonst geht
         # der text verloren (er war nie im parser und wird beim flush
@@ -3717,7 +4083,23 @@ class GLMEventAccumulator:
         # und gehoert verworfen.
         if all_tool_calls and self._preamble_pending:
             self._preamble_pending = False
-            self._deferred_visible_text = ""
+            # S-15: auch hier stand „praeambel" fuer „alles im puffer".
+            # Der marker sitzt in einem spaeteren satz als der echte
+            # ('Der Bericht ist da. Ich nutze jetzt `read`…'), und der
+            # verwurf nahm den ersten satz mit. Jetzt satzweise filtern;
+            # was uebrig bleibt, geht weiter unten in ordnung raus.
+            # Nur bei aufruf-markup im puffer bleibt der verworfen — dann
+            # ist er der abschluss-pfad zustaendig und die prosa davor ist
+            # per definition praeambel.
+            if self._turn_start_buffer_is_preamble(
+                self._deferred_visible_text, self._narration_carry
+            ):
+                self._deferred_visible_text = ""
+            else:
+                self._deferred_visible_text = self._strip_release_narration(
+                    self._deferred_visible_text
+                )
+                self._deferred_is_answer = bool(self._deferred_visible_text.strip())
         # T-06: das modell WOLLTE einen aufruf, der wegen fehlendem
         # pflichtargument nicht ausfuehrbar ist (`write` ohne content,
         # `read` ohne filePath). Vorher galt der turn danach als leerer
@@ -3796,6 +4178,17 @@ class GLMEventAccumulator:
             )
 
         chunks: list[str] = []
+        # S-15: der S-05-puffer wird gleich unten geleert, die
+        # veroeffentlichung fuer mit-calls steht weiter unten. Deshalb hier
+        # sichern — er ist der einzige behaelter, der sichtbaren text
+        # aufbewahrt, den der turn nicht mehr ueber den laufenden stream
+        # ausgeben kann.
+        _deferred_at_finalize = self._deferred_visible_text
+        # S-15: das flag gehoert zum inhalt von `_deferred_at_finalize` —
+        # beide werden zusammen geprueft, also zusammen gesichert. Ohne
+        # den snapshot blieb es hier ein `NameError` (die feldform wurde
+        # in den aufrufern gesetzt, die hier gelesene stelle war lokal).
+        _deferred_is_answer = self._deferred_is_answer
         final_text = self._deferred_visible_text + tail_text
         # Ausgabegrenze auch auf dem ZUSAMMENGESETZTEN endtext durchsetzen
         # (die delta-kappung in consume_event greift fuer den cache nicht).
@@ -4013,8 +4406,51 @@ class GLMEventAccumulator:
         # S-10: der rand-links kommt zurueck (siehe oben) — er gehoert zu
         # dem text, der schon im stream steht. Ohne das wurde aus
         # 'Der Bericht' + ' ist fuer Sie.' ein 'Der Berichtist fuer Sie.'.
-        if all_tool_calls and held_text.strip() and self._emitted_visible_text:
-            released = self._strip_self_talk(held_text, require_complete_sentence=False)
+        # S-15: der S-05-puffer, der am turn-anfang als „keine praeambel"
+        # erkannt wurde (also echter antworttext ist, der nur hinter einem
+        # protokoll-fragment oder einer narration lag). Ohne diesen schritt
+        # verliert er den inhalt doppelt: `final_text` wird nur ohne calls
+        # veroeffentlicht, und der verlags-pfad am aufruf-event scheitert an
+        # `_preamble_pending`. Reihenfolge: der puffer stand VOR dem
+        # carry-text und geht deshalb zuerst raus.
+        if (
+            all_tool_calls
+            and _deferred_is_answer
+            and _deferred_at_finalize.strip()
+            and not _contains_protocol_fragment(_deferred_at_finalize)
+            and _fences_balanced(_deferred_at_finalize)
+        ):
+            released_buffer = self._strip_release_narration(
+                _deferred_at_finalize
+            ).strip()
+            self._deferred_visible_text = ""
+            if released_buffer and not _TERMINATOR_ONLY_RE.match(released_buffer):
+                chunks.append(self._visible_content_chunk(released_buffer))
+        # S-15: die schranke dieser freigabe war `self._emitted_visible_text`
+        # — also die frage "kam vorher schon etwas raus". Sie verwarf damit
+        # auch **legitime prosa**: ein fertiger erster satz, der nur
+        # deshalb hier lag, weil hinter ihm eine narration oder ein
+        # protokoll-fragment stand (gemessen: 'Der Bericht ist fuer Sie.
+        # Ich' + aufruf lieferte `''`, ein ganzer absatz fehlte im client-
+        # text). Die frage, um die es geht, ist ob der rest eine praeambel
+        # IST — das entscheidet der marker, satzweise
+        # (`strip_turn_start_narration`).
+        #
+        # `held_narration` (S-12) sagt, dass der text aus dem **carry**
+        # kommt, also vom sichtbaren text, den wir zurueckgehalten haben. Das
+        # ist die eine haelfte des kriteriums; die andere ist der parser:
+        # stand der geflushte puffer auch aufruf-markup, dann ist die prosa
+        # daraus per definition praeambel — genau der fall, den
+        # `test_accumulator_drops_tool_preamble_and_repairs_shell_command_array`
+        # pinnt (dort liegen praeambel und DSML in einem part, und die
+        # praeambel ist chinesisch: kein marker erkennt sie). Prosa aus
+        # einem *eigenen* part dagegen ist antwort und wird ausgegeben.
+        _flushed_was_preamble = bool(
+            self.tool_parser.flushed_markup_prefix_is_preamble
+            and not self._emitted_visible_text
+        )
+        if all_tool_calls and held_text.strip() and not _flushed_was_preamble:
+            released = self._strip_release_narration(held_text)
             stripped = released.strip()
             if stripped and not _TERMINATOR_ONLY_RE.match(stripped):
                 chunks.append(self._visible_content_chunk(released))
@@ -4367,6 +4803,18 @@ class GLMEventAccumulator:
             self.truncated_turn = True
 
         final_content = self._sanitize_visible_text(clean_content.strip())
+        # S-16: der body bekam die meta-chatter-kette nie. Sie sitzt in
+        # `finalize()`, und der non-stream-pfad ruft `finalize()` nie — er
+        # nimmt sich den text hier neu aus den parts. Damit stand die
+        # erfundene limit-meldung ungefiltert im body, obwohl der filter
+        # sie entfernt (`strip_meta_chatter(...)` gibt dafuer '' zurueck).
+        # Dieselbe regel wie im abschluss: mit aufrufen wird gefiltert,
+        # ohne aufrufe nur dann, wenn der text danach leer waere — eine
+        # antwort, die nur aus meta-chatter besteht, ist keine antwort.
+        if all_tool_calls:
+            final_content = strip_meta_chatter(final_content)
+        elif strip_meta_chatter(final_content) == "":
+            final_content = ""
         stripped_echo = strip_transcript_echo(final_content)
         if stripped_echo != final_content:
             log = self.logger or _LOGGER

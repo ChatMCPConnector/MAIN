@@ -15,10 +15,10 @@ Jedes Szenario nennt seine Erwartung ausdrücklich. Sie stammen aus den
 gepinnten Tests, nicht aus dem, was der Proxy gerade tut — ein Sweep, der
 nur aufzählt, ist eine sehr teure Kopie der Testsuite.
 
-`KNOWN` listet die am 2026-09-27 beim Neuaufbau gefundenen, bisher
-unbehandelten Befunde (S-15…S-18, alle an aelteren staenden gegengeprueft
-= vorbestehend). Sie werden ausgewiesen, nicht versteckt, zitausieren aber
-nicht den Exit-Code.
+`KNOWN` listet die am 2026-09-27 beim Neuaufbau gefundenen Befunde, die
+**noch offen** sind. S-15…S-18 sind behoben; uebrig bleibt eine bewusst
+akzeptierte S-14-Grenze. Sie wird ausgewiesen, nicht versteckt, zitausieren
+aber nicht den Exit-Code.
 
     python3 sweep2.py            # Tabelle + Protokoll
     python3 sweep2.py --quiet    # nur Verstoesse
@@ -58,8 +58,9 @@ SCENARIOS: list[tuple[str, list, set, str, list[str], str, str | None]] = [
     ("praeambel-en+call", ["I'll now read the file.", CALL], READ, "", ["read"], "tool_calls", None),
     # die chinesische praeambel ist nur GEPINNT, wenn sie im selben part
     # steht wie das DSML (`test_accumulator_drops_tool_preamble_…`). In
-    # einem eigenen part kennt kein muster sie, und sie wird gestreamt —
-    # das ist der ist-zustand, keine erwaehnung im test.
+    # einem eigenen part kennt kein muster sie — sie wird gestreamt. Der
+    # wortrest, der bis S-15 noch davor entkam ('D'/'De'/'Der'), faellt
+    # seit der filterkette in `strip_turn_start_narration` mit.
     ("praeambel-cn-eigener-part", ["我将创建文件。\n\n", CALL], READ, "我将创建文件。\n\n", ["read"], "tool_calls", None),
     ("praeambel+call+prosa", ["Ich lese die Datei jetzt.", CALL, PROSE], READ, PROSE, ["read"], "tool_calls", None),
     # --- selbst-steuerung (S-08/S-09) ------------------------------------
@@ -75,8 +76,8 @@ SCENARIOS: list[tuple[str, list, set, str, list[str], str, str | None]] = [
     # --- aufruf-protokoll -------------------------------------------------
     ("json-protokoll+call", ['{"tool_calls":[{"name":"read","arguments":{"filePath":"/a.py"}}]}', CALL], READ, "", ["read", "read"], "tool_calls", None),
     ("dsml-aufruf+prosa", [DSML, PROSE], READ_ONLY, PROSE, ["read"], "tool_calls", None),
-    # S-18: DSML ueber viele parts zerschnitten leckt als markup in den
-    # stream (chunk 1/3), obwohl der aufruf korrekt geborgen wird
+    # S-18: DSML ueber viele parts zerschnitten — der aufruf muss ankommen
+    # und das markup darf nicht in den stream lecken
     ("dsml-ueber-viele-parts", ["我将创建文件。\n\n", DSML], READ_ONLY, "我将创建文件。\n\n", ["read"], "tool_calls", None),
     ("unbrauchbarer-aufruf", [UNUSABLE], READ, "", [], "error", None),
     ("unbrauchbarer-aufruf-hinter-prosa", [PROSE, UNUSABLE], READ, PROSE, [], "error", PROSE),
@@ -89,62 +90,18 @@ SCENARIOS: list[tuple[str, list, set, str, list[str], str, str | None]] = [
 CHUNK_SIZES = (1, 3, 7, 13, 29, 10_000)
 
 # Vorbestehende, am 2026-09-27 gefundene und noch nicht behobene Befunde.
-# Alle an `02ceca2` und `9054325` gegengeprueft: identisch, also nicht von
-# S-10…S-14 verursacht. Details in optimierung.md (S-15…S-18).
+# Stand nach S-15…S-18: **ein** eintrag uebrig. Die anderen fuenf sind
+# behoben und deshalb aus der tabelle gestrichen — ein `KNOWN`-eintrag fuer
+# ein sauberes szenario waere eine luege, die den harness unbrauchbar macht
+# (er zaehlt die treffer ja selbst mit). Die messungen, die die befunde
+# belegt haben, stehen in optimierung.md.
 KNOWN: dict[str, str] = {
-    "praeambel-en+call": (
-        "S-17 + S-14: bei chunk 1 bricht der part-merge mitten im wort um "
-        "('I'\\n\\nll now read the file.') und das erste fragment der "
-        "praeambel entkommt. `_ends_sentence` zaehlt `'` (und `\"`, `)`, "
-        "`»`) zu den satzzeichen (`_SENTENCE_END_CHARS`), eine part, die an "
-        "einem kontrahentions-apostroph endet, gilt ihm also als satzende. "
-        "Gegenprobe: der positive fall ohne apostroph ist unauffaellig."
-    ),
-    "praeambel-cn-eigener-part": (
-        "S-14: nur der wortrest vor der ersten werkzeug-marke entkommt "
-        "('D'/'De'/'Der'); das ist die bewusst akzeptierte grenze."
-    ),
     "selbst-steuerung+call": (
-        "S-14: nur der wortrest vor der ersten werkzeug-marke entkommt."
-    ),
-    "selbst-steuerung-mittelteil": (
-        "S-15: der fertige erste satz ('Der Bericht ist da.') faellt im "
-        "aufruf-turn ganz aus, wenn er zusammen mit der selbst-steuerung in "
-        "einem delta kommt (chunk 13+: stream = ''), und wird bei chunk 7 "
-        "mitten im wort abgeschnitten ('Der Ber'). Ursache: die "
-        "S-12-freigabeschranke `self._emitted_visible_text` — was nur vom "
-        "turn-anfang zuruecklag, gilt ihr als praeambel und wird verworfen. "
-        "Dieselbe schranke frisst auch die prosa, die einem protokoll-"
-        "fragment folgt (siehe `dsml-aufruf+prosa`)."
-    ),
-    "dsml-aufruf+prosa": (
-        "S-15 (gleiche ursache wie beim selbstgespraech) + S-18: (a) bei "
-        "chunk 7/29/10000 geht die PROSA NACH dem DSML-aufruf vollstaendig "
-        "verloren — stream = '', body = None (S-13 option B), der client "
-        "bekommt also einen aufruf und sonst nichts, obwohl das modell "
-        "einen satz geschrieben hat. Ursache ist dieselbe schranke wie "
-        "unten: die prosa lag im S-05-puffer und wurde nie freigegeben, "
-        "weil bis dahin nichts sichtbar war. (b) bei chunk 1/3 leckt das "
-        "DSML selbst als markup in den stream, obwohl der aufruf korrekt "
-        "geborgen wird (S-18)."
-    ),
-    "dsml-ueber-viele-parts": (
-        "S-18: DSML, das ueber viele parts zerschnitten ist (chunk 1/3), "
-        "leckt als sichtbares markup in den stream — der aufruf wird "
-        "trotzdem richtig geborgen. Der midstream-guard prueft auf "
-        "`{\"tool_calls\"` und auf die nackte objektform, nicht auf DSML."
-    ),
-    "limit-erfunden+nur-text": (
-        "S-16: die erfundene limit-behauptung kommt im reinen text-turn "
-        "durch — im stream UND im body. Die filter selbst koennen sie "
-        "(`strip_meta_chatter(...)` gibt dafuer '' zurueck), sie werden "
-        "aber nicht angewandt: `chat_completion` (der non-stream-einstieg) "
-        "ruft `finalize()` nie, und `build_response()` rendert den text neu "
-        "aus den parts. Damit gilt die gesamte filterkette des abschlusses "
-        "nur fuer den stream. Betroffen sind auch selbstgespraech, "
-        "protokoll-narration und halluzinations-echo. Vorsatz: die "
-        "doku behauptet seit S-08, der finale bericht gehe durch "
-        "`finalize`/`strip_meta_chatter` — das stimmt fuer den body nicht."
+        "S-14 (bewusst akzeptiert, nicht S-15): nur der wortrest vor der "
+        "ersten werkzeug-marke entkommt. Die selbst-steuerung steht hier am "
+        "ANFANG des turns, es gibt also keinen fertigen satz davor, den "
+        "S-15 retten koennte — der rest ist der erste teil des ersten "
+        "satzes der narration."
     ),
 }
 

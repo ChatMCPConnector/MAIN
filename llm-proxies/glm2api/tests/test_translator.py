@@ -4953,9 +4953,11 @@ def test_s14_split_open_sentence_releases_only_the_finished_part():
 
     assert _split_open_sentence("Vorher\nalpha\nbeta") == ("Vorher\nalpha\n", "beta")
     assert _split_open_sentence("ganz offen") == ("", "ganz offen")
-    # der rand nach dem satzende ist selbst ein "offener" rest und wird
-    # mitgehalten — bis zum naechsten satz, also um einen tick spaeter
-    assert _split_open_sentence("fertig. ") == ("fertig.", " ")
+    # der rand nach dem satzende gehoert zum TRENNER, nicht zum offenen
+    # satz: er stand schon im stream, und `flush()` strippt seinen anteil
+    # (S-15: sonst wurde aus '… fuer Sie. Ich' ein '… fuer Sie.Ich')
+    assert _split_open_sentence("fertig. ") == ("fertig. ", "")
+    assert _split_open_sentence("fertig. Ich") == ("fertig. ", "Ich")
     # nichts zu halten: der offene satz ist laenger als der deckel
     long_open = "alpha " * 200
     assert _split_open_sentence(long_open) == (long_open, "")
@@ -5012,3 +5014,300 @@ def test_s14_open_fence_line_does_not_swallow_the_newline(chunk_size):
     streamed, _ = _s10_stream([_S14_FENCE], chunk_size)
 
     assert streamed.split() == _S14_FENCE.split(), (chunk_size, streamed)
+
+
+# =====================================================================
+# S-15…S-18 — die vier befunde aus dem neuaufbau der mess-harnesses
+# (`harness/order_matrix.py`, `harness/sweep2.py`, `harness/leak_probe.py`,
+# stand 2026-09-27). Jeder befund hat hier mindestens EINEN test ueber
+# ALLE chunk-groessen, weil alle vier an einer fragmentgrenze entstanden
+# sind — vier stichproben haetten genau die faelle uebersehen.
+# =====================================================================
+
+_S15_ANTWORT_VOR_NARRATION = "Der Bericht ist da. Ich nutze jetzt `read` fuer den Rest."
+_S15_ANTWORT_SOLL = "Der Bericht ist da."
+# layout `rand-links-im-carry`: der punkt und der leerraum, die den
+# gesendeten satz abschliessen, sind der linke rand des carries
+_S15_RAND = "Der Bericht ist fuer Sie. Ich"
+_S15_RAND_SOLL = "Der Bericht ist fuer Sie."
+_S16_LIMIT = "Tool-Limit erreicht — hier die Analyse."
+_S17_KONTRAKTION = "I'll now read the file."
+_S18_DSML = (
+    '<|DSML|tool_calls><|DSML|invoke name="read">'
+    '<|DSML|parameter name="filePath"><![CDATA[/etc/hostname]]></|DSML|parameter>'
+    "</|DSML|invoke></|DSML|tool_calls>"
+)
+
+
+# --- S-15 ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("chunk_size", range(1, len(_S15_ANTWORT_VOR_NARRATION) + 1))
+def test_s15_finished_sentence_before_narration_survives_every_chunk_size(chunk_size):
+    """S-15, der eigentliche befund: ein FERTIGER, unauffaelliger erster
+    satz fiel im aufruf-turn **ganz** aus, wenn die selbst-steuerung mit
+    ihm in einem delta ankam.
+
+    Gemessen in `harness/sweep2.py`, szenario `selbst-steuerung-mittelteil`
+    (vor dem fix 5 von 6 chunk-groessen falsch, chunk 13+: stream = '',
+    chunk 7: 'Der Ber' mitten im wort). Ursache war die
+    S-12-freigabeschranke `self._emitted_visible_text`: die beantwortet
+    die frage „kam vorher schon etwas raus" — die frage ist aber, ob der
+    rest eine praeambel IST. Das entscheidet `strip_turn_start_narration`
+    satzweise, nicht pauschal.
+    """
+    streamed, _ = _s10_stream(
+        [_S15_ANTWORT_VOR_NARRATION, _s10_native_event("c1")], chunk_size
+    )
+
+    assert streamed.split() == _S15_ANTWORT_SOLL.split(), (chunk_size, streamed)
+    assert "Ich" not in streamed, (chunk_size, streamed)
+
+
+@pytest.mark.parametrize("chunk_size", range(1, len(_S15_RAND) + 1))
+def test_s15_lead_edge_of_the_held_text_reaches_the_client(chunk_size):
+    """S-15, der rand: der linke rand eines ZURUECKGEHALTENEN texts
+    schliesst den satz, der schon im stream steht — er ist kein eigener
+    inhalt und darf nicht mit der narration fallen.
+
+    Gemessen in `harness/order_matrix.py`, layout `rand-links-im-carry`
+    (vor dem fix 4 von 10 chunk-groessen falsch): chunk 3/8 verlor den
+    punkt am satzende ('Der Bericht ist fuer Sie'), chunk 11/20 den
+    leerraum davor ('Der Berichtist fuer Sie.' / 'Der Bericht ist
+    fuerSie.'). Der rand wanderte als 'trenner' in den carry, und der
+    abschluss haengte nur `lead_whitespace` wieder an — der punkt fehlte
+    in dieser schranke.
+    """
+    streamed, _ = _s10_stream([_S15_RAND, _s10_native_event("c1")], chunk_size)
+
+    assert streamed.split() == _S15_RAND_SOLL.split(), (chunk_size, streamed)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 13, 29, 1000])
+def test_s15_owed_lead_edge_is_never_taken_out_of_a_parser_structure(chunk_size):
+    """Gegenprobe zur neuen `_owed_lead_edge`: der rand wird nur
+    abgetrennt, wenn er wirklich dem VORHER gesendeten satz gehoert.
+
+    Steht der parser mitten in einer struktur (offener fence, angebrochenes
+    protokoll), ist der rand inhalt der struktur. Abgetrennt veroeffentlicht
+    kam hier 'ls-la' statt 'ls -la' an, der fence zusaetzlich mit fuehrendem
+    leerraum (der rand ' ' vor '-la' war abgetrennt worden, waehrend der
+    parser '```bash\\nls' hielt). Gepinnt ist der fall durch
+    `test_s10_fenced_text_in_one_part_is_not_lost_before_a_native_call`,
+    hier steht die regel selbst.
+    """
+    streamed, _ = _s10_stream([_S10_FENCED, _s10_native_event("c1")], chunk_size)
+
+    assert _S10_FENCED in streamed, (chunk_size, streamed)
+
+
+def test_s15_owed_lead_edge_needs_published_text_and_an_empty_buffer():
+    """Die drei schranken der regel, jede einzeln — sonst ist der test
+    oben nur ein glueckstreffer."""
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+
+    # nichts gesendet -> es gibt keinen satz, den der rand abschliessen
+    # koennte; ein fuehrender punkt waere ein artefakt am turn-anfang
+    assert accumulator._owed_lead_edge(". Ich") == (". Ich", "")
+    # der parser haelt eine struktur: der rand ist inhalt der struktur
+    accumulator._emitted_visible_text = True
+    accumulator.tool_parser.pending_text = "```bash\nls"
+    assert accumulator._owed_lead_edge(" -la") == (" -la", "")
+    # der S-05-puffer geht zuerst raus; jetzt veroeffentlichter rand kaeme
+    # ihm in die queere
+    accumulator.tool_parser.pending_text = ""
+    accumulator._deferred_visible_text = "Der Bericht"
+    assert accumulator._owed_lead_edge(". Ich") == (". Ich", "")
+    # jetzt ist er geschuldet — punkt und leerraum, aber KEIN zeilenumbruch
+    accumulator._deferred_visible_text = ""
+    assert accumulator._owed_lead_edge(". Ich") == ("Ich", ". ")
+    assert accumulator._owed_lead_edge(" ist da. Ich") == ("ist da. Ich", " ")
+    # der ganze text ist rand: es gibt nichts, wohin er gehoerte
+    assert accumulator._owed_lead_edge(". ") == (". ", "")
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 13, 29, 1000])
+def test_s15_turn_start_preamble_is_still_dropped_chunk_independently(chunk_size):
+    """Gegenprobe: die filterkette ist SATZweise, der turn-AnFANG bleibt
+    trotzdem praeambel. Eine deutsche praeambel, die den ganzen turn
+    einleitet, geht im aufruf-turn verloren — sonst haette S-15 die
+    T-07-maschlinie abgeschafft statt sie zu praezisieren.
+    """
+    streamed, _ = _s10_stream([_S10_PREAMBLE, _s10_native_event("c1")], chunk_size)
+
+    assert streamed.strip() == "", (chunk_size, streamed)
+
+
+def test_s15_prose_after_a_protocol_fragment_is_not_lost():
+    """S-15, zweite haelfte: die prosa, die einem protokoll-fragment
+    folgt, ist antwort und keine praeambel.
+
+    Gemessen in `harness/sweep2.py`, szenario `dsml-aufruf+prosa` (vor dem
+    fix: stream = '' und body = None bei chunk 7/29/10000 — der client
+    bekam einen aufruf und sonst nichts). Dieselbe schranke wie oben, hier
+    aus dem S-05-puffer statt aus dem carry.
+    """
+    streamed, _ = _s10_stream([_S18_DSML, _S10_PROSE_A], 7)
+
+    assert _S10_PROSE_A in streamed, streamed
+    assert "<|" not in streamed, streamed
+
+
+# --- S-16 ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("chunk_size", range(1, len(_S16_LIMIT) + 1))
+def test_s16_invented_limit_claim_is_dropped_without_tool_calls(chunk_size):
+    """S-16: die erfundene limit-behauptung durchbrach den reinen
+    TEXT-turn — im stream und im body.
+
+    Gemessen in `harness/sweep2.py`, szenario `limit-erfunden+nur-text`
+    (vor dem fix alle 6 chunk-groessen falsch). Die filter selbst konnten
+    sie (`strip_meta_chatter(...)` gibt dafuer '' zurueck), sie wurden nur
+    nicht angewandt: die beschraenkung „nur wenn der turn aufrufe hat"
+    stammt aus S-08 und gilt fuer die SELBST-STEUERUNG (dort ist eine
+    aussage ueber `open` echter inhalt), nicht fuer die limit-meldung.
+    """
+    accumulator = GLMEventAccumulator(model="m", allowed_tool_names={"read"})
+    streamed: list[str] = []
+
+    def collect(chunks):
+        for chunk in chunks or ():
+            if not chunk.startswith("data: ") or "[DONE]" in chunk:
+                continue
+            try:
+                delta = json.loads(chunk[6:].strip())["choices"][0]["delta"]
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                continue
+            if delta.get("content"):
+                streamed.append(delta["content"])
+
+    for offset in range(0, len(_S16_LIMIT), chunk_size):
+        chunks, _ = accumulator.consume_event(
+            {
+                "conversation_id": "c",
+                "parts": [
+                    {
+                        "logic_id": f"p{offset}",
+                        "content": [
+                            {"type": "text", "text": _S16_LIMIT[offset : offset + chunk_size]}
+                        ],
+                    }
+                ],
+            }
+        )
+        collect(chunks)
+    collect(accumulator.finalize("finish"))
+
+    message = accumulator.build_response("finish")["choices"][0]["message"]
+    assert "".join(streamed).strip() == "", (chunk_size, "".join(streamed))
+    assert "Tool-Limit" not in (message.get("content") or ""), (chunk_size, message)
+
+
+def test_s16_legitimate_open_mention_without_calls_survives():
+    """Gegenprobe zu S-16: die abschraenkung nach „nur mit aufrufen" gilt
+    fuer die SELBST-STEUERUNG, nicht fuer alles. Ein Text, der `open`
+    nennt, ohne zu steuern, ist Inhalt und muss ankommen.
+    """
+    text = "Die Datei wurde mit `open` gelesen, das ist der Weg."
+    streamed, _ = _s10_stream([text], 7)
+
+    assert "open" in streamed, streamed
+
+
+# --- S-17 ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("chunk_size", range(1, len(_S17_KONTRAKTION) + 1))
+def test_s17_contraction_does_not_end_a_sentence(chunk_size):
+    """S-17: der apostroph war ein satzzeichen. Damit galt jede part, die
+    an einem kontrahierenden apostroph endete, als satzende — der
+    part-merge fügte einen absatzumbruch ein und das erste fragment der
+    praeambel entkam.
+
+    Gemessen in `harness/sweep2.py`, szenario `praeambel-en+call`: bei
+    chunk 1 kam 'I'\\n\\nll now read the file.' an.
+    """
+    streamed, _ = _s10_stream([_S17_KONTRAKTION, _s10_native_event("c1")], chunk_size)
+
+    assert "\n\n" not in streamed, (chunk_size, streamed)
+    assert streamed.strip() == "", (chunk_size, streamed)
+
+
+def test_s17_real_sentence_enders_still_end_a_sentence():
+    """Gegenprobe: `)`, `"` und `»` bleiben satzzeichen (sie schliessen
+    eine klammer/ein zitat), nur `'` fiel raus. `:` ist und bleibt KEIN
+    satzzeichen — sonst wuerde jede 'Hier der Aufruf:'-zeile umbrechen.
+    """
+    from glm2api.services.translator import _needs_paragraph_break
+
+    assert not _needs_paragraph_break("Der Bericht ist da'", "Der Rest"), "apostroph"
+    assert not _needs_paragraph_break("Der Bericht ist da:", "Der Rest"), "doppelpunkt"
+    for closer in (")", '"', "»", ".", "!", "?", "…", "。"):
+        assert _needs_paragraph_break(f"Der Bericht ist da{closer}", "Der Rest"), closer
+
+
+# --- S-18 ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 13, 1000])
+def test_s18_dsml_split_over_many_parts_never_leaks_as_markup(chunk_size):
+    """S-18: DSML, das ueber viele parts zerschnitten ist, leckte als
+    sichtbares markup in den stream — der aufruf selbst wurde richtig
+    geborgen, der client sah trotzdem `<|DSML|tool_calls><|DSML|invoke …`.
+
+    Der midstream-guard kannte nur `{\"tool_calls\"` und die nackte
+    objektform. Zwei ursachen, beide behoben: der absatzumbruch
+    (`_needs_paragraph_break`) und der angefangene opener in
+    `tool_parser` (`BEGUN_MARKUP_RE`).
+    """
+    streamed, accumulator = _s10_stream(
+        ["我将创建文件。\n\n", _S18_DSML], chunk_size
+    )
+    message = accumulator.build_response("finish")["choices"][0]["message"]
+
+    assert "<|" not in streamed, (chunk_size, streamed)
+    assert "DSML" not in streamed, (chunk_size, streamed)
+    assert [c["function"]["name"] for c in (message.get("tool_calls") or [])] == [
+        "read"
+    ], (chunk_size, message)
+
+
+def test_s18_paragraph_break_is_never_inserted_inside_markup():
+    """S-18, die erste haelfte: der absatzumbruch stand mitten im
+    aufruf-markup, weil `|` am anfang einer zeile wie eine
+    markdown-tabelle aussieht. Die grenze liegt innerhalb von markup
+    (nach dem letzten `>` folgt ein `<`) — da bricht kein absatz um.
+    """
+    from glm2api.services.translator import _needs_paragraph_break
+
+    opener = "<|DSML|tool_calls|><|DSML|invoke name=\"read\"><|DSML|parameter"
+    assert not _needs_paragraph_break("<|DSML|tool_calls|", "tool_calls><|DSML|invoke")
+    assert not _needs_paragraph_break(opener, '<|DSML|parameter name="filePath">')
+    # ausserhalb von markup bleibt die absatzregel unveraendert
+    assert _needs_paragraph_break("Hier der Aufruf:", "```bash")
+    assert _needs_paragraph_break("Hier der Aufruf:", "| Spalte |")
+
+
+def test_s18_begun_markup_opener_is_held_by_the_parser():
+    """S-18, die zweite haelfte: `<|` am textende ist ein angefangener
+    opener, kein text. Ohne den typ muss der `|` aus `<|DSML|` als
+    alternative gelten — und leere alternativen matchen ueberall.
+
+    Das muster ist mit `\\Z` verankert und laesst **vollstaendige** marker
+    bewusst weg (sie gehoeren dem normalen marker-pfad, sonst kaeme der
+    holdback dem gepinnten „`<|` eroeffnet den dsml-puffer" zuvor). `'<|'`
+    ist selbst ein `TAG_NAME_HINTS`-eintrag und matcht darum nicht — die
+    kuerzesten angefangenen opener sind `'<'` und `'<|D'`.
+    """
+    from glm2api.utils.tool_parser import BEGUN_MARKUP_RE
+
+    for fragment in ("<", "<|d", "<|DS", '{"tool'):
+        assert BEGUN_MARKUP_RE.search(fragment), fragment
+    # der vollstaendige marker gehoert dem normalen pfad, nicht diesem hier
+    assert not BEGUN_MARKUP_RE.search("<|DSML|tool_calls"), "vollstaendiger marker"
+    # die echte gegenprobe: ein Wort, das mit 'P' anfaengt, ist KEIN markup.
+    # Genau dieser Test war der falsch-positive Treffer, als die fragmente
+    # nicht `re.escape()`t waren.
+    assert not BEGUN_MARKUP_RE.search("Pa"), "'Pa' war der falsch-positive treffer"
+    assert not BEGUN_MARKUP_RE.search("Der Bericht ist da"), "prosa"

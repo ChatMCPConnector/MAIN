@@ -903,14 +903,15 @@ Holdback einführt, muss *jede* Stelle entscheiden, die er in den Schnitt
 einbezieht; „verzögert statt gelöscht" gilt für den neuen Pfad, nicht für
 die drei gepinnten daneben.
 
-### S-15 bis S-18 — vier Funde aus dem Harness-Neuaufbau (**OFFEN, nicht behoben**)
+### S-15 bis S-18 — vier Funde aus dem Harness-Neuaufbau (**behoben 2026-09-27**)
 
 Am 2026-09-27 wurden `order_matrix` und `sweep2` neu gebaut (die alten Fassungen
-lagen nur unter `/tmp` und waren weg). Beide melden heute **0 unbekannte
-Verstöße** — und haben dabei vier Befunde zutage gefördert, die kein Test sah.
-Alle vier sind an `02ceca2` und `9054325` gegengeprüft: **vorbestehend**, nicht
-von S-10…S-14 verursacht. In `harness/` als `KNOWN` hinterlegt, damit sie
-auffallen, ohne den Exit-Code zu fälschen.
+lagen nur unter `/tmp` und waren weg). Beide melden **0 unbekannte Verstöße** —
+und haben dabei vier Befunde zutage gefördert, die kein Test sah. Alle vier
+waren an `02ceca2` und `9054325` gegengeprüft: **vorbestehend**, nicht von
+S-10…S-14 verursacht. In `harness/` waren sie als `KNOWN` hinterlegt, damit sie
+auffallen, ohne den Exit-Code zu fälschen; seit dem 2026-09-27 ist die
+`KNOWN`-Tabelle bis auf eine bewusst akzeptierte S-14-Grenze leer.
 
 **S-15 — die S-12-Freigabeschranke frisst legitimen Text am Turn-Anfang.**
 S-12 gibt beim Aufruf-Eintreffen nur heraus, was „als Fortsetzung von bereits
@@ -921,14 +922,69 @@ Gesendetem" zurücklag (`self._emitted_visible_text`). Gemessen:
 | `'Der Bericht ist fuer Sie. Ich'` | `'Der Bericht ist fuer Sie. Ich'` | — | **`''`** |
 | `'Der Bericht ist da. Ich nutze jetzt \`read\` fuer den Rest.'` | `'Der Bericht ist da'` (ohne Punkt) | `'Der Ber'` (mitten im Wort) | **`''`** |
 
-Ein **fertiger, unauffälliger Satz** verschwindet in einem Turn mit
-Tool-Call — komplett, wenn er in einem Delta kommt, und abhängig davon, wo der
-Upstream schneidet. Dieselbe Schranke frisst auch die Prosa, die einem
-DSML-Aufruf folgt (`dsml-aufruf+prosa`): Stream `''`, Body `None` — der Client
-bekommt einen Aufruf und sonst nichts, obwohl das Modell einen Satz
-geschrieben hat. Die Schranke ist zu grob: „steht am Turn-Anfang" heißt
-„Präambel" ist nur für Text *vor* einem Call richtig, nicht für Text, der
-erst durch ein Protokoll-Fragment in den Puffer kam.
+Ein **fertiger, unauffälliger Satz** verschwindet in einem Turn mit Tool-Call —
+komplett, wenn er in einem Delta kommt, und abhängig davon, wo der Upstream
+schneidet. Dieselbe Schranke frisst auch die Prosa, die einem DSML-Aufruf
+folgt (`dsml-aufruf+prosa`): Stream `''`, Body `None` — der Client bekommt
+einen Aufruf und sonst nichts, obwohl das Modell einen Satz geschrieben hat.
+Die Schranke war zu grob: „steht am Turn-Anfang" heißt „Präambel" ist nur für
+Text *vor* einem Call richtig, nicht für Text, der erst durch ein
+Protokoll-Fragment in den Puffer kam.
+
+**S-15, zweite Hälfte — der linke Rand des zurückgehaltenen Textes.** Nach dem
+ersten Fix war der ganze Satz gerettet, aber der **Satzendpunkt fehlte**.
+Layout `rand-links-im-carry`, Soll `'Der Bericht ist fuer Sie.'`:
+
+| | Chunk 3 / 8 | Chunk 11 / 20 |
+|---|---|---|
+| IST | `'Der Bericht ist fuer Sie'` (Punkt fehlt) | `'Der Berichtist fuer Sie.'` / `'Der Bericht ist fuerSie.'` (Leerraum fehlt) |
+| Carry | `'. Ich'` | `' ist fuer Sie. Ich'` bzw. `' Sie. Ich'` |
+
+Der Punkt und der Leerraum, die den **schon gesendeten** Satz abschließen,
+wandern als „Trenner" in den Carry — dieselbe Konvention wie in
+`_split_open_sentence` (S-14), nur an der *falschen Stelle* angewandt. Sie
+sterben dort mit der Narration, denn `_SENTENCE_END_RE` liest den Punkt als
+*Anfang* des Narration-Satzes. `finalize()` hängte nur `lead_whitespace` wieder
+an, nie den Satzendpunkt.
+
+**Fix zu S-15.** Zwei Teile, beide nötig:
+
+1. *Die Schranke.* Die Frage „kam vorher schon etwas raus" wird durch „ist der
+   Rest eine **Präambel**" ersetzt, entschieden **satzweise**. Neue
+   Modul-Funktion `strip_turn_start_narration()`, neue Methode
+   `_strip_release_narration()` — die Filterkette `strip_turn_start_narration` →
+   `strip_self_steering(rcs=False)` → `strip_invented_limit_claim(rcs=False)` →
+   `strip_protocol_meta_narration` an **einer** Stelle, mit drei Aufrufern
+   (Verwurf am Aufruf-Event, S-09-Zweig in `finalize`,
+   `tool_parser.flush()`-Signal `flushed_markup_prefix_is_preamble`). Vorher
+   entschieden drei Pfade unabhängig, was „Präambel" heißt.
+2. *Der Rand.* Neue Methode `_owed_lead_edge(text) -> (eigener Anteil,
+   geschuldeter Rand)`, angewandt an zwei Stellen in `consume_event` (S-14-Zweig
+   nach `_split_open_sentence`, S-09-Ganztext-Zweig). Drei Schranken, jede hat
+   einen gepinnten Alt-Test gerettet:
+   - `self._emitted_visible_text` muss wahr sein — sonst gibt es keinen Satz,
+     den der Rand abschließen könnte, und ein führender Punkt/Leerraum wäre
+     ein Artefakt am Turn-Anfang (`leerraum-artefakt`);
+   - `self._deferred_visible_text` muss leer sein — der S-05-Puffer geht zuerst
+     raus, ein jetzt veröffentlichter Rand käme ihm in die Quere;
+   - `self.tool_parser.pending_text` muss leer sein — steht der Parser mitten
+     in einer Struktur, ist der Rand **Inhalt der Struktur**. Ohne diese dritte
+     Schranke riss der Rand einen Code-Fence auseinander:
+     `test_s10_fenced_text_in_one_part_is_not_lost_before_a_native_call[3]`
+     lieferte `ls-la` statt `ls -la` und einen Fence mit führendem Leerraum
+     (der Rand `' '` vor `-la` war abgetrennt, während der Parser
+     `` ```bash\nls `` hielt).
+
+   Der Rand enthält **keinen Zeilenumbruch** (sonst gehört er zum folgenden
+   Block) und nur echte Satzenden, nicht `"`, `)`, `»` — die schließen, sie
+   stehen nie am Anfang; dafür die neue Konstante
+   `_SENTENCE_TERMINATORS`. Er geht **direkt an `chunks`** und nicht durch die
+   restliche Kette: der Auftrag `_preamble_narration_probe` prüft gegen den
+   **Upstream**-Text (`_emitted_text_tail`), nicht gegen den veröffentlichten —
+   der gerade zurückgehaltene Carry ist darin enthalten, der Rand `'. '` nach
+   dem Carry `'Ich'` las sich dadurch als Präambel und fiel im Aufruf-Turn mit.
+   Der Rand ist per Definition kein Text: er enthält weder Narration noch
+   Protokoll-Fragment, er schließt nur ab.
 
 **S-16 — der Non-Stream-Pfad filtert den Antworttext überhaupt nicht.**
 `chat_completion` (der Non-Stream-Einstieg, `glm_client.py` Z. 491–795) ruft
@@ -938,7 +994,7 @@ Filterkette des Abschlusses — `strip_meta_chatter`,
 `strip_invented_limit_claim`, `strip_protocol_meta_narration`,
 Halluzinations-Echo, Fence-Unwrap, S-06-Leerzeilen, die S-12-Freigabe — hängt
 an `finalize()` und gilt damit **nur für den Stream**. Gemessen, rein
-text-Turn, Text `'Tool-Limit erreicht — hier die Analyse.'`:
+Text-Turn, Text `'Tool-Limit erreicht — hier die Analyse.'`:
 
 | | Ergebnis |
 |---|---|
@@ -949,46 +1005,141 @@ text-Turn, Text `'Tool-Limit erreicht — hier die Analyse.'`:
 
 Das ist genau die Form, vor der S-08 gebaut wurde („die schädlichste Form: das
 Modell hört auf zu arbeiten und legt dem Client eine fertige Antwort samt
-Grund für den Abbruch hin"). Die Doku behauptet seit S-08, der finale Bericht
+Grund für den Abbruch hin"). Die Doku behauptete seit S-08, der finale Bericht
 gehe durch `finalize`/`strip_meta_chatter` — für den Body stimmt das nicht.
 **Wichtig:** die Test-Hilfen rufen `finalize()` *vor* `build_response()` auf.
 Diese Reihenfolge gibt es in Produktion nicht, deshalb blieb die ganze
 Body-Pfad-Klasse ungetestet.
 
-**S-17 — ein Apostroph gilt als Satzende.** `_SENTENCE_END_CHARS = ".!?…。'\"' )»"`
-enthält `'` (und `"`, `)`, `»`). Eine Part, die an einem Kontraktions-Apostroph
-endet, gilt `_ends_sentence()` als Satzende, und `_needs_paragraph_break()`
-setzt daraufhin einen **Absatzumbruch mitten im Wort**:
+**Fix zu S-16, bewusst eng.** Die Behauptung „der Non-Stream-Pfad filtert
+nichts" ist **halb** wahr und wurde nicht so übernommen: `build_response()`
+enthält selbst Filter (Fence-Unwrap, Echo-`strip`, Self-Steering über den
+gerenderten Text) — sie greifen nur nicht für die *Abschluss*-Kette, und der
+S-13-Fall `content is None` bei Calls darf nicht angetastet werden. Behoben
+wurde die schädliche Klasse, an zwei Stellen:
+
+- *Stream:* neue Methode `_strip_invented_limit_claim()`, die auch **ohne**
+  Calls greift. Die Beschränkung „nur wenn der Turn Aufrufe hat" stammt aus
+  S-08 und gilt für die **Selbst-Steuerung** (dort ist eine Aussage über
+  `open` echter Inhalt), nicht für die Limit-Meldung — die ist so gebaut, dass
+  sie nur greift, wenn sie am Anfang steht (200 Zeichen) oder ein
+  Abbruch-Wort enthält. Die gemeinsame Hülle ist die Modul-Funktion
+  `_apply_text_filters(text, steps, require_complete_sentence)`.
+- *Body:* die Kette in `build_response()` **direkt vor**
+  `stripped_echo = strip_transcript_echo(...)`: mit Calls nur Meta-Chatter, ohne
+  Calls auch dann, wenn der Filter alles entfernt.
+
+**S-17 — ein Apostroph gilt als Satzende.** `_SENTENCE_END_CHARS` enthielt `'`
+(neben `"`, `)`, `»`). Eine Part, die an einem Kontraktions-Apostroph endet, gilt
+`_ends_sentence()` als Satzende, und `_needs_paragraph_break()` setzt daraufhin
+einen **Absatzumbruch mitten im Wort**:
 `"I'll now read the file."` bei Chunk 1 → `"I'\n\nll now read the file."`.
 Vorhanden seit S-11 (dort wurde die Regel nur umsortiert, das Zeichen war
 schon vorher ein Satzende) und an `9054325` identisch. Die Gegenprobe ohne
 Apostroph ist unauffällig.
 
+**Fix zu S-17.** `'` aus `_SENTENCE_END_CHARS` streichen — es ist
+Vokabelöffner oder Possessiv, kein Satzende. `)"»` **bleiben**: sie schließen
+ein Zitat oder eine Klammer, dort ist ein Satzende plausibel. Gepinnt in
+`test_s17_real_sentence_enders_still_end_a_sentence`.
+
 **S-18 — DSML über viele Parts leckt als Markup.** Bei Chunk-Größen 1–3 leckt
 das DSML als sichtbarer Text in den Stream, obwohl der Aufruf korrekt geborgen
-wird. Der Midstream-Guard prüft auf `{"tool_calls"` und auf die nackte
-Objektform, nicht auf DSML — der DSML-Pfad greift nur bei zusammenhängenden
-Parts. Vorhanden an allen geprüften Ständen.
+wird. Vorhanden an allen geprüften Ständen.
 
-**Reihenfolge der Reparatur (Vorschlag, nicht ausgeführt).** S-16 zuerst: es
-ist die Ursache hinter einer ganzen Filterklasse, und die Diagnose ist
-eindeutig (`build_response` müsste den in `finalize` berechneten Text
-übernehmen statt neu zu rendern — mit Rücksicht auf die S-13-Regel
-`content is None` bei Calls). S-15 als zweites: die Schranke muss unterscheiden
-„stand am Turn-Anfang **und** ist Präambel" von „kam erst durch ein
-Protokoll-Fragment in den Puffer". S-17 ist ein Einzeiler
-(`'` aus `_SENTENCE_END_CHARS` streichen, mit Gegenprobe), S-18 eine
-Ergänzung des Midstream-Guards um DSML.
+**Fix zu S-18 — zwei Ursachen, nicht eine.** Genau wie bei S-14: ein Auslöser,
+der ein *vollständiges* Merkmal sucht, ist an jeder Schnittstelle unvollständig.
+1. `_needs_paragraph_break()` brach an **jeder** `|`-Grenze um, weil `|` am
+   Zeilenanfang wie eine Markdown-Tabelle aussieht: aus einem Part wurde `<` +
+   `|DSML` + `|tool_calls>` und damit drei Parts mit zwei Umbrüchen. Neue
+   **Regel 0**: liegt die Grenze **innerhalb** von Markup (nach dem letzten `>`
+   folgt ein `<`), bricht kein Absatz um — das ist ein Transportschaden, keine
+   Formatierung.
+2. `TAG_NAME_HINTS` erkennt einen Opener erst, wenn er **vollständig** im Puffer
+   liegt; bis dahin wurde jedes Zeichen einzeln als sichtbarer Text ausgegeben.
+   Neu: `BEGUN_MARKUP_RE = _build_begun_markup_regex([*TAG_NAME_HINTS, '{"tool_calls"'])`
+   — endet der Text an einem **angefangenen** Opener, gibt `consume()` `""`
+   zurück. *Fallstrick, im Code dokumentiert:* die Fragmente müssen
+   `re.escape()`t werden. Sonst wird das `|` in `<|` zur Alternative, leere
+   Alternativen matchen überall, und der Mustertest auf `'Pa'` schlägt an —
+   genau das war der erste Fehlversuch.
+
+Dazu kam `tool_protocol.py`: `contains_tool_markup` kannte DSML nicht, wodurch
+der Carry Markup festhalten konnte, während der Parser die folgende Prosa
+verschluckte. `_TOOL_MARKUP_RE` bekam die DSML-Alternative
+(`r"<\|?\s*dsml\|"`).
+
+**Ergebnis nach den Fixes (alle drei Harnesses, 2026-09-27)**
+
+| Harness / Szenario | vorher | nachher |
+|---|---|---|
+| `order_matrix` | 4 Verstöße (alle `rand-links-im-carry`) | **0 / 120** |
+| `sweep2` | 0 unbekannte, aber 6 Szenarien nur per `KNOWN` auf 0 | **0 unbekannte / 132**, 1 bekannter Befund |
+| `sweep2` `selbst-steuerung-mittelteil` | 5 von 6 Chunkgrößen falsch | **0 / 6** |
+| `sweep2` `dsml-aufruf+prosa` | 4 von 6 (Prosa fehlt im Stream) | **0 / 6** |
+| `sweep2` `dsml-ueber-viele-parts` | 2 von 6 (Markup im Stream) | **0 / 6** |
+| `sweep2` `praeambel-en+call` | 1 von 6 (Umbruch mitten im Wort) | **0 / 6** |
+| `sweep2` `limit-erfunden+nur-text` | 6 von 6 (Stream **und** Body) | **0 / 6** |
+| `sweep2` `praeambel-cn-eigener-part` | 2 von 6 (Wortrest vor der Marke) | **0 / 6** (Mitreise des S-15-Filters) |
+| `leak_probe` | 4/215 + 0/104 | 4/215 + 0/104 (unverändert, der S-14-Rest) |
+
+**Positivkontrolle (Pflicht, sonst beweisen die Tests nichts).** Die 13 neuen
+Tests (173 Fälle) gegen `02ceca2` gefahren: **127 rot, 46 grün**. Rot sind
+genau die Klassen, die die Fixes behaupten:
+
+| Test | rot am alten Stand |
+|---|---|
+| `s15_finished_sentence_before_narration_survives_every_chunk_size` | 50 von 57 |
+| `s16_invented_limit_claim_is_dropped_without_tool_calls` | 39 von 39 |
+| `s15_lead_edge_of_the_held_text_reaches_the_client` | 29 von 29 |
+| `s18_dsml_split_over_many_parts_never_leaks_as_markup` | 3 von 7 (genau Chunk 1–3) |
+| `s17_contraction_does_not_end_a_sentence` | 2 von 23 |
+| `s15_owed_lead_edge_needs_published_text_and_an_empty_buffer` | 1 von 1 |
+| `s15_prose_after_a_protocol_fragment_is_not_lost` | 1 von 1 |
+| `s17_real_sentence_enders_still_end_a_sentence` | 1 von 1 |
+| `s18_begun_markup_opener_is_held_by_the_parser` | 1 von 1 |
+
+Grün bleiben die Gegenproben — genau so soll es sein: der Turn-Anfang bleibt
+Präambel (`s15_turn_start_preamble_is_still_dropped`, 6/6), der Fence bleibt
+ganz (`s15_owed_lead_edge_is_never_taken_out_of_a_parser_structure`, 6/6),
+ein `open`-Hinweis ohne Calls bleibt Inhalt
+(`s16_legitimate_open_mention_without_calls_survives`, 1/1), die Absatzregel
+außerhalb von Markup bleibt
+(`s18_paragraph_break_is_never_inserted_inside_markup`, 1/1).
+
+**Nicht behoben, bewusst.** `sweep2`, Szenario `selbst-steuerung+call`: bei 2
+von 6 Chunkgrößen entkommt der Wortrest vor der ersten Werkzeug-Marke. Das ist
+die **akzeptierte S-14-Grenze**, nicht S-15 — die Selbst-Steuerung steht dort
+am *Anfang* des Turns, es gibt also keinen fertigen Satz davor, den S-15
+retten könnte; der Rest ist der erste Teil des ersten Narration-Satzes.
+
+**Reihenfolge, in der repariert wurde (die Vorschlagsreihenfolge war falsch).**
+S-18 zuerst, weil die Ursache eindeutig war und die beiden Hälften unabhängig
+blieben; dann S-17 (Einzeiler, mit Gegenprobe), dann S-16, dann S-15 als
+letztes, weil es die beiden anderen in sich aufnahm. Die ursprüngliche
+Überlegung „S-16 zuerst, es ist die Ursache hinter einer ganzen Filterklasse"
+hätte den halben Teil des Problems vergrößert: `build_response()` filtert
+durchaus, nur die *Abschluss*-Kette fehlt — und die S-13-Regel
+(`content is None` bei Calls) hätte dabei verteidigt werden müssen.
 
 ### Verifikation
 
-- **1426 Tests grün** (854 + 572 neue aus S-14; Suite 8,5 s → 11,1 s).
+- **1599 Tests grün** (1426 + 173 neue aus S-15…S-18; Suite 11,8 s → 12,5 s).
   Historie: 839 (794 + 45 aus S-10), mit S-11 **848** (+ 9), mit S-12
-  **852** (+ 4), mit S-13 **854** (+ 2, Verhaltens-neutral).
-- Harnesses (nach dem Neuaufbau): `order_matrix` 120 Messungen / 0 unbekannte
-  Verstöße, `sweep2` 132 / 0. Eigenprüfung: an `9054325` melden sie 14 bzw. 7
-  unbekannte Verstöße, an `02ceca2` 0 — sie sehen also echte Fehler und
-  verschlucken keine.
+  **852** (+ 4), mit S-13 **854** (+ 2, Verhaltens-neutral), mit S-14
+  **1426** (+ 572).
+- **S-15…S-18 gegen den Vorher-Stand `02ceca2` (Positivkontrolle): 127 der 173
+  neuen Fälle schlagen fehl**, die 46 Gegenproben sind gegen beide Stände grün.
+  Aufschlüsselung im Abschnitt oben. Zwei Klassen, die man beim Lesen der Zahl
+  nicht erwartet: `s17_contraction` ist nur 2 von 23 rot (der Wortumbruch ist im
+  Stream erst bei ganz kleinen Chunkgrößen sichtbar), und
+  `s18_dsml_split_over_many_parts` 3 von 7 (genau die Chunkgrößen 1–3 — der
+  Rest war schon vorher in Ordnung). Beides ist gemessen, nicht geschätzt.
+- Harnesses (nach den Fixes): `order_matrix` 120 Messungen / **0** unbekannte
+  Verstöße (vorher 4), `sweep2` 132 / **0** (vorher 0, aber 6 Szenarien nur per
+  `KNOWN` auf 0). `leak_probe` unverändert 4/215 + 0/104. Eigenprüfung: an
+  `9054325` melden die Sweeps 14 bzw. 7 unbekannte Verstöße — sie sehen also
+  echte Fehler und verschlucken keine.
 - S-11 gegen den Vorher-Stand (Positivkontrolle): **8** der 9 neuen Tests
   schlagen fehl — alle sechs Chunk-Unabhängigkeits-Fälle, der
   Doppelumbruch und der Regel-Test. Die Anti-Kleb-Gegenprobe
@@ -1055,6 +1206,16 @@ Non-Stream-Response per OpenAI-Vertrag `None`, sobald Tool-Calls da sind:
 für reine Stream-Aussagen dort also nichts nachprüfbar. Das ist eine
 **bewusste Entscheidung** (S-13), mit zwei Tests festgenagelt — sie steht
 nicht zufällig da und soll auch nicht beim Aufräumen verschwinden.
+
+Und der Nachsatz aus S-15, der beim Bauen des Fixes drei Stunden gekostet hat:
+`_preamble_narration_probe` prüft gegen den **Upstream**-Text
+(`_emitted_text_tail`), nicht gegen den, den der Client schon sieht. Der
+gerade zurückgehaltene Carry ist darin enthalten. Wer eine „der Rand gehört
+nach vorn"-Korrektur baut, muss also damit rechnen, dass ein rand, der über
+`text_delta` in die Kette geht, sofort als Präambel wiedererkannt und in den
+S-05-Puffer geschrieben wird — er landet dann im Aufruf-Turn im selben
+Verwurf, den man eigentlich beheben wollte. Der Rand ging deshalb direkt an
+`chunks`.
 
 ---
 
@@ -1162,8 +1323,8 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - Stream/Non-Stream-Parität bei Text neben Calls: Asymmetrie entschieden und gepinnt (S-13) — DONE 2026-09-27
 - Beim Call-Eintreffen zurückgehaltener Rest (Carry/Parser) ging im Aufruf-Turn verloren (S-12) — DONE 2026-09-27
 - Erstes Fragment einer zerschnittenen Narration entkam (Nebenbefund aus S-13): angefangener Werkzeug-Token als Holdback-Auslöser (S-14) — DONE 2026-09-27
-- Mess-Harnesses lagen nur in `/tmp` und waren nach Neustart weg — jetzt in `llm-proxies/glm2api/harness/` — DONE 2026-09-27
-- **OFFEN** aus dem Harness-Neuaufbau (alle vorbestehend, gegengeprüft an `02ceca2`/`9054325`): S-15 S-12-Schranke frisst legitimen Text am Turn-Anfang, S-16 Non-Stream filtert den Antworttext nicht, S-17 Apostroph gilt als Satzende, S-18 DSML über viele Parts leckt
+- Mess-Harnesses lagen nur in `/tmp` und waren nach Neustart weg — jetzt in `llm-proxies/glm2api/harness/` — DONE 2026-09-27- Vier Funde aus dem Harness-Neuaufbau (alle vorbestehend, gegengeprüft an `02ceca2`/`9054325`) — **DONE 2026-09-27**: S-15 Präambel wird satzweise statt pauschal erkannt (der linke Rand des zurückgehaltenen Textes kam als S-15-Rest noch dazu, `_owed_lead_edge`), S-16 erfundene Limit-Behauptung greift auch ohne Calls (Stream **und** Body), S-17 Apostroph ist kein Satzende, S-18 DSML über viele Parts leckt nicht mehr (Absatzregel **und** angefangener Opener)
+- Harnesses lagen nur in `/tmp` und waren nach Neustart weg — jetzt in `llm-proxies/glm2api/harness/`, mit `trace_stream.py` und `common.py` — DONE 2026-09-27
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).
