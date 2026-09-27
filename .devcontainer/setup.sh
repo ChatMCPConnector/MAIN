@@ -146,23 +146,27 @@ echo "==> [landscape] Commit-Signierung einrichten (SSH-Signatur)..."
 # in zwei Test-Repos reproduziert (der Code-Account passt, /user/emails liefert
 # "Resource not accessible by integration"). SSH-Signierung laeuft dagegen rein
 # lokal, braucht keine API und keinen Token.
-# Der Codespace-Key ~/.ssh/codespaces.auto (ED25519) existiert in jedem
-# Codespace automatisch. Die allowedSignersFile liegt in .runtime/, weil der
-# Key pro Codespace neu sein kann und sie darum nicht ins Repo gehoert;
-# enthaelt nur den oeffentlichen Schluessel, ist also kein Secret.
+# Der Codespace-Key ~/.ssh/codespaces.auto (ED25519) gehört dem CODESPACE,
+# nicht dem Konto: jeder neue Codespace hat einen anderen. Damit die Signaturen
+# aller Codespaces lokal pruefbar sind, sammelt setup.sh die oeffentlichen Keys
+# in config/git-allowed-signers (versioniert, Dedup pro Fingerabdruck, kein
+# Secret) statt in einer .runtime-Datei, die nur den letzten Key kennt.
 SIGN_KEY="$HOME/.ssh/codespaces.auto"
 if [ -f "$SIGN_KEY" ]; then
-  mkdir -p "$REPO_ROOT/.runtime"
-  printf '%s %s\n' "$(git -C "$REPO_ROOT" config user.email 2>/dev/null || echo tadeuslol@users.noreply.github.com)" \
-         "$(cut -d' ' -f1,2 "$SIGN_KEY.pub")" > "$REPO_ROOT/.runtime/git-allowed-signers"
-  chmod 600 "$REPO_ROOT/.runtime/git-allowed-signers" 2>/dev/null || true
+  SIGNERS="$REPO_ROOT/config/git-allowed-signers"
+  FP="$(ssh-keygen -lf "$SIGN_KEY.pub" 2>/dev/null | awk '{print $2}')"
+  MAIL="$(git -C "$REPO_ROOT" config user.email 2>/dev/null || echo unknown)"
+  if [ -n "$FP" ] && ! grep -qF "$FP" "$SIGNERS" 2>/dev/null; then
+    printf '%s %s # %s\n' "$MAIL" "$(cut -d' ' -f1,2 "$SIGN_KEY.pub")" "$FP" >> "$SIGNERS"
+    echo "    Signing-Key neuer Codespace eingetragen: ${FP:0:24}…"
+  fi
   git -C "$REPO_ROOT" config gpg.format ssh
   git -C "$REPO_ROOT" config user.signingkey "$SIGN_KEY.pub"
-  git -C "$REPO_ROOT" config gpg.ssh.allowedSignersFile "$REPO_ROOT/.runtime/git-allowed-signers"
+  git -C "$REPO_ROOT" config gpg.ssh.allowedSignersFile "$SIGNERS"
   git -C "$REPO_ROOT" config commit.gpgsign true
-  echo "    SSH-Signatur aktiv (Key $(ssh-keygen -lf "$SIGN_KEY.pub" 2>/dev/null | awk '{print $2}' | cut -c1-24)…)."
-  echo "    Hinweis: GitHub zeigt 'Verified' erst, wenn der Key einmalig unter"
-  echo "    Settings > SSH und GPG keys als SIGNING key registriert ist."
+  echo "    SSH-Signatur aktiv (Key ${FP:0:24}…, $(grep -c . "$SIGNERS") bekannte Signierer)."
+  echo "    Hinweis: GitHub zeigt 'Verified' erst nach Registrierung des Keys"
+  echo "    als SIGNING key — und der Key ist pro Codespace neu."
 else
   echo "    WARN: kein $SIGN_KEY — Commits bleiben unsigniert (nicht fatal)."
 fi
