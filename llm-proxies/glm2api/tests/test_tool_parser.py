@@ -725,7 +725,7 @@ def test_bare_call_object_after_newline_is_parsed():
 
     clean, calls = parse_tool_calls_from_text(text, allowed_tool_names={"read"})
 
-    assert clean == "Hier kommt der naechsten Schritt." or clean.startswith("Hier kommt")
+    assert clean == "Hier kommt der naechste Schritt."
     assert len(calls) == 1
     assert calls[0]["function"]["name"] == "read"
 
