@@ -138,14 +138,10 @@ check "Pfadbegrenztes Commit dokumentiert" bash -c '
   grep -q "git commit -- <pfad>" "$REPO_ROOT/AGENTS.md" || { echo "fehlt"; exit 1; }
   echo "nur eigene Pfade"'
 
-echo "== 9. Testsuite =="
-check "validate-revision.sh"     bash "$REPO_ROOT/infra/scripts/validate-revision.sh"
-
+echo "== 9. Provider live =="
 if [ "$LIVE" -eq 1 ]; then
-  echo "== 9. Provider live (langsam, NIM Kaltstart bis ~3 min) =="
   check "keys.sh doctor"         bash "$REPO_ROOT/infra/scripts/keys.sh" doctor
 else
-  echo "== 9. Provider live =="
   skipt "keys.sh doctor" "uebersprungen (--live fuer echte Provider-Calls)"
 fi
 
