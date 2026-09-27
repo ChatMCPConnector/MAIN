@@ -149,8 +149,12 @@ def flush_pending(state, now):
     """
     out = bytearray()
     for st in state.values():
-        if st["pending"] is not None and now >= st["deadline"]:
-            out += st["pending"]
+        # Ueber eine lokale Variable verengen: der Type-Checker kann
+        # `st["pending"] is not None` nicht durch einen Dict-Wert hindurch
+        # verfolgen, meldet dann faelschlich "None is not subscriptable".
+        pending = st["pending"]
+        if pending is not None and now >= st["deadline"]:
+            out += pending
             st["pending"] = None
     return bytes(out)
 

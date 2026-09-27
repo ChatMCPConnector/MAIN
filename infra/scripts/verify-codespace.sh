@@ -107,7 +107,27 @@ check "beide Generationen"      bash -c '
   printf "%s" "$out" | grep -q "backup: vorhanden"  || { echo "backup FEHLT"; exit 1; }
   echo "current + backup auf Drive"'
 
-echo "== 8. Testsuite =="
+echo "== 8. Agenten-Anweisungen =="
+# Ein Agent muss die Save-Pflicht kennen, ohne dass der Nutzer sie wiederholen
+# muss. Jeder Client liest eine andere Datei — fehlt eine oder steht die Regel
+# nicht drin, faellt das hier auf, statt beim naechsten Sessionende auf.
+check "AGENTS.md (Referenz)" bash -c '
+  [ -f "$REPO_ROOT/AGENTS.md" ] || { echo "FEHLT"; exit 1; }
+  grep -q "save.sh" "$REPO_ROOT/AGENTS.md" || { echo "Save-Regel fehlt"; exit 1; }
+  echo "hat die Save-Regel"'
+check "Save-Regel in allen Client-Dateien" bash -c '
+  missing=""
+  for f in CLAUDE.md GEMINI.md .cursorrules .github/copilot-instructions.md; do
+    [ -f "$REPO_ROOT/$f" ] || { missing="$missing $f:fehlt"; continue; }
+    grep -q "save.sh" "$REPO_ROOT/$f" || missing="$missing $f:ohne-Regel"
+  done
+  [ -z "$missing" ] || { echo "$missing"; exit 1; }
+  echo "CLAUDE/GEMINI/Cursor/Copilot informiert"'
+check "Pfadbegrenztes Commit dokumentiert" bash -c '
+  grep -q "git commit -- <pfad>" "$REPO_ROOT/AGENTS.md" || { echo "fehlt"; exit 1; }
+  echo "nur eigene Pfade"'
+
+echo "== 9. Testsuite =="
 check "validate-revision.sh"     bash "$REPO_ROOT/infra/scripts/validate-revision.sh"
 
 if [ "$LIVE" -eq 1 ]; then

@@ -6,6 +6,12 @@
   Systempakete → opencode → Shell-Aliase → **Secrets-Auto-Unlock** (via `LANDSCAPE_PASSPHRASE`) → **Git-Auth** (via `LANDSCAPE_PAT`) → Browser-Runtime → Benchmark-Kopien.
 - Erste Pflichtlektüre: `infrastructure.md` (Layout „was wozu", Betrieb, Proxies, Secrets-Modell, Changelog). `README.md` ist nur die kurze öffentliche GitHub-Übersicht.
 - Repo ist shared für mehrere eigene Accounts. Alles Bleibende liegt unter `/workspaces/MAIN` und wird per `./infra/scripts/save.sh` gepusht. Einmal pro Account: PAT + Passphrase als Codespaces-Secrets hinterlegen, danach ist alles automatisch.
+- **Gilt für jeden Agenten, unabhängig vom Client:** Diese Datei ist die
+  Referenz. Clients, die sie nicht lesen, haben hier eine Datei mit derselben
+  Kurzfassung: `CLAUDE.md` (Claude Code), `GEMINI.md` (Gemini CLI),
+  `.cursorrules` (Cursor), `.github/copilot-instructions.md` (Copilot). Neue
+  Clients bekommen dieselbe Kurzfassung — siehe
+  `infrastructure.md`, Abschnitt „Agenten-Anweisungen“.
 - **Sicherheitsmodell: Komfort > Sicherheit.** Alle Accounts sind eigene. Die Secrets-Passphrase liegt absichtlich im Repo (`config/passphrase`). Kein „Geheimnis-Schutz"-Purismus, Automatik hat Vorrang.
 
 ## 1. Session-Start
@@ -43,3 +49,6 @@ Normale Code-, Doku- und Config-Edits sind keine Infrastruktur-Änderung: keine 
 - `.runtime/`, Browserprofile, Caches und Klartext-Secrets werden nicht committet (siehe `.gitignore`). Ausnahme (Komfort > Sicherheit): `config/passphrase` darf Klartext-Secrets enthalten. Was davon für einen neuen Codespace nötig ist, muss als reproduzierbares Skript unter `infra/scripts/` im Repo liegen.
 - `infrastructure.md` (Changelog + Infra-Soll) nur bei tatsächlicher Infrastruktur-Änderung im selben Arbeitsgang aktualisieren. `README.md` (öffentliche Übersicht) nur bei relevanten Strukturänderungen. Kein Doku-Update und kein Commit für Nicht-Infra-Änderungen erzwingen.
 - **Committen/Pushen ohne Rückfrage:** seit 2026-09-26 dauerhaft freigegeben („immer selber direkt"). Nach jedem abgeschlossenen Arbeitsgang `./infra/scripts/save.sh "<message>"` laufen lassen — das macht Commit, Rebase, Push und Drive-Backup in einem. Nicht mehr nachfragen. Vorher `git status`/`git diff` prüfen, Secrets sind durch `.gitignore` ausgeschlossen. Ausnahme: destruktive Historie (`rebase` auf gepushten Commits, `force-push`, `reset --hard`) bleibt Rückfrage-Pflicht.
+- **Nur eigene Pfade committen.** `git commit` committet den **gesamten Index**, nicht die genannten Dateien — und `save.sh` macht vorher `git add -A`. Da das Repo für mehrere eigene Accounts shared ist, erwischt das fremde, gerade in Arbeit befindliche Änderungen (live passiert: eine 905-zeilige Löschung aus einer parallelen Refactor-Arbeit landete in einem fremden Commit). Deshalb: **vor dem Save `git status` ansehen.** Ist fremder Änderungsstand im Baum → nicht committen, melden, eigene Pfade mit `git commit -- <pfad>` separat sichern.
+- **Kein Autosave-Daemon.** Bewusst abgeschaltet (2026-09-27), weil er per `git add -A` den Agent-Index mutierte und Halb-Zustände laufender Arbeit als eigene Commits einfror. **Damit ist der `save.sh`-Aufruf oben der einzige Auslöser für Commit *und* Drive-Backup** — ohne ihn ist bis zu einer Stunde Agent-Arbeit nach einem Codespace-Verlust weg.
+- **Testläufe nicht committten.** Ein Test, der einen echten Commit erzeugt, gehört zurückgenommen (nicht gepusht), bevor weitergearbeitet wird — sonst landet er in `origin/main`.

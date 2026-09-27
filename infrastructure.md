@@ -385,6 +385,56 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Rückweg: Commit revertieren — bzw. für Chromium-CDP: Playwright-Setup neu
   anlegen.
 
+### Agenten-Anweisungen: die Save-Regel muss jeder Client kennen
+
+**Nutzervorgabe (2026-09-27):** Der Nutzer arbeitet nie selbst unter `MAIN`; er
+sagt einem Agenten „commite/pushe“ und erwartet, dass **jeder** Agent das ohne
+Nachfrage tut. Damit das nicht vom jeweiligen Client abhängt, liegt die Regel in
+**sechs Dateien**, von denen jede der Client liest, den er eben benutzt:
+
+| Datei | Client |
+|---|---|
+| `AGENTS.md` | **Referenz** — opencode, Codex, jeder Agent, der `AGENTS.md` liest |
+| `CLAUDE.md` | Claude Code |
+| `GEMINI.md` | Gemini CLI |
+| `.cursorrules` | Cursor |
+| `.github/copilot-instructions.md` | GitHub Copilot |
+
+Die vier Client-Dateien sind bewusst kurz und verweisen als **verbindlich** auf
+`AGENTS.md` — doppelte lange Regeln driften auseinander, eine kurze Kopie mit
+Zeiger nicht. In `AGENTS.md` selbst stehen die drei Zusätze, die diese Sitzung
+erzwungen hat: **nur eigene Pfade committen** (`git commit -- <pfad>`, weil
+`save.sh` vorher `git add -A` macht und das Repo shared ist), **kein
+Autosave-Daemon** (womit der Save-Aufruf der einzige Auslöser für Commit *und*
+Backup ist) und **Testläufe nicht committten**.
+
+**Gegen das Auseinanderlaufen gibt es einen Check:** `verify-codespace.sh`
+prüft, dass alle fünf Client-Dateien existieren und die Save-Regel enthalten, und
+bricht sonst durch. Ein neuer Client braucht genau eine Datei nach diesem Muster
+plus eine Zeile im Check.
+
+### Drive-Backup: Fehler werden nicht mehr verschluckt
+
+`save.sh` rief das Backup mit `|| true` auf — ein fehlgeschlagenes Backup sah
+unverändert wie ein erfolgreicher Save aus. Da Drive die **einzige** Kopie
+außerhalb von GitHub ist, war das der teuerste stille Fehler der Repo-Sicherung.
+Seit 2026-09-27 meldet `save.sh` den Fehler nach dem erfolgreichen Push:
+
+```
+WARNUNG: Push ok, aber das Google-Drive-Backup ist FEHLGESCHLAGEN.
+         Drive ist damit die veraltete Generation — nicht vergessen:
+         ./infra/scripts/gdrive-backup.sh backup --force
+```
+
+**Der Push-Erfolg wird weiterhin nie gefährdet** (der Backup-Hook läuft nach
+dem Push und beendet `save.sh` nicht mit Fehler). Verifiziert mit absichtlich
+kaputtem Backup-Skript — die Warnung erscheint, der Save meldet Erfolg.
+
+**Kein periodischer Backup-Timer, bewusst** (Nutzerentscheidung): es wird nur
+gesichert, wenn ein Agent etwas committen will. Der Preis ist dokumentiert: fällt
+der Codespace zwischen zwei Arbeitsgängen weg, ist der Drive-Stand so alt wie der
+letzte `save.sh`.
+
 ### Maus, Copy/Paste & Scrollen in TUIs (opencode + Freebuff)
 
 **Es gibt genau eine Betriebsart, und sie ist die mit dem pty-Filter (Maus aus).**
@@ -674,6 +724,10 @@ Proxy bei jedem Start automatisch hoch.
   **Meine Regel war zu eng und genau deshalb kam der Restfehler durch:** Ich habe nur bei *leerer* Eingabe umgehängt, sonst nativ durchgelassen — und freebuffs `history-up` konnte dann doch zuschnappen, sobald ein Entwurf in der Eingabe stand. Der Nutzer sah „manchmal scrollt das Rad die Chatbox mit“. Bei einer **einzeiligen** Eingabe gibt es für vertikale Bewegung aber nichts Vernünftliches: `up`/`down` sind dort entweder Historie oder gar nichts. **Also gilt jetzt dieselbe Aussage wie `input_move_up: "none"` — Pfeiltasten gehören dem Scrollen, der Input sieht sie nicht** — und der relevante Zustand ist der **Inhalt** der Eingabe, nicht ihre Länge, weil das Slash-Menü genau dann offen ist, wenn die Eingabe mit `/` beginnt. `track_input` führt deshalb jetzt den Inhalt (gekappt auf 512 Zeichen) statt einer Zeichenanzahl.
   **Regel:** Eingabe beginnt mit `/` → Pfeil nativ (Menü bedienbar). **Alles andere** → sofort `PageUp`/`PageDown`, ohne Burst-Fenster: das Rad scrollt die Unterhaltung und **nie** die Prompt-Historie. End-to-end am pty belegt mit dem Nutzerfall (`Hey ␍ ␍ Bye ␍` + zwei Radklicks → `ESC[5~ ESC[5~`).
   **Die Lektion aus fünf Runden:** Ich hatte „Eingabe leer" als Proxy für „der Input ist unzuständig" gewählt, statt die *ursprüngliche* Regel aus der Repo-Doku zu nehmen. `Revision.md` 4.16 nennt sie wörtlich — Halbseiten-Navigation über Auf-/Ab-Tasten, `input_move_up/down` bewusst auf `none`. Ein Proxy, den ich selbst erfunden habe, ist schwächer als die Regel, die schon dokumentiert war.
+- 2026-09-27: **Save-Regel für jeden Agenten sichtbar gemacht — und ein stiller Fehler beseitigt, der teurer war als er aussah.** Zwei Aufträge: (a) `save.sh` meldet ein **fehlgeschlagenes** Drive-Backup nicht mehr als Erfolg, (b) jeder Agent kennt die Save-Pflicht nativ, ohne dass der Nutzer „commite/pushe“ sagen muss.
+  **(a)** Der Backup-Hook stand auf `./infra/scripts/gdrive-backup.sh backup || true` — ein totes Backup war damit unsichtbar, und Drive ist die einzige Kopie außerhalb von GitHub. Jetzt: Warnblock nach dem Push mit dem Nachhol-Befehl `backup --force`; der Push-Erfolg bleibt unangetastet. Mit absichtlich kaputtem Backup-Skript verifiziert (Warnung erscheint, Save meldet Erfolg).
+  **(b)** Nur `AGENTS.md` enthielt die Regel — die liest aber nur opencode/Codex. Claude Code liest `CLAUDE.md`, Gemini CLI `GEMINI.md`, Cursor `.cursorrules`, Copilot `.github/copilot-instructions.md`. **Neu angelegt:** `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.github/copilot-instructions.md` — jeweils kurz, mit **verbindlichem** Zeiger auf `AGENTS.md` (doppelte lange Regeln driften auseinander, eine kurze Kopie mit Zeiger nicht). In `AGENTS.md` selbst drei Zusätze aus dieser Sitzung ergänzt: **nur eigene Pfade committen** (`git commit -- <pfad>` — `save.sh` macht vorher `git add -A`, und das Repo ist shared, live passiert), **kein Autosave-Daemon** (macht den Save-Aufruf zum einzigen Auslöser für Commit *und* Backup) und **Testläufe nicht committten**. **Gegen das Auseinanderlaufen prüft `verify-codespace.sh`** jetzt in einem neuen Abschnitt, dass alle fünf Client-Dateien existieren, die Save-Regel enthalten und die Pfad-Regel dokumentiert ist; ein neuer Client braucht eine Datei nach dem Muster plus eine Zeile im Check.
+  **Und ein Fehler, den ich dabei selbst gemacht habe:** Mein Verifikationstest für (a) lief über `save.sh` mit einer Message — und erzeugte damit einen **echten Commit auf `origin/main`**, der das `gdrive-backup.sh` als 2-Zeilen-Stub enthielt. Behoben: Commit auf den echten Inhalt umgeschrieben und mit `--force-with-lease` gepusht (Nutzungsfreigabe), Message korrigiert. Die Lehre steht jetzt als eigene Regel in `AGENTS.md` unter „Testläufe nicht committten“ — ich hätte den Test mit einem Wegwerf-Repo fahren müssen, nicht über den echten Save.
 ## Changelog
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.
