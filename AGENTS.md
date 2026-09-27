@@ -8,8 +8,7 @@
 - Repo ist shared für mehrere eigene Accounts. Alles Bleibende liegt unter `/workspaces/MAIN` und wird per `./infra/scripts/save.sh` gepusht. Einmal pro Account: PAT + Passphrase als Codespaces-Secrets hinterlegen, danach ist alles automatisch.
 - **Gilt für jeden Agenten, unabhängig vom Client:** Diese Datei ist die
   Referenz. Clients, die sie nicht lesen, haben hier eine Datei mit derselben
-  Kurzfassung: `CLAUDE.md` (Claude Code), `GEMINI.md` (Gemini CLI),
-  `.cursorrules` (Cursor), `.github/copilot-instructions.md` (Copilot). Neue
+  Kurzfassung: `GEMINI.md` (Gemini CLI), `.github/copilot-instructions.md` (Copilot). Neue
   Clients bekommen dieselbe Kurzfassung — siehe
   `infrastructure.md`, Abschnitt „Agenten-Anweisungen“.
 - **Sicherheitsmodell: Komfort > Sicherheit.** Alle Accounts sind eigene. Die Secrets-Passphrase liegt absichtlich im Repo (`config/passphrase`). Kein „Geheimnis-Schutz"-Purismus, Automatik hat Vorrang.

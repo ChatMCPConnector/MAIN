@@ -117,12 +117,12 @@ check "AGENTS.md (Referenz)" bash -c '
   echo "hat die Save-Regel"'
 check "Save-Regel in allen Client-Dateien" bash -c '
   missing=""
-  for f in CLAUDE.md GEMINI.md .cursorrules .github/copilot-instructions.md; do
+  for f in GEMINI.md .github/copilot-instructions.md; do
     [ -f "$REPO_ROOT/$f" ] || { missing="$missing $f:fehlt"; continue; }
     grep -q "save.sh" "$REPO_ROOT/$f" || missing="$missing $f:ohne-Regel"
   done
   [ -z "$missing" ] || { echo "$missing"; exit 1; }
-  echo "CLAUDE/GEMINI/Cursor/Copilot informiert"'
+  echo "GEMINI/Copilot informiert"'
 check "Pfadbegrenztes Commit dokumentiert" bash -c '
   grep -q "git commit -- <pfad>" "$REPO_ROOT/AGENTS.md" || { echo "fehlt"; exit 1; }
   echo "nur eigene Pfade"'

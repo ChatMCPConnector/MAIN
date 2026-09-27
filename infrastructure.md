@@ -390,17 +390,15 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
 **Nutzervorgabe (2026-09-27):** Der Nutzer arbeitet nie selbst unter `MAIN`; er
 sagt einem Agenten „commite/pushe“ und erwartet, dass **jeder** Agent das ohne
 Nachfrage tut. Damit das nicht vom jeweiligen Client abhängt, liegt die Regel in
-**sechs Dateien**, von denen jede der Client liest, den er eben benutzt:
+den Client-Dateien, die der Client liest:
 
 | Datei | Client |
 |---|---|
 | `AGENTS.md` | **Referenz** — opencode, Codex, jeder Agent, der `AGENTS.md` liest |
-| `CLAUDE.md` | Claude Code |
 | `GEMINI.md` | Gemini CLI |
-| `.cursorrules` | Cursor |
 | `.github/copilot-instructions.md` | GitHub Copilot |
 
-Die vier Client-Dateien sind bewusst kurz und verweisen als **verbindlich** auf
+Die Client-Dateien sind bewusst kurz und verweisen als **verbindlich** auf
 `AGENTS.md` — doppelte lange Regeln driften auseinander, eine kurze Kopie mit
 Zeiger nicht. In `AGENTS.md` selbst stehen die drei Zusätze, die diese Sitzung
 erzwungen hat: **nur eigene Pfade committen** (`git commit -- <pfad>`, weil
