@@ -124,6 +124,10 @@ MODAL_OPEN_PATTERNS = (
     b"Select a chat to resume",
     b"Search chats...",
     b"choose model",
+    b"Enter select",
+    b"Type your own answer",
+    b"Select multiple options",
+    b"\xe2\x86\x91\xe2\x86\x93 navigate",
 )
 
 
@@ -342,6 +346,7 @@ def main(argv):
     except ValueError:
         debounce = 0.0
     carry = b""
+    master_carry = b""
     text = ""
     modal_open = False
     arrow_state = new_arrow_state()
@@ -375,8 +380,12 @@ def main(argv):
                     break
                 if not data:
                     break
-                if any(pat in data for pat in MODAL_OPEN_PATTERNS):
+                chunk = master_carry + data
+                if any(pat in chunk for pat in MODAL_OPEN_PATTERNS):
                     modal_open = True
+                    master_carry = b""
+                else:
+                    master_carry = data[-32:]
                 stripped = MOUSE_RE.findall(data)
                 if stripped:
                     debug(f" Maus entfernt: {[m.decode('latin1') for m in stripped]}")
