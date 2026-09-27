@@ -120,23 +120,37 @@ ESC_SEQ_RE = re.compile(
 )
 
 
-MODAL_OPEN_PATTERNS = (
+# Modale Screens (/history, /chats, /model)
+HISTORY_MODAL_OPEN_PATTERNS = (
     b"Select a chat to resume",
     b"Search chats...",
     b"choose model",
+)
+
+# Agenten-Fragen (ask_user) mit 1 bis N Fragen
+QUESTION_MODAL_OPEN_PATTERNS = (
     b"Enter select",
     b"Type your own answer",
     b"Select multiple options",
+    b"(click to answer)",
     b"\xe2\x86\x91\xe2\x86\x93 navigate",
 )
 
+# Abschluss aller Fragen (qVA in freebuff)
+QUESTION_MODAL_CLOSE_PATTERNS = (
+    b"Your answer:",
+    b"Your answers:",
+    b"You skipped the",
+)
 
-def track_input(data, text="", modal_open=False):
+
+def track_input(data, text="", history_modal=False, question_modal=False):
     """Verfolgt den Inhalt der aktuellen freebuff-Eingabezeile und Modal-Status.
 
-    Wichtig fuer die Menue-Erkennung:
     1. Slash-Menue: Eingabe beginnt mit '/'
-    2. Modale Screens: /history, /chats, /model (Enter oeffnet, Escape/Enter schliesst)
+    2. History/Model-Screens: Enter/Escape schliesst
+    3. Agenten-Fragen (1..N Fragen): Enter schliesst NICHT (wechselt zur naechsten Frage),
+       erst QUESTION_MODAL_CLOSE_PATTERNS oder Escape/Ctrl+C schliessen die Fragen.
     """
     buf = bytearray(text.encode("utf-8", "replace") if text else b"")
     clean = ESC_SEQ_RE.sub(b"", data)
@@ -144,17 +158,23 @@ def track_input(data, text="", modal_open=False):
         if byte in (0x0D, 0x0A):  # Enter
             current = buf.decode("utf-8", "replace").strip()
             if current in ("/history", "/chats", "/model"):
-                modal_open = True
+                history_modal = True
             else:
-                modal_open = False
+                history_modal = False
+            # WICHTIG: question_modal wird durch Enter NICHT geschlossen!
+            # Bei Multi-Fragen springt Enter von Frage 1 zu Frage 2, 3...
+            # question_modal schliesst erst wenn freebuff QUESTION_MODAL_CLOSE_PATTERNS
+            # ausgibt oder der Nutzer Escape/Ctrl+C drueckt.
             buf = bytearray()
         elif byte in (0x03, 0x15):  # Ctrl+C oder Ctrl+U
             buf = bytearray()
-            modal_open = False
+            history_modal = False
+            question_modal = False
         elif byte == 0x1B:  # Bare Escape
             if buf and buf[0:1] == b"/":
                 buf = bytearray()
-            modal_open = False
+            history_modal = False
+            question_modal = False
         elif byte in (0x7F, 0x08):  # Backspace
             if buf:
                 del buf[-1]
@@ -162,7 +182,7 @@ def track_input(data, text="", modal_open=False):
             buf.append(byte)
         if len(buf) > 512:
             del buf[:-512]
-    return buf.decode("utf-8", "replace"), modal_open
+    return buf.decode("utf-8", "replace"), history_modal, question_modal
 
 
 def new_arrow_state():
@@ -179,18 +199,19 @@ def _page(seq, now, last_page, debounce):
 
 
 def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0,
-                   last_page=None, always=False, text="", modal_open=False):
+                   last_page=None, always=False, text="", history_modal=False,
+                   question_modal=False):
     """Pfeiltasten im Chat -> IMMER PageUp/PageDown (1:1 Replikation).
 
-    In Menues ('/...' oder /history /model) -> NATIV (0 ms Latenz).
+    In Menues ('/...', /history, /model, Agenten-Fragen 1..N) -> NATIV (0 ms Latenz).
 
     Grund:
       * Im Chatfenster (egal ob leer oder waehrend man tippt) muessen
         Pfeiltasten 1:1 zu PageUp/PageDown werden: nur PageUp/Down scrollt
         das Unterhaltungsfenster in freebuff auch bei befuellter Eingabezeile,
         und beruehrt NIE den Schreibbanner.
-      * In Menues (Slash-Menue '/' oder /history-Screen) muessen Pfeiltasten
-        nativ bleiben, damit die Menueauswahl mit Pfeil hoch/runter bedienbar ist.
+      * In Menues (Slash-Menue '/', /history, Agenten-Fragen 1..N) muessen Pfeiltasten
+        nativ bleiben, damit die Auswahl mit Pfeil hoch/runter bedienbar ist.
     """
     data = carry + data
     carry = b""
@@ -218,8 +239,8 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
             pos = match.end()
             out += _page(seq, now, last_page, debounce)
         out += data[pos:]
-        t, m = track_input(data, text, modal_open)
-        return bytes(out), carry, state, last_page, t, m
+        t, hm, qm = track_input(data, text, history_modal, question_modal)
+        return bytes(out), carry, state, last_page, t, hm, qm
 
     matches = sorted(
         (m for seq in ARROW_PAGE for m in re.finditer(re.escape(seq), data)),
@@ -232,22 +253,22 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
             continue
         seq = match.group()
         before = data[pos:match.start()]
-        text, modal_open = track_input(before, text, modal_open)
+        text, history_modal, question_modal = track_input(before, text, history_modal, question_modal)
         out += before
         pos = match.end()
 
-        in_menu = text.startswith("/") or modal_open
+        in_menu = text.startswith("/") or history_modal or question_modal
         if in_menu:
-            # Menues (/history, Slash-Menue, Model-Picker): Pfeile nativ
+            # Menues (/history, Slash-Menue, Model-Picker, Agenten-Fragen 1..N): Pfeile nativ
             out += seq
         else:
             # Unterhaltung scrollen: IMMER PageUp/PageDown (1:1 Replikation)
             out += _page(seq, now, last_page, debounce)
 
     remaining = data[pos:]
-    text, modal_open = track_input(remaining, text, modal_open)
+    text, history_modal, question_modal = track_input(remaining, text, history_modal, question_modal)
     out += remaining
-    return bytes(out), carry, state, last_page, text, modal_open
+    return bytes(out), carry, state, last_page, text, history_modal, question_modal
 
 
 def window_size(fd):
@@ -348,7 +369,8 @@ def main(argv):
     carry = b""
     master_carry = b""
     text = ""
-    modal_open = False
+    history_modal = False
+    question_modal = False
     arrow_state = new_arrow_state()
     last_page = dict.fromkeys(ARROW_PAGE, -1e9)
     debug(f"arrow_page={arrow_page} always_page={always_page} gap={gap}s debounce={debounce}s")
@@ -381,8 +403,14 @@ def main(argv):
                 if not data:
                     break
                 chunk = master_carry + data
-                if any(pat in chunk for pat in MODAL_OPEN_PATTERNS):
-                    modal_open = True
+                if any(pat in chunk for pat in HISTORY_MODAL_OPEN_PATTERNS):
+                    history_modal = True
+                    master_carry = b""
+                elif any(pat in chunk for pat in QUESTION_MODAL_OPEN_PATTERNS):
+                    question_modal = True
+                    master_carry = b""
+                elif any(pat in chunk for pat in QUESTION_MODAL_CLOSE_PATTERNS):
+                    question_modal = False
                     master_carry = b""
                 else:
                     master_carry = data[-32:]
@@ -402,12 +430,13 @@ def main(argv):
                     # Das ist die Sicht auf die Tastatur-Kette: was hier landet,
                     # hat das Kind als Tastendruck gelesen.
                     if arrow_page:
-                        data, carry, arrow_state, last_page, text, modal_open = rewrite_arrows(
+                        data, carry, arrow_state, last_page, text, history_modal, question_modal = rewrite_arrows(
                             data, carry, time.monotonic(), arrow_state, gap,
                             debounce, last_page, always=always_page, text=text,
-                            modal_open=modal_open)
+                            history_modal=history_modal, question_modal=question_modal)
                     else:
-                        text, modal_open = track_input(data, text, modal_open)
+                        text, history_modal, question_modal = track_input(
+                            data, text, history_modal, question_modal)
                     if not data:
                         continue
                     debug(f" -> {summarize(data)}")
