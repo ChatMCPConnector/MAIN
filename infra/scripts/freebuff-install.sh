@@ -73,33 +73,37 @@ if [ ! -f "\$launcher" ]; then
   echo "  Reparieren: bash ./infra/scripts/freebuff-install.sh   (im MAIN-Repo)" >&2
   exit 127
 fi
-# Default: KEIN Filter, freebuff laeuft direkt. freebuff 0.1.0 ist
-# maus-first, und das ist belegt, nicht vermutet:
-#   * Output-Bloecke (wAH, maxVisibleLines 5/10) klappen nur per Klick auf
-#     (onClick togglet expanded) — es gibt keine Tasten-Action dafuer.
-#   * opentui vergibt Fokus per Klick ("while(L){if(L.focusable){L.focus();
-#     break}L=L.parent}"), und nur ein FOKUSSIERTER ScrollBox uebersetzt
-#     pageup/up ueberhaupt in scrollBy (0,5 bzw. 0,2 Viewport). freebuff setzt
-#     nirgends focusable und fokussiert nur die Eingabe — Fokus im Block
-#     entsteht also ausschliesslich per Klick.
-# Der pty-Filter entfernt genau diese Klicks und macht Output-Bloecke damit
-# unbenutzbar (5/10 Zeilen, kein Aufklappen, kein Scrollen). Deshalb ist er
-# nicht mehr Default.
-# Kopieren kostet dabei nichts: freebuff kopiert beim Ziehen selbst, und
-# /copy legt den GESAMTEN Chat inkl. vollstaendigem Output in die
-# Zwischenablage. Was entfaellt, ist nur die native Terminal-Auswahl waehrend
-# freebuff laeuft — in anderen Tabs und Sheets bleibt sie erhalten.
-# Wer sie im TUI braucht: FREEBUFF_PTY_FILTER=1
-if [ -t 0 ] && [ -t 1 ] && [ "\${FREEBUFF_PTY_FILTER:-0}" = "1" ] \
-   && [ "\${FREEBUFF_NO_PTY_FILTER:-0}" != "1" ] \
+# Zwei Betriebsarten, per Schalter — weil sie sich technisch ausschliessen:
+# Maus an  = Output-Bloecke scrollen/aufklappen (Klick + Rad), Kopieren im TUI
+#            ueber Ziehen (freebuff kopiert selbst) und /copy (ganzer Chat).
+#            Ctrl+C ist dann der Interrupt-Befehl der App, Ctrl+V funktioniert
+#            (Bracketed Paste, live gemessen: Text landet in der Eingabe).
+# Maus aus = Terminal-Auswahl mit der Maus, und damit Ctrl+C = Kopieren wie im
+#            normalen Terminal. Preis: Output-Bloecke bleiben bei 5/10 Zeilen
+#            und sind nicht aufklappbar.
+#   freebuff                    -> Maus an  (Default)
+#   freebuff -c                 -> Maus aus (pty-Filter, Terminal-Copy)
+#   FREEBUFF_PTY_FILTER=1 ...   -> dieselbe Wahl ueber die Variable
+filter=0
+args=()
+for a in "\$@"; do
+  case "\$a" in
+    -c|--terminal-copy) filter=1 ;;
+    *) args+=("\$a") ;;
+  esac
+done
+if [ "\$filter" = "1" ] || [ "\${FREEBUFF_PTY_FILTER:-0}" = "1" ]; then
+  [ "\${FREEBUFF_NO_PTY_FILTER:-0}" = "1" ] && filter=0
+fi
+if [ "\$filter" = "1" ] && [ -t 0 ] && [ -t 1 ] \\
    && command -v python3 >/dev/null 2>&1 && [ -f "\$pty_filter" ]; then
   # Der Filter protokolliert dann, welche Esc-Sequenzen das Kind liest, damit
   # sich Tastatur-Fragen in Sekunden beantworten lassen. Getippter Text wird
   # NICHT protokolliert (nur Byte-Laenge). Abschalten: FREEBUFF_PTY_DEBUG=off
   export FREEBUFF_PTY_DEBUG="\${FREEBUFF_PTY_DEBUG:-/tmp/opencode/freebuff-keys.log}"
-  exec python3 "\$pty_filter" -- node "\$launcher" "\$@"
+  exec python3 "\$pty_filter" -- node "\$launcher" "\${args[@]}"
 fi
-exec node "\$launcher" "\$@"
+exec node "\$launcher" "\${args[@]}"
 WRAPPER_EOF
   chmod +x "$WRAPPER"
 }
