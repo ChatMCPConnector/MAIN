@@ -455,23 +455,42 @@ Einzelklick vom Einzeldruck. Dazu der Zielkonflikt: In freebuff ist `up` auf
 leerer Eingabe per Definition `history-up` — „letzte Nachricht holen“. Das Rad
 soll das nicht, der Pfeil schon.
 
-**Lösung: kontextabhängig nach Eingabe-Inhalt.** Der Filter zählt den
-Zeichenstand aus den **eigenen Tastatur-Bytes** (`track_input`: Enter → 0,
-Backspace −1, Ctrl+U → 0, Paste zählt mit, UTF-8-Fortsetzungsbytes nicht) — und
-**pro Position im Chunk**, nicht pro Chunk:
+**Lösung: 1:1 die opencode-Regel, angewandt auf den Eingabe-Inhalt.**
+opencode löst es per Config (`.opencode/tui.json`): `messages_half_page_up: up`
+— die Pfeiltasten gehören dem Scrollen — plus `input_move_up/down: "none"`, damit
+der Input sie nicht sieht, plus `history_previous: ctrl+up`, weil die Historie
+umziehen musste. **Diese drei Zeilen sind der Fix, auf den sich der Nutzer
+berufen hat, und sie sind 1:1 übertragbar — nur nicht per Config**, weil
+freebuff keine Keybind-Config hat. Der Filter ist die Stelle, an der die drei
+Zeilen nachgebaut werden. Der relevante Zustand ist **der Inhalt** der Eingabe,
+nicht ihre Länge: das Slash-Menü ist genau dann offen, wenn die Eingabe mit
+`/` beginnt.
 
-| Eingabe | Pfeil/Rad | Folge |
+| Eingabe | Pfeil / Rad | Folge |
 |---|---|---|
-| **leer** (Nachricht abgeschickt) | sofort `PageUp`/`PageDown`, ohne Burst-Fenster | kein `history-up` durchs Rad, ~0 ms Latenz |
-| **nicht leer** (Slash-Menü offen, Cursor im Text) | nativ bzw. Burst-Test | Slash-Menü bedienbar, Rad-Geste blättert trotzdem |
+| **beginnt mit `/`** (Menü offen) | nativ, bzw. Burst-Test bei Geste | Slash-Menü bedienbar, Rad-Geste blättert trotzdem |
+| **alles andere** (leer, Entwurf, Text, nach Enter) | **immer** sofort `PageUp`/`PageDown`, ohne Fenster | das Rad **scrollt die Unterhaltung und nie die Prompt-Historie** |
 
-**Preis, bewusst akzeptiert:** Auf leerer Eingabe holt `up` nicht mehr die letzte
-Nachricht — dafür gibt es `/history`. Ohne diese Regel müsste man eines von
-beidem opfern. Zwei echte Bugs hat die Testarbeit dabei gefunden: Backspace
-(`0x7f`/`0x08`) wurde als druckbares Zeichen **gezählt** (ein Backspace machte
-die Eingabe länger), und der Kontext wurde **pro Chunk statt pro Position**
+**Die Regel war vorher zu eng — das war der verbliebene Fehler.** Zuerst galt die
+Umleitung nur bei *leerer* Eingabe; sobald Text stand, wurde der Pfeil
+durchgelassen, und freebuffs `history-up` konnte doch zuschlagen. Der Nutzer sah
+genau das („manchmal scrollt das Rad die Chatbox mit“). Bei einer einzeiligen
+Eingabe gibt es für vertikale Bewegung ohnehin nichts Vernünftliches — `up`/`down`
+sind dort entweder Historie oder gar nichts. Also: **Pfeiltasten gehören dem
+Scrollen, der Input sieht sie nicht** — dieselbe Aussage wie
+`input_move_up: "none"`, nur per Filter statt per Config.
+
+**Preise, bewusst akzeptiert:** Auf der leeren Eingabe holt `up` nicht mehr die
+letzte Nachricht (dafür `/history`); bei einem *befüllten* Entwurf scrollt `up`
+statt in der Zeile zu navigieren — bei einzeiligem Entwurf ist der Verlust
+Leerlauf. Zwei echte Bugs hat die Testarbeit zu diesem Teil gefunden: Backspace
+(`0x7f`/`0x08`) wurde als druckbares Zeichen **gezählt** (ein Backspace machte die
+Eingabe länger), und der Kontext wurde **pro Chunk statt pro Position**
 ausgewertet (Tippen und Pfeil im selben Read → Slash-Menü kaputt). Beide als
-Testfälle festgehalten, 22 Funktionstests grün, end-to-end am pty belegt.
+Testfälle festgehalten, Testabdeckung: Inhalt statt Länge, Enter/Backspace/Ctrl+U/
+Paste/leer/Entwurf, `Hey Bye` im Chat, Slash-Menü, `Enter`+Pfeil im selben Read,
+`links`/`rechts` unangetastet — end-to-end am pty belegt:
+`Hey ␍ ␍ Bye ␍` + zwei Radklicks → `ESC[5~ ESC[5~`.
 
 **4. Umleiten des Rads selbst geht nicht.** `.vscode/keybindings.json` mit
 `mousewheel up`/`down` ist **kein gültiges Keybinding**: VS Code listet als
@@ -651,6 +670,10 @@ Proxy bei jedem Start automatisch hoch.
 - 2026-09-27: **Eine Betriebsart, und sie ist die mit Maus aus — der Default-Wechsel von eben wurde zurückgenommen.** Der Nutzerwunsch war eindeutig: `Ctrl+C` kopieren, `Ctrl+V` einfügen **und** Mausrad-Scrollen, alles in **einer** Version, ohne Schalter. Genau das liefert der pty-Filter: Maus aus heißt, das Terminal kann auswählen, also kopiert `Ctrl+C` (xterm.js kopiert nur mit Auswahl), `Ctrl+V` läuft über bracketed Paste (beides am echten TUI-Stream verifiziert: alle vier Maus-Sequenzen entfernt, `?2004h` und `?1004h` bleiben), und das Mausrad kommt als `up`/`down` an und wird kontextabhängig auf `PageUp`/`PageDown` umgehängt. **Der zwischenzeitlich eingebaute Schalter `freebuff -c` ist wieder entfernt**, samt der Dokuzeile „Default umgedreht“ als aktuelle Empfehlung — bleibt aber im Changelog als Historie stehen, weil die Begründung (Blöcke sind ausschließlich mausbedienbar) gültig bleibt.
   **Die Entscheidung fällt bewusst gegen die Maus**, obwohl die Maus mehr kann: Rad im Output-Block ja, Block aufklappen ja. Denn der Verlust bei „Maus an“ betrifft **das Kopieren** (Häufigkeit im Alltag: hoch), der Verlust bei „Maus aus“ betrifft **nur das Aufklappen eines Blocks** — und dessen vollständiger Inhalt ist trotzdem erreichbar: `/copy` legt den gesamten Chat in die Zwischenablage, `/export` schreibt ihn als Datei. Andersherum gilt: `Ctrl+C` ist in jedem TUI der Interrupt-Befehl, „Strg+C kopiert“ ist Terminal-Muskelgedächtnis, und das Terminal kopiert nur mit Auswahl — Auswahl braucht die Maus, die Maus braucht die App. Diese Kette ist der eigentliche Grund, warum es keine Konfiguration mit beidem für einen Cursor gibt.
   **Ein Irrtum, der mitkorrigiert wurde:** bei der Verifikation hatte ich das Binary direkt statt über den Wrapper gestartet und „Maus-Sequenzen vorhanden“ gemeldet — der Wrapper war umgangen. Nach Korrektur über `freebuff` exakt das erwartete Bild. (Dieselbe Sorte Fehler wie zuvor: nicht am Instrument, sondern am Aufrufpfad messen.)
+- 2026-09-27: **Das war der opencode-Fix, und er ist 1:1 übertragbar — ich hatte die falsche Regel gebaut.** Der Nutzerbericht „es war genau das gleiche Problem bei opencode, das wurde hier gefixt“ war richtig, und die Lösung steht in `.opencode/tui.json`: `messages_half_page_up: "up"` (**Pfeiltasten gehören dem Scrollen**), `input_move_up/down: "none"` (**der Input bekommt sie nicht**), `history_previous: "ctrl+up"` (Historie umgezogen, weil die Pfeiltasten jetzt scrollen). Drei Zeilen Config — bei freebuff ohne Keybind-Config, aber der pty-Filter ist genau die Stelle, an der man sie nachbauen kann.
+  **Meine Regel war zu eng und genau deshalb kam der Restfehler durch:** Ich habe nur bei *leerer* Eingabe umgehängt, sonst nativ durchgelassen — und freebuffs `history-up` konnte dann doch zuschnappen, sobald ein Entwurf in der Eingabe stand. Der Nutzer sah „manchmal scrollt das Rad die Chatbox mit“. Bei einer **einzeiligen** Eingabe gibt es für vertikale Bewegung aber nichts Vernünftliches: `up`/`down` sind dort entweder Historie oder gar nichts. **Also gilt jetzt dieselbe Aussage wie `input_move_up: "none"` — Pfeiltasten gehören dem Scrollen, der Input sieht sie nicht** — und der relevante Zustand ist der **Inhalt** der Eingabe, nicht ihre Länge, weil das Slash-Menü genau dann offen ist, wenn die Eingabe mit `/` beginnt. `track_input` führt deshalb jetzt den Inhalt (gekappt auf 512 Zeichen) statt einer Zeichenanzahl.
+  **Regel:** Eingabe beginnt mit `/` → Pfeil nativ (Menü bedienbar). **Alles andere** → sofort `PageUp`/`PageDown`, ohne Burst-Fenster: das Rad scrollt die Unterhaltung und **nie** die Prompt-Historie. End-to-end am pty belegt mit dem Nutzerfall (`Hey ␍ ␍ Bye ␍` + zwei Radklicks → `ESC[5~ ESC[5~`).
+  **Die Lektion aus fünf Runden:** Ich hatte „Eingabe leer" als Proxy für „der Input ist unzuständig" gewählt, statt die *ursprüngliche* Regel aus der Repo-Doku zu nehmen. `Revision.md` 4.16 nennt sie wörtlich — Halbseiten-Navigation über Auf-/Ab-Tasten, `input_move_up/down` bewusst auf `none`. Ein Proxy, den ich selbst erfunden habe, ist schwächer als die Regel, die schon dokumentiert war.
 ## Changelog
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.
