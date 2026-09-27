@@ -603,7 +603,16 @@ Freebuff besitzt keine Keybinding-Konfigurationsdatei. Deshalb wird die Trennung
    *Sicherheitsnetz:* Falls ein nativer Pfeil bei leerem Prompt durchrutscht, scrollt er
    die Unterhaltung statt die Prompt-Historie zu verändern.
 
-2. **PTY-Filter (`infra/scripts/freebuff-pty.py`):**
+2. **Vendor-Binary-Patch für saubere Wort-/Zeilengrenzen (`patch_word_boundary` in `infra/scripts/freebuff-install.sh`):**
+   In Freebuffs Wortbewegungsfunktionen `LGA` (Word Backward) und `_GA` (Word Forward) fraß
+   die originale Schleife (`while($>0&&/\s/.test(H[$-1]))$--;while($>0&&!/\s/.test(H[$-1]))$--;`)
+   Leerzeilen und das vorherige Wort in einem einzigen Schritt mit, sodass der Cursor über Zeilen hinweg
+   immer sofort am Zeilenanfang landete und `Strg+Backspace` die Zeile darüber mitlöschte.
+   Der atomare 276-Byte-Patch trennt Whitespace- und Wortschritte sauber (`s = $>0 && /\s/.test(...)`):
+   Steht der Cursor nach Zeilenumbrüchen am Zeilenanfang (`|Hey`), springt `Strg+Links` bzw. löscht
+   `Strg+Backspace` präzise bis zum Zeilenende der vorigen Zeile (`Hey|`), statt das Wort mitzureißen.
+
+3. **PTY-Filter (`infra/scripts/freebuff-pty.py`):**
    * **Im Chat-Fenster (1:1 Replikation von PageUp/PageDown):**
      Egal ob der Prompt leer ist oder Text darin getippt wird: Auf-/Ab-Pfeile werden
      **immer und sofort zu `PageUp` (`\x1b[5~`) und `PageDown` (`\x1b[6~`)**.
@@ -801,10 +810,9 @@ glm2api selbst kommt komplett mit (Code im Repo).
 Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
 
-- 2026-09-27: **Freebuff Wort-Navigation (`Strg+Links`/`Strg+Rechts`) und Wort-Löschen (`Strg+Backspace`):** Auslöser war Nutzerbefund „ich kann bei freebuff mit strg+ pfeiltaste links und rechts nicht über wörter springen und strg + backspace löscht auch keine ganze wörter“. Analyse des Bundles (`RJ`, `pP`) belegt die Ursache:
-  - Freebuff implementiert Wort-Sprünge (`moveWordForward`/`moveWordBackward`, `cqA`/`lqA`) intern ausschließlich für `Alt`/`Option` (`\x1b[1;3D`, `\x1b[1;3C`, `\x1bb`, `\x1bf`). Die Standard-Terminal-Sequenzen für `Strg+Links`/`Strg+Rechts` (`\x1b[1;5D`, `\x1b[1;5C`) liefen ins Leere.
-  - Wort-Löschen (`deleteWordBackward`) war an `Alt+Backspace` und `Ctrl+W` (`\x17`) gebunden. Standard-Terminals (xterm.js / VS Code) senden bei `Strg+Backspace` jedoch `\x08` (ASCII BS), was Freebuffs Parser als einzelnes Zeichen (`backspace`) ohne `ctrl` behandelte.
-  - **Lösung ohne Struktur-Änderung:** `infra/scripts/freebuff-pty.py` übersetzt die Sequenzen im PTY-Eingangsstrom transparent: `\x1b[1;5D` (Strg+Links) → `\x1b[1;3D` (Alt+Links), `\x1b[1;5C` (Strg+Rechts) → `\x1b[1;3C` (Alt+Rechts), `\x08` / CSI u (Strg+Backspace) → `\x17` (Ctrl+W) und `\x1b[3;5~` (Strg+Delete) → `\x1b[3;3~`. `track_input` berücksichtigt `\x17` für die Slash-Menü-Erkennung, `PARTIAL_PREFIXES` sichert fragmentierte Terminal-Reads ab.
+- 2026-09-27: **Freebuff Wort-Navigation (`Strg+Links`/`Strg+Rechts`) und Wort-Löschen (`Strg+Backspace`) inklusive sauberer Zeilengrenzen:**
+  - **Auslöser 1:** Nutzerbefund „ich kann bei freebuff mit strg+ pfeiltaste links und rechts nicht über wörter springen und strg + backspace löscht auch keine ganze wörter“. Analyse des Bundles (`RJ`, `pP`) belegte: Wort-Sprünge (`moveWordForward`/`moveWordBackward`, `cqA`/`lqA`) waren intern ausschließlich für `Alt`/`Option` (`\x1b[1;3D`, `\x1b[1;3C`, `\x1bb`, `\x1bf`) registriert, `Strg+Links`/`Rechts` (`\x1b[1;5D`, `\x1b[1;5C`) liefen ins Leere; `Strg+Backspace` sendet `\x08` (ASCII BS), was Freebuff als Einzelzeichen-Backspace behandelte. Gelöst in `freebuff-pty.py` via transparenter Sequenz-Übersetzung auf `Alt+Links`/`Rechts` und `Ctrl+W` (`\x17`).
+  - **Auslöser 2:** Nutzerbefund „es springt immer zum Zeilenanfang — bei `Hey\n\nHey\n\nHey|` soll 2x Strg+Links zu `Hey\n\nHey|\n\nHey` springen, derzeit landet es bei `Hey\n\n|Hey\n\nHey`, genau wie beim Löschen“. Analyse von `LGA` (`word-backward`) und `_GA` (`word-forward`): Die interne Schleife fraß Leerzeilen/Umbruch (`/\s/`) und das davorstehende Wort in *einem* Aufruf zusammen. Gelöst über atomaren Vendor-Patch `patch_word_boundary` in `freebuff-install.sh`: Whitespace- und Wortschritte werden sauber getrennt (`s = $>0 && /\s/.test(...)`). Steht der Cursor am Zeilenanfang (`|Hey`), stoppt `Strg+Links` bzw. `Strg+Backspace` exakt am Zeilenende der vorigen Zeile (`Hey|`). `track_input` im PTY-Relay spiegelt dieselbe Wort-/Leerzeilen-Logik wider.
 - 2026-09-27: **Autosave-Daemon abgeschaltet — er kam beiden schaden, und es war messbar.** Der Nutzer nutzt `save.sh` selbst am Ende jedes Arbeitsgangs; der Daemon lief zusätzlich alle 30 Min und tat drei Dinge, von denen zwei schadeten:
   - **`git add -A` mutierte den Index, den der auslösende Agent danach committet.** In der Freebuff-Sitzung hat das konkret schiefgegangen: Der Daemon hatte `infra/scripts/free-models.py` (905 Zeilen, Löschung aus einer parallel laufenden Refactor-Arbeit) **gestaged**, und mein pfadbegrenztes `git commit -- infrastructure.md` war eigentlich gedacht, genau solche Fremdänderungen nicht mitzunehmen — der Commit nimmt aber den **Index**, nicht die genannten Pfade, also flog die Löschung mit in `afed24f`. **Die Lehre war danach „pfadbegrenzt committen“, die eigentliche Ursache ist das `add -A` eines Dritten.**
   - **Halb-Zustände wurden als eigener Arbeitsgang verbucht:** 42 Commits mit Namen `autosave <Zeitstempel>` im Log, darunter `2eec781 autosave 2026-09-26T21:29Z`, das den glm2api-Refactor mitten im Arbeiten eingefroren hat. Die Commit-Nachricht transportiert keine Information, und der Zwischenstand ist im Verlauf schwer wiederzufinden.

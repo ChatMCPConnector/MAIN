@@ -251,9 +251,8 @@ def track_input(data, text="", history_modal=False, question_modal=False):
             if buf:
                 del buf[-1]
         elif byte == 0x17:  # Ctrl+W / Ctrl+Backspace (Wort loeschen)
-            while buf and buf[-1:] in b" \t":
-                del buf[-1]
-            while buf and buf[-1:] not in b" \t":
+            s = bool(buf and buf[-1:] in b" \t\r\n")
+            while buf and (buf[-1:] in b" \t\r\n") == s:
                 del buf[-1]
         elif byte >= 0x20:
             buf.append(byte)

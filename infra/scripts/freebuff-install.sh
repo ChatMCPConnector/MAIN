@@ -234,6 +234,45 @@ print("  Pfeil-Scroll-Patch: erfolgreich (history-up/down -> onScrollUp/Down)")
 PYEOF
 }
 
+# Wortgrenzen-Patch: LGA und _GA so anpassen, dass Wortsprünge und Wortlöschen
+# an Zeilenumbrüchen (und Leerzeilen) sauber anhalten, statt über Zeilengrenzen
+# hinweg das vorherige Wort mitzufressen.
+patch_word_boundary() {
+  local bin="${NATIVE_DIR}/freebuff"
+  [ -f "$bin" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[freebuff] WARN: kein python3 -> Wortgrenzen-Patch uebersprungen"
+    return 0
+  fi
+  python3 - "$bin" <<'PYEOF'
+import os, sys
+
+path = sys.argv[1]
+data = open(path, "rb").read()
+orig = b'function LGA(H,A){let $=Math.max(0,Math.min(A,H.length));while($>0&&/\\s/.test(H[$-1]))$--;while($>0&&!/\\s/.test(H[$-1]))$--;return $}function _GA(H,A){let $=Math.max(0,Math.min(A,H.length));while($<H.length&&!/\\s/.test(H[$]))$++;while($<H.length&&/\\s/.test(H[$]))$++;return $}'
+repl = b'function LGA(H,A){let $=Math.max(0,Math.min(A,H.length)),s=$>0&&/\\s/.test(H[$-1]);while($>0&&s===/\\s/.test(H[$-1]))$--;return $;    }function _GA(H,A){let $=Math.max(0,Math.min(A,H.length)),s=$<H.length&&/\\s/.test(H[$]);while($<H.length&&s===/\\s/.test(H[$]))$++;return $;    }'
+
+if repl in data:
+    print("  Wortgrenzen-Patch: bereits gepatcht")
+    sys.exit(0)
+
+if data.count(orig) != 1:
+    print(f"  Wortgrenzen-Patch: {data.count(orig)} Treffer fuer Muster -> unangetastet")
+    sys.exit(0)
+
+assert len(orig) == len(repl), "Laengendifferenz"
+out = data.replace(orig, repl, 1)
+assert len(out) == len(data), "Dateigroesse darf sich nicht aendern"
+
+tmp = path + ".patched"
+with open(tmp, "wb") as f:
+    f.write(out)
+os.chmod(tmp, 0o755)
+os.replace(tmp, path)
+print("  Wortgrenzen-Patch: erfolgreich (saubere Zeilen-/Wortgrenzen bei Strg+Links/Rechts und Backspace)")
+PYEOF
+}
+
 # Nach dem Patch pruefen, ob das Binary noch startet; sonst Backup zurueck.
 verify_after_patch() {
   local bin="${NATIVE_DIR}/freebuff"
@@ -262,6 +301,7 @@ if [ -x "$WRAPPER" ] && is_latest_installed && [ -s "${NATIVE_DIR}/freebuff" ]; 
   # Patch weg und muss neu drauf.
   patch_scroll_step
   patch_arrow_scroll
+  patch_word_boundary
   verify_after_patch
   echo "[freebuff] v$(installed_version) (aktuellste) bereits installiert (${APP_DIR}); Wrapper: ${WRAPPER}"
   exit 0
@@ -287,6 +327,7 @@ fi
 cleanup_partial_downloads
 patch_scroll_step
 patch_arrow_scroll
+patch_word_boundary
 verify_after_patch
 
 if [ -s "${NATIVE_DIR}/credentials.json" ]; then
