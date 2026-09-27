@@ -2629,6 +2629,9 @@ class GLMEventAccumulator:
     # aufgibt und verlangt einen neustart. Zaehler fuer die notice.
     loop_guard_dropped_count: int = 0
     loop_guard_dropped_tools: list[str] = field(default_factory=list)
+    # Text-/reasoning-protokolle werden erst beim Abschluss geparst. Ihr
+    # Guard-Entscheid muss bei wiederholtem build_response() stabil bleiben.
+    _loop_guard_text_call_decisions: dict[str, list[bool]] = field(default_factory=dict)
     # T-20: laufender zustand des bereits gesendeten texts. Aus einem
     # wachsenden praefix-STRING wurde das: der originalansatz pruefte und
     # kopierte den GESAMTEN text bei jedem part (O(n) je part, also
@@ -2797,6 +2800,63 @@ class GLMEventAccumulator:
     def render_full_output(self) -> tuple[str, str]:
         """Public: (volltext, reasoning) — u.a. fuer follow-up-renders."""
         return self._render_full_output()
+
+    def _apply_text_tool_call_loop_guard(
+        self, tool_calls: list[dict[str, object]]
+    ) -> list[dict[str, object]]:
+        """Begrenzt Text-/Reasoning-Calls mit demselben Budget wie native Calls.
+
+        Native Calls werden schon beim Event-Einlesen begrenzt. JSON/DSML im
+        Textkanal wird dagegen erst in finalize()/build_response() geparst und
+        muss dort gegen dieselben Signaturzaehler laufen, bevor Calls an den
+        Client gehen.
+        """
+        guarded: list[dict[str, object]] = []
+        occurrence_by_signature: dict[str, int] = {}
+        for tool_call in tool_calls:
+            call_id = _coerce_call_id(tool_call.get("id"))
+            if not call_id:
+                guarded.append(tool_call)
+                continue
+            if call_id in self._server_side_tool_call_ids:
+                if call_id in self._loop_guard_text_call_decisions:
+                    continue
+                guarded.append(tool_call)
+                continue
+
+            signature = _tool_call_signature(tool_call)
+            occurrence = occurrence_by_signature.get(signature, 0)
+            occurrence_by_signature[signature] = occurrence + 1
+            decisions = self._loop_guard_text_call_decisions.setdefault(signature, [])
+            if occurrence < len(decisions):
+                if decisions[occurrence]:
+                    guarded.append(tool_call)
+                continue
+
+            repeat = self._server_side_signature_counts.get(signature, 0)
+            allowed = repeat < _MAX_IDENTICAL_NATIVE_CALLS
+            decisions.append(allowed)
+            if not allowed:
+                self.loop_guard_dropped_count += 1
+                function = tool_call.get("function")
+                name = (
+                    str(function.get("name", "")).strip()
+                    if isinstance(function, dict)
+                    else ""
+                )
+                if name and name not in self.loop_guard_dropped_tools:
+                    self.loop_guard_dropped_tools.append(name)
+                if self.logger:
+                    self.logger.info(
+                        "Dropped identical text tool_call (loop guard) tool=%s repeats=%s",
+                        name or "tool",
+                        repeat,
+                    )
+                continue
+
+            self._server_side_signature_counts[signature] = repeat + 1
+            guarded.append(tool_call)
+        return guarded
 
     def _estimated_usage(self, completion_chars: int) -> dict[str, int]:
         """Grobe Token-Schaetzung (~4 Zeichen/Token): der Upstream liefert
@@ -4136,6 +4196,7 @@ class GLMEventAccumulator:
         xml_tool_calls = _dedupe_tool_call_list(xml_tool_calls)
         merged_raw_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
         all_tool_calls = sanitize_tool_calls(merged_raw_calls, fallback_url=self.fallback_tool_url)
+        all_tool_calls = self._apply_text_tool_call_loop_guard(all_tool_calls)
         # S-07: die praeambel-verwurf-logik in `consume_event` laeuft nur,
         # wenn in DEMSELBEN event ein sichtbarer delta ankommt. Traegt der
         # aufruf in einem eigenen event (der haeufige fall: die
@@ -4848,6 +4909,7 @@ class GLMEventAccumulator:
         xml_tool_calls = _dedupe_tool_call_list(xml_tool_calls)
         merged_raw_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
         all_tool_calls = sanitize_tool_calls(merged_raw_calls, fallback_url=self.fallback_tool_url)
+        all_tool_calls = self._apply_text_tool_call_loop_guard(all_tool_calls)
         # T-06: siehe finalize() — ein turn, dessen einziger call
         # unbrauchbar war (fehlendes pflichtargument), ist kein leerer
         # erfolg, sondern ein fehlerhafter turn.

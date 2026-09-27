@@ -56,6 +56,24 @@ def _native_open_list_event(call_id: str, target: str = TARGET):
     return event
 
 
+def _text_read_event(count: int, target: str = TARGET):
+    protocol = {
+        "tool_calls": [
+            {"name": "read", "arguments": {"filePath": target}}
+            for _ in range(count)
+        ]
+    }
+    return {
+        "status": "finish",
+        "parts": [
+            {
+                "logic_id": "text_calls",
+                "content": [{"type": "text", "text": json.dumps(protocol) + "[]"}],
+            }
+        ],
+    }
+
+
 def _feed(acc, count: int, target: str = TARGET, tag: str = "c"):
     for index in range(count):
         acc.consume_event(_native_open_event(f"call_{tag}{index}", target))
@@ -95,6 +113,27 @@ def test_loop_guard_gilt_ueber_dict_und_listenform_gemeinsam():
 
     assert len(acc._server_side_tool_calls) == 2
     assert acc.loop_guard_dropped_count == 8
+
+
+def test_loop_guard_begrenzt_identische_textprotokoll_calls():
+    acc = _acc()
+    acc.consume_event(_text_read_event(10))
+    acc.finalize("finish")
+    message = acc.build_response()["choices"][0]["message"]
+
+    assert len(message.get("tool_calls") or []) == 2
+    assert acc.loop_guard_dropped_count == 8
+    assert acc.loop_guard_dropped_tools == ["read"]
+
+
+def test_zwei_absichtlich_gleiche_text_calls_bleiben_erlaubt():
+    acc = _acc()
+    acc.consume_event(_text_read_event(2))
+    acc.finalize("finish")
+    message = acc.build_response()["choices"][0]["message"]
+
+    assert len(message.get("tool_calls") or []) == 2
+    assert acc.loop_guard_dropped_count == 0
 
 
 def test_unterschiedliche_ziele_werfen_den_guard_nicht_aus():
@@ -244,6 +283,35 @@ def test_non_stream_antwort_enthaelt_die_loop_guard_notice():
     assert "[loop_guard_notice]" in content
     assert "NO tool limit" in content
     assert len(message.get("tool_calls") or []) == 2
+
+
+def test_stream_guard_notice_gilt_auch_fuer_textprotokoll_calls():
+    client = _make_client()
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
+        _FakeResponse([_text_read_event(10)]),
+        "assistant-1",
+    )
+
+    text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
+
+    assert text.count("filePath") == 2
+    assert "[loop_guard_notice]" in text
+    assert "8 identical read call" in text
+
+
+def test_non_stream_guard_notice_gilt_auch_fuer_textprotokoll_calls():
+    client = _make_client()
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
+        _FakeResponse([_text_read_event(10)]),
+        "assistant-1",
+    )
+
+    result, _ = client.chat_completion(_payload())
+    message = result["choices"][0]["message"]
+
+    assert len(message.get("tool_calls") or []) == 2
+    assert "[loop_guard_notice]" in (message.get("content") or "")
+    assert "8 identical read call" in message["content"]
 
 
 def test_ohne_drops_keine_notice_im_strom():
