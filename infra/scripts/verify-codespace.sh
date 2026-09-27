@@ -93,7 +93,7 @@ check "antigravity antwortet"    bash -c '
 info "Quoten" "$(bash "$REPO_ROOT/infra/scripts/quota.sh" 2>/dev/null | grep -E 'Gemini|Claude' | tr -s ' ' | tr '\n' '|' | cut -c1-90)"
 
 echo "== 5. Daemons =="
-check "autosave-daemon"          bash -c 'pgrep -f "autosave-daemon.sh" >/dev/null && echo "laeuft"'
+# Kein autosave-daemon-Check mehr (Nutzerentscheidung 2026-09-27)
 check "config-watchdog"          bash -c 'pgrep -f "config-watchdog.sh" >/dev/null && echo "laeuft"'
 check "proxy-watchdog"           bash -c 'pgrep -f "proxy-watchdog.sh" >/dev/null && echo "laeuft"'
 

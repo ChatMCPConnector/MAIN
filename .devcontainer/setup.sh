@@ -267,13 +267,13 @@ else
   echo "    Config-Watchdog läuft bereits."
 fi
 
-echo "==> [landscape] Autosave-Daemon starten (committet+pusht alle 30 Min)..."
-if ! { [ -f /tmp/opencode/autosave-daemon.lock ] && kill -0 "$(cat /tmp/opencode/autosave-daemon.lock 2>/dev/null)" 2>/dev/null; }; then
-  setsid nohup bash "$REPO_ROOT/.devcontainer/autosave-daemon.sh" </dev/null >> /tmp/opencode/autosave.log 2>&1 &
-  disown $! 2>/dev/null || true
-  echo "    Autosave-Daemon gestartet (30-Min-Intervall)."
-else
-  echo "    Autosave-Daemon läuft bereits."
-fi
+# KEIN autosave-daemon (Nutzerentscheidung 2026-09-27). Grund: er committete
+# Halb-Zustaende laufender Agent-Arbeit und mutierte per `git add -A` den Index,
+# den der ausloesende Agent danach committet — in dieser Session hat das
+# ungefragt eine fremde, bereits gestagte Loeschung mitgenommen. Gesichert wird
+# jetzt ausschliesslich ueber ./infra/scripts/save.sh am Ende eines Arbeitsgangs
+# (Commit + Push + Drive-Backup). Konsequenz, bewusst gewaehlt: was zwischen
+# zwei save.sh-Aufrufen entsteht, ist nur ueber den Arbeitsbaum gesichert.
+echo "    Kein autosave-daemon (Nutzerentscheidung) — Sicherung laeuft ueber save.sh"
 
 echo "==> [landscape] Fertig. Weiter mit: ./infra/scripts/save.sh status"

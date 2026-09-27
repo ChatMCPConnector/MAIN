@@ -34,14 +34,7 @@ while true; do
     bash "$REPO_ROOT/infra/scripts/opencode-server.sh" start >> /tmp/opencode/watchdog.log 2>&1 || true
   fi
 
-  # 5. autosave-daemon
-  if ! { [ -f /tmp/opencode/autosave-daemon.lock ] && kill -0 "$(cat /tmp/opencode/autosave-daemon.lock 2>/dev/null)" 2>/dev/null; }; then
-    echo "$(date '+%H:%M:%S') [watchdog] autosave-daemon weg — starte neu..." >> /tmp/opencode/watchdog.log
-    setsid nohup bash "$REPO_ROOT/.devcontainer/autosave-daemon.sh" </dev/null >> /tmp/opencode/autosave.log 2>&1 &
-    disown $! 2>/dev/null || true
-  fi
-
-  # 6. config-watchdog (inotify auf opencode.json → opencode-server restart)
+  # 5. config-watchdog (inotify auf opencode.json → opencode-server restart)
   if ! { [ -f /tmp/opencode/config-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/config-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
     echo "$(date '+%H:%M:%S') [watchdog] config-watchdog weg — starte neu..." >> /tmp/opencode/watchdog.log
     setsid nohup bash "$REPO_ROOT/infra/scripts/config-watchdog.sh" </dev/null >> /tmp/opencode/config-watchdog.log 2>&1 &
