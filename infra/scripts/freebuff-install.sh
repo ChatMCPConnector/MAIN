@@ -32,6 +32,9 @@
 # geladen, patcht das naechste setup.sh erneut.
 FREEBUFF_SCROLL_STEP="${FREEBUFF_SCROLL_STEP:-0.5}"   # 0.5 = wie opencode
 #
+# Maus: Default ist AUS (freebuff laeuft direkt, der pty-Filter nur per
+# FREEBUFF_PTY_FILTER=1). Begruendung und Beleg im Wrapper-Kommentar.
+#
 # Login: kommt NICHT von hier. ~/.config/manicode/credentials.json wird ueber
 # infra/scripts/secrets.sh aus config/secrets.enc wiederhergestellt — deshalb
 # steht der Aufruf in setup.sh bewusst NACH dem Secrets-Schritt.
@@ -70,18 +73,29 @@ if [ ! -f "\$launcher" ]; then
   echo "  Reparieren: bash ./infra/scripts/freebuff-install.sh   (im MAIN-Repo)" >&2
   exit 127
 fi
-# Freebuff (opentui) schaltet Mouse-Reporting ein und killt damit die native
-# Textauswahl des Terminals. Einen Config-Kniff gibt es nicht (weder
-# settings.json noch Flag noch Env), also laeuft das TUI durch
-# freebuff-pty.py, das nur die Maus-Sequenzen aus dem Output entfernt —
-# derselbe Effekt wie opencodes 'mouse: false'. Bypass zum Debuggen:
-# FREEBUFF_NO_PTY_FILTER=1 freebuff
-if [ -t 0 ] && [ -t 1 ] && [ "\${FREEBUFF_NO_PTY_FILTER:-0}" != "1" ] \\
+# Default: KEIN Filter, freebuff laeuft direkt. freebuff 0.1.0 ist
+# maus-first, und das ist belegt, nicht vermutet:
+#   * Output-Bloecke (wAH, maxVisibleLines 5/10) klappen nur per Klick auf
+#     (onClick togglet expanded) — es gibt keine Tasten-Action dafuer.
+#   * opentui vergibt Fokus per Klick ("while(L){if(L.focusable){L.focus();
+#     break}L=L.parent}"), und nur ein FOKUSSIERTER ScrollBox uebersetzt
+#     pageup/up ueberhaupt in scrollBy (0,5 bzw. 0,2 Viewport). freebuff setzt
+#     nirgends focusable und fokussiert nur die Eingabe — Fokus im Block
+#     entsteht also ausschliesslich per Klick.
+# Der pty-Filter entfernt genau diese Klicks und macht Output-Bloecke damit
+# unbenutzbar (5/10 Zeilen, kein Aufklappen, kein Scrollen). Deshalb ist er
+# nicht mehr Default.
+# Kopieren kostet dabei nichts: freebuff kopiert beim Ziehen selbst, und
+# /copy legt den GESAMTEN Chat inkl. vollstaendigem Output in die
+# Zwischenablage. Was entfaellt, ist nur die native Terminal-Auswahl waehrend
+# freebuff laeuft — in anderen Tabs und Sheets bleibt sie erhalten.
+# Wer sie im TUI braucht: FREEBUFF_PTY_FILTER=1
+if [ -t 0 ] && [ -t 1 ] && [ "\${FREEBUFF_PTY_FILTER:-0}" = "1" ] \
+   && [ "\${FREEBUFF_NO_PTY_FILTER:-0}" != "1" ] \
    && command -v python3 >/dev/null 2>&1 && [ -f "\$pty_filter" ]; then
-  # Standardmaessig protokolliert der Filter, welche Esc-Sequenzen das Kind
-  # liest. Das beantwortet die Frage "kommt die Keybinding-Taste ueberhaupt an"
-  # ohne weiteres Raten. Getippter Text wird NICHT protokolliert (nur Laenge).
-  # Abschalten: FREEBUFF_PTY_DEBUG=off
+  # Der Filter protokolliert dann, welche Esc-Sequenzen das Kind liest, damit
+  # sich Tastatur-Fragen in Sekunden beantworten lassen. Getippter Text wird
+  # NICHT protokolliert (nur Byte-Laenge). Abschalten: FREEBUFF_PTY_DEBUG=off
   export FREEBUFF_PTY_DEBUG="\${FREEBUFF_PTY_DEBUG:-/tmp/opencode/freebuff-keys.log}"
   exec python3 "\$pty_filter" -- node "\$launcher" "\$@"
 fi
