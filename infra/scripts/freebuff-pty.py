@@ -123,15 +123,45 @@ ARROW_PAGE = {
 # zusammengesetzt. Sonst wuerde ein geteilter Pfeil durchrutschen.
 PARTIAL_PREFIXES = (b"\x1b", b"\x1b[", b"\x1bO")
 
-# Default 25 ms: ueber dem Abstand zweier Rad-Ereignisse (sub-ms), unter dem
-# Tastenwiederholungs-Takt (Browser ~33 ms ab 500 ms Haltezeit). Wird nur fuer
-# burst_until-Berechnung genutzt (gap*4 = 100 ms, min 120 ms).
+# Default 25 ms: Reserve-Konstante fuer timing-basierte Steuerung.
 DEFAULT_WHEEL_GAP_MS = 25.0
+
+ESC_SEQ_RE = re.compile(
+    rb"\x1b\[[0-9;?]*[ -/]*[@-~]"
+    rb"|\x1bO[@-~]"
+    rb"|\x1b[\]P][^\x07\x1b]*[\x07\x1b\\]"
+    rb"|\x1b[ -/]*[@-~]"
+)
+
+
+def track_input(data, text=""):
+    """Verfolgt den Inhalt der aktuellen freebuff-Eingabezeile.
+
+    Wichtig fuer die Slash-Menue-Erkennung: freebuff oeffnet das Slash-Menue
+    NUR wenn die Eingabe mit '/' beginnt. Enter schickt ab (leert), Backspace
+    zieht ab, Ctrl+U/Ctrl+C leeren, Escape bei '/' bricht ab.
+    """
+    buf = bytearray(text.encode("utf-8", "replace") if text else b"")
+    clean = ESC_SEQ_RE.sub(b"", data)
+    for byte in clean:
+        if byte in (0x0D, 0x0A, 0x03, 0x15):
+            buf = bytearray()
+        elif byte in (0x7F, 0x08):
+            if buf:
+                del buf[-1]
+        elif byte == 0x1B:
+            if buf and buf[0:1] == b"/":
+                buf = bytearray()
+        elif byte >= 0x20:
+            buf.append(byte)
+        if len(buf) > 512:
+            del buf[:-512]
+    return buf.decode("utf-8", "replace")
 
 
 def new_arrow_state():
-    """Je Eingangssequenz: letzter Zeitpunkt + Ende der Burst-Phase."""
-    return {seq: {"last_seen": 0.0, "burst_until": 0.0} for seq in ARROW_PAGE}
+    """Dummy-State fuer Rueckwaertskompatibilitaet."""
+    return {seq: {"burst_until": 0.0} for seq in ARROW_PAGE}
 
 
 def _page(seq, now, last_page, debounce):
@@ -143,29 +173,21 @@ def _page(seq, now, last_page, debounce):
 
 
 def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0,
-                   last_page=None, always=False):
-    """Pfeiltasten sofort nativ, Rad-Gesten werden PageUp/PageDown.
+                   last_page=None, always=False, text=""):
+    """Pfeiltasten ausserhalb des Slash-Menues -> IMMER PageUp/PageDown.
 
-    **Hybrid-Erkennung** — kein Delay, kein Pending:
+    Im Slash-Menue ('/...') -> NATIV (0 ms Latenz).
 
-      1. **Im selben Read >=2 gleiche Pfeile:** Mausrad liefert viele Events in
-         einem read(). Alle werden sofort zu PageUp/PageDown.
-      2. **Ueber Reads hinweg:** Erster Pfeil geht sofort nativ durch, aber
-         wir merken den Zeitpunkt (`last_seen`). Kommt der naechste gleiche
-         Pfeil innerhalb `gap` Sekunden, wechseln wir in den Geste-Modus
-         (`burst_until`) und senden PageUp/PageDown.
-      3. **Einzelner Pfeil (keine Wiederholung in gap):** Nativ, sofort, null
-         Verzoegerung. Genau das braucht das Slash-Menue.
-      4. `links`/`rechts` werden nie angefasst (nicht in `ARROW_PAGE`).
+    Grund: Mausrad und Pfeiltasten senden dieselben Bytes (ESC[A / ESC[B).
+    In freebuff loesen native Pfeile bei normalem Chatverlauf 'history-up' aus
+    (rollt alte Eingaben in die Prompt-Zeile).
+    PageUp/PageDown (ESC[5~ / ESC[6~) dagegen scrollt IMMER und
+    AUSSCHLIESSLICH das Unterhaltungsfenster — genau wie gewuenscht.
 
-    **Preis:** Das allererste Rad-Event pro Schwung geht als nativer Pfeil
-    durch (history-up). Ab dem zweiten Event (< gap spaeter) kommen alle als
-    PageUp/PageDown. Bei einem typischen Schwung mit 10-30 Events ist das
-    unmerklich.
-
-    `always=True` schickt jeden Pfeil als Seite (FREEBUFF_ARROW_PAGE=1).
-
-    Gibt (neue_daten, rest, state, last_page) zurueck.
+    Die einzige Ausnahme ist das Slash-Menue: wenn der Nutzer '/' tippt,
+    muessen die Pfeiltasten das Menue bedienen. Deshalb:
+      * Eingabe beginnt mit '/': Pfeile bleiben nativ (Slash-Menue bedienbar).
+      * Sonst: Pfeile werden IMMER PageUp/PageDown (Mausrad scrollt 1:1 wie PageUp/Down).
     """
     data = carry + data
     carry = b""
@@ -181,7 +203,6 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
 
     out = bytearray()
     if always:
-        # Alte Pauschal-Umleitung: jedes up/down wird Seite, ohne Fenster.
         pos = 0
         for match in sorted(
             (m for seq in ARROW_PAGE for m in re.finditer(re.escape(seq), data)),
@@ -194,49 +215,34 @@ def rewrite_arrows(data, carry=b"", now=0.0, state=None, gap=0.025, debounce=0.0
             pos = match.end()
             out += _page(seq, now, last_page, debounce)
         out += data[pos:]
-        return bytes(out), carry, state, last_page
+        return bytes(out), carry, state, last_page, track_input(data, text)
 
-    # --- Zaehlen, welche Pfeile wie oft in diesem Read vorkommen ---
     matches = sorted(
         (m for seq in ARROW_PAGE for m in re.finditer(re.escape(seq), data)),
         key=lambda m: m.start(),
     )
-    # Zaehler je Sequenz (nur in DIESEM Read).
-    count = {}
-    for m in matches:
-        seq = m.group()
-        count[seq] = count.get(seq, 0) + 1
 
     pos = 0
     for match in matches:
         if match.start() < pos:
             continue
         seq = match.group()
-        out += data[pos:match.start()]
+        before = data[pos:match.start()]
+        text = track_input(before, text)
+        out += before
         pos = match.end()
 
-        st = state[seq]
-
-        # Geste? Drei Wege:
-        # (a) burst_until noch aktiv (mitten im Rad-Schwung)
-        # (b) >=2 gleiche im selben Read (Rad liefert viele auf einmal)
-        # (c) letzter gleicher Pfeil < gap Sekunden her (Rad ueber Reads)
-        in_burst = st["burst_until"] > now
-        multi_in_read = count.get(seq, 0) >= 2
-        rapid_repeat = (now - st["last_seen"]) < gap and st["last_seen"] > 0
-
-        if in_burst or multi_in_read or rapid_repeat:
-            # Geste: PageUp/PageDown, burst verlaengern
-            st["burst_until"] = now + max(gap * 4, 0.12)
-            out += _page(seq, now, last_page, debounce)
-        else:
-            # Einzelner Tastendruck: sofort nativ
+        if text.startswith("/"):
+            # Slash-Menue: Pfeile nativ an freebuff
             out += seq
+        else:
+            # Unterhaltung scrollen: IMMER PageUp/PageDown (0 ms Delay, 100% verlaesslich)
+            out += _page(seq, now, last_page, debounce)
 
-        st["last_seen"] = now
-
-    out += data[pos:]
-    return bytes(out), carry, state, last_page
+    remaining = data[pos:]
+    text = track_input(remaining, text)
+    out += remaining
+    return bytes(out), carry, state, last_page, text
 
 
 def window_size(fd):
@@ -329,6 +335,7 @@ def main(argv):
     except ValueError:
         debounce = 0.0
     carry = b""
+    text = ""
     arrow_state = new_arrow_state()
     last_page = dict.fromkeys(ARROW_PAGE, -1e9)
     debug(f"arrow_page={arrow_page} always_page={always_page} gap={gap}s debounce={debounce}s")
@@ -376,9 +383,11 @@ def main(argv):
                     # Das ist die Sicht auf die Tastatur-Kette: was hier landet,
                     # hat das Kind als Tastendruck gelesen.
                     if arrow_page:
-                        data, carry, arrow_state, last_page = rewrite_arrows(
+                        data, carry, arrow_state, last_page, text = rewrite_arrows(
                             data, carry, time.monotonic(), arrow_state, gap,
-                            debounce, last_page, always=always_page)
+                            debounce, last_page, always=always_page, text=text)
+                    else:
+                        text = track_input(data, text)
                     if not data:
                         continue
                     debug(f" -> {summarize(data)}")
