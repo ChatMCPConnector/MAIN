@@ -46,8 +46,8 @@ Messung auch dort grün, ist entweder die Messung blind oder der Fix wirkungslos
 | Skript | Misst | Stand |
 |---|---|---|
 | `leak_probe.py` | Narration-Rest, der den Client erreicht, je Chunkgröße 1…215; dazu die Gegenprobe „echter Antworttext mit `` `read` ``/`` `bash` ``/Fence" | 4/215 (nur Wortrest vor der ersten Marke, bewusst so), Antworttext 0/104 verändert |
-| `order_matrix.py` | Reihenfolge-Invariante über 12 Text/Call-Layouts × 10 Chunkgrößen: Soll-Vergleich **und** Chunk-Invariante | 120 Messungen, **0** unbekannte Verstöße (vor dem S-15-Fix 4, alle im Layout `rand-links-im-carry`) |
-| `sweep2.py` | Vertrags-Sweep: 22 Szenarien × 6 Chunkgrößen, Stream- **und** Non-Stream-Pfad (Text, Aufrufe, `finish_reason`, Body) | 132 Messungen, **0** unbekannte Verstöße, 1 bekannter Befund (S-14-Rest, 2/6) |
+| `order_matrix.py` | Reihenfolge-Invariante über 13 Text/Call-Layouts × 10 Chunkgrößen: Soll-Vergleich, Chunk-Invariante; `absatz-vor-call` vergleicht Whitespace exakt | 130 Messungen, **0** unbekannte Verstöße (vor dem S-15-Fix waren 4/120 falsch) |
+| `sweep2.py` | Vertrags-Sweep: 23 Szenarien × 6 Chunkgrößen, Stream- **und** Non-Stream-Pfad (Text, Aufrufe, `finish_reason`, Body) | 138 Messungen, **0** unbekannte Verstöße, 1 bekannter Befund (S-14-Rest, 2/6) |
 | `trace_stream.py` | Delta-für-Delta-Trace, wenn ein Fall unklar ist | Werkzeug, kein Soll |
 
 **Eigenprüfung der Harnesses** (Pflicht, sonst misst man nichts): beide
@@ -76,5 +76,10 @@ das nichts mehr misst.
 | **S-18** | DSML, das über viele Parts zerschnitten ist, leckt als sichtbares Markup in den Stream (der Aufruf wird trotzdem korrekt geborgen). Zwei Ursachen: die Absatzregel im Markup, und ein Opener, der erst bei *Vollständigkeit* erkannt wird. | behoben: Regel 0 in `_needs_paragraph_break()` + `BEGUN_MARKUP_RE` |
 | **S-14-Rest** | `selbst-steuerung+call`: bei 2 von 6 Chunkgrößen entkommt der Wortrest vor der ersten Werkzeug-Marke. Bewusst akzeptiert — die Selbst-Steuerung steht am *Anfang* des Turns, es gibt also keinen fertigen Satz davor, den S-15 retten könnte. | `KNOWN`, zählt nicht als Verstoß |
 
-Alle vier waren an `02ceca2` und `9054325` gegengeprüft: **vorbestehend**, nicht
-von S-10…S-14 verursacht. Details in `../optimierung.md`, THEMA 8.
+Die vier erledigten Befunde waren an `02ceca2` und `9054325` gegengeprüft:
+**vorbestehend**, nicht von S-10…S-14 verursacht. Die beiden neuen
+Coverage-Fälle wurden ebenfalls am Vorher-Stand `02ceca2` geprüft:
+`absatz-vor-call` 10/10 und `selbst-steuerung+nur-text` 6/6 sind dort bereits
+grün. Das sind bewusst gepinnte Verträge und Messlücken, keine neu entdeckten
+Defekte. Details und Positivkontroll-Ergebnis stehen in `../optimierung.md`,
+THEMA 8.

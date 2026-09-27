@@ -1182,34 +1182,48 @@ falsche Zuspitzung; sie hätte den halben Teil des Problems vergrößert. Richti
 ist: er filtert eine andere Menge als der Stream, und die schädliche Klasse
 ist abgedeckt.
 
-#### 4. Messlücke: kein Layout „Absatzumbruch **und** nativer Aufruf"
+#### 4. Absatzumbruch plus nativer Aufruf — **Messlücke geschlossen**
 
-`order_matrix` hat `nur-prosa-ohne-call` (S-11) und `prosa-call-prose` (S-06),
-aber **kein** Layout, in dem ein Absatzumbruch direkt neben einem nativen
-Aufruf steht. Genau dort schneiden `_needs_paragraph_break` (S-11/S-17/S-18)
-und die S-06-Leerzeilenlogik zusammen — die drei Regeln haben sich bisher nur
-getrennt vermessen.
+`order_matrix` hatte `nur-prosa-ohne-call` (S-11) und `prosa-call-prose` (S-06),
+aber kein Layout, in dem Absatztrenner, Aufruf und Folgeprosa zusammenkommen.
+Jetzt ergänzt: `absatz-vor-call` mit
+`[PROSE_A, "\\n\\n", call(), PROSE_B]`, Erwartung `PROSE_A + PARA + PROSE_B`.
+Der Harness prüft für dieses Layout **exakte** Whitespace-Gleichheit (der
+allgemeine Vergleich normalisiert Whitespace), genau einen `\\n\\n`-Trenner,
+kein `\\n\\n\\n`-Artefakt und genau einen nativen Call.
 
-Ansatz: Layout `[PROSE_A + "\n\n", call(), PROSE_B]`, Erwartung
-`PROSE_A + PARA + PROSE_B`, 10 Chunkgrößen. **Vorher den Harness an einem
-alten Stand rot verifizieren** (`GLM_SRC` auf einen alten Worktree), sonst ist
-es wieder ein grüner Test, der nichts beweist.
+Messung: **10/10 Chunkgrößen grün** (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000);
+das gesamte `order_matrix` ist jetzt **13 × 10 = 130**, 0 unbekannte
+Verstöße. Positivkontrolle an `02ceca2`: **10/10 ebenfalls grün**. Das ist
+absichtlich kein neuer Bug-Fund, sondern eine dokumentierte Vertrags-Kombination,
+die vorher nicht als Messfall existierte.
 
-#### 5. Messlücke: kein Szenario „Selbst-Steuerung im reinen Text-Turn"
+#### 5. Selbst-Steuerung im reinen Text-Turn — **Verhaltensentscheidung gepinnt**
 
-`leak_probe` misst den **Stream** (4/215). Für den **Body** bei
-Selbst-Steuerung ohne Aufrufe gibt es kein Szenario in `sweep2`: alle
-`selbst-steuerung-*`-Szenarien haben einen Aufruf, und dort ist `content is
-None` (S-13), also nichts nachprüfbar. Die Zelle ist leer, und die Entscheidung
-aus Abschnitt 2 ist damit nur an einem Ad-hoc-Skript belegt, nicht im Repo.
+Bisher hatte `sweep2` nur Selbst-Steuerung **mit** Aufrufen; dort gilt S-13
+(`content is None`), also war der Body nicht prüfbar. Ergänzt wurde
+`selbst-steuerung+nur-text`, ohne Calls, mit identischer Erwartung für Stream
+und Body: „Der `open`-Aufruf funktioniert hier nicht, ich nutze `read`.".
+Dazu 7 parametrische Tests mit Chunkgrößen 1, 3, 5, 7, 13, 29, 1000. Sie pinnen
+die S-08-Politik: eine technische Aussage über `open` ist im reinen Text-Turn
+Inhalt, nicht zu filterndes Selbstgespräch.
 
-Ansatz: Szenario in `sweep2` **ohne** Aufruf, Erwartung = **bewusst der volle
-Text** (so wird Abschnitt 2 festgeschrieben), plus ein Test, der genau das
-als gewollt pinnt. Sonst repariert die nächste Session das versehentlich.
+Messung: **6/6 Chunkgrößen grün** im Sweep, `sweep2` jetzt **23 × 6 = 138**,
+0 unbekannte Verstöße; die 7 Coverage-/Policy-Tests sind grün. Positivkontrolle am
+alten Code `02ceca2`: **6/6 Szenarien und alle 7 Tests ebenfalls grün**. Auch
+das ist bewusst kein Fix oder Fehlerfindung, sondern ein Vertrag, der jetzt
+nachprüfbar und gegen versehentliche Verhaltensänderung gepinnt ist.
+
+**Hinweis zur Positivkontrolle:** „positiv" heißt hier, dass die neue Messung am
+alten Stand ihre bekannte Wahrheit behält. Anders als bei Regressionstests muss
+sie **nicht rot** werden: diese beiden Lücken betrafen fehlende Abdeckung und
+eine bereits geltende Entscheidung, keinen Defekt in `02ceca2`. Der alte Stand
+ist ausdrücklich gegen `GLM_SRC=/workspaces/wt-gap/llm-proxies/glm2api/src`
+geprüft worden; beide Harness-Fälle waren über alle ihre Chunkgrößen grün.
 
 ### Verifikation
 
-- **1599 Tests grün** (1426 + 173 neue aus S-15…S-18; Suite 11,8 s → 12,5 s).
+- **1616 Tests grün** (1426 + 173 neue aus S-15…S-18 + 17 Coverage-Tests für die vorherigen Messlücken; letzter Lauf 11,6 s).
   Historie: 839 (794 + 45 aus S-10), mit S-11 **848** (+ 9), mit S-12
   **852** (+ 4), mit S-13 **854** (+ 2, Verhaltens-neutral), mit S-14
   **1426** (+ 572).
@@ -1220,11 +1234,13 @@ als gewollt pinnt. Sonst repariert die nächste Session das versehentlich.
   Stream erst bei ganz kleinen Chunkgrößen sichtbar), und
   `s18_dsml_split_over_many_parts` 3 von 7 (genau die Chunkgrößen 1–3 — der
   Rest war schon vorher in Ordnung). Beides ist gemessen, nicht geschätzt.
-- Harnesses (nach den Fixes): `order_matrix` 120 Messungen / **0** unbekannte
-  Verstöße (vorher 4), `sweep2` 132 / **0** (vorher 0, aber 6 Szenarien nur per
-  `KNOWN` auf 0). `leak_probe` unverändert 4/215 + 0/104. Eigenprüfung: an
-  `9054325` melden die Sweeps 14 bzw. 7 unbekannte Verstöße — sie sehen also
-  echte Fehler und verschlucken keine.
+- Harnesses (nach den Fixes und der Coverage-Erweiterung): `order_matrix`
+  **130** Messungen / **0** unbekannte Verstöße (vor dem S-15-Fix 4 Fehler in
+  der alten Matrix), `sweep2` **138** / **0** unbekannte (vor der Erweiterung
+  132). Der bekannte S-14-Rest bleibt 2/6 in `selbst-steuerung+call`.
+  `leak_probe` unverändert 4/215 + 0/104. Die zwei neuen Coverage-Fälle waren
+  am alten Stand `02ceca2` ebenfalls grün (Matrix 10/10; Text-only-Sweep 6/6),
+  denn sie pinnen bestehende Korrektheit/Politik statt einen Defekt zu melden.
 - S-11 gegen den Vorher-Stand (Positivkontrolle): **8** der 9 neuen Tests
   schlagen fehl — alle sechs Chunk-Unabhängigkeits-Fälle, der
   Doppelumbruch und der Regel-Test. Die Anti-Kleb-Gegenprobe
@@ -1240,10 +1256,18 @@ als gewollt pinnt. Sonst repariert die nächste Session das versehentlich.
   `interword spaces[1]`, `fenced text …[1000]`,
   `space … finalize tail[5,11,20]` und die drei Layouts mit Calls. Die
   übrigen 32 sind gegen beide Stände grün (Gegenproben).
-- `order_matrix.py`: 11 Layouts × 10 Chunk-Größen → 0 Verstöße
-  (vorher 23). `holdback_probe.py` whitespace-normalisiert: 0 (vorher 10).
-- `sweep2.py` (31 Szenarien × 2 Pfade × 3 Achsen, 7818 Messungen) und die
-  794 Alt-Tests unverändert grün.
+- Die 17 Coverage-/Policy-Tests zu „Absatz + Call" (10 Chunkgrößen) und
+  „Selbst-Steuerung ohne Call" (7 Chunkgrößen) sind gegen `02ceca2`
+  **17/17 grün** — erwartet, da sie vorher ungedeckte Kombinationen bzw. eine
+  bestehende Verhaltensentscheidung pinnen, nicht neu behobene Defekte.
+- Die zwei neuen Coverage-Klassen: „Absatzumbruch + nativer Aufruf" 10/10
+  grün (am alten Stand ebenfalls grün) und „Selbst-Steuerung ohne Aufruf"
+  7/7 grün (ebenfalls am alten Stand grün). Das sind gepinnte Verträge, keine
+  Fehlerkorrekturen.
+- Die historischen `holdback_probe.py`- und `sweep2.py`-Zahlen gehören zum
+  älteren Messstand vor dem Harness-Neuaufbau; maßgeblich für den aktuellen
+  Stand sind `order_matrix` (130) und `sweep2` (138) oben. Die 794 Alt-Tests
+  sind die historische Basis vor S-10…S-14.
 - **794 Tests grün** (718 vor dem Nachtrag + 76 neue; Basis der Übergabe
   wiederum 532 + 143 aus S-05/06/07).
 - Jede neue Testklasse wurde gegen den **Vorher-Stand** laufen gelaufen, wie
@@ -1418,6 +1442,7 @@ deshalb prüft jetzt ein Test *alle* Kopien, nicht nur `.env.example`.
 - Erstes Fragment einer zerschnittenen Narration entkam (Nebenbefund aus S-13): angefangener Werkzeug-Token als Holdback-Auslöser (S-14) — DONE 2026-09-27
 - Mess-Harnesses lagen nur in `/tmp` und waren nach Neustart weg — jetzt in `llm-proxies/glm2api/harness/`, mit `trace_stream.py` und `common.py` — DONE 2026-09-27
 - Vier Funde aus dem Harness-Neuaufbau (alle vorbestehend, gegengeprüft an `02ceca2`/`9054325`) — **DONE 2026-09-27**: S-15 Präambel wird satzweise statt pauschal erkannt (der linke Rand des zurückgehaltenen Textes kam als S-15-Rest noch dazu, `_owed_lead_edge`), S-16 erfundene Limit-Behauptung greift auch ohne Calls (Stream **und** Body), S-17 Apostroph ist kein Satzende, S-18 DSML über viele Parts leckt nicht mehr (Absatzregel **und** angefangener Opener)
+- Die Lücke „Absatzumbruch + nativer Aufruf" und die S-08-Politik „Selbst-Steuerung im reinen Text-Turn ist Inhalt" sind jetzt als Harness-Szenarien und Chunk-Tests gepinnt — **DONE 2026-09-27**, beide Positivkontrollen am alten Stand erwartet grün (10/10 + 6/6)
 
 Siehe auch: Git-Commit 1039311 (Härtetest-Kampagne komplett),
 infrastructure.md Changelog (10)–(14).

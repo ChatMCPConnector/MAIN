@@ -6,6 +6,11 @@ dieser Sweep den *Vertrag* beider Pfade:
 - **Stream:** was der Client als laufende assistant-nachricht sieht.
 - **Non-Stream:** was `build_response()` in den Body schreibt.
 
+Das Szenario `selbst-steuerung+nur-text` pinnt die S-08-Politik: ohne
+Werkzeug-Aufrufe ist eine Selbst-Steuerungsaussage Inhalt und bleibt sowohl
+im Stream als auch im Body erhalten. Am Vorher-Stand `02ceca2` ebenfalls
+grün (6/6) — dies ist eine bewusst dokumentierte Erwartung, kein Fix.
+
 Der wichtigste Vertrag ist S-13: bei Tool-Calls ist `message.content`
 `None` (Option B, bewusst entschieden), der Text geht über den Stream.
 Der zweite ist T-06: ein Aufruf ohne Pflichtargument ist `error`, nicht
@@ -15,10 +20,9 @@ Jedes Szenario nennt seine Erwartung ausdrücklich. Sie stammen aus den
 gepinnten Tests, nicht aus dem, was der Proxy gerade tut — ein Sweep, der
 nur aufzählt, ist eine sehr teure Kopie der Testsuite.
 
-`KNOWN` listet die am 2026-09-27 beim Neuaufbau gefundenen Befunde, die
-**noch offen** sind. S-15…S-18 sind behoben; uebrig bleibt eine bewusst
-akzeptierte S-14-Grenze. Sie wird ausgewiesen, nicht versteckt, zitausieren
-aber nicht den Exit-Code.
+`KNOWN` listet offene, bewusst akzeptierte Befunde. S-15…S-18 sind behoben;
+übrig bleibt eine bewusst akzeptierte S-14-Grenze. Sie wird ausgewiesen, nicht
+versteckt, zitiert aber nicht den Exit-Code.
 
     python3 sweep2.py            # Tabelle + Protokoll
     python3 sweep2.py --quiet    # nur Verstoesse
@@ -67,6 +71,11 @@ SCENARIOS: list[tuple[str, list, set, str, list[str], str, str | None]] = [
     ("selbst-steuerung+call", ["Der `open`-Tool-Aufruf funktioniert hier nicht, ich nutze `read`.", CALL], READ, "", ["read"], "tool_calls", None),
     ("selbst-steuerung-mittelteil", ["Der Bericht ist da. Ich nutze jetzt `read` fuer den Rest.", CALL], READ, "Der Bericht ist da.", ["read"], "tool_calls", None),
     ("limit-erfunden+nur-text", ["Tool-Limit erreicht — hier die Analyse."], READ, "", [], "stop", None),
+    # Luecke B (2026-09-27): S-08-Politik — im reinen Text-Turn ist die
+    # selbst-steuerung bewusst Inhalt. Ohne Calls darf der Filter nicht
+    # die technische Aussage ueber `open` entfernen. Stream und Body werden
+    # beide gegen den vollstaendigen Text geprueft.
+    ("selbst-steuerung+nur-text", ["Der `open`-Aufruf funktioniert hier nicht, ich nutze `read`."], READ, "Der `open`-Aufruf funktioniert hier nicht, ich nutze `read`.", [], "stop", "Der `open`-Aufruf funktioniert hier nicht, ich nutze `read`."),
     # --- protokoll-meta (S-07) -------------------------------------------
     ("protokoll-meta+call", ["Wrong tool calls above — correcting to `read`.", CALL], READ, "", ["read"], "tool_calls", None),
     # --- fences und leerraum (S-05/S-06/S-10) ----------------------------

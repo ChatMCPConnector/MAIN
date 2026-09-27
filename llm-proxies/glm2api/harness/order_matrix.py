@@ -62,6 +62,11 @@ LAYOUTS: list[tuple[str, list, str, int]] = [
     ("rand-links-im-carry", [SPACE, call()], SPACE_ERWARTET, 1),
     ("leerraum-artefakt", [PROSE_A, WS, call(), PROSE_B], PROSE_A + WS + PROSE_B, 1),
     ("nur-prosa-ohne-call", [PROSE_A, PROSE_B], PROSE_A + PARA + PROSE_B, 0),
+    # Luecke A (2026-09-27): der Absatztrenner faellt in eine Folge mit
+    # nativen Calls. Die whitespace-only-part liegt direkt vor dem Call;
+    # der Absatzumbruch muss genau einmal erhalten bleiben, nicht durch
+    # S-06 entfernt oder vervielfacht werden.
+    ("absatz-vor-call", [PROSE_A, PARA, call(), PROSE_B], PROSE_A + PARA + PROSE_B, 1),
 ]
 
 CHUNK_SIZES = (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000)
@@ -75,12 +80,17 @@ CHUNK_SIZES = (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000)
 KNOWN: dict[str, str] = {}
 
 
-def check(parts: list, expected: str, expected_calls: int, chunk: int) -> list[str]:
+def check(parts: list, expected: str, expected_calls: int, chunk: int, label: str = "") -> list[str]:
     streamed, _body, accumulator = stream(parts, chunk)
     problems: list[str] = []
 
     if streamed.split() != expected.split():
         problems.append(f"soll-vergleich: IST {streamed!r} != SOLL {expected!r}")
+    if label == "absatz-vor-call" and streamed != expected:
+        # Luecke A: bei diesem Layout ist Whitespace Teil des Vertrags —
+        # der Absatztrenner muss vor UND nach dem Call genau einmal erhalten
+        # bleiben. Der allgemeine Vergleich normalisiert sonst Leerraum.
+        problems.append(f"absatz-exakt: IST {streamed!r} != SOLL {expected!r}")
     if "\n\n\n" in streamed:
         # S-06: das leerzeilen-artefakt neben nativen calls
         problems.append(f"leerzeilen-artefakt im stream: {streamed!r}")
@@ -110,7 +120,7 @@ def main() -> int:
     for label, parts, expected, expected_calls in LAYOUTS:
         for chunk in CHUNK_SIZES:
             measurements += 1
-            problems = check(parts, expected, expected_calls, chunk)
+            problems = check(parts, expected, expected_calls, chunk, label)
             if not problems:
                 if not quiet:
                     print(f"{label:<28} {chunk:>6}  ok")

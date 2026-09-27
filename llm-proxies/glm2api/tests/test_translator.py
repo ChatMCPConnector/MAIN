@@ -5311,3 +5311,60 @@ def test_s18_begun_markup_opener_is_held_by_the_parser():
     # nicht `re.escape()`t waren.
     assert not BEGUN_MARKUP_RE.search("Pa"), "'Pa' war der falsch-positive treffer"
     assert not BEGUN_MARKUP_RE.search("Der Bericht ist da"), "prosa"
+
+
+# --- Coverage-Luecken aus der S-15…S-18-Nacharbeit ------------------
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 8, 11, 13, 20, 1000])
+def test_order_matrix_paragraph_break_survives_next_to_native_call(chunk_size):
+    """Coverage-Luecke A: Absatztrenner, nativer Aufruf und Folgeprosa im
+    selben Layout.
+
+    Die alte Matrix hatte Absatz ohne Call und Prosa/Call/Prosa, aber nicht
+    den Absatztrenner direkt vor dem Call. Hier wird Whitespace NICHT
+    normalisiert: genau ein `\\n\\n` muss erhalten bleiben, kein drittes
+    Newline-Artefakt entstehen, die Folgeprosa muss in Reihenfolge kommen,
+    und der native Call muss genau einmal im Non-Stream-Response stehen.
+    """
+    streamed, accumulator = _s10_stream(
+        [_S10_PROSE_A, "\n\n", _s10_native_event("c1"), _S10_PROSE_B],
+        chunk_size,
+    )
+    response = accumulator.build_response("finish")
+    choice = response["choices"][0]
+    message = choice["message"]
+
+    expected = _S10_PROSE_A + "\n\n" + _S10_PROSE_B
+    assert streamed == expected, (chunk_size, repr(streamed), repr(expected))
+    assert streamed.count("\n\n") == 1, (chunk_size, repr(streamed))
+    assert "\n\n\n" not in streamed, (chunk_size, repr(streamed))
+    assert [call["function"]["name"] for call in message.get("tool_calls", [])] == ["read"]
+    # S-13: bei Calls ist Body-Content bewusst None; hier wird der
+    # Absatzvertrag ueber den Stream geprueft, der Call im Response.
+    assert message.get("content") is None
+
+
+_SELF_STEERING_TEXT_ONLY = (
+    "Der `open`-Aufruf funktioniert hier nicht, ich nutze `read`."
+)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 5, 7, 13, 29, 1000])
+def test_self_steering_without_tool_calls_is_preserved_in_stream_and_body(chunk_size):
+    """Coverage-Luecke B / S-08-Politik: Selbst-Steuerung ohne Aufruf ist
+    im reinen Text-Turn **bewusst Inhalt** — zum Beispiel eine technische
+    Aussage darueber, warum `open` nicht funktioniert.
+
+    Der Filter ist an Calls gebunden. Diese Gegenprobe pinnt den
+    Nicht-Fall in BEIDEN Antwortpfaden, ueber variable Chunk-Grenzen:
+    Streamtext == erwartete Prosa == Non-Stream-Body, kein Call.
+    """
+    streamed, accumulator = _s10_stream([_SELF_STEERING_TEXT_ONLY], chunk_size)
+    choice = accumulator.build_response("finish")["choices"][0]
+    message = choice["message"]
+
+    assert streamed == _SELF_STEERING_TEXT_ONLY, (chunk_size, streamed)
+    assert message.get("content") == _SELF_STEERING_TEXT_ONLY, (chunk_size, message)
+    assert not message.get("tool_calls")
+    assert choice.get("finish_reason") == "stop"
