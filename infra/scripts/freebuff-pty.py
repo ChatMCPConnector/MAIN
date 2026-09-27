@@ -12,16 +12,18 @@ Deshalb dieser Filter: das Programm läuft auf einem pty, wir geben seinen Outpu
 an das echte Terminal weiter — nur ohne die Maus-Sequenzen. Der Terminal steht
 damit im selben Zustand wie bei opencode mit `mouse: false`.
 
-Zusaetzlich wird die **Pfeiltasten-Umleitung** aus opencodes `tui.json` auf die
-Hauptansicht angewendet: Mausrad -> `up`/`down` (xterm.js), und `up`/`down`
-wird auf PageUp/PageDown umgehaengt, waehrend der Input seine Pfeiltasten
-verliert. Das ist 1:1 die opencode-Loesung aus `Revision.md` 4.16
-(``messages_half_page_up: up`` + ``input_move_up: none``) — dort ist es eine
-Config, hier ist es der Filter, weil freebuff keine Keybind-Config hat.
-Abschaltbar mit ``FREEBUFF_NO_ARROW_PAGE=1``, falls jemand die Pfeiltasten in
-der Eingabe braucht (Prompt-Historie, mehrzeilige Eingabe).
-Umgehaengt werden **nur** die exakten Cursor-Sequenzen ohne Modifikator;
-`shift+up` (`ESC[1;2A`) und `ctrl+up` (`ESC[1;5A`) bleiben unangetastet.
+Die **Pfeiltasten-Umleitung** aus opencodes `tui.json` (`up`/`down` ->
+PageUp/PageDown, damit der Chat seitenweise scrollt) war hier bis
+2026-09-27 **eingeschaltet** und hat damit die Menues unbedienbar gemacht:
+die Pfeiltasten scrollten den Chat, statt den Slash-Befehl-Vorschlag zu
+bewegen (Nutzerbefund mit Screenshot: die Pfeile muessen das gruen markierte
+Menue bedienen). Sie ist deshalb jetzt **aus** und nur per
+``FREEBUFF_ARROW_PAGE=1`` wieder einschaltbar. Der Filter macht dann genau
+eine Sache: Maus-Reporting entfernen. Tasten, Mausrad, Text und bracketed
+Paste gehen unveraendert an das Kind.
+Umgehaengt wuerden **nur** die exakten Cursor-Sequenzen ohne Modifikator;
+`shift+up` (`ESC[1;2A`) und `ctrl+up` (`ESC[1;5A`) bleiben auch dann
+unangetastet.
 
 Entfernt wird ausschliesslich Mause-Reporting:
     ESC [ ? <1000|1001|1002|1003|1005|1006|1015|1016> (h|l)
@@ -216,7 +218,16 @@ def main(argv):
     debug(f"start argv={argv} pty={master}")
     out = sys.stdout.buffer
     stdin_open = True
-    arrow_page = os.environ.get("FREEBUFF_NO_ARROW_PAGE", "0") != "1"
+    # Default AUS (2026-09-27): Pfeiltasten muessen die Slash-Befehl-Liste
+    # bedienen, nicht den Chat scrollen. `FREEBUFF_ARROW_PAGE=1` schaltet die
+    # alte Umhaengung up/down -> PageUp/PageDown wieder frei (wer den Chat
+    # lieber mit den Pfeilen seitenweise scrollt). Die alte Schreibweise
+    # `FREEBUFF_NO_ARROW_PAGE=1` bleibt als Bypass fuer die Debug-Sessions
+    # gueltig und schaltet ebenfalls ab.
+    arrow_page = (
+        os.environ.get("FREEBUFF_ARROW_PAGE", "0") == "1"
+        and os.environ.get("FREEBUFF_NO_ARROW_PAGE", "0") != "1"
+    )
     # Default 0 = KEINE Drosselung. Der Nutzerwunsch lautete ausdruecklich
     # „0 ms, aber weniger Zeilen pro Schritt“ — die Drosselung war der falsche
     # Hebel (sie begrenzt die Rate, nicht die Schrittweite) und ist per

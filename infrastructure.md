@@ -426,10 +426,30 @@ Mouse-Reporting zu `up`/`down` (xterm.js, live im Key-Log bestaetigt: die
 Testsession bekam `ESC[A`/`ESC[B`), und `up`/`down` wird in der App auf Scrollen
 umgehaengt, waehrend der Input seine Pfeiltasten bewusst verliert.
 
-**Uebertragung auf freebuff, 1:1.** freebuff hat keine Keybind-Config, aber der
-pty-Filter sitzt genau an der Stelle, an der opencode die App-Config hat — im
-Tastatur-Eingangsstrom. `freebuff-pty.py` haengt daher dort `up`/`down` auf
-PageUp/PageDown um:
+**Uebertragung auf freebuff — Pfeiltasten bleiben Pfeiltasten (Stand 2026-09-27).**
+freebuff hat keine Keybind-Config, aber der pty-Filter sitzt genau an der
+Stelle, an der opencode die App-Config hat — im Tastatur-Eingangsstrom. Dort
+gibt es zwei moegliche Eingriffe, und der Nutzer hat am 2026-09-27 mit Screenshot
+entschieden, welcher der richtige ist:
+
+| Variante | im Filter | Effekt |
+|---|---|---|
+| **Default (aktuell)** | `up`/`down` unveraendert | Pfeile bedienen die Slash-Befehl-Liste (`/new`, `/diagnostics`, …) |
+| `FREEBUFF_ARROW_PAGE=1` | `up`/`down` -> PageUp/PageDown | Pfeile scrollen den Chat seitenweise, Menue unbedienbar |
+
+Der Filter macht im Default also **genau eine Sache: Maus-Reporting entfernen**.
+Tasten, Mausrad, Text und bracketed Paste gehen unveraendert an das Kind.
+
+**Warum die Umhaengung wieder aus ist.** Sie war als 1:1-Kopie der
+opencode-Loesung eingebaut und hat die opencode-Semantik mitgenommen — unter
+anderem den bewussten Verlust, dass `up`/`down` im Input den Cursor nicht mehr
+bewegen. Bei freebuff ist dieser Verlust nicht sichtbar, sondern **funktional
+teurer**: die Pfeile scrollten den Chat, waehrend das offene Slash-Menue stehen
+blieb (`Nutzerbefund 2026-09-27: Pfeiltasten muessen das gruen markierte Menue
+bedienen`). `FREEBUFF_NO_ARROW_PAGE=1` (alte Schreibweise) bleibt als Bypass
+gueltig und schaltet ebenfalls ab.
+
+Mapping der ausgeschalteten Variante, falls sie jemand wieder braucht:
 
 | im Filter | |
 |---|---|
@@ -438,20 +458,12 @@ PageUp/PageDown um:
 | `ESC [ C` / `ESC [ D` (rechts/links) | unveraendert |
 | `ESC [ 1 ; 2 A` / `1 ; 5 A` (shift/ctrl+up) | unveraendert |
 
-Warum PageUp/PageDown und nicht ein Zeilenschritt: `PageUp` ist im Bundle an den
-Root-Action `scroll-up` gebunden, und **der funktioniert nachweislich** (live
-getestet, Nutzerbestaetigung: „PageUp und PageDown scrollt hoch und runter“).
-Genau das war vorher ungeprueft, jetzt ist es der Anker.
-
-**Der Preis, derselbe wie bei opencode:** `up`/`down` verschieben im Input
-weder den Cursor noch navigieren in der Prompt-Historie. Bei freebuff ist das
-sichtbarer als bei opencode, weil es dort `bash-history-up`/`history-up`
-verloren hat — **das ist genau das, was die Nutzerbeobachtung „Mausrad scrollt
-nur den Chatverlauf“ war**: das Rad kam als `up`/`down` an undNavigierte die
-History, statt zu scrollen. Wer die Pfeiltasten in der Eingabe braucht
-(mehrzeilige Eingabe, gezielte History-Navigation): `FREEBUFF_NO_ARROW_PAGE=1
-freebuff`. Wer eine Taste fuer Prompt-Historie sucht: `ctrl+p`/`ctrl+n` bzw.
-die History-Actions selbst.
+Anker der Variante war: `PageUp` ist im Bundle an den Root-Action `scroll-up`
+gebunden, und **der funktioniert nachweislich** (live getestet,
+Nutzerbestaetigung: „PageUp und PageDown scrollt hoch und runter“).
+Wer die Pfeiltasten in der Eingabe braucht (mehrzeilige Eingabe, gezielte
+History-Navigation) hat sie im Default zurueck; fuer Prompt-Historie bleiben
+`ctrl+p`/`ctrl+n` bzw. die History-Actions.
 
 **Schrittweite, nicht Rate — und was freebuff anbietet.** Ein Rad-Klick wird
 zu `scroll-up`/`scroll-down`, und deren Schritt ist im Bundle **fest verdrahtet**:
@@ -747,6 +759,7 @@ Proxy bei jedem Start automatisch hoch.
   **Umsetzung:** `setup.sh` konfiguriert repo-lokal `gpg.format=ssh`, `user.signingkey=~/.ssh/codespaces.auto.pub`, `gpg.ssh.allowedSignersFile=.runtime/git-allowed-signers`, `commit.gpgsign=true` — der ED25519-Key gehört jedem Codespace und wird **lokal** benutzt, also ohne API und ohne Token. Die `allowedSignersFile` liegt bewusst in `.runtime/` statt im Repo: der Key kann pro Codespace neu sein, und sie enthält ohnehin nur den öffentlichen Schlüssel. Ohne sie meldet Git `%G? = N` („needs to be configured"), mit ihr `G`.
   **Was gelöst ist und was nicht:** Commit-Signaturen sind gültig und lokal prüfbar. GitHub wird sie aber als **signed, nicht verified** anzeigen, bis der Key einmalig unter *Settings → SSH and GPG keys* als **Signing key** registriert ist (`user/ssh_signing_keys` ist leer). Das ist ein Account-Schritt, der nicht im Codespace passiert — und die Wurzel, an der ein späterer Versuch wieder ansetzt.
   **Nebenbefund, wichtig für die Historie:** Bis dahin ist **jeder Commit unsigniert** (`%G? = N`), auch die aus der Parallel-Session. Ein nachträgliches Signieren historischer Commits ist nicht möglich; ab hier sind sie es.
+- 2026-09-27: **Die Pfeiltasten-Umleitung in `freebuff-pty.py` ist aus — sie hat nicht nur gescrollt, sie hat die Menues unbedienbar gemacht.** Der Nutzerbericht mit Screenshot: Pfeiltasten sollen im **grün markierten Slash-Befahl-Menü** (`/new`, `/diagnostics`, `/history`, `/copy`) hoch und runter gehen, tatsächlich scrollten sie den Chat (rot markiert) — und die Menüs waren „nicht mehr richtig verwendbar". **Ursache:** `freebuff-pty.py` hängte `up`/`down` (`ESC[A`/`ESC OA` -> `ESC[5~`, `ESC[B`/`ESC OB` -> `ESC[6~`) auf PageUp/PageDown um, damit das Mausrad den Chat seitenweise scrollt. Diese Umhängung war als 1:1-Kopie der opencode-Lösung aus `Revision.md` 4.16 eingebaut, **inklusive ihres bewussten Preises** (`input_move_up: none` — der Input verliert die Pfeile). Bei opencode kostet der Preis nur Cursorbewegung in der Eingabe, bei freebuff ist er **funktional**: die Pfeile sind dort das einzige Bedienelement der Slash-Liste, also war der Verlust kein Verlust, sondern der Nutzwert selbst. Die Doku-Begründung „Mausrad kommt als up/down" traf auf eine App, in der `up`/`down` zweierlei bedeuten — die Umhängung unterschied die beiden nicht. **Umsetzung:** Default ist jetzt **keine** Umschreibung; der Filter tut nur noch das Copy/Paste-Stabilisieren (Maus-Reporting raus). Der Eingriff lebt als `FREEBUFF_ARROW_PAGE=1` weiter, `FREEBUFF_NO_ARROW_PAGE=1` bleibt als Bypass gültig. **Maus unangetastet**, wie gewünscht: Filter, Alternate Screen, bracketed Paste, Scroll-Patch (`fOA` 0,5) und Debug-Log bleiben wie sie waren. **Verifiziert** am echten pty: Default gibt `ESC[A ESC[B ESC OA ESC[5~ ESC[C` byte-identisch ans Kind, mit `FREEBUFF_ARROW_PAGE=1` kommt `ESC[5~ ESC[6~ ESC[5~ ESC[5~ ESC[C`. **Lehre, die den Fehler kippt:** eine Semantik aus einer anderen App 1:1 zu übernehmen ist nur dann richtig, wenn man den **Preis** mitdenkt — er war dokumentiert und trotzdem nicht geprüft worden, weil er in der Quelldoku plausibel klang („Input verliert Cursorbewegung") statt nach dem Nutzerfoto billig auszusehen.
 ## Changelog
 
 - 2026-09-26: **Cline und NVIDIA NIM aus opencode entfernt, `free-models.py` gelöscht — Grund ist Betriebsverlässlichkeit, nicht Modellqualität.** Auslöser war die Frage nach den Reasoning-Stufen von `stealth/pixel-canary`, deren Antwort in Cline-Timeouts und sporadischen 500ern unterging. **Was die Messung ergab** (Cap-Probe und Token-Vergleich, beide gegen die Cline-API): `none` liefert 0 Reasoning-Tokens, `high` 298, `xhigh` 464, `max` 349–349 — und `max` lief in 1 von 3 Läufen in einen Timeout >300 s, `xhigh` einmal in einen Vercel-500. opencode kennt intern genau sieben Stufen (`none, minimal, low, medium, high, xhigh, max`, Enum im Binary), mehr gibt es nicht; für `@ai-sdk/openai-compatible` reicht es jeden String ungeprüft als `reasoning_effort` durch. **Der eigentliche Befund ist aber der Provider, nicht die Stufen:** derselbe Aufruf lieferte im Tagesverlauf mal 200 und mal 500, ein Lauf von `max` lief 68 s, der nächste über 300 s in den Timeout, und ein `opencode run` gegen den Provider endete in `Unexpected server error`. Ein Provider, der ein Viertel der Anfragen verliert, ist im Hauptbetrieb unbrauchbar, egal wie gut die Modelle sind. **Entfernt:** beide Provider-Blöcke aus `opencode.json` (`cline`, `nvidia` — letzterer trug `z-ai/glm-5.3`), die Aliase `free-models`/`cline-models`/`nvidia-models`, die beiden `KEYS`-Zeilen in `keys.sh` sowie Pack- und Restore-Paar in `secrets.sh`. **Die Key-Dateien `~/.config/landscape/cline.key` und `nvidia-nim.key` bleiben bewusst auf der Platte** — sie sind nicht Teil des Caches oder der Profile, und `secrets.sh lock` ignoriert sie jetzt, sobald sie nicht mehr referenziert sind. **Nebenbefund, der die Entscheidung stützt:** die Cap-Probe, mit der die Stufen geprüft werden sollten, war an `space-bunny-alpha` zweimal hintereinander nicht reproduzierbar (einmal 500 „will mehr Reasoning", einmal 200 mit 0 Tokens) — dieselbe Fehlermeldung also ohne Aussagekraft. Verifiziert: `opencode models` zeigt keinen `cline/`- und keinen `nvidia/`-Eintrag mehr, `keys.sh status` listet nur noch `xinjianya.key`, `bash -n` auf allen drei geänderten Skripten, `opencode.json` valides JSON.
