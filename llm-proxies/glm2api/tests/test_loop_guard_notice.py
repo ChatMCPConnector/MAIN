@@ -281,9 +281,13 @@ def test_non_stream_antwort_enthaelt_die_loop_guard_notice():
     client = _make_client()
     result, _ = client.chat_completion(_payload())
     message = result["choices"][0]["message"]
-    content = message.get("content") or ""
+    # S-22: die notice steht im DENKKANAL, nicht im sichtbaren text.
+    # Live 2026-09-28: als content landete sie mitten in der antwort und
+    # das modell las sie als teil seiner eigenen narration.
+    content = message.get("reasoning_content") or ""
     assert "[loop_guard_notice]" in content
     assert "NO tool limit" in content
+    assert "[loop_guard_notice]" not in (message.get("content") or "")
     assert len(message.get("tool_calls") or []) == 2
 
 
@@ -312,8 +316,9 @@ def test_non_stream_guard_notice_gilt_auch_fuer_textprotokoll_calls():
     message = result["choices"][0]["message"]
 
     assert len(message.get("tool_calls") or []) == 2
-    assert "[loop_guard_notice]" in (message.get("content") or "")
-    assert "8 identical read call" in message["content"]
+    assert "[loop_guard_notice]" in (message.get("reasoning_content") or "")
+    assert "8 identical read call" in message["reasoning_content"]
+    assert "[loop_guard_notice]" not in (message.get("content") or "")
 
 
 def test_stream_blocked_tool_notice_survives_alongside_valid_native_calls():
@@ -537,3 +542,85 @@ def test_remap_zaehlt_nicht_als_blockiert():
     assert acc.blocked_tool_attempt_names == [], "gemappt darf nicht blockiert sein"
     assert ("open", "read") in acc.native_remapped_calls
 
+
+
+# --- S-22: notices gehen in den DENKKANAL, nicht in den sichtbaren text -------
+#
+# Live-Befund 2026-09-28 (Session `build` + `glm-5.3`, Ordnervergleich): die
+# notices wurden per `content`-delta in die antwort geschrieben und landeten
+# mitten im sichtbaren text — der client zeigte
+#   "Abbruch ehrlich gem [loop_guard_notice] 8 identical open call(s) ...
+#    [native_remap_notice] ... [blocked_tool_notice] ..."
+# als EINE normale antwort. Das modell las die notices als teil seiner
+# eigenen narration und produzierte genau die drift, die sie verhindern
+# sollen. Der kanal IST die botschaft.
+
+
+def test_stream_notice_stand_im_denkkanal_nicht_im_text():
+    client = _make_client()
+    events = [_native_open_event("call_m", "/workspaces/MAIN/README.md")]
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
+        _FakeResponse(events),
+        "assistant-1",
+    )
+    text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
+
+    # Die notice MUSS als reasoning_content raus ...
+    assert '"reasoning_content":"[native_remap_notice]' in text.replace("\\n", ""), (
+        "die notice muss im denkkanal stehen"
+    )
+    # ... und darf NICHT als sichtbarer content-delta erscheinen.
+    assert '"content":"[native_remap_notice]' not in text, (
+        "die notice darf nicht im sichtbaren text stehen (live-bug 2026-09-28)"
+    )
+
+
+def test_stream_notices_kommen_in_fester_reihenfolge_remap_blocked_loop():
+    """S-22 (bug 3): der prepend-stempel kehrt die reihenfolge um. Bei mehr
+    als drei notices pro turn (live: loop, remap, blocked, remap, blocked)
+    wich die ausgabe von der beabsichtigten ab. Jetzt explizit gebaut."""
+    client = _make_client()
+    events = [
+        _native_open_event("ok1", "/workspaces/MAIN/README.md"),
+        _native_open_event("bad1", "turn0search0"),
+    ] + [_native_open_event(f"dup{i}", "/workspaces/MAIN/a.md") for i in range(4)]
+    events.append({"status": "finish", "parts": []})
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
+        _FakeResponse(events),
+        "assistant-1",
+    )
+    text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
+
+    positions = {}
+    for tag in ("native_remap_notice", "blocked_tool_notice", "loop_guard_notice"):
+        idx = text.find(f"[{tag}]")
+        assert idx >= 0, f"{tag} fehlt im stream"
+        positions[tag] = idx
+    assert positions["native_remap_notice"] < positions["blocked_tool_notice"], (
+        "remap muss vor blocked stehen: 'ergebnis ist echt' vor 'lief nicht'"
+    )
+    assert positions["blocked_tool_notice"] < positions["loop_guard_notice"], (
+        "blocked muss vor loop stehen"
+    )
+
+
+def test_non_stream_notice_stand_im_denkkanal_nicht_im_text():
+    from glm2api.services.glm_client import _native_remap_notice_text, _loop_guard_notice_text
+    from glm2api.services.translator import GLMEventAccumulator
+
+    acc = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash", "webfetch"})
+    acc.consume_event(_native_open_event("call_m", "/workspaces/MAIN/README.md"))
+    acc.loop_guard_dropped_count = 2
+    acc.loop_guard_dropped_tools = ["open"]
+
+    result = {"choices": [{"index": 0, "message": {"content": "echte antwort"}}]}
+    client = _make_client()
+    client._inject_turn_notices(result, acc)
+    message = result["choices"][0]["message"]
+
+    assert "[native_remap_notice]" in (message.get("reasoning_content") or "")
+    assert "[loop_guard_notice]" in (message.get("reasoning_content") or "")
+    # der sichtbare text bleibt unberuehrt — das ist der eigentliche fix.
+    assert message["content"] == "echte antwort", (
+        "die notices duerfen den sichtbaren text nicht veraendern (live-bug)"
+    )

@@ -494,9 +494,12 @@ def test_mixed_blocked_and_valid_native_calls_are_reported_non_stream():
     message = result["choices"][0]["message"]
 
     assert [call["function"]["name"] for call in message["tool_calls"]] == ["read"]
-    assert "[blocked_tool_notice]" in message["content"]
-    assert "open" in message["content"]
-    assert "NOT executed" in message["content"]
+    # S-22: notices gehen in den denkkanal, nicht in den sichtbaren text.
+    reasoning = message.get("reasoning_content") or ""
+    assert "[blocked_tool_notice]" in reasoning
+    assert "open" in reasoning
+    assert "NOT executed" in reasoning
+    assert "[blocked_tool_notice]" not in (message.get("content") or "")
 
 
 def test_transient_flag_on_upstream_error():

@@ -769,34 +769,11 @@ class GLMWebClient:
                         # C-12: follow-up-runde wird zur aktiven runde
                         active_payload = follow_up
                         continue
-                    if accumulator.blocked_tool_attempt_names and has_valid_calls:
-                        # V-02: gemischter Turn — gueltige Calls werden
-                        # ausgeliefert, die blockierten Namen protokolliert.
-                        # Ohne diese Zeile verschwaende der blocked-versuch
-                        # still; das Modell wiederholt ihn dann.
-                        blocked_names = sorted(set(accumulator.blocked_tool_attempt_names))
-                        self.logger.warning(
-                            "Turn contained valid and blocked tool calls; delivering valid calls, blocked=%s",
-                            ", ".join(blocked_names),
-                        )
-                        # S-10/C-11: die gueltigen calls zu verwerfen war
-                        # der urspruengliche fehler (C-11) — sie werden
-                        # ausgeliefert. Aber der client muss AUCH erfahren,
-                        # dass ein aufruf abgelehnt wurde: ohne sichtbares
-                        # signal endet der turn wie ein vollstaendiger und
-                        # der agent beendet den tool-loop.
-                        notice = _blocked_notice_text(blocked_names)
-                        if notice:
-                            choices = result.get("choices")
-                            if isinstance(choices, list) and choices:
-                                message = choices[0].get("message")
-                                if isinstance(message, dict):
-                                    existing = str(message.get("content") or "")
-                                    message["content"] = f"{notice}\n{existing}" if existing else notice
-                    # T-25: auch der loop guard ist ein abgelehnter aufruf und
-                    # muss sichtbar sein — sonst zaehlt das modell calls
-                    # gegen ergebnisse und erfindet ein limit.
-                    self._inject_loop_guard_notice(result, accumulator)
+                    # S-22: ALLE notices eines turns an EINER stelle, in
+                    # fester reihenfolge, im DENKKANAL statt im sichtbaren
+                    # text. Siehe die ausfuehrliche begruendung im
+                    # stream-pfad. Reihenfolge: remap -> blocked -> loop.
+                    self._inject_turn_notices(result, accumulator)
                     return result, accumulator.conversation_id
                 if retry_exc is None:
                     break
@@ -839,63 +816,84 @@ class GLMWebClient:
                 )
             conversation_slot.__exit__(None, None, None)
             lease.release()
-        # T-25: der pfad fuer einen turn OHNE terminalen upstream-status
+        # T-25/S-22: der pfad fuer einen turn OHNE terminalen upstream-status
         # (abgeschnitten, kein `finish`) hatte die notice vorher nicht —
         # obwohl er der fall ist, in dem dem modell die erklaerung am
         # meisten fehlt: es hat calls gesendet und keine ergebnisse
-        # gesehen. Also auch hier.
+        # gesehen. Also auch hier. S-22: alle notices, im denkkanal.
         final_result = accumulator.build_response()
-        self._inject_loop_guard_notice(final_result, accumulator)
+        self._inject_turn_notices(final_result, accumulator)
         return final_result, accumulator.conversation_id
 
-    def _inject_loop_guard_notice(self, result: dict[str, object], accumulator: object) -> None:
-        """T-25: loop-guard-drops fuer das modell sichtbar machen (non-stream).
+    def _inject_turn_notices(self, result: dict[str, object], accumulator: object) -> None:
+        """S-22: alle turn-notices an EINER stelle, in fester reihenfolge,
+        in den DENKKANAL (`reasoning_content`) statt in `content`.
 
-        In-place am fertigen response-dict, damit beide non-stream-returns
-        (terminaler status und abgeschnittener turn) identisch behandelt
-        werden. Ohne Signal zaehlt das modell 10 calls gegen 2 ergebnisse
-        und schliesst auf ein erfundenes limit (live 2026-09-26)."""
-        self._inject_native_remap_notice(result, accumulator)
+        Live 2026-09-28 (Session `build` + `glm-5.3`, Ordnervergleich): die
+        notices standen per `content`-injektion mitten im sichtbaren text der
+        antwort — der client zeigte "Abbruch ehrlich gem ...
+        [loop_guard_notice] 8 identical open call(s) ... [blocked_tool_notice]
+        The tool(s) open ..." als EINE normale antwort, und das modell
+        erkannte die notices nicht als systemrueckmeldung. Sie landen jetzt in
+        `reasoning_content`: fuer das modell sichtbar, fuer den client vom
+        antworttext getrennt.
+
+        Reihenfolge remap -> blocked -> loop ist die beabsichtigte und
+        deshalb explizit: "dein `open` lief als `read`, ergebnis ist echt"
+        zuerst, "dieser versuch lief nicht" danach, "du hast denselben
+        aufruf wiederholt" zuletzt."""
+        remap_notice = _native_remap_notice_text(
+            getattr(accumulator, "native_remapped_calls", [])
+        )
+        blocked_names = sorted(
+            set(getattr(accumulator, "blocked_tool_attempt_names", []) or [])
+        )
+        has_valid_calls = False
+        choices = result.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            message = choices[0].get("message")
+            has_valid_calls = bool(isinstance(message, dict) and message.get("tool_calls"))
+        notices: list[str] = []
+        if remap_notice:
+            self.logger.warning(
+                "Turn remapped native tool call(s) and executed them; telling the model the real tool name",
+            )
+            notices.append(remap_notice)
+        # V-02/S-10/C-11: gemischter Turn. Die gueltigen calls werden
+        # ausgeliefert, aber der abgelehnte aufruf muss fuer das modell
+        # sichtbar bleiben — sonst wiederholt es ihn.
+        if blocked_names and has_valid_calls:
+            self.logger.warning(
+                "Turn contained valid and blocked tool calls; delivering valid calls, blocked=%s",
+                ", ".join(blocked_names),
+            )
+            blocked_notice = _blocked_notice_text(blocked_names)
+            if blocked_notice:
+                notices.append(blocked_notice)
+        # T-25: der loop guard ist ebenfalls ein abgelehnter aufruf.
         dropped = int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0)
-        if dropped <= 0:
+        if dropped > 0:
+            loop_notice = _loop_guard_notice_text(
+                dropped, getattr(accumulator, "loop_guard_dropped_tools", [])
+            )
+            if loop_notice:
+                self.logger.warning(
+                    "Turn dropped %s identical native call(s) via the loop guard; telling the model the real reason",
+                    dropped,
+                )
+                notices.append(loop_notice)
+        if not notices:
             return
-        notice = _loop_guard_notice_text(
-            dropped, getattr(accumulator, "loop_guard_dropped_tools", [])
-        )
-        if not notice:
-            return
-        self.logger.warning(
-            "Turn dropped %s identical native call(s) via the loop guard; telling the model the real reason",
-            dropped,
-        )
-        choices = result.get("choices")
         if not isinstance(choices, list) or not choices:
             return
         message = choices[0].get("message") if isinstance(choices[0], dict) else None
         if not isinstance(message, dict):
             return
-        existing = str(message.get("content") or "")
-        message["content"] = f"{notice}\n{existing}" if existing else notice
-
-    def _inject_native_remap_notice(self, result: dict[str, object], accumulator: object) -> None:
-        """S-21 (non-stream): gemappte native calls als ECHTE ausfuehrung melden.
-
-        Geht VOR der blocked-notice: das modell muss zuerst erfahren, dass sein
-        `open` als `read` gelaufen ist (Ergebnis ist echt), und DANN, dass die
-        nicht-abbildbaren `open`-versuche wirklich nicht gelaufen sind. Die
-        umgekehrte reihenfolge erzeugt die widerspruechliche botschaft aus dem
-        live-fall 2026-09-28."""
-        notice = _native_remap_notice_text(getattr(accumulator, "native_remapped_calls", []))
-        if not notice:
-            return
-        choices = result.get("choices")
-        if not isinstance(choices, list) or not choices:
-            return
-        message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        if not isinstance(message, dict):
-            return
-        existing = str(message.get("content") or "")
-        message["content"] = f"{notice}\n{existing}" if existing else notice
+        block = "\n".join(notices)
+        existing_reasoning = str(message.get("reasoning_content") or "")
+        message["reasoning_content"] = (
+            f"{block}\n{existing_reasoning}" if existing_reasoning else block
+        )
 
     def generate_images(self, payload: dict[str, object]) -> dict[str, object]:
         lease = self.request_queue.acquire(f"image:{payload.get('model', self.config.glm_image_model_name)}")
@@ -1266,11 +1264,49 @@ class GLMWebClient:
                     # seiteninhalt — der call hatte nie stattgefunden. Ohne
                     # diese notice liest der client die erfindung als erfolg
                     # und beendet den tool-loop.
+                    #
+                    # Die blocked-notice selbst wird gleich mitgebaut (siehe
+                    # den S-22-block darunter) — alle notices eines turns
+                    # gehen an einer stelle raus, in fester reihenfolge und im
+                    # denkkanal statt im sichtbaren text.
+                    # S-22: ALLE Notices eines turns werden an EINER stelle
+                    # gebaut und in FESTER reihenfolge ausgegeben — statt
+                    # jede einzeln per `[*new, *old]` vorzuschieben. Der
+                    # prepend-stapel kehrt die reihenfolge um und mehr als
+                    # drei notices pro turn (live 2026-09-28: loop, remap,
+                    # blocked, remap, blocked in einem turn) ergab eine
+                    # reihenfolge, die von der beabsichtigten abwich.
+                    # Zugleich gehen sie in den DENKKANAL
+                    # (`reasoning_content`), nicht in `content`: als
+                    # content landeten sie mitten im sichtbaren text der
+                    # antwort (live: "Abbruch ehrlich gem ...
+                    # [loop_guard_notice] ... [blocked_tool_notice] ...").
+                    #
+                    # Reihenfolge (bewusst, ist die ganze Botschaft):
+                    #   1. remap   — "dein `open` lief als `read`, ergebnis ist echt"
+                    #   2. blocked — "dieser versuch lief nicht"
+                    #   3. loop    — "du hast denselben aufruf wiederholt"
+                    # S-21 hatte remap per prepend vor blocked gezwungen; hier
+                    # ist die reihenfolge direkt ablesbar und kann nicht
+                    # kippen.
+                    remap_notice = _native_remap_notice_text(
+                        accumulator.native_remapped_calls
+                    )
+                    loop_notice = _loop_guard_notice_text(
+                        accumulator.loop_guard_dropped_count,
+                        accumulator.loop_guard_dropped_tools,
+                    )
+                    notices: list[str] = []
+                    if remap_notice:
+                        self.logger.warning(
+                            "Stream turn remapped native tool call(s) and executed them; "
+                            "telling the model the real tool name",
+                        )
+                        notices.append(remap_notice)
                     if turn_blocked_names and turn_has_valid_calls:
-                        # S-10/C-11 (stream): dieselbe luecke wie im
-                        # non-stream-pfad. Die gueltigen calls werden
+                        # S-10/C-11 (stream): die gueltigen calls werden
                         # ausgeliefert (C-11), aber der abgelehnte aufruf
-                        # muss fuer den client sichtbar bleiben — sonst
+                        # muss fuer das modell sichtbar bleiben — sonst
                         # beendet der agent den tool-loop mit dem
                         # gefuehl, alles sei ausgefuehrt worden.
                         blocked_names_text = ", ".join(sorted(set(turn_blocked_names)))
@@ -1279,75 +1315,18 @@ class GLMWebClient:
                             "delivering valid calls with notice, blocked=%s",
                             blocked_names_text,
                         )
-                        notice = _blocked_notice_text(turn_blocked_names)
-                        if notice:
-                            delta: dict[str, object] = {"content": notice}
-                            if not accumulator.emitted_role:
-                                delta = {"role": "assistant", "content": notice}
-                                accumulator.emitted_role = True
-                            finalize_chunks = [
-                                accumulator._chunk_json(
-                                    {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
-                                ),
-                                *finalize_chunks,
-                            ]
-                    # S-21 (stream): gemappte native calls als ECHTE ausfuehrung
-                    # melden. Die Notice muss VOR der blocked-notice stehen:
-                    # "dein `open` lief als `read`, das ergebnis ist echt" erst,
-                    # dann "diese `open`-versuche mit `turn*search*` liefen
-                    # nicht". Die umgekehrte Reihenfolge erzeugt die
-                    # widerspruechliche Rueckmeldung aus dem Live-Fall
-                    # 2026-09-28 (15x-identische-open-Schleife). `finalize_chunks`
-                    # wird per prepend gebaut, also muss dieser Block NACH dem
-                    # blocked-block laufen, damit die remap-notice in der
-                    # ausgabe vorn steht.
-                    remap_notice = _native_remap_notice_text(
-                        accumulator.native_remapped_calls
-                    )
-                    if remap_notice:
-                        self.logger.warning(
-                            "Stream turn remapped native tool call(s) and executed them; "
-                            "telling the model the real tool name",
-                        )
-                        remap_delta: dict[str, object] = {"content": remap_notice}
-                        if not accumulator.emitted_role:
-                            remap_delta = {"role": "assistant", "content": remap_notice}
-                            accumulator.emitted_role = True
-                        finalize_chunks = [
-                            accumulator._chunk_json(
-                                {"choices": [{"index": 0, "delta": remap_delta, "finish_reason": None}]}
-                            ),
-                            *finalize_chunks,
-                        ]
-                    # T-25 (stream): der loop guard verwirft identische
-                    # native calls ohne rueckmeldung. Das modell zaehlt dann
-                    # calls gegen ergebnisse, erfindet ein limit und bricht
-                    # ab (live: "Tool-Limit (8/8 Runden) erreicht").
-                    # Also dieselbe behandlung wie ein abgelehnter call.
-                    loop_notice = _loop_guard_notice_text(
-                        accumulator.loop_guard_dropped_count,
-                        accumulator.loop_guard_dropped_tools,
-                    )
-                    # `blocked` beschreibt nur die LETZTE Upstream-Runde. Ein
-                    # vorheriger blockierter Versuch kann die Follow-up-Budgets
-                    # erschoepft haben und in der letzten Runde mit gueltigen
-                    # Calls fehlen; die Notice muss trotzdem zum Modell.
+                        blocked_notice = _blocked_notice_text(turn_blocked_names)
+                        if blocked_notice:
+                            notices.append(blocked_notice)
                     if loop_notice:
                         self.logger.warning(
                             "Stream turn dropped %s identical native call(s) via the loop guard; "
                             "telling the model the real reason",
                             accumulator.loop_guard_dropped_count,
                         )
-                        loop_delta: dict[str, object] = {"content": loop_notice}
-                        if not accumulator.emitted_role:
-                            loop_delta = {"role": "assistant", "content": loop_notice}
-                            accumulator.emitted_role = True
-                        finalize_chunks = [
-                            accumulator._chunk_json(
-                                {"choices": [{"index": 0, "delta": loop_delta, "finish_reason": None}]}
-                            ),
-                            *finalize_chunks,
-                        ]
+                        notices.append(loop_notice)
+                    for notice_text in notices:
+                        yield accumulator._notice_chunk(notice_text).encode("utf-8")
                     if turn_blocked_names and not turn_has_valid_calls and not blocked:
                         blocked_names_text = ", ".join(sorted(set(turn_blocked_names)))
                         self.logger.warning(

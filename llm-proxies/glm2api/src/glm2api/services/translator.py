@@ -4877,6 +4877,35 @@ class GLMEventAccumulator:
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE finalize output", chunks)
         return chunks
 
+    def _notice_chunk(self, notice: str) -> str:
+        """S-22: eine Notice als DENKKANAL statt als sichtbarer text.
+
+        Live 2026-09-28 (Session mit `build` + `glm-5.3`, Ordnervergleich):
+        die notices wurden per `content`-delta ausgeliefert und landeten
+        mitten im Fliesstext der antwort — der client zeigte
+        "Abbruch ehrlich gem ... [loop_guard_notice] 8 identical open
+        call(s) ... [native_remap_notice] Correction ... [blocked_tool_notice]
+        The tool(s) open ..." als EINE normale antwort. Das modell erkannte
+        die notices nicht als systemrueckmeldung, sondern als teil seiner
+        eigenen narration, und produzierte genau die drift, die sie
+        verhindern sollen (live: "Abbruch ehrlich gem" mitten im satz).
+
+        `reasoning_content` ist der richtige kanal: der client zeigt es
+        getrennt von der antwort an, es geht NICHT in den sichtbaren
+        text ein, und das modell sieht es trotzdem. Tool-rolle waere
+        ebenfalls sauber, geht aber nur wenn im turn ein echter
+        `tool_call` existiert — bei einem rein blockierten turn gibt es
+        keinen, und eine erfundene tool-id waere schlimmer als ein
+        sichtbares delta.
+        """
+        delta: dict[str, object] = {"reasoning_content": notice}
+        if not self.emitted_role:
+            delta = {"role": "assistant", "reasoning_content": notice}
+            self.emitted_role = True
+        return self._chunk_json(
+            {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
+        )
+
     def prepend_blocked_notice(
         self, blocked_names_text: str, finalize_chunks: list[str]
     ) -> list[str]:
@@ -4887,7 +4916,8 @@ class GLMEventAccumulator:
 
         Wichtig: NICHT erneut finalizen — `finalize()` ist nicht
         idempotent und wuerde den bereits erzeugten prose-chunk verlieren.
-        Stattdessen wird genau ein zusaetzlicher content-delta vorangestellt."""
+        Stattdessen wird genau ein zusaetzlicher notice-delta vorangestellt
+        (seit S-22 im denkkanal, nicht im sichtbaren text)."""
         notice = (
             f"[blocked_tool_notice] The tool(s) {blocked_names_text} are not available in "
             "this environment and were NOT executed. Do not claim to have called them "
@@ -4896,13 +4926,7 @@ class GLMEventAccumulator:
         self.blocked_tool_attempt_names.extend(
             name.strip() for name in blocked_names_text.split(",") if name.strip()
         )
-        delta: dict[str, object] = {"content": notice}
-        if not self.emitted_role:
-            delta = {"role": "assistant", "content": notice}
-            self.emitted_role = True
-        notice_chunk = self._chunk_json(
-            {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
-        )
+        notice_chunk = self._notice_chunk(notice)
         return [notice_chunk, *finalize_chunks]
 
     def build_response(self, status: str | None = None) -> dict[str, object]:
