@@ -1,0 +1,241 @@
+/**
+ * Maps raw provider errors to user-friendly messages with recovery actions.
+ */
+function classifyError(error, provider) {
+  const msg = (error?.message || String(error) || '').toLowerCase()
+  const statusCode = error?.code || error?.statusCode || error?.status || 0
+
+  // ── DeepSeek session create failures ──────────────────────────
+  if (error?.code === 'session_create_failed') {
+    const isAuth = error?.statusCode === 40001 || error?.statusCode === 40003
+    if (isAuth) {
+      return {
+        category: 'session_expired',
+        message: `Your ${provider} browser session has expired or is invalid (${error.statusCode}).`,
+        action: `Re-capture a fresh fetch() from chat.deepseek.com DevTools and restart the server.`,
+        status: 401,
+      }
+    }
+    return {
+      category: 'provider_error',
+      message: `${provider} refused to create a session: ${error.message}`,
+      action: 'Re-capture a fresh fetch() from your browser and restart the server.',
+      status: 502,
+    }
+  }
+
+  // ── Account suspended / muted ──────────────────────────────────
+  if (error?.code === 'account_suspended') {
+    const muteUntil = error?.muteUntil ? new Date(error.muteUntil * 1000).toLocaleString() : null
+    return {
+      category: 'account_suspended',
+      message: `Your ${provider} account has been suspended${muteUntil ? ` until ${muteUntil}` : ''}.`,
+      action:
+        'This account is temporarily muted by the provider. Switch to a different account in the startup wizard, or wait until the suspension lifts.',
+      status: 403,
+    }
+  }
+
+  // ── Device/IP flagged (Cloudflare bot-behavior detection) ──
+  // Distinct from a stale session: re-capturing a fetch() from the same
+  // flagged device/IP will not fix this — it needs time (and/or a different
+  // network) to clear, not new cookies.
+  if (statusCode === 403 && msg.includes('unusual activity')) {
+    const cooldownSec = error?.cooldownMs ? Math.ceil(error.cooldownMs / 1000) : null
+    return {
+      category: 'device_flagged',
+      message: `${provider} flagged this device/IP for unusual activity (Cloudflare bot detection).`,
+      action: cooldownSec
+        ? `Pausing this session for ~${cooldownSec}s. Avoid retrying immediately — repeated attempts while flagged can prolong the block. If it persists, try a different network/IP.`
+        : 'Wait before retrying — repeated attempts while flagged can prolong the block. If it persists, try a different network/IP.',
+      status: 403,
+    }
+  }
+
+  // ── Chat session deleted server-side (Qwen) ─────────────
+  // The chat was removed upstream (e.g. cleaned up after a daily-limit hit,
+  // or expired). Restarting the server re-runs the session wizard and
+  // creates a fresh session, which is simpler and more reliable than an
+  // in-request auto-recreate.
+  if (error?.code === 'CHAT_NOT_FOUND') {
+    return {
+      category: 'session_expired',
+      message: `${provider} reports this chat session no longer exists.`,
+      action: 'Restart the server to start a fresh session.',
+      status: 404,
+    }
+  }
+
+  // ── Daily quota exhausted (Qwen) ────────────────────────
+  // Qwen returns { success:false, data:{ code:'RateLimited', num } } when
+  // the account's daily message allowance is used up — distinct from
+  // 'quota_limit' (temporary overload, retry soon). `waitMs` unit (minutes vs
+  // hours) is parsed from Qwen's template string — see providers/qwen/api.js.
+  if (error?.code === 'RateLimited') {
+    const waitMs = error?.waitMs
+    const waitLabel = waitMs
+      ? waitMs >= 60 * 60 * 1000
+        ? `~${Math.ceil(waitMs / 3600000)} hour${Math.ceil(waitMs / 3600000) === 1 ? '' : 's'}`
+        : `~${Math.ceil(waitMs / 60000)} minute${Math.ceil(waitMs / 60000) === 1 ? '' : 's'}`
+      : null
+    return {
+      category: 'daily_limit',
+      message: `${provider} daily usage limit reached.`,
+      action: waitLabel
+        ? `Wait ${waitLabel} before trying again, or switch to a different account in the startup wizard.`
+        : 'Wait before trying again tomorrow, or switch to a different account in the startup wizard.',
+      status: 429,
+    }
+  }
+
+  // ── Provider quota/capacity exhausted ──────────────────
+  // Qwen (and others) push an inline `error` frame with code 'quota_limit'
+  // when the provider itself is overloaded — not a client-side rate limit,
+  // not a bad request. Retrying later with the same account is the fix.
+  if (error?.code === 'quota_limit' || msg.includes('quota_limit') || msg.includes('high demand')) {
+    return {
+      category: 'provider_overloaded',
+      message: `${provider} is currently experiencing high demand and rejected the request (quota_limit).`,
+      action:
+        'Wait a bit and try again. This is on the provider side, not your account or request.',
+      status: 503,
+    }
+  }
+
+  // ── Provider-stream inline error frame ─────────────────
+  // Emitted by stream handlers when the provider pushes an `error` payload
+  // mid-stream (bad model, quota, invalid param, etc.). Preserve the actual
+  // provider message rather than collapsing to the generic fallback.
+  if (msg.includes('stream error:')) {
+    const detail = (error?.message || '').split('stream error:')[1]?.trim()
+    return {
+      category: 'provider_error',
+      message: `${provider} returned a stream error: ${detail || 'unknown error'}`,
+      action:
+        'Check the model id / request parameters, or re-capture a fresh fetch() if it persists.',
+      status: statusCode >= 400 ? statusCode : 502,
+    }
+  }
+
+  // ── Session expired / auth failures ────────────────────
+  if (statusCode === 401 || statusCode === 403) {
+    return {
+      category: 'session_expired',
+      message: `Your ${provider} browser session has expired or is invalid.`,
+      action: `Re-capture a fresh fetch() from ${getProviderURL(provider)} DevTools and restart the server.`,
+      status: 401,
+    }
+  }
+
+  // ── Rate limiting ──────────────────────────────────────
+  if (statusCode === 429) {
+    const cooldownSec = error?.cooldownMs ? Math.ceil(error.cooldownMs / 1000) : null
+    const waitHint = cooldownSec
+      ? ` Retry in ~${cooldownSec}s.`
+      : ' Wait a few minutes and try again.'
+    return {
+      category: 'rate_limited',
+      message: `You've hit ${provider}'s hourly message limit.`,
+      action: `${waitHint} Or switch to a different user account in the startup wizard.`,
+      status: 429,
+    }
+  }
+
+  // ── Network errors ─────────────────────────────────────
+  if (
+    msg.includes('econnrefused') ||
+    msg.includes('enotfound') ||
+    msg.includes('econnreset') ||
+    msg.includes('timeout') ||
+    msg.includes('fetch failed') ||
+    msg.includes('network')
+  ) {
+    return {
+      category: 'network',
+      message: `Cannot reach ${provider}. Network error.`,
+      action:
+        'Check your internet connection. If you are behind a VPN or proxy, try disconnecting it.',
+      status: 502,
+    }
+  }
+
+  // ── Invalid input ──────────────────────────────────────
+  if (msg.includes('invalid json') || msg.includes('parse')) {
+    return {
+      category: 'invalid_request',
+      message: `${provider} returned an unexpected response (possibly an error page).`,
+      action:
+        'This usually means the session is invalid. Re-capture a fresh fetch() and try again.',
+      status: 502,
+    }
+  }
+
+  // ── Generic provider error ─────────────────────────────
+  if (statusCode >= 400) {
+    return {
+      category: 'provider_error',
+      message: `${provider} returned an error (HTTP ${statusCode}).`,
+      action: 'If this persists, re-capture a fresh fetch() from your browser.',
+      status: 502,
+    }
+  }
+
+  // ── Unknown / fallback ─────────────────────────────────
+  return {
+    category: 'internal',
+    message: `An unexpected error occurred with ${provider}.`,
+    action:
+      'Try restarting the server. If the issue persists, re-capture a fresh fetch() from your browser.',
+    status: 500,
+  }
+}
+
+function getProviderURL(provider) {
+  const urls = {
+    deepseek: 'chat.deepseek.com',
+    chatgpt: 'chatgpt.com',
+    claude: 'claude.ai',
+    qwen: 'chat.qwen.ai',
+  }
+  return urls[provider?.toLowerCase()] || provider || 'the provider'
+}
+
+/**
+ * Build a full OpenAI-compatible error response with user-friendly details.
+ *
+ * @param {Error|object} error - Raw error from provider
+ * @param {string} provider - 'deepseek' | 'claude' | 'chatgpt'
+ * @param {string} type - OpenAI error type
+ * @param {string} code - OpenAI error code
+ */
+function toOpenAIError(error, provider, type, code) {
+  // Direct-message overload: toOpenAIError(status, message, type, code)
+  // Used by route handlers for simple validation errors, bypassing classifyError.
+  if (typeof error === 'number' && typeof provider === 'string') {
+    return {
+      error: {
+        message: provider,
+        type: type || 'invalid_request_error',
+        code: code || 'invalid_request',
+        action: null,
+        category: type || 'invalid_request_error',
+        status: error,
+      },
+    }
+  }
+
+  const classified = classifyError(error, provider)
+
+  return {
+    error: {
+      message: classified.message,
+      type: type || classified.category || 'api_error',
+      code: code || classified.category || 'internal_error',
+      action: classified.action,
+      category: classified.category,
+      status: classified.status || 500,
+    },
+  }
+}
+
+module.exports = { toOpenAIError, classifyError }

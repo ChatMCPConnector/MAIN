@@ -150,6 +150,9 @@ cmd_lock() {
   [ -s "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ] && { cp "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" "$stage/files/antigravity-oauth_creds.json"; found=1; }
   [ -s "$HOME/.config/landscape/chatglm-refresh-token" ] && { cp "$HOME/.config/landscape/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
   missing_or_empty "$HOME/.config/landscape/chatglm-refresh-token" && [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
+  # ZeroKey (ChatGPT-Web): die Users-Datei traegt die ChatGPT-Cookies + das
+  # Sentinel-Token. Ohne sie startet der Proxy auf Port 7250 nicht sinnvoll.
+  [ -s "$HOME/.config/landscape/zerokey-users.json" ] && { cp "$HOME/.config/landscape/zerokey-users.json" "$stage/files/zerokey-users.json"; found=1; }
   [ -s "$HOME/.local/share/opencode/auth.json" ] && { cp "$HOME/.local/share/opencode/auth.json" "$stage/files/opencode-auth.json"; found=1; }
   [ -s "$HOME/.config/rclone/rclone.conf" ] && { cp "$HOME/.config/rclone/rclone.conf" "$stage/files/rclone.conf"; found=1; }
   # Freebuff-CLI-Login (Account-Token + Fingerprint). Ohne das ist freebuff in
@@ -208,6 +211,10 @@ cmd_unlock() {
   if [ -f "$stage/files/chatglm-refresh-token" ] && missing_or_empty "$HOME/.config/landscape/chatglm-refresh-token"; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/chatglm-refresh-token" "$HOME/.config/landscape/chatglm-refresh-token" && chmod 600 "$HOME/.config/landscape/chatglm-refresh-token"
     echo "    ChatGLM-Refresh-Token wiederhergestellt."
+  fi
+  if [ -f "$stage/files/zerokey-users.json" ] && missing_or_empty "$HOME/.config/landscape/zerokey-users.json"; then
+    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/zerokey-users.json" "$HOME/.config/landscape/zerokey-users.json" && chmod 600 "$HOME/.config/landscape/zerokey-users.json"
+    echo "    ZeroKey-ChatGPT-Credentials wiederhergestellt."
   fi
   if [ -f "$stage/files/antigravity-oauth_creds.json" ] && missing_or_empty "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json"; then
     mkdir -p "$HOME/.config/antigravity-oauth-proxy" && cp "$stage/files/antigravity-oauth_creds.json" "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" && chmod 600 "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json"

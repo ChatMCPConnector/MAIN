@@ -22,7 +22,7 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, verify-codespace.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
-| `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
+| `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) + **zerokey** (Port 7250, ChatGPT-Web) |
 
 | `.env` `.runtime/` | GITIGNORED — Klartext-Secrets (.env), Browser-Profil, Runtime (nie committen) |
 
@@ -30,9 +30,10 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 
 Codespace bauen → `setup.sh` stellt ALLES automatisch wieder her (Systempakete,
 opencode, uv, Secrets-Unlock, Git-Auth, Freebuff-CLI, Browser-Runtime,
-**glm2api-Proxy inkl. Start** — der Code liegt komplett im Repo, es gibt nichts
-mehr zu klonen; nur `uv sync` (Python 3.14 + Deps, beim ersten Mal ~2-5 Min) +
-Autostart). Danach:
+**glm2api-, antigravity- und zerokey-Proxy inkl. Start** — der Code liegt
+komplett im Repo, es gibt nichts mehr zu klonen; nur `uv sync` (Python 3.14 +
+Deps, beim ersten Mal ~2-5 Min) + `pnpm install` (ZeroKey, lädt einmalig
+Playwright-Chromium) + Autostart). Danach:
 
 ```bash
 ./infra/scripts/save.sh status                       # Überblick (Repo, Auth, Secrets)
@@ -129,14 +130,19 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 | xinjianya | gpt-5.6-sol | xinjianya.key |
 | **glm2api** | glm-5.3 | lokal, Port 8001, kein Key |
 | **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
-| downloaddoctor | ZeroKey (128k Context, 16k Output) | lokal, Port 7250, Platzhalter-Key `opencode` |
+| downloaddoctor | ZeroKey (**16k** Context, 16k Output) | lokal, Port 7250, Platzhalter-Key `opencode`, Code im Repo |
 | cyberpradeep | ZeroKey (+ chatgpt-Variante) | lokal, Port 8088, Platzhalter-Key `local` |
 
 - `downloaddoctor`/`cyberpradeep` sind in `opencode.json` konfiguriert (Loopback-only,
-  Platzhalter-Keys) — sie sind **nicht** Teil der Setup-/Watchdog-Kette: setup.sh
-  stellt nur glm2api und antigravity wieder her und startet sie. Wer die beiden
-  nutzt, startet sie selbst (Befund aus dem Main-Analyse-Run 2026-09-28: bis dahin
-  konfiguriert, aber in keiner Doku erwähnt).
+  Platzhalter-Keys).
+- **`downloaddoctor` (ZeroKey) ist seit 2026-09-29 Teil der Setup-/Watchdog-Kette.**
+  Vorher war er nur konfiguriert, aber in keiner Doku erwähnt und von keinem Skript
+  gestartet (Befund aus dem Main-Analyse-Run 2026-09-28) — der Proxy lief nur, weil
+  er von Hand gestartet worden war. `setup.sh` und `proxy-watchdog.sh` kümmern sich
+  jetzt um ihn, der Code liegt in `llm-proxies/zerokey/`. Details im Abschnitt
+  [ZeroKey](#zerokey--der-chatgpt-web-proxy-port-7250).
+- `cyberpradeep` (ZeroKey-Variante, Port 8088) bleibt **außen vor**: kein Code im
+  Repo, keine Credentials, nicht Teil der Kette.
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
@@ -208,6 +214,65 @@ einem Codespace-Wechsel macht setup.sh automatisch: uv-Install (falls nötig),
   im Repo (kein Patch-Artefakt mehr).
 - setup.sh rebuilt nur bei `LANDSCAPE_REBUILD_LLM_PROXIES=1` (sonst manuell).
 - Upstream-Limit ist pro Guest-Token (~5 Nachrichten) — der Pool rotiert das weg.
+
+## ZeroKey — der ChatGPT-Web-Proxy (Port 7250)
+
+OpenAI-kompatibler Proxy, der eine **ChatGPT-Web-Conversation** als
+`/v1/chat/completions`-Endpunkt anbietet. Nötig, weil es keinen API-Key für
+ChatGPT gibt: der Proxy fährt einen echten Browser (Playwright), übernimmt
+Cookies und Sentinel-Token aus einem Capture und streamt die Conversation.
+
+| | |
+|---|---|
+| **Code** | `llm-proxies/zerokey/` — **liegt im Repo, kein Klon** (vendored 2026-09-29 aus `/workspaces/downloaddoctor-zerokey`) |
+| **Start** | `./llm-proxies/scripts/start-zerokey.sh` (`node server.js chatgpt main MAIN`) |
+| **Port** | 7250, loopback-only |
+| **opencode** | Provider `downloaddoctor`, Modell `zerokey`, Platzhalter-Key `opencode` |
+| **Log** | `/tmp/opencode/zerokey.log`, PID `/tmp/opencode/zerokey.pid` |
+| **Health** | `curl -s 127.0.0.1:7250/health` |
+| **Quelle** | upstream `downloaddoctor/zerokey`, Commit `11ea0bf` |
+
+### Credentials — der Teil, der nicht im Git stehen kann
+
+`llm-proxies/zerokey/temp/users.json` enthält die **ChatGPT-Cookies, das
+Sentinel-Token und die Session-IDs**. Das ist ein Secret mit Auslaufdatum, kein
+Quelltext — deshalb ist `temp/` per `.gitignore` ausgeschlossen und die Datei
+wandert über das Secret-Bundle:
+
+```
+config/secrets.enc  --(secrets.sh unlock)-->  ~/.config/landscape/zerokey-users.json
+                    --(start-zerokey.sh)-->  llm-proxies/zerokey/temp/users.json
+```
+
+`secrets.sh` packt sie bei `lock` ein und legt sie bei `unlock` ab (symmetrisch
+zum `chatglm-refresh-token`). **Nach dem ersten `lock` mit dem neuen Eintrag**
+überlebt der Proxy einen Codespace-Neubau ohne Browser-Login.
+
+Solange das Bundle sie nicht enthält, startet `start-zerokey.sh` **nicht**
+sondern sagt es klar — ein stiller Fehlstart ohne Credentials wäre ein Proxy, der
+401 liefert und den Agenten raten lässt.
+
+**Wenn die Cookies abgelaufen sind** (ChatGPT-Session, typisch nach Tagen):
+`initializeFromJSON` schlägt dann mit `openai-sentinel-proof-token not found`
+fehl. Neuer Login = ChatGPT im Browser öffnen, die Conversation als HAR
+capturen, `utils/har-to-capture.js` drüber, Ergebnis nach
+`~/.config/landscape/zerokey-users.json`, dann `secrets.sh lock` + `save.sh`.
+
+### Abweichungen vom Upstream-Stand
+
+Bewusst, beim Vendoring gemacht — jeweils weil das Original im MAIN-Repo Schaden
+angerichtet hätte:
+
+| Entfernt | Warum |
+|---|---|
+| `"postinstall": "git config core.hooksPath .githooks"` | Läuft bei jedem `pnpm install` **im MAIN-Repo** und würde dessen `core.hooksPath` auf einen relativen, nicht existierenden Pfad umbiegen — die Hooks des Haupt-Repos wären still weg. |
+| `.githooks/pre-commit` | Macht `git add $files` über alle geänderten Dateien. Im geteilten MAIN-Repo (mehrere eigene Accounts) würde ein Commit eines Agenten damit fremde Arbeit mit einfrieren. |
+| `.vscode/settings.json` | Editor-Konfiguration des Upstream-Klons (`chat.tools.terminal.autoApprove` für `Set-Content`). MAIN hat eigene `.vscode/`; die Datei hätte im Unterordner nur überflüssig gewirkt. |
+
+`zerokey.sh` / `zerokey.bat` (Upstream-Download-/Klon-Helfer) sind bewusst
+**da** — sie sind Teil der Upstream-Distribution und in dessen README
+dokumentiert. Für dieses Setup gilt `llm-proxies/scripts/start-zerokey.sh`;
+wer `./zerokey.sh` hier ausführt, erzeugt ein verschachteltes `zerokey/zerokey`.
 
 ## Antigravity Quota-Architektur & Token-Multiplikator (Befunde)
 
@@ -901,6 +966,8 @@ Proxy bei jedem Start automatisch hoch.
     * **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):** Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2 springt). Der Fragenmodus schließt erst, wenn Freebuff `Your answer:` / `Your answers:` ausgibt oder der Nutzer Esc / Strg+C drückt.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
+
+- 2026-09-29: **ZeroKey offiziell ins Repo aufgenommen — der dritte LLM-Proxy war konfiguriert, aber nirgends gepflegt.** Anlass war die Fehlersuche an `ses_f16591f3…`, `ses_f16212e6…` und `ses_f15f39a8…`: der ChatGPT-Proxy auf Port 7250 hat drei aufeinanderfolgende Analyse-Sessions abgebrochen (Details im ZeroKey-Abschnitt oben und in `llm-proxies/zerokey/AGENTS.md`). **Der Fund, der unabhängig vom Bug zählte:** `infrastructure.md` führte `downloaddoctor` in der Provider-Tabelle mit *„128k Context"* — der Proxy erzwingt aber `promptLimit = 50_000` **Zeichen** (~12,5k Tokens, `providers/chatgpt/config.js`). Faktor 6,4 zwischen dem, was opencode glaubte, und dem, was der Proxy akzeptierte. `opencode.json` behauptete dieselben 128k, deshalb hat opencode **nie kompactiert** und ungebremst Historie geschickt, die der Proxy dann hart abschnitt. `limit.context` steht jetzt auf **16000**. **Drei Fehler, alle live reproduziert, nicht am grünen Unit-Test erkannt:** (a) `limitPrompt` schnitt überlange Prompts mit `slice(0, limit)` — behält den **Anfang** und wirft den **Schwanz** weg, und im Schwanz stehen die letzte User-Nachricht und die neuesten Tool-Ergebnisse. Das Modell verlor den Auftrag und fiel auf generische Rückfragen zurück; bei 78 kB waren 28 523 Zeichen weg, darunter wörtlich das „mach weiter". A/B gegen den echten Upstream: alter Code → *"What would you like me to do with it?"*, neuer Code → vollständige Analyse. (b) `readSSE` rief `onDone` bei `[DONE]` **außerhalb** von `finishOnce` — doppelter Aufruf, und ein werfender Handler entkam als unbehandelte Rejection; nötig geworden, weil der Ask-Guard aus `onDone` heraus retryt. (c) Ein Detektor-Muster matchte `key` ohne Wortgrenze und ließ dadurch genau die häufigste Drift-Frage („Zero**Key**") durch. **Die Leerlauf-Ursache ist ausdrücklich nicht behoben:** das Modell driftet gelegentlich aus dem Agent-Modus. Abgefangen werden jetzt die drei Ausbruchsformen (generische Frage als `⟦ask⟧`, leerer Turn, Drift als Text) plus der abgeschnittene Prompt — jeder mit eigenem Retry-Nudge, einmalig begrenzt, und **echte Blocker kommen durch** (live gegengeprüft: *„Which MHI command failed and what path or parameters should be corrected?"* nennt einen konkreten Artefakt und wurde nicht unterdrückt). **Übernahme ins Repo:** Code aus `/workspaces/downloaddoctor-zerokey` nach `llm-proxies/zerokey/` (117 Dateien via `git archive HEAD`, damit exakt der committete Stand und kein Runtime-State); `start-zerokey.sh` nach dem Muster von `start-glm2api.sh`; verdrahtet in `setup.sh` + `proxy-watchdog.sh` + `verify-codespace.sh`; **`postinstall` und `.githooks/` entfernt** — beide hätten das geteilte MAIN-Repo beschädigt (der erste biegt `core.hooksPath` des Haupt-Repos um, der zweite macht `git add` über alle geänderten Dateien); die ChatGPT-Cookies laufen jetzt über `secrets.sh` wie der ChatGLM-Token. **Ein Bug, den das Startskript erst im eigenen Betrieb zeigte:** `node ... >> "$LOG" 2>&1 &` ließ die aufrufende Subshell die stdout-Pipe des Aufrufers erben — bei `start-zerokey.sh | tail` wartete `tail` ewig auf EOF, während der Proxy längst lief. Das hätte **den Watchdog blockiert**, weil er das Skript aus einer Umleitung startet. Der Subshell-Body wird jetzt komplett umgeleitet. Live verifiziert: Proxy läuft aus `llm-proxies/zerokey`, `/health` ok, echter opencode-Request liefert Tool-Calls.
 
 - 2026-09-28: **Befund-Abarbeitung aus dem Main-Analyse-Run (read-only
   `opencode run` über das gesamte Repo, Log `.runtime/opencode-main-analysis.log`).

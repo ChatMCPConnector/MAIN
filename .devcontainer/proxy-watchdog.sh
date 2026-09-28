@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# proxy-watchdog.sh: hält alle lokalen LLM-Proxies am Leben (glm2api, antigravity-proxy)
-# egal was passiert (OOM-Kill, Container-Reattach, Idle-Stopp...).
+# proxy-watchdog.sh: hält alle lokalen LLM-Proxies am Leben (glm2api,
+# antigravity-proxy, zerokey) egal was passiert (OOM-Kill, Container-Reattach,
+# Idle-Stopp...).
 #
 # Wird von start-on-boot.sh und setup.sh als Hintergrund-Daemon gestartet und prüft
 # alle 30s den Proxy-Health.
@@ -28,7 +29,13 @@ while true; do
     bash "$REPO_ROOT/llm-proxies/antigravity-proxy/scripts/start.sh" >> /tmp/opencode/watchdog.log 2>&1 || true
   fi
 
-  # 3. opencode-server (Port 4096)
+  # 3. zerokey (Port 7250)
+  if ! curl -sf -m 3 http://127.0.0.1:7250/v1/models >/dev/null 2>&1; then
+    echo "$(date '+%H:%M:%S') [watchdog] zerokey (Port 7250) weg — starte neu..." >> /tmp/opencode/watchdog.log
+    bash "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" >> /tmp/opencode/watchdog.log 2>&1 || true
+  fi
+
+  # 4. opencode-server (Port 4096)
   if ! curl -sf -m 3 http://127.0.0.1:4096/ >/dev/null 2>&1; then
     echo "$(date '+%H:%M:%S') [watchdog] opencode-server (Port 4096) weg — starte neu..." >> /tmp/opencode/watchdog.log
     bash "$REPO_ROOT/infra/scripts/opencode-server.sh" start >> /tmp/opencode/watchdog.log 2>&1 || true

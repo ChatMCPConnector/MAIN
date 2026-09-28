@@ -279,6 +279,20 @@ else
   fi
 fi
 
+echo "==> [landscape] LLM-Proxy zerokey wiederherstellen & starten..."
+# ZeroKey (ChatGPT-Web-Provider, Port 7250) liegt komplett im Repo unter
+# llm-proxies/zerokey/ — kein Klon. start-zerokey.sh macht pnpm install
+# (einmalig, lädt Playwright-Chromium) und startet. Ohne die ChatGPT-Cookies
+# (temp/users.json, aus dem Secret-Bundle) startet er nicht sinnvoll; das
+# Skript sagt das dann klar, statt still zu scheitern.
+if ss -tln | grep -q ":7250 "; then
+  echo "    Port 7250 belegt — zerokey läuft bereits."
+else
+  bash "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" \
+    && echo "    zerokey läuft." \
+    || echo "    WARN: zerokey-Start fehlgeschlagen — manuell: ./llm-proxies/scripts/start-zerokey.sh"
+fi
+
 echo "==> [landscape] Zentralen opencode-Server starten..."
 if ss -tln | grep -q ":4096 "; then
   echo "    Port 4096 belegt — opencode-server läuft bereits."
@@ -290,7 +304,7 @@ else
   fi
 fi
 
-echo "==> [landscape] Proxy-Watchdog starten (hält glm2api am Leben)..."
+echo "==> [landscape] Proxy-Watchdog starten (hält glm2api, antigravity-proxy und zerokey am Leben)..."
 # Watchdog auch beim Codespace-Bau/Rebuild starten (postStartCommand macht es bei
 # jedem Start zusätzlich). setsid, damit devcontainer-cli ihn nicht mitkillt.
 mkdir -p /tmp/opencode
