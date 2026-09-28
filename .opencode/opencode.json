@@ -115,35 +115,6 @@
         }
       }
     },
-    "cyberpradeep": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Cyberpradeep",
-      "options": {
-        "baseURL": "http://127.0.0.1:8088/v1",
-        "apiKey": "local"
-      },
-      "models": {
-        "zerokey": {
-          "name": "ZeroKey",
-          "reasoning": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "none": {
-              "reasoningEffort": "none"
-            }
-          },
-          "limit": {
-            "context": 128000,
-            "output": 16384
-          }
-        }
-      }
-    },
     "antigravity": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Antigravity OAuth Proxy",
