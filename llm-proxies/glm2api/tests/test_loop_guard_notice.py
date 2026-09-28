@@ -316,6 +316,83 @@ def test_non_stream_guard_notice_gilt_auch_fuer_textprotokoll_calls():
     assert "8 identical read call" in message["content"]
 
 
+def test_stream_blocked_tool_notice_survives_alongside_valid_native_calls():
+    client = _make_client()
+    events = [_native_open_event("call_bad", "turn0search1")]
+    events.append(
+        {
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "good-read",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {
+                                "name": "read",
+                                "id": "read-good",
+                                "arguments": {"filePath": "/workspaces/MAIN/README.md"},
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
+        _FakeResponse(events),
+        "assistant-1",
+    )
+
+    text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
+
+    assert "[blocked_tool_notice]" in text
+    assert "open" in text
+    assert "NOT executed" in text
+    assert '"name":"read"' in text
+    assert '"name":"open"' not in text
+
+
+def test_stream_loop_guard_notice_survives_alongside_valid_native_calls():
+    client = _make_client()
+    events = [_native_open_event(f"call_{index}") for index in range(6)]
+    events.append(
+        {
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "good-read",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {
+                                "name": "read",
+                                "id": "read-good",
+                                "arguments": {"filePath": "/workspaces/MAIN/README.md"},
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
+        _FakeResponse(events),
+        "assistant-1",
+    )
+
+    text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
+
+    assert "[loop_guard_notice]" in text
+    assert "4 identical open call" in text
+    assert "NO tool limit" in text
+    assert '"name":"read"' in text
+    assert '"name":"open"' not in text
+
+
+
 def test_ohne_drops_keine_notice_im_strom():
     """Gegenprobe: ein turn mit zwei verschiedenen zielen darf keine
     alarmmeldung produzieren, sonst schickt der proxy bei jedem normalen

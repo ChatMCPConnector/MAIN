@@ -663,6 +663,19 @@ def _needs_paragraph_break(previous: str, following: str) -> bool:
     last_closed = previous.rfind(">")
     if previous.find("<", last_closed + 1) != -1:
         return False
+    # Ungeschlossene klammer: die grenze liegt INNERHALB eines
+    # klammer-kommentars ('…(8/' + '8) …'). Ein absatzumbruch dort ist
+    # ein transportschaden — und er zerschneidet genau den satz, den
+    # `strip_invented_limit_claim` als einheit braucht (gemessen:
+    # 'Die Rundenbegrenzung (8/8) ist erreicht…' bei chunk 3 — '(8/'
+    # + '8) ' las sich als geordnete liste ('8) ' matcht
+    # `\d+[.)][ \t]`), das eingeschobene '\n\n' beendete den satz
+    # kuenstlich und der rest '8) ist erreicht…' streamte als
+    # vermeintliche antwort.
+    if previous.count("(") > previous.count(")"):
+        return False
+    if previous.count("[") > previous.count("]"):
+        return False
     if following[:1].isspace():
         return False
     if previous[-1:].isspace():
@@ -1400,12 +1413,34 @@ _PREAMBLE_STEM_PREFIX_RE = _build_stem_prefix_regex(_PREAMBLE_STEMS)
 # Hold only the ambiguous initial article prefix so a split before the first
 # backtick cannot escape. A following ordinary word releases it immediately.
 _INITIAL_TOOL_NARRATION_PREFIX_RE = re.compile(
-    r"\A(?:d|de|der|der[ \t]+|t|th|the|the[ \t]+)\Z", re.IGNORECASE
+    r"\A(?:d|de|der|der[ \t]+|di|die|die[ \t]+|t|th|the|the[ \t]+)\Z", re.IGNORECASE
+)
+
+_LIMIT_CLAIM_LEAD_PREFIXES = (
+    "die rundenbegrenzung", "die rundenbeschränkung", "das rundenlimit",
+    "das tool-limit", "das tokenlimit", "rundenbegrenzung", "rundenbeschränkung",
 )
 
 
 def _initial_tool_narration_prefix_undecided(text: str) -> bool:
     return bool(_INITIAL_TOOL_NARRATION_PREFIX_RE.fullmatch(text))
+
+
+def _initial_limit_claim_prefix_undecided(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text.lstrip()).casefold()
+    if not normalized:
+        return False
+    parts = normalized.split()
+    for lead in _LIMIT_CLAIM_LEAD_PREFIXES:
+        if lead.startswith(normalized):
+            return True
+        words = lead.split()
+        if len(parts) <= len(words) and all(
+            word == part if index < len(parts) - 1 else word.startswith(part)
+            for index, (word, part) in enumerate(zip(words, parts))
+        ):
+            return True
+    return False
 
 
 def _preamble_narration_undecided(text: str) -> bool:
@@ -1504,6 +1539,7 @@ _LIMIT_CLAIM_RE = re.compile(
     r"(?:tool|token|output|round|turn|schritt|aufruf)[\s_-]*limit"
     r"|(?:token|output)[\s_-]*(?:limit|budget|grenze)"
     r"|(?:runden|tool|token)[\s_-]*limit"
+    r"|runden(?:begrenzung|beschr[aä]nkung)"
     r"|keine\s+tools?\s+mehr",
     re.IGNORECASE,
 )
@@ -1708,6 +1744,7 @@ _NARRATION_TOKEN_RE = re.compile(
     r"|\baufr(?:u|ü)f"
     r"|\blimit\b"
     r"|\b(?:web-?url|dateisystem|pfade?|dateien?|files?|filesystem)\b"
+    r"|\brunden(?:begrenzung|beschr[aä]nkung|[ _-]?limit)\b"
     r"|\bich\b|\bstattdessen\b|\binstead\b"
     r")"
 )
@@ -2704,6 +2741,7 @@ class GLMEventAccumulator:
     # durch (live gemessen).
     _narration_carry: str = ""
     _initial_tool_prefix_held: bool = False
+    _initial_limit_claim_prefix_held: bool = False
     _deferred_reasoning: str = ""
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
     blocked_tool_attempt_names: list[str] = field(default_factory=list)
@@ -3444,6 +3482,41 @@ class GLMEventAccumulator:
             self._narration_carry = text_delta
             self._initial_tool_prefix_held = True
             text_delta = ""
+        elif (
+            text_delta
+            and not self._emitted_visible_text
+            and not self._deferred_visible_text
+            and len(text_delta) < _SELF_STEERING_CARRY_LIMIT
+            and _initial_limit_claim_prefix_undecided(text_delta)
+        ):
+            self._narration_carry = text_delta
+            self._initial_limit_claim_prefix_held = True
+            text_delta = ""
+        elif (
+            self._initial_limit_claim_prefix_held
+            and text_delta.startswith(self._narration_carry)
+            and len(text_delta) < _SELF_STEERING_CARRY_LIMIT
+            and _initial_limit_claim_prefix_undecided(text_delta)
+        ):
+            self._narration_carry = text_delta
+            text_delta = ""
+        elif self._initial_limit_claim_prefix_held and not _self_steering_holdback(
+            text_delta
+        ):
+            # Der carry ist keine limit-behauptung geworden (oder der satz
+            # ist zu lang, um weiter zu warten): flag freigeben. Aber NUR
+            # wenn der generische holdback den text nicht ohnehin haelt —
+            # sonst wird hier der carry gedroppt, waehrend der folgetext
+            # ("8) ist erreicht...") als frischer satz durchrauscht
+            # (chunk 3: '(8/' prefix-match bricht, rest streamt).
+            # Der carry-Inhalt lebt bereits in `text_delta` weiter (oben
+            # an L3435 prependiert) — der carry muss HIER mit geleert
+            # werden, sonst wird er beim naechsten delta ein zweites Mal
+            # vorangestellt und die naechste satzgrenze schreibt den
+            # satz doppelt in den praembel-puffer (chunk 1, gemessen:
+            # '…neu starten.Die Rundenbegrenzung…').
+            self._initial_limit_claim_prefix_held = False
+            self._narration_carry = ""
         elif (
             held_article_continues
             and text_delta.startswith(self._narration_carry)
@@ -4501,7 +4574,9 @@ class GLMEventAccumulator:
                 final_text = stripped_echo
             if all_tool_calls:
                 final_text = strip_meta_chatter(final_text)
-            elif strip_meta_chatter(final_text) == "":
+            else:
+                final_text = strip_invented_limit_claim(final_text)
+            if not all_tool_calls and not final_text:
                 final_text = ""
         # T-18: der client hat einen tool-vertrag verlangt (`required` oder
         # eine konkrete auswahl) und der turn liefert prosa. Das ist kein

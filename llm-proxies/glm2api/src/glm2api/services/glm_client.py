@@ -1190,7 +1190,7 @@ class GLMWebClient:
                     # seiteninhalt — der call hatte nie stattgefunden. Ohne
                     # diese notice liest der client die erfindung als erfolg
                     # und beendet den tool-loop.
-                    if turn_blocked_names and turn_has_valid_calls and not blocked:
+                    if turn_blocked_names and turn_has_valid_calls:
                         # S-10/C-11 (stream): dieselbe luecke wie im
                         # non-stream-pfad. Die gueltigen calls werden
                         # ausgeliefert (C-11), aber der abgelehnte aufruf
@@ -1224,7 +1224,11 @@ class GLMWebClient:
                         accumulator.loop_guard_dropped_count,
                         accumulator.loop_guard_dropped_tools,
                     )
-                    if loop_notice and not blocked:
+                    # `blocked` beschreibt nur die LETZTE Upstream-Runde. Ein
+                    # vorheriger blockierter Versuch kann die Follow-up-Budgets
+                    # erschoepft haben und in der letzten Runde mit gueltigen
+                    # Calls fehlen; die Notice muss trotzdem zum Modell.
+                    if loop_notice:
                         self.logger.warning(
                             "Stream turn dropped %s identical native call(s) via the loop guard; "
                             "telling the model the real reason",

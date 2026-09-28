@@ -3719,6 +3719,8 @@ def test_real_answers_survive_the_inventory_filter(keep):
     ),
     # live, aeltere session `glm2api-Ordner-Analyse`
     ("Tool-Limit (8/8 Runden) erreicht, ich kann nicht weitermachen.", ""),
+    ("Die Rundenbegrenzung (8/8) ist dadurch erschöpft.", ""),
+    ("Die Rundenbegrenzung (8/8) ist erreicht; ich muss neu starten.", ""),
     ("Ich habe die Analyse abgebrochen: Tokenlimit erreicht.", ""),
     ("Es gibt keine Tools mehr in dieser Umgebung.", ""),
     # live repro E: das 'Tool-Limit' stand nicht am anfang, gerettet hat
@@ -4169,6 +4171,22 @@ def _feed_deltas(deltas, allowed=None):
     return "".join(streamed), accumulator
 
 
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 13, 1000])
+def test_german_round_limit_claim_is_stripped_across_stream_deltas(chunk_size):
+    """Eine erfundene Rundenbegrenzung darf nicht durch Chunk-Grenzen rutschen."""
+    claim = (
+        "Die Rundenbegrenzung (8/8) ist erreicht; ich muss neu starten. "
+        "Ergebnis: 8 Dateien wurden geprüft."
+    )
+    deltas = [claim[index : index + chunk_size] for index in range(0, len(claim), chunk_size)]
+    from glm2api.services.translator import strip_invented_limit_claim
+    assert strip_invented_limit_claim(claim) == "Ergebnis: 8 Dateien wurden geprüft."
+
+    streamed, _accumulator = _feed_deltas(deltas)
+
+    assert streamed == "Ergebnis: 8 Dateien wurden geprüft.", streamed
+
+
 # Live repro M (2026-09-26 19:29, 20 tool-calls im turn): ein text-part
 # enthielt drei varianten desselben selbstgespraechs, aneinandergeklebt,
 # weil die saetze ueber mehrere deltas liefen.
@@ -4318,6 +4336,7 @@ def test_contains_tool_markup_recognises_protocol(text):
     "Der `open`-Aufruf funktioniert hier nicht, ich nutze stattdessen `read`.",
     "I need to use read instead of open.",
     "Das Tool-Limit (8/8) ist erreicht.",
+    "Die Rundenbegrenzung (8/8) ist erreicht.",
     "Ich öffne die Datei mit dem Editor.",
     "Ein Beispiel: {\"name\": \"beispiel\"} sieht so aus.",
 ])

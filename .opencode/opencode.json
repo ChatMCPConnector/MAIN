@@ -86,6 +86,54 @@
         }
       }
     },
+    "downloaddoctor": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Downloaddoctor",
+      "options": {
+        "baseURL": "http://127.0.0.1:7250/v1",
+        "apiKey": "opencode"
+      },
+      "models": {
+        "zerokey": {
+          "name": "ZeroKey",
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        },
+        "ZeroKey": {
+          "name": "ZeroKey",
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        }
+      }
+    },
+    "cyberpradeep": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Cyberpradeep",
+      "options": {
+        "baseURL": "http://127.0.0.1:8088/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "zerokey": {
+          "name": "ZeroKey",
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        },
+        "chatgpt": {
+          "name": "ZeroKey (chatgpt)",
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        }
+      }
+    },
     "antigravity": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Antigravity OAuth Proxy",

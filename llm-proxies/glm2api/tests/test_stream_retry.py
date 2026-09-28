@@ -406,6 +406,99 @@ def test_blocked_tool_triggers_follow_up_round_non_stream():
     assert "Alles erledigt." in json.dumps(result, ensure_ascii=False)
 
 
+def _mixed_blocked_and_valid_call_event():
+    return {
+        "status": "finish",
+        "parts": [
+            {
+                "logic_id": "p1",
+                "status": "finish",
+                "content": [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": {
+                            "name": "open",
+                            "id": "open-bad",
+                            "arguments": '{"open":[{"ref_id":"turn0search1"}]}',
+                        },
+                    },
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": {
+                            "name": "read",
+                            "id": "read-good",
+                            "arguments": {"filePath": "/workspaces/MAIN/README.md"},
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def test_mixed_blocked_and_valid_native_calls_are_reported_in_stream():
+    """A blocked native open must remain visible even beside an executable read."""
+    client, calls = _make_client([[_mixed_blocked_and_valid_call_event()]])
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "inspect README"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"filePath": {"type": "string"}},
+                        "required": ["filePath"],
+                    },
+                },
+            }
+        ],
+    }
+
+    chunks = [chunk.decode("utf-8") for chunk in client.stream_chat_completion(payload)]
+    stream_text = "".join(chunks)
+    call_chunks = [chunk for chunk in chunks if '"tool_calls"' in chunk]
+    read_call_chunks = [chunk for chunk in call_chunks if '"name":"read"' in chunk]
+
+    assert calls["count"] == 1
+    assert len(read_call_chunks) == 1
+    assert '"name":"open"' not in "".join(call_chunks)
+    assert "[blocked_tool_notice]" in stream_text
+    assert "open" in stream_text
+    assert "NOT executed" in stream_text
+
+
+def test_mixed_blocked_and_valid_native_calls_are_reported_non_stream():
+    client, _ = _make_client([[_mixed_blocked_and_valid_call_event()]])
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "inspect README"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"filePath": {"type": "string"}},
+                        "required": ["filePath"],
+                    },
+                },
+            }
+        ],
+    }
+
+    result, _ = client.chat_completion(payload)
+    message = result["choices"][0]["message"]
+
+    assert [call["function"]["name"] for call in message["tool_calls"]] == ["read"]
+    assert "[blocked_tool_notice]" in message["content"]
+    assert "open" in message["content"]
+    assert "NOT executed" in message["content"]
+
+
 def test_transient_flag_on_upstream_error():
     exc = UpstreamAPIError(502, "boom", transient=True)
     assert exc.transient is True
