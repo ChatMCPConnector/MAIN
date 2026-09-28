@@ -35,6 +35,7 @@ from .translator import (
     extract_history_tool_call_signatures,
     extract_recent_user_url,
     filter_tools,
+    is_abandon_claim,
     parse_tool_choice_policy,
     resolve_chat_mode,
     resolve_networking,
@@ -85,6 +86,16 @@ _TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
 def _is_transport_error(exc: BaseException) -> bool:
     """True fuer Verbindungsabbruch/Timeout/gzip-Fehler beim Lesen."""
     return isinstance(exc, _TRANSPORT_ERRORS) and not isinstance(exc, QueueTimeoutError)
+
+
+# S-25: wie lange sichtbarer text zurueckgehalten wird, bevor er als
+# „kein abbruch" durchgewinkt wird. 600 zeichen ist laenger als jeder
+# realistische abbruch-satz ("…bis das Rundenlimit erreicht war. Schick mir
+# bitte eine neue Nachricht." = ~90 zeichen) und kurz genug, dass eine
+# laengere passage ohne tool-call nicht unbegrenzt wartet. Ab hier an ist
+# ein treffer so unwahrscheinlich, dass das durchlassen guenstiger ist als
+# weiteres zurueckhalten.
+_ABANDON_HOLD_CHARS = 600
 
 
 def _extract_nested_url_value(value: object) -> object:
@@ -1152,6 +1163,15 @@ class GLMWebClient:
                 #     eigenen, begrenzten budget erneut versucht.
                 served_content = False
                 served_visible_text = False
+                # S-25: puffer fuer die aufgaben-abandon-erkennung. Solange
+                # sichtbarer text zurueckgehalten wird, ist der turn noch
+                # umkehrbar; danach nicht mehr (V-03).
+                served_visible_text_flushed = False
+                abandon_buffer: list[bytes] = []
+                abandon_buffered_text: list[str] = []
+                # S-25: gesetzt, wenn ein aufgaben-abandon erkannt und
+                # unterdrueckt wurde. Treibt die fortsetzungs-runde.
+                suppress_abandon_reason: str | None = None
                 retry_exc: UpstreamAPIError | None = None
                 finalize_chunks: list[str] | None = None
                 blocked: list[str] = []
@@ -1205,9 +1225,93 @@ class GLMWebClient:
                                         served_visible_text = True
                                 except (json.JSONDecodeError, KeyError, IndexError, ValueError):
                                     served_content = True
+                            # S-25: sichtbarer text wird zurueckgehalten, bis
+                            # klar ist, dass es KEIN aufgaben-abandon ist. Der
+                            # turn ist nur in diesem fenster umkehrbar; danach
+                            # ist der text beim client (V-03, live belegt).
+                            #
+                            # Der puffer ist kurz: freigegangen wird, sobald ein
+                            # tool_call kommt (das modell arbeitet weiter), der
+                            # text zu lang wird, oder beim turn-ende. Im
+                            # normalfall kommt der erste tool_call sofort, die
+                            # verzoegerung ist also unmerklich.
+                            if not served_visible_text_flushed:
+                                probe_text = ""
+                                has_call_probe = False
+                                try:
+                                    delta_probe = json.loads(
+                                        encoded.decode("utf-8").removeprefix("data: ").strip()
+                                    )["choices"][0]["delta"]
+                                except (json.JSONDecodeError, KeyError, IndexError, ValueError):
+                                    delta_probe = {}
+                                probe_text = str(delta_probe.get("content") or "")
+                                has_call_probe = bool(
+                                    delta_probe.get("tool_calls") or delta_probe.get("tool_use")
+                                )
+                                if probe_text or has_call_probe:
+                                    abandon_buffer.append(encoded)
+                                    abandon_buffered_text.append(probe_text)
+                                    if has_call_probe:
+                                        # das modell ruft ein werkzeug auf, es
+                                        # bricht nicht ab -> alles freigeben.
+                                        for buffered in abandon_buffer:
+                                            yield buffered
+                                        abandon_buffer = []
+                                        abandon_buffered_text = []
+                                        served_visible_text_flushed = True
+                                        continue
+                                    # Kein abandoning-Muster bisher: sobald der
+                                    # text laenger als die schwelle ist oder ein
+                                    # abandoning-Muster vollstaendig erkannt
+                                    # wurde, ist entschieden. EIN ERSTER
+                                    # sichtbarer chunk wird bewusst gehalten
+                                    # (bis ~600 zeichen), weil genau dort das
+                                    # live-abbruch-satz stand; das kostet bei
+                                    # normalen antworten nur die erste
+                                    # textpassage, und ein tool_call (der
+                                    # regelfall) loest sofort auf.
+                                    if is_abandon_claim("".join(abandon_buffered_text)):
+                                        # entschieden: abandon. Puffer bleibt,
+                                        # wird beim turn-ende verworfen.
+                                        continue
+                                    if len("".join(abandon_buffered_text)) > _ABANDON_HOLD_CHARS:
+                                        for buffered in abandon_buffer:
+                                            yield buffered
+                                        abandon_buffer = []
+                                        abandon_buffered_text = []
+                                        served_visible_text_flushed = True
+                                    continue
                             yield encoded
 
                         if status in {"finish", "intervene"}:
+                            # S-25: der turn ist zu ende — jetzt steht fest, ob
+                            # der zurueckgehaltene text ein aufgaben-abandon
+                            # war. Wenn ja, wird er VERWORFEN (der turn laeuft
+                            # ohne ihn weiter, s. `needs_correction` unten) —
+                            # das ist der moment, in dem C wirkt. Wenn nein,
+                            # wird er geflusht, damit die normale antwort
+                            # vollstaendig beim client ankommt.
+                            if abandon_buffer:
+                                buffered_text = "".join(abandon_buffered_text)
+                                abandon_reason = is_abandon_claim(buffered_text)
+                                if abandon_reason:
+                                    self.logger.warning(
+                                        "S-25: suppressing task-abandon text before it reaches the "
+                                        "client (reason=%s, chars=%s) — the turn continues instead",
+                                        abandon_reason,
+                                        len(buffered_text),
+                                    )
+                                    suppress_abandon_reason = abandon_reason
+                                else:
+                                    # fail-safe: kein abandon -> der
+                                    # zurueckgehaltene anteil gehoert dem
+                                    # client, sonst gaenge er verloren (live
+                                    # regression: "TEIL-1" bzw. "plain answer"
+                                    # kam nicht an).
+                                    for buffered in abandon_buffer:
+                                        yield buffered
+                                abandon_buffer = []
+                                abandon_buffered_text = []
                             finalize_chunks = accumulator.finalize(
                                 status=status,
                                 last_error=event.get("last_error") if isinstance(event.get("last_error"), dict) else None,
@@ -1218,9 +1322,26 @@ class GLMWebClient:
                                     turn_blocked_names.append(blocked_name)
                             break
                 except UpstreamAPIError:
+                    # S-25: fail-safe — ein turn, der mit UpstreamAPIError
+                    # endet, erreicht die abandon-entscheidung nie. Ohne
+                    # flush ginge der zurueckgehaltene anteil verloren (live
+                    # regression: "TEIL-1" kam nicht an, der turn brach ohne
+                    # `finish` ab). Also: gepuffertes ausliefern, es sei
+                    # denn, es wurde bereits als abandon erkannt.
+                    if abandon_buffer and not suppress_abandon_reason:
+                        for buffered in abandon_buffer:
+                            yield buffered
+                        abandon_buffer = []
                     raise
                 except Exception as exc:  # noqa: BLE001
                     if not _is_transport_error(exc):
+                        # S-25: fail-safe wie im UpstreamAPIError-zweig — ein
+                        # abrupter fehler darf den zurueckgehaltenen anteil
+                        # nicht verschlucken.
+                        if abandon_buffer and not suppress_abandon_reason:
+                            for buffered in abandon_buffer:
+                                yield buffered
+                            abandon_buffer = []
                         raise
                     upstream_exc = _transport_error_to_upstream(exc)
                     if served_content or attempt >= max_stream_retries:
@@ -1262,6 +1383,20 @@ class GLMWebClient:
                         self.logger.warning(
                             "Upstream stream truncated; finalizing partial turn as error (retry budget exhausted or content already served)"
                         )
+                # S-25: fail-safe fuer JEDEN ausstieg aus der event-schleife.
+                # Der gepufferte sichtbare text gehoert dem client, sobald der
+                # turn endet — ausser er wurde gerade als aufgaben-abandon
+                # erkannt. Ohne das gehen bei ABBGESCHNITTENEN streams die
+                # bereits erzeugten anteile verloren (live regression:
+                # "TEIL-1" kam nicht an, weil der turn nie ein `finish`
+                # erreichte und damit weder der finish- noch der
+                # exception-zweig den puffer geleert hat).
+                if abandon_buffer and not suppress_abandon_reason:
+                    for buffered in abandon_buffer:
+                        yield buffered
+                    abandon_buffer = []
+                    abandon_buffered_text = []
+
                 if finalize_chunks is None and retry_exc is None:
                     finalize_chunks = accumulator.finalize(status="stop")
                     blocked = list(accumulator.blocked_tool_attempt_names)
@@ -1308,6 +1443,12 @@ class GLMWebClient:
                         blocked
                         or getattr(accumulator, "native_remapped_calls", [])
                         or int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0) > 0
+                        # S-25: ein unterdrueckter aufgaben-abandon ist selbst
+                        # der grund fuer eine korrektur-runde — auch wenn sonst
+                        # keine notice ansteht. Live: das modell bot die
+                        # abgabe an, der text wurde verworfen, jetzt laeuft die
+                        # fortsetzung.
+                        or suppress_abandon_reason
                     )
                     if (
                         needs_correction

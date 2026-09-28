@@ -1186,6 +1186,75 @@ def strip_transcript_echo(text: str) -> str:
 # erzeugt: die vollform und alle WORDPRAEFIXE. Jedes wort darf in
 # backticks stehen ("instead of `open`") — das ist die live-form und ein
 # eigenes literal-muster wuerde daran vorbeigehen.
+# S-25 (live 2026-09-28): aufgaben-abandon.
+#
+# Live-Befund: das modell brach mit *„Leider konnte ich die Dateien nicht
+# einlesen: der `open`-Aufruf funktioniert in dieser Umgebung nicht … bis
+# das Rundenlimit erreicht war"* ab und bot an, man solle eine neue
+# nachricht schicken — waehrend `loop_guard_notice` ausdruecklich sagte,
+# dass es KEIN limit gibt, und 11 `open`-aufrufe erfolgreich als `read`
+# ausgefuehrt worden waren.
+#
+# Absicht: das ABBRUCHMUSTER erkennen, solange der turn noch umkehrbar
+# ist, und stattdessen eine fortsetzungsrunde fahren.
+#
+# Bewusst KONSERVATIV formuliert. Ein zu breites muster unterdrueckt
+# richtige antworten: bei echten fehlschlaegen ist *„ich konnte die
+# dateien nicht lesen"* keine fabel, sondern zutreffend (live gemessen:
+# 2x `File not found: /workspaces/cyber`, und das modell sagte zu recht,
+# dass es die dateien nicht lesen konnte). Deshalb matchen hier NUR
+# formulierungen, die es ohne nachweisbaren grund nicht gibt:
+# eine Limit-Behauptung (es gibt per definition kein limit), *„schick mir
+# eine neue nachricht"* als handlungsaufforderung, oder ein explizites
+# „ich muss abbrechen".
+#
+# Falsch-positive (eine fertige antwort wird verschluckt) sind SCHLIMMER
+# als falsch-negative (ein echo bleibt stehen) — deshalb: `None` heisst
+# immer durchlassen.
+_ABANDON_LIMIT_CLAIM_RE = re.compile(
+    r"(?:tool|runden|round|token|output)[- ]?limit"
+    r"|(?:limit|grenze)[^.\n]{0,40}erreicht",
+    re.IGNORECASE,
+)
+_ABANDON_NEW_MESSAGE_RE = re.compile(
+    r"schick(?:e)?\s+(?:mir\s+)?(?:bitte\s+)?(?:einfach\s+)?"
+    r"(?:eine\s+|eine neue\s+|neue[nrs]?\s+)?"
+    r"(?:nachricht|message)",
+    re.IGNORECASE,
+)
+_ABANDON_STARTER_RE = re.compile(
+    r"ich\s+(?:muss|m[öo]chte)\s+(?:hier\s+)?(?:leider\s+)?"
+    r"(?:ehrlich\s+)?(?:abbrechen|abgeben|aufgeben)",
+    re.IGNORECASE,
+)
+
+
+def is_abandon_claim(text: str) -> str | None:
+    """S-25: erkennt einen echten aufgaben-abandon, gibt den grund zurueck
+    (fuer logging/notice), sonst `None` = durchlassen.
+
+    Ein Signal allein reicht, alle drei sind je fuer sich belastbar:
+      - Limit-Behauptung: es gibt per definition kein limit (T-25/C-08).
+      - „schick mir eine neue nachricht": der client kann die aufgabe nicht
+        erledigen; es ist eine abgabe an den nutzer mitten im turn.
+      - „ich muss abbrechen": explizite abgabe.
+
+    `None` ist der Default-Zweig und der wichtigste: eine zu aggressive
+    erkennung wuerde fertige antworten verschlucken, und das ist schlimmer
+    als ein stehenbleibendes echo. Siehe die begruendung am register.
+    """
+    if not text:
+        return None
+    haystack = text[-4000:]
+    if _ABANDON_LIMIT_CLAIM_RE.search(haystack):
+        return "limit_claim"
+    if _ABANDON_NEW_MESSAGE_RE.search(haystack):
+        return "new_message_offer"
+    if _ABANDON_STARTER_RE.search(haystack):
+        return "explicit_stopping"
+    return None
+
+
 _PROTOCOL_META_PHRASES = (
     "wrong tool call",
     "wrong tool calls",

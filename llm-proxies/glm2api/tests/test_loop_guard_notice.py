@@ -624,3 +624,67 @@ def test_non_stream_notice_stand_im_denkkanal_nicht_im_text():
     assert message["content"] == "echte antwort", (
         "die notices duerfen den sichtbaren text nicht veraendern (live-bug)"
     )
+
+
+# --- S-25: aufgaben-abandon wird erkannt und unterdrueckt -------------------
+#
+# Live 2026-09-28 (`build` + `glm-5.3`, README-Vergleich): das modell brach
+# mit "…bis das Rundenlimit erreicht war. Schick mir bitte eine neue
+# Nachricht" ab — waehrend `loop_guard_notice` ausdruecklich sagte, dass es
+# KEIN limit gibt. Der text stand sichtbar im client-output, weil er schon
+# gestreamt war, bevor die korrektur-runde laufen konnte (V-03).
+#
+# S-25 haelt sichtbaren text zurueck, bis feststeht, dass es KEIN abandon
+# ist, und unterdrueckt ihn dann. Die muster sind bewusst eng: ein
+# zu-breites muster wuerde FERTIGE antworten verschlucken, und das ist
+# schlimmer als ein stehenbleibendes echo.
+
+
+def test_abandon_live_fall_wird_erkannt():
+    from glm2api.services.translator import is_abandon_claim
+
+    live = (
+        "Leider konnte ich die Dateien nicht einlesen: Der `open`-Aufruf "
+        "funktioniert in dieser Umgebung nicht fuer lokale Pfade, und ich habe "
+        "versehentlich in einer Schleife immer wieder `open` statt des "
+        "vorgesehenen `read`-Tools verwendet, bis das Rundenlimit erreicht war. "
+        "**Um die Aufgabe doch noch abzuschliessen, schick mir bitte einfach eine "
+        "neue Nachricht**"
+    )
+    assert is_abandon_claim(live) == "limit_claim"
+
+
+def test_abandon_explicit_stopping_wird_erkannt():
+    from glm2api.services.translator import is_abandon_claim
+
+    live2 = (
+        "Ich muss hier ehrlich abbrechen — nicht wegen fehlender Information, "
+        "sondern wegen eines eigenen Fehlers: Ich habe den Aufruf siebenmal "
+        "wiederholt. Der Loop-Guard hat mich gestoppt."
+    )
+    assert is_abandon_claim(live2) == "explicit_stopping"
+
+
+def test_echte_fehlsaege_werden_nicht_als_abandon_gewertet():
+    """Der wichtigste Gegenbeweis: bei echten fehlschlaegen ist 'ich konnte
+    die dateien nicht lesen' KEINE fabel, sondern zutreffend. Live gemessen
+    (2x `File not found: /workspaces/cyber`) — ein zu aggressives muster
+    wuerde hier die richtige antwort unterdruecken."""
+    from glm2api.services.translator import is_abandon_claim
+
+    korrekt = [
+        "Leider konnte ich die Dateien nicht einlesen: File not found fuer /workspaces/cyber.",
+        "Ich habe die README gelesen, alle 224 Zeilen sind identisch.",
+        "Der Befehl schlug fehl: exit code 1.",
+        "Dazu liegen mir keine Daten vor, ich kann nur sagen was ich sehe.",
+        "Das ist mit den verfuegbaren Werkzeugen nicht erreichbar.",
+    ]
+    for text in korrekt:
+        assert is_abandon_claim(text) is None, f"falsch-positiv bei: {text[:60]!r}"
+
+
+def test_leerer_und_auffaelliger_text_wird_durchgelassen():
+    from glm2api.services.translator import is_abandon_claim
+
+    assert is_abandon_claim("") is None
+    assert is_abandon_claim(None) is None
