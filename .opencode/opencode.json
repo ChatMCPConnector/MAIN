@@ -112,7 +112,7 @@
             }
           },
           "limit": {
-            "context": 128000,
+            "context": 16000,
             "output": 16384
           }
         }
