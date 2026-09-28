@@ -203,28 +203,106 @@ def _estimate_prompt_chars(payload: dict[str, object]) -> int:
         return 0
 
 
+def _turn_notice_texts(accumulator: GLMEventAccumulator, blocked: list[str]) -> list[str]:
+    """S-22/S-24: die Notices eines Turns in der EINZIGEN gueltigen
+    Reihenfolge — remap, blocked, loop. An einer Stelle, damit stream- und
+    non-stream-pfad nicht auseinanderlaufen (S-21 musste die reihenfolge
+    noch per prepend-erzwingen, S-22 hat das durch eine geordnete liste
+    ersetzt, S-24 braucht sie fuer den „content war schon raus"-pfad).
+
+    Die reihenfolge ist die botschaft: "dein `open` lief als `read`, das
+    ergebnis ist echt" zuerst, "dieser versuch lief nicht" danach, "du hast
+    denselben aufruf wiederholt" zuletzt."""
+    notices: list[str] = []
+    remap_notice = _native_remap_notice_text(
+        getattr(accumulator, "native_remapped_calls", [])
+    )
+    if remap_notice:
+        notices.append(remap_notice)
+    if blocked:
+        blocked_notice = _blocked_notice_text(blocked)
+        if blocked_notice:
+            notices.append(blocked_notice)
+    loop_notice = _loop_guard_notice_text(
+        int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0),
+        getattr(accumulator, "loop_guard_dropped_tools", []),
+    )
+    if loop_notice:
+        notices.append(loop_notice)
+    return notices
+
+
 def _build_blocked_tool_follow_up_payload(
     payload: dict[str, object],
     accumulator: GLMEventAccumulator,
     allowed_tool_names: set[str] | None,
 ) -> dict[str, object] | None:
-    """Negative tool-result round: the model tried to call a blocked/
-    undeclared tool (e.g. open_url). Instead of silently dropping
-    the call (which makes the model repeat until its client-side
-    round limit is burnt), inject an explicit "tool not available"
-    turn into the conversation and let it answer properly."""
-    if not accumulator.blocked_tool_attempt_names:
-        return None
+    """S-23: die echte Systemrueckmeldung als EIGENE USER-NACHICHT.
+
+    Warum das der einzige Weg ist, der das Modell sicher erreicht:
+    eine Notice im SSE-delta (`content` oder `reasoning_content`) ist ein
+    Ausgabekanal zum CLIENTEN, kein kontext. Live gemessen am 2026-09-28
+    (`build` + `glm-5.3`, README-Vergleich): `opencode run` gibt
+    `reasoning_content` nicht als `reasoning`-part aus und schickt es in
+    der Folgeanfrage NICHT zurueck — nach S-22 (Notices in den Denkkanal)
+    kam beim Modell gar nichts an. Die Folge war die volle Abbruch-
+    Pathologie: das Modell rief 13x `open` (11 davon erfolgreich als `read`
+    ausgefuehrt), erklaerte dann *"`open` funktioniert nicht fuer lokale
+    Pfade"* (falsch), *„bis das Rundenlimit erreicht war"* (erfunden, es
+    gab keins) und *„schick mir einfach eine neue Nachricht"* (Aufgaben-
+    Abandon) — obwohl `loop_guard_notice` ausdruecklich das Gegenteil
+    sagte. Vor S-22 waren die Notices zwar sichtbar (im Fliesstext), aber
+    das modell las sie als Teil seiner eigenen narration. Beide Kanaele
+    sind damit unzuverlaessig fuer Modell-Rueckmeldung.
+
+    Deshalb: die Notices gehen als `user`-nachricht in die KONVERSATION.
+    Das ist derselbe Weg, den diese Funktion schon fuer blockierte Tools
+    ging und der nachweislich funktioniert — er erzeugt eine echte
+    Kontextnachricht, die der Client nicht verlieren kann, weil er sie nie
+    sieht. Sichtbar fuer den Menschen wird sie dadurch nicht, was genau
+    der Zweck ist.
+    """
     blocked = sorted(set(accumulator.blocked_tool_attempt_names))
+    remapped = list(getattr(accumulator, "native_remapped_calls", []) or [])
+    dropped = int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0)
+    if not (blocked or remapped or dropped):
+        return None
     allowed = sorted(allowed_tool_names or [])
     follow_up = dict(payload)
     messages = list(payload.get("messages", [])) # type: ignore[arg-type]
     rendered_text, _ = accumulator.render_full_output()
     assistant_content = rendered_text.strip()
+
+    # Die Reihenfolge ist die beabsichtigte: zuerst "das lief und ist
+    # echt", dann "das lief nicht", dann "du hast wiederholt".
+    parts: list[str] = []
+    remap_notice = _native_remap_notice_text(remapped)
+    if remap_notice:
+        parts.append(remap_notice)
+    if blocked:
+        parts.append(
+            "The tool(s) "
+            + ", ".join(f"`{name}`" for name in blocked)
+            + " do NOT exist in this environment and were NOT executed. Do not call them again."
+            + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
+            + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
+            + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
+        )
+    loop_notice = _loop_guard_notice_text(
+        dropped, getattr(accumulator, "loop_guard_dropped_tools", [])
+    )
+    if loop_notice:
+        parts.append(loop_notice)
+    correction = "\n\n".join(parts)
+
     if assistant_content:
-        assistant_text = assistant_content + "\n\nTool call attempt: " + ", ".join(blocked)
+        assistant_text = assistant_content
+        if blocked:
+            assistant_text += "\n\nTool call attempt: " + ", ".join(blocked)
     else:
-        assistant_text = "Tool call attempt: " + ", ".join(blocked)
+        assistant_text = (
+            "Tool call attempt: " + ", ".join(blocked) if blocked else "Tool call round."
+        )
     messages = messages + [
         {
             "role": "assistant",
@@ -233,13 +311,14 @@ def _build_blocked_tool_follow_up_payload(
         {
             "role": "user",
             "content": (
-                "The tool(s) "
-                + ", ".join(f"`{name}`" for name in blocked)
-                + " do NOT exist in this environment and were NOT executed. Do not call them again."
-                + (" Available tools: " + ", ".join(f"`{name}`" for name in allowed) + ". Use them instead." if allowed else "")
-                + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
-                + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
-                + " Continue the task now with the available tools. Output ONLY the structured tool call for the next step. Do NOT output any apologies, conversational text, or meta-explanations."
+                correction
+                + " Continue the task now with the available tools."
+                " Your tool results from this round ARE in the conversation — read them"
+                " before concluding anything. There is NO tool limit and NO round limit;"
+                " never report one. If a path does not exist, correct the path or choose"
+                " a different one — do not end the task and do not ask for a new message."
+                " Output ONLY the structured tool call for the next step."
+                " Do NOT output any apologies, conversational text, or meta-explanations."
             ),
         },
     ]
@@ -742,9 +821,17 @@ class GLMWebClient:
                         message_obj = choices_obj[0].get("message")
                         if isinstance(message_obj, dict):
                             has_valid_calls = bool(message_obj.get("tool_calls"))
-                    if (
+                    # S-23: wie im stream-pfad — die Folge-runde feuert bei
+                    # JEDER rueckmeldung, die das modell sehen muss, nicht nur
+                    # bei blockierten tools. Begruendung siehe
+                    # `_build_blocked_tool_follow_up_payload`.
+                    needs_correction = bool(
                         accumulator.blocked_tool_attempt_names
-                        and not has_valid_calls
+                        or getattr(accumulator, "native_remapped_calls", [])
+                        or int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0) > 0
+                    )
+                    if (
+                        needs_correction
                         and blocked_follow_ups < max_blocked_follow_ups
                     ):
                         # Negative tool-result round instead of silently
@@ -1196,9 +1283,34 @@ class GLMWebClient:
                         b'"tool_calls"' in chunk.encode("utf-8", "ignore") and b'"name"' in chunk.encode("utf-8", "ignore")
                         for chunk in finalize_chunks
                     )
-                    if (
+                    # S-23: die Folge-runde feuert bei JEDER rueckmeldung,
+                    # die das Modell sehen muss — auch wenn der turn gueltige
+                    # calls enthaelt. Ohne das erreicht die remap-/loop-notice
+                    # das modell nie: ein SSE-delta erreicht den client, nicht
+                    # die konversation (live 2026-09-28: 13x `open`, davon 11
+                    # als `read` ausgefuehrt, keine notice angekommen → falsche
+                    # "open funktioniert nicht"-diagnose + erfundenes
+                    # "rundenlimit" + aufgaben-abandon).
+                    #
+                    # V-02 bleibt gewahrt, aber richtig gelesen: es verbietet,
+                    # gueltige calls zu VERWERFEN, nicht, eine korrektur zu
+                    # schicken. Die `_build_..._follow_up_payload`-funktion
+                    # nimmt nur den gerenderten text auf, nicht die calls —
+                    # die calls liegen unveraendert in `finalize_chunks` und
+                    # werden danach normal ausgeliefert. `turn_has_valid_calls`
+                    # als bedingung zu pruefen war der bug: in genau dem fall,
+                    # den die notices verhindern sollen (viele `open`, alle als
+                    # `read` erfolgreich), ist `turn_has_valid_calls` true und
+                    # die korrektur wurde deshalb NIE gesendet. live belegt:
+                    # 13 gemappte `open` + 9 loop-drops, `blocked_follow_ups=0`
+                    # in allen vier turns.
+                    needs_correction = bool(
                         blocked
-                        and not turn_has_valid_calls
+                        or getattr(accumulator, "native_remapped_calls", [])
+                        or int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0) > 0
+                    )
+                    if (
+                        needs_correction
                         and blocked_follow_ups < max_blocked_follow_ups
                     ):
                         # Follow-up round with a negative tool result
@@ -1208,6 +1320,28 @@ class GLMWebClient:
                         follow_up = _build_blocked_tool_follow_up_payload(active_payload, accumulator, allowed_tool_names)
                         if follow_up is None:
                             self.logger.warning("blocked_tool_follow_up_payload returned None; blocked=%s", blocked)
+                            for chunk in finalize_chunks:
+                                yield chunk.encode("utf-8")
+                            return
+                        # S-24: ist dem client schon text gestreamt, kann die
+                        # falsche antwort nicht mehr zurueckgenommen werden
+                        # (live 2026-09-28: "bis das Rundenlimit erreicht war"
+                        # + "schick mir bitte eine neue nachricht" stand im
+                        # sichtbaren output, DANACH lieferte das modell nach
+                        # der korrektur-runde die richtige antwort). Deshalb
+                        # wird die korrektur-runde NUR genommen, solange noch
+                        # nichts raus ist — dann ist der turn umkehrbar und
+                        # der client sieht nur die korrigierte antwort. Nach
+                        # ausgeliefertem content gewinnt V-03 (ein turn ist
+                        # nicht zuruecknehmbar, sonst haette der client zwei
+                        # antworten) und die notices gehen wie bisher raus.
+                        if served_content:
+                            self.logger.warning(
+                                "Correction round skipped: content already served to the client "
+                                "(V-03: a turn cannot be retracted) — notices go out as deltas",
+                            )
+                            for notice_text in _turn_notice_texts(accumulator, blocked):
+                                yield accumulator._notice_chunk(notice_text).encode("utf-8")
                             for chunk in finalize_chunks:
                                 yield chunk.encode("utf-8")
                             return
@@ -1269,62 +1403,12 @@ class GLMWebClient:
                     # den S-22-block darunter) — alle notices eines turns
                     # gehen an einer stelle raus, in fester reihenfolge und im
                     # denkkanal statt im sichtbaren text.
-                    # S-22: ALLE Notices eines turns werden an EINER stelle
-                    # gebaut und in FESTER reihenfolge ausgegeben — statt
-                    # jede einzeln per `[*new, *old]` vorzuschieben. Der
-                    # prepend-stapel kehrt die reihenfolge um und mehr als
-                    # drei notices pro turn (live 2026-09-28: loop, remap,
-                    # blocked, remap, blocked in einem turn) ergab eine
-                    # reihenfolge, die von der beabsichtigten abwich.
-                    # Zugleich gehen sie in den DENKKANAL
-                    # (`reasoning_content`), nicht in `content`: als
-                    # content landeten sie mitten im sichtbaren text der
-                    # antwort (live: "Abbruch ehrlich gem ...
-                    # [loop_guard_notice] ... [blocked_tool_notice] ...").
-                    #
-                    # Reihenfolge (bewusst, ist die ganze Botschaft):
-                    #   1. remap   — "dein `open` lief als `read`, ergebnis ist echt"
-                    #   2. blocked — "dieser versuch lief nicht"
-                    #   3. loop    — "du hast denselben aufruf wiederholt"
-                    # S-21 hatte remap per prepend vor blocked gezwungen; hier
-                    # ist die reihenfolge direkt ablesbar und kann nicht
-                    # kippen.
-                    remap_notice = _native_remap_notice_text(
-                        accumulator.native_remapped_calls
-                    )
-                    loop_notice = _loop_guard_notice_text(
-                        accumulator.loop_guard_dropped_count,
-                        accumulator.loop_guard_dropped_tools,
-                    )
-                    notices: list[str] = []
-                    if remap_notice:
-                        self.logger.warning(
-                            "Stream turn remapped native tool call(s) and executed them; "
-                            "telling the model the real tool name",
-                        )
-                        notices.append(remap_notice)
-                    if turn_blocked_names and turn_has_valid_calls:
-                        # S-10/C-11 (stream): die gueltigen calls werden
-                        # ausgeliefert (C-11), aber der abgelehnte aufruf
-                        # muss fuer das modell sichtbar bleiben — sonst
-                        # beendet der agent den tool-loop mit dem
-                        # gefuehl, alles sei ausgefuehrt worden.
-                        blocked_names_text = ", ".join(sorted(set(turn_blocked_names)))
-                        self.logger.warning(
-                            "Stream turn contained valid and blocked tool calls; "
-                            "delivering valid calls with notice, blocked=%s",
-                            blocked_names_text,
-                        )
-                        blocked_notice = _blocked_notice_text(turn_blocked_names)
-                        if blocked_notice:
-                            notices.append(blocked_notice)
-                    if loop_notice:
-                        self.logger.warning(
-                            "Stream turn dropped %s identical native call(s) via the loop guard; "
-                            "telling the model the real reason",
-                            accumulator.loop_guard_dropped_count,
-                        )
-                        notices.append(loop_notice)
+                    # S-24/S-22: alle notices EINER stelle, in fester
+                    # reihenfolge (siehe `_turn_notice_texts`), im DENKKANAL
+                    # statt im sichtbaren text. Die reihenfolge ist damit
+                    # nicht mehr von einem prepend-stempel abhaengig, der sie
+                    # bei mehr als drei notices pro turn umkehrte.
+                    notices = _turn_notice_texts(accumulator, turn_blocked_names)
                     for notice_text in notices:
                         yield accumulator._notice_chunk(notice_text).encode("utf-8")
                     if turn_blocked_names and not turn_has_valid_calls and not blocked:
