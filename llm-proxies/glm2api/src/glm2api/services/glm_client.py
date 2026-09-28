@@ -100,6 +100,36 @@ def _mirror_loop_guard_counts(accumulator: object, scope: dict[str, int]) -> Non
         scope.update(counts)
 
 
+def _mirror_drop_counts(accumulator: object, scope: dict[str, int]) -> int:
+    """S-27: `loop_guard_dropped_count` request-uebergreifend fuehren.
+
+    Live 2026-09-28 (`ses_f1605c9d0ffeCSJmR08y4q29FK`): 75 `open`-mappings,
+    6 drops — und **null** korrekturrunden. `needs_correction` prueft
+    `loop_guard_dropped_count`, der im Accumulator lebt; der wird pro
+    Upstream-Runde neu gebaut. In der Runde, in der die drops passieren,
+    ist der Zaehler am Ende > 0, aber der turn endet und ein frischer
+    accumulator startet mit 0. Im log deshalb durchgehend
+    `blocked_follow_ups=0` — die korrektur konnte nie feuern, und das
+    modell bekam keine einzige notice. Es erfand daraufhin erklaerungen
+    (*"the system has repeatedly interrupted me"*, *"MCP-Scrape-Fehler"*),
+    die es nicht gab.
+
+    Dieselbe Fehlerklasse wie S-26 (zaehler im accumulator statt
+    request-scope), an anderer stelle. Gibt die gesamt-zahl zurueck."""
+    total = int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0)
+    if total:
+        scope["drops"] = scope.get("drops", 0) + total
+    return scope.get("drops", 0)
+
+
+def _seed_drop_counts(accumulator: object, scope: dict[str, int]) -> None:
+    """S-27: request-weiten drop-stand in einen frischen accumulator
+    zurueckspielen, damit `needs_correction` ihn sieht."""
+    total = int(scope.get("drops", 0) or 0)
+    if total:
+        setattr(accumulator, "loop_guard_dropped_count", total)
+
+
 def _seed_loop_guard_counts(accumulator: object, scope: dict[str, int]) -> None:
     """S-26: request-uebergreifenden stand in einen frischen accumulator
     zurueckspielen, damit die wiederholungsgrenze ueber rounds greift."""
@@ -739,12 +769,14 @@ class GLMWebClient:
         # belegt in `ses_f161565c6ffeZp78k7WqoSoF06` (21x `open` auf denselben
         # nicht existierenden pfad, null drops, das modell erfand ein "the
         # system has repeatedly interrupted me", das es nicht gab).
-        request_scope_signatures: dict[str, int] = {}
+        request_scope_signatures: dict[str, int] = {}  # S-27: 'drops' -> int
         # C-15: das konto, mit dem die AKTUELLE runde laeuft. Die
         # conversation gehoert diesem konto, nicht irgendeinem.
         _conversation_account_index = account_index
         accumulator = new_accumulator()
         # S-26: request-uebergreifenden loop-guard-stand einspielen.
+        # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
+        _seed_drop_counts(accumulator, request_scope_signatures)
         _seed_loop_guard_counts(accumulator, request_scope_signatures)
         # C-12: retries der non-stream-runde verwenden das payload der
         # aktuellen runde; nach einer follow-up-runde ist das deren payload
@@ -790,6 +822,7 @@ class GLMWebClient:
                             raise
                         accumulator.consume_event(event)
                         _mirror_loop_guard_counts(accumulator, request_scope_signatures)
+                        _mirror_drop_counts(accumulator, request_scope_signatures)
                         if status in {"finish", "intervene"}:
                             finished = True
                             break
@@ -872,6 +905,8 @@ class GLMWebClient:
                             created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
                         # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                        # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
+                        _seed_drop_counts(accumulator, request_scope_signatures)
                         _seed_loop_guard_counts(accumulator, request_scope_signatures)
                         _conversation_account_index = self._get_preferred_account_index(lease.ticket)
                         response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
@@ -889,7 +924,9 @@ class GLMWebClient:
                     needs_correction = bool(
                         accumulator.blocked_tool_attempt_names
                         or getattr(accumulator, "native_remapped_calls", [])
-                        or int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0) > 0
+                        # S-27: der drop-stand muss request-uebergreifend sein — im
+                        # accumulator sieht die naechste runde wieder 0.
+                        or int(request_scope_signatures.get("drops", 0) or 0) > 0
                     )
                     if (
                         needs_correction
@@ -914,6 +951,8 @@ class GLMWebClient:
                             created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
                         # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                        # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
+                        _seed_drop_counts(accumulator, request_scope_signatures)
                         _seed_loop_guard_counts(accumulator, request_scope_signatures)
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         # C-12: follow-up-runde wird zur aktiven runde
@@ -951,6 +990,8 @@ class GLMWebClient:
                     created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                 accumulator = new_accumulator()
                 # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
+                _seed_drop_counts(accumulator, request_scope_signatures)
                 _seed_loop_guard_counts(accumulator, request_scope_signatures)
                 _conversation_account_index = self._get_preferred_account_index(lease.ticket)
                 response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
@@ -1183,8 +1224,10 @@ class GLMWebClient:
         # belegt in `ses_f161565c6ffeZp78k7WqoSoF06` (21x `open` auf denselben
         # fehlenden pfad, null drops, das modell erfand ein "the system has
         # repeatedly interrupted me", das es nicht gab).
-        request_scope_signatures: dict[str, int] = {}
+        request_scope_signatures: dict[str, int] = {}  # S-27: 'drops' -> int
         accumulator = new_accumulator()
+        # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
+        _seed_drop_counts(accumulator, request_scope_signatures)
         _seed_loop_guard_counts(accumulator, request_scope_signatures)
 
         def generate():
@@ -1257,6 +1300,7 @@ class GLMWebClient:
                             raise
                         chunks, status = accumulator.consume_event(event)
                         _mirror_loop_guard_counts(accumulator, request_scope_signatures)
+                        _mirror_drop_counts(accumulator, request_scope_signatures)
                         for chunk in chunks:
                             encoded = chunk.encode("utf-8")
                             if not served_content and (b'"content"' in encoded or b'"reasoning_content"' in encoded):
@@ -1296,37 +1340,34 @@ class GLMWebClient:
                             for blocked_name in blocked:
                                 if blocked_name not in turn_blocked_names:
                                     turn_blocked_names.append(blocked_name)
-                            # S-25: der aufgaben-abandon wird hier erkannt, wo
-                            # der text WIRKLICH entsteht — in `finalize_chunks`.
-                            # Ein chunk-buffern im sse-pfad war der erste
-                            # versuch und ging nicht: der accumulator streamt
-                            # den prose-text nicht ueber `consume_event`, sondern
-                            # erst in `finalize()` (live gemessen: der
-                            # abandon-text kam als EIN finaler chunk). Der
-                            # puffer sah ihn also nie.
+                            # S-25 -> S-27: der aufgaben-abandon wird NICHT
+                            # mehr unterdrueckt. Das unterdruecken war die
+                            # ursache der erfundenen system-meldungen: das
+                            # modell bekam den text nie, in dem es seinen
+                            # zustand beschrieb, und erfand stattdessen
+                            # erklaerungen, die es nicht gab (live
+                            # `ses_f1605c9d0ffeCSJmR08y4q29FK`: *"the system
+                            # has repeatedly interrupted me telling me to stop
+                            # calling `open`"*, *"MCP-Scrape-Fehler"*, *"wie
+                            # vom System gefordert"* — alles frei erfunden).
                             #
-                            # Nur wenn der turn reiner text ist (kein
-                            # tool_call) — ein turn mit werkzeugaufruf bricht
-                            # per definition nicht ab, und C-11/V-02 verlangen,
-                            # gueltige calls unveraendert auszuliefern.
+                            # Der text bleibt jetzt sichtbar UND loest die
+                            # korrekturrunde aus: das modell erfaehrt die
+                            # aufgaben-abandon, bekommt dazu eine echte
+                            # korrektur als user-nachricht (mit den notices),
+                            # und arbeitet weiter. Information statt
+                            # Schweigen — der umgekehrte ansatz von S-25 hat
+                            # das system genau in die totecke getrieben.
                             final_text, _ = accumulator.render_full_output()
                             final_reason = is_abandon_claim(final_text)
-                            if final_reason and not any(
-                                b'"tool_calls"' in chunk.encode("utf-8", "ignore") for chunk in finalize_chunks
-                            ):
+                            if final_reason:
                                 self.logger.warning(
-                                    "S-25: suppressing task-abandon text (reason=%s, chars=%s) — "
-                                    "the turn continues instead",
+                                    "S-27: task-abandon detected (reason=%s, chars=%s) — text stays "
+                                    "visible, a correction round runs so the model gets the real facts",
                                     final_reason,
                                     len(final_text),
                                 )
                                 suppress_abandon_reason = final_reason
-                                finalize_chunks = [
-                                    chunk
-                                    for chunk in finalize_chunks
-                                    if b'"tool_calls"' in chunk.encode("utf-8", "ignore")
-                                ]
-                                served_content = True
                             break
                 except UpstreamAPIError:
                     raise
@@ -1418,7 +1459,9 @@ class GLMWebClient:
                     needs_correction = bool(
                         blocked
                         or getattr(accumulator, "native_remapped_calls", [])
-                        or int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0) > 0
+                        # S-27: der drop-stand muss request-uebergreifend sein — im
+                        # accumulator sieht die naechste runde wieder 0.
+                        or int(request_scope_signatures.get("drops", 0) or 0) > 0
                         # S-25: ein unterdrueckter aufgaben-abandon ist selbst
                         # der grund fuer eine korrektur-runde — auch wenn sonst
                         # keine notice ansteht. Live: das modell bot die
@@ -1440,19 +1483,35 @@ class GLMWebClient:
                             for chunk in finalize_chunks:
                                 yield chunk.encode("utf-8")
                             return
-                        # S-24: ist dem client schon text gestreamt, kann die
-                        # falsche antwort nicht mehr zurueckgenommen werden
-                        # (live 2026-09-28: "bis das Rundenlimit erreicht war"
-                        # + "schick mir bitte eine neue nachricht" stand im
-                        # sichtbaren output, DANACH lieferte das modell nach
-                        # der korrektur-runde die richtige antwort). Deshalb
-                        # wird die korrektur-runde NUR genommen, solange noch
-                        # nichts raus ist — dann ist der turn umkehrbar und
-                        # der client sieht nur die korrigierte antwort. Nach
-                        # ausgeliefertem content gewinnt V-03 (ein turn ist
-                        # nicht zuruecknehmbar, sonst haette der client zwei
-                        # antworten) und die notices gehen wie bisher raus.
-                        if served_content:
+                        # S-24 -> S-27: ist dem client schon text gestreamt,
+                        # kann die antwort nicht mehr zurueckgenommen werden
+                        # (V-03: sonst haette der client zwei antworten).
+                        #
+                        # **BEI DROPS UND REMAPS WIRD DIE KORREKTUR JETZT
+                        # IMMER GEFAHREN**, auch wenn schon text raus ist.
+                        # Begruendung aus zwei Live-Faellen: die schleife
+                        # `ses_f1605c9d0ffeCSJmR08y4q29FK` (75 mappings,
+                        # 6 drops, **null** korrekturrunden — das modell
+                        # erfand "the system has repeatedly interrupted me" /
+                        # "MCP-Scrape-Fehler") und der abbruch mit
+                        # "bis das Rundenlimit erreicht war" (null korrektur,
+                        # aufgabe unvollstaendig). Der fruehere skip nach
+                        # `served_content` war praktisch IMMER aktiv, weil
+                        # `served_content` bei jedem normalen turn true ist
+                        # (der turn streamt ja sichtbaren text) — die
+                        # korrektur kam also nie an, egal wie gut die
+                        # bedingung gebaut war. Ein zweiter Antwort-Block
+                        # ist ein kosmetischer schaden; die fehlenden Fakten
+                        # sind ein sachlicher, weil sie den Auftrag
+                        # abbrechen lassen und den Grund verfaelschen.
+                        #
+                        # `served_content` gilt damit nur noch fuer den
+                        # blocked-only-Fall, wo es nichts zu korrigieren gibt.
+                        if served_content and not (
+                            suppress_abandon_reason
+                            or int(request_scope_signatures.get("drops", 0) or 0) > 0
+                            or getattr(accumulator, "native_remapped_calls", [])
+                        ):
                             self.logger.warning(
                                 "Correction round skipped: content already served to the client "
                                 "(V-03: a turn cannot be retracted) — notices go out as deltas",
@@ -1462,6 +1521,15 @@ class GLMWebClient:
                             for chunk in finalize_chunks:
                                 yield chunk.encode("utf-8")
                             return
+                        if served_content and (
+                            suppress_abandon_reason
+                            or int(request_scope_signatures.get("drops", 0) or 0) > 0
+                            or getattr(accumulator, "native_remapped_calls", [])
+                        ):
+                            self.logger.warning(
+                                "S-27: content already served, but the model needs the real facts "
+                                "(abandon/drops/remaps present) — running the correction round anyway",
+                            )
                         self.logger.warning(
                             "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s (served_content=%s)",
                             ", ".join(sorted(set(blocked))),
@@ -1474,6 +1542,8 @@ class GLMWebClient:
                             created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
                         # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                        # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
+                        _seed_drop_counts(accumulator, request_scope_signatures)
                         _seed_loop_guard_counts(accumulator, request_scope_signatures)
                         if served_content:
                             accumulator.emitted_role = True
@@ -1507,6 +1577,8 @@ class GLMWebClient:
                             created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
                         # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                        # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
+                        _seed_drop_counts(accumulator, request_scope_signatures)
                         _seed_loop_guard_counts(accumulator, request_scope_signatures)
                         _conversation_account_index = self._get_preferred_account_index(lease.ticket)
                         response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
@@ -1565,6 +1637,8 @@ class GLMWebClient:
                     created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                 accumulator = new_accumulator()
                 # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
+                _seed_drop_counts(accumulator, request_scope_signatures)
                 _seed_loop_guard_counts(accumulator, request_scope_signatures)
                 _conversation_account_index = self._get_preferred_account_index(lease.ticket)
                 response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)

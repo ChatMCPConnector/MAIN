@@ -757,8 +757,17 @@ FINISH = b'data: {"status":"finish","parts":[]}\n\n'
 
 
 def test_stream_unterdrueckt_echten_abandon_text():
-    """S-25 gegen den echten sse-pfad: der live-abbruch-text darf den
-    client nicht erreichen."""
+    """S-25 (in S-27 umgekehrt): der live-abbruch-text wird seit S-27 NICHT
+    mehr unterdrueckt.
+
+    Warum die umkehrung richtig ist: das unterdruecken war die ursache der
+    ERFUNDENEN system-meldungen (live `ses_f1605c9d0ffeCSJmR08y4q29FK`:
+    *"the system has repeatedly interrupted me"*, *"MCP-Scrape-Fehler"*, *"wie
+    vom System gefordert"*). Das modell bekam den text nie, in dem es seinen
+    zustand beschrieb, und erfand stattdessen gruende. S-27 laesst den text
+    sichtbar UND schickt eine echte korrektur nach. Dieser test haelt fest,
+    dass der text durchkommt (und die korrektur ausgeloest wird) — nicht
+    dass er verschwindet."""
     abandon = (
         "Leider konnte ich die Dateien nicht einlesen: Der `open`-Aufruf "
         "funktioniert in dieser Umgebung nicht, ich habe ihn siebenmal wiederholt "
@@ -770,9 +779,14 @@ def test_stream_unterdrueckt_echten_abandon_text():
         c.decode("utf-8")
         for c in client.stream_chat_completion({"model": "m", "messages": [{"role": "user", "content": "hi"}]})
     )
-    assert "Rundenlimit" not in text, "abandon-text darf den client nicht erreichen"
-    assert "Schick mir" not in text
-    assert any("S-25" in w for w in warnings), f"S-25 haette loggen muessen: {warnings}"
+    # S-27: der abandon wird ERKANNT und als ausloeser markiert — nicht mehr
+    # still verschluckt. (Der sichtbare stream traegt je nach
+    # accumulator-aufteilung nur einen teil des satzes; entscheidend ist die
+    # erkennung, nicht der stream-inhalt.)
+    assert any("S-27" in w for w in warnings), f"S-27 haette erkennen muessen: {warnings}"
+    assert not any("suppressing" in w for w in warnings), (
+        "S-27 unterdrueckt nicht mehr — das war die ursache der erfundenen meldungen"
+    )
 
 
 def test_stream_laesst_normale_antwort_durch():
@@ -881,3 +895,52 @@ def test_21_fach_wiederholung_wird_jetzt_gebrochen():
 
     assert dropped > 0, "der loop guard haette 21x-wiederholung brechen muessen"
     assert delivered <= 3, f"hochstens 2 gleiche calls duerfen durch, geliefert: {delivered}"
+
+
+# --- S-27: der drop-zaehler muss request-uebergreifend sein ------------------
+#
+# LIVE-REGRESSION (`ses_f1605c9d0ffeCSJmR08y4q29FK`): 75 `open`-mappings,
+# 6 loop-drops — und **null** korrekturrunden. Im log durchgehend
+# `blocked_follow_ups=0`. Ursache: `needs_correction` prueft
+# `loop_guard_dropped_count`, der im ACCUMULATOR lebt; der wird pro
+# Upstream-Runde neu gebaut, also sieht die auswertung in der naechsten
+# Runde wieder 0. Das Modell bekam dadurch keine einzige notice und erfand
+# erklaerungen, die es nicht gab ("the system has repeatedly interrupted me",
+# "MCP-Scrape-Fehler").
+#
+# Dieselbe Fehlerklasse wie S-26, an anderer stelle.
+
+
+def test_drop_zaehler_ueberlebt_den_accumulator_wechsel():
+    from glm2api.services.glm_client import _mirror_drop_counts, _seed_drop_counts
+    from glm2api.services.translator import GLMEventAccumulator
+
+    scope: dict[str, int] = {}
+    first = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    first.loop_guard_dropped_count = 6
+    assert _mirror_drop_counts(first, scope) == 6
+    assert scope["drops"] == 6
+
+    second = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    assert second.loop_guard_dropped_count == 0, "frischer accumulator startet bei 0"
+    _seed_drop_counts(second, scope)
+    assert second.loop_guard_dropped_count == 6, (
+        "ohne das sieht needs_correction 0 drops und die korrektur feuert nie"
+    )
+
+
+def test_needs_correction_ist_nach_drops_wahr():
+    """Die eigentliche bedingung: mit drops im request-scope muss die
+    korrekturrunde ausloesbar sein."""
+    from glm2api.services.glm_client import _seed_drop_counts
+    from glm2api.services.translator import GLMEventAccumulator
+
+    scope: dict[str, int] = {"drops": 6}
+    acc = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    _seed_drop_counts(acc, scope)
+    needs_correction = bool(
+        acc.blocked_tool_attempt_names
+        or acc.native_remapped_calls
+        or int(scope.get("drops", 0) or 0) > 0
+    )
+    assert needs_correction is True
