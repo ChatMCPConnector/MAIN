@@ -62,9 +62,7 @@ SCENARIOS: list[tuple[str, list, set, str, list[str], str, str | None]] = [
     ("praeambel-en+call", ["I'll now read the file.", CALL], READ, "", ["read"], "tool_calls", None),
     # die chinesische praeambel ist nur GEPINNT, wenn sie im selben part
     # steht wie das DSML (`test_accumulator_drops_tool_preamble_…`). In
-    # einem eigenen part kennt kein muster sie — sie wird gestreamt. Der
-    # wortrest, der bis S-15 noch davor entkam ('D'/'De'/'Der'), faellt
-    # seit der filterkette in `strip_turn_start_narration` mit.
+    # einem eigenen part kennt kein muster sie — sie wird gestreamt.
     ("praeambel-cn-eigener-part", ["我将创建文件。\n\n", CALL], READ, "我将创建文件。\n\n", ["read"], "tool_calls", None),
     ("praeambel+call+prosa", ["Ich lese die Datei jetzt.", CALL, PROSE], READ, "\n\n" + PROSE, ["read"], "tool_calls", None),
     # --- selbst-steuerung (S-08/S-09) ------------------------------------
@@ -102,24 +100,12 @@ CHUNK_SIZES = (1, 3, 7, 13, 29, 10_000)
 # Eintrag nur fuer den Streamtext; alle uebrigen Vertragsfelder muessen
 # trotzdem stimmen.
 KNOWN: dict[str, dict[int, tuple[str, ...]]] = {
-    # Exakte, bereits verifizierte Varianten. Andere Fehler desselben
-    # Szenarios (Calls, finish_reason oder Body) bleiben unbekannt/rot.
-    "selbst-steuerung+call": {
-        1: ("D",),
-        3: ("Der ",),
-    },
-    # Das Leerzeichen wurde vor Erkennung/Abschluss der folgenden Narration
-    # bereits gestreamt; nachtraegliches Zuruecknehmen wuerde den Stream aendern.
     "selbst-steuerung-mittelteil": {
         1: ("Der Bericht ist da. ",),
         3: ("Der Bericht ist da. ",),
     },
 }
 KNOWN_DETAILS = {
-    "selbst-steuerung+call": (
-        "S-14: exakt dokumentierter Narrationsrest; nur die folgenden "
-        "Chunk-zu-Output-Zuordnungen werden akzeptiert."
-    ),
     "selbst-steuerung-mittelteil": (
         "S-15: bereits gestreamtes abschliessendes Leerzeichen; nur die "
         "folgenden Chunk-zu-Output-Zuordnungen werden akzeptiert."

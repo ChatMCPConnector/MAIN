@@ -1396,6 +1396,18 @@ def _build_stem_prefix_regex(stems: tuple[str, ...]) -> re.Pattern[str]:
 _PREAMBLE_STEM_PREFIX_RE = _build_stem_prefix_regex(_PREAMBLE_STEMS)
 
 
+# The observed self-narration starts with "Der `open`..." / "The `open`...".
+# Hold only the ambiguous initial article prefix so a split before the first
+# backtick cannot escape. A following ordinary word releases it immediately.
+_INITIAL_TOOL_NARRATION_PREFIX_RE = re.compile(
+    r"\A(?:d|de|der|der[ \t]+|t|th|the|the[ \t]+)\Z", re.IGNORECASE
+)
+
+
+def _initial_tool_narration_prefix_undecided(text: str) -> bool:
+    return bool(_INITIAL_TOOL_NARRATION_PREFIX_RE.fullmatch(text))
+
+
 def _preamble_narration_undecided(text: str) -> bool:
     """Endet der text auf einem noch unvollstaendigen praeambel-anfang?
 
@@ -1411,6 +1423,7 @@ def _preamble_narration_undecided(text: str) -> bool:
     if _PREAMBLE_NARRATION_RE.search(text):
         return False
     return bool(_PREAMBLE_STEM_PREFIX_RE.search(text))
+
 
 def strip_protocol_meta_narration(text: str) -> str:
     """Entfernt Text, in dem das Modell das Werkzeugprotokoll kommentiert
@@ -2690,6 +2703,7 @@ class GLMEventAccumulator:
     # delta passt — bei chunk-groesse 1-13 kam die komplette narration
     # durch (live gemessen).
     _narration_carry: str = ""
+    _initial_tool_prefix_held: bool = False
     _deferred_reasoning: str = ""
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
     blocked_tool_attempt_names: list[str] = field(default_factory=list)
@@ -3394,6 +3408,13 @@ class GLMEventAccumulator:
         # erkennbar etwas anderes ist, geht der ganze carry in einem
         # rutsch an den parser — die reihenfolge bleibt so erhalten.
         text_delta = self._narration_carry + text_delta
+        held_article_continues = self._initial_tool_prefix_held and bool(
+            self._narration_carry
+        )
+        if self._initial_tool_prefix_held and not _initial_tool_narration_prefix_undecided(
+            text_delta
+        ):
+            self._initial_tool_prefix_held = False
         # S-07: das ende ist noch präfix einer protokoll-marke -> warten.
         # S-09: ODER der letzte satz ist noch offen und trägt ein
         # werkzeug-/limit-token -> ebenfalls warten, bis der satz fertig
@@ -3412,19 +3433,26 @@ class GLMEventAccumulator:
             text_delta, self._narration_carry = _split_open_sentence(text_delta)
             # S-15: war der GANZE text der offene satz, dann beginnt der
             # carry mit dem rand, der den fertigen satz DAVOR abschliesst.
-            # Derselbe rand wie im zweig unten, nur an anderer stelle
-            # entstanden — der zweite fall, weil `_split_open_sentence`
-            # seinen eigenen rand erst am Trenner erkennt, nicht am anfang.
-            carry_edge_carrier, carry_edge = self._owed_lead_edge(
-                self._narration_carry
-            )
-            # nur wenn der fertige praefix leer ist: dann ist der rand der
-            # GANZE text_delta und kann direkt veroeffentlicht werden. Steht
-            # ein praefix davor, faehrt der rand mit durch die normale
-            # kette — dort ist die reihenfolge durch den praefix gegeben.
-            if carry_edge and not text_delta:
-                self._narration_carry = carry_edge_carrier
-                chunks.append(self._visible_content_chunk(carry_edge))
+        elif (
+            text_delta
+            and not self._emitted_visible_text
+            and not self._deferred_visible_text
+            and _initial_tool_narration_prefix_undecided(text_delta)
+        ):
+            # S-14: retain only the initial article fragments until either
+            # an opening tool token or ordinary answer prose disambiguates it.
+            self._narration_carry = text_delta
+            self._initial_tool_prefix_held = True
+            text_delta = ""
+        elif (
+            held_article_continues
+            and text_delta.startswith(self._narration_carry)
+            and _self_steering_holdback(text_delta)
+        ):
+            # The article evolved into the known tool-narration sentence;
+            # keep it with the existing self-talk holdback.
+            self._narration_carry = text_delta
+            text_delta = ""
         elif text_delta and (
             _PROTOCOL_META_NARRATION_TAIL_RE.search(text_delta)
             or _self_steering_holdback(text_delta)
@@ -4099,6 +4127,7 @@ class GLMEventAccumulator:
         # der text verloren (er war nie im parser und wird beim flush
         # nicht zurueckgegeben).
         held_narration = bool(self._narration_carry)
+        held_initial_tool_prefix = self._initial_tool_prefix_held
         if self._narration_carry:
             self.tool_parser.pending_text += self._narration_carry
             self._narration_carry = ""
@@ -4575,7 +4604,12 @@ class GLMEventAccumulator:
             self.tool_parser.flushed_markup_prefix_is_preamble
             and not self._emitted_visible_text
         )
-        if all_tool_calls and held_text.strip() and not _flushed_was_preamble:
+        if (
+            all_tool_calls
+            and held_text.strip()
+            and not _flushed_was_preamble
+            and not held_initial_tool_prefix
+        ):
             released = self._strip_release_narration(held_text)
             stripped = released.strip()
             if stripped and not _TERMINATOR_ONLY_RE.match(stripped):
@@ -4616,7 +4650,6 @@ class GLMEventAccumulator:
                     }
                 )
             )
-
         if all_tool_calls:
             if not self.emitted_role:
                 chunks.append(

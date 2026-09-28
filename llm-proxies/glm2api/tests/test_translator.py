@@ -4900,10 +4900,7 @@ def test_s11_paragraph_break_rules_directly():
 # ist vorbestehend, nicht von S-10/S-11/S-12 verursacht.
 _S14_NARRATION = _S09_NARRATION
 
-# Der wortrest VOR der ersten werkzeug-marke. Der kann nur weg, wenn die
-# erste satzhaelfte eines jeden parts gepuffert wird (verzoegerung auf
-# JEDER antwort) — bewusst nicht gemacht, siehe optimierung.md S-14.
-_S14_RESIDUE = ("", "D", "De", "Der")
+# Der schmale Lookahead haelt nur den mehrdeutigen Artikelanfang zurueck.
 
 
 def test_s14_begun_tool_token_is_held_back():
@@ -4969,7 +4966,7 @@ def test_s14_narration_fragment_never_reaches_the_client(chunk_size):
     ihn ausloest — vier stichproben hätten genau die faelle übersehen."""
     streamed, _ = _s10_stream([_S14_NARRATION, _s10_native_event("c1")], chunk_size)
 
-    assert streamed.strip() in _S14_RESIDUE, (chunk_size, streamed)
+    assert streamed == "", (chunk_size, streamed)
     for marker in ("`", "open", "read", "funktioniert", "nur das", "Pfade"):
         assert marker not in streamed, (chunk_size, marker, streamed)
 
@@ -4985,6 +4982,20 @@ def test_s14_call_behind_a_split_narration_still_arrives(chunk_size):
         chunk_size,
         streamed,
     )
+
+
+def test_s14_initial_article_lookahead_preserves_regular_prose():
+    """Der S-14-Lookahead darf normale Antworten mit deutschem oder
+    englischem Artikelanfang nicht verlieren oder umschreiben."""
+    for text in (
+        "Der Bericht nennt drei Punkte.",
+        "The report lists three points.",
+    ):
+        for chunk_size in range(1, len(text) + 1):
+            streamed, _ = _s10_stream(
+                [text, _s10_native_event("c1")], chunk_size
+            )
+            assert streamed == text, (text, chunk_size, streamed)
 
 
 _S14_ANSWER = (

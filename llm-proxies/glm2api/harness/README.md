@@ -49,9 +49,9 @@ Messung auch dort grün, ist entweder die Messung blind oder der Fix wirkungslos
 
 | Skript | Misst | Stand |
 |---|---|---|
-| `leak_probe.py` | Narration-Rest je Chunkgröße 1…215; Antwort-Gegenprobe mit `read`/`bash`/Fence | 0 unbekannte Leaks; 4 exakt bekannte S-14-Präfixreste (`D`, `De`, `Der `, `Der `), 0/215 Calls verloren, Antworttext exakt 0/104 verändert |
-| `order_matrix.py` | Exakter Soll- und Chunk-Invarianzvergleich über 17 Text/Call-Layouts × 10 Chunkgrößen; zusätzlich S-14-Rest über alle 215 Chunkgrößen | 170 Layout-Messungen + 215 S-14-Messungen, 0 unbekannte Abweichungen; 4/10 exakte, dokumentierte Whitespacevarianten nur in `rand-links-im-carry` |
-| `sweep2.py` | Exakter Vertrags-Sweep: 23 Szenarien × 6 Chunkgrößen, Stream- **und** Non-Stream-Pfad (Text, Aufrufe, `finish_reason`, Body) | 138 Messungen, 0 unbekannte Verstöße; exakte Ausnahmen: S-14 (2/6) und S-15-Schlussleerzeichen (2/6); sonst alle Vertragsfelder geprüft |
+| `leak_probe.py` | Narration-Rest je Chunkgröße 1…215; Antwort-Gegenprobe mit `read`/`bash`/Fence | S-14 erwartet exakt 0 sichtbaren Narrationstext; 0/215 Calls verloren, Antworttext exakt 0/104 verändert |
+| `order_matrix.py` | Exakter Soll- und Chunk-Invarianzvergleich über 17 Text/Call-Layouts × 10 Chunkgrößen; zusätzlich S-14-Rest über alle 215 Chunkgrößen | zuletzt: 170 Layout-Messungen + 215 S-14-Messungen, 0 unbekannte Abweichungen; S-14 ohne Rest, 4/10 bekannte Whitespacevarianten nur in `rand-links-im-carry` |
+| `sweep2.py` | Exakter Vertrags-Sweep: 23 Szenarien × 6 Chunkgrößen, Stream- **und** Non-Stream-Pfad (Text, Aufrufe, `finish_reason`, Body) | zuletzt: 138 Messungen, 0 unbekannte Verstöße; S-15-Schlussleerzeichen 2/6 bekannte Chunk-Abweichungen; keine S-14-Ausnahme |
 | `trace_stream.py` | Delta-für-Delta-Trace, wenn ein Fall unklar ist | Werkzeug, kein Soll |
 
 **Eigenprüfung der Harnesses** (Pflicht, sonst misst man nichts): beide
@@ -80,7 +80,7 @@ stehen in `../optimierung.md`.
 | **S-16** | Erfundenen Limit-Behauptungen gingen im Text-only-Turn durch — Stream und Body. | behoben: Limit-Filter auch ohne Calls + Body-Kette |
 | **S-17** | Apostroph als Satzende erzeugte Absatzumbruch mitten im Wort. | behoben: Apostroph aus Satzendzeichen entfernt |
 | **S-18** | Über Parts zerschnittenes DSML leckte im Stream; Ursache: Absatzregel im Markup und fehlender Holdback für angefangene Opener. | behoben: Markup-Grenze + `BEGUN_MARKUP_RE` |
-| **S-14-Rest** | 4/215 Chunkgrößen lassen vor dem ersten Backtick `'D'`, `'De'` oder `'Der '` durch (Chunk 1–4); ab Chunk 5 kein sichtbarer Rest. Höchstens vier Präfixzeichen in diesem Repro, keine generelle Wortlänge-Latenz in jedem Turn. | bewusst akzeptiert; beide Harnesses erlauben ausschließlich exakte Chunk-/Output-Zuordnungen |
+| **S-14-Rest** | Die mehrdeutigen initialen Artikel-Fragmente (`D`, `De`, `Der `, `T`, `Th`, `The `) werden bis zur Disambiguierung gehalten; bekannte Selbst-Narration bleibt unsichtbar, gewöhnliche Prosa mit `Der`/`The` bleibt erhalten. | behoben und verifiziert: 0/215 sichtbare Reste, 0/215 Calls verloren, Prosa-Gegenprobe 0/104 verändert |
 | **S-19** | Trenner auf beiden Seiten eines unsichtbaren Calls verdoppelten Absatz-Newlines; auch zwei einzelne Newlines müssen sich über einen Call zu einem Absatz ergänzen. | behoben und mit vier Call-Layouts plus späterer Absatz-Gegenprobe über alle Chunkgrößen geprüft |
 
 Der exakte Streamvergleich kann dokumentierte Whitespace-Reste nicht

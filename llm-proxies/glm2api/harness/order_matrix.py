@@ -75,7 +75,7 @@ LAYOUTS: list[tuple[str, list, str, int]] = [
 ]
 
 CHUNK_SIZES = (1, 2, 3, 5, 7, 8, 11, 13, 20, 1000)
-S14_PREFIXES = {1: "D", 2: "De", 3: "Der ", 4: "Der "}
+S14_PREFIXES: dict[int, str] = {}
 
 # Das Layout liefert je nach Chunkgrenze exakt bekannte Rand-Whitespace-
 # Varianten. Ein dritter Output oder ein zusätzlicher Call-/Protokollfehler
@@ -144,7 +144,7 @@ def check(
 
 
 def check_s14_residuals() -> list[tuple[int, str]]:
-    """S-14-Ausnahme als exakte Chunk-Messung, nicht pauschal als KNOWN."""
+    """Prueft den S-14-Stream ueber alle Chunkgroessen auf leeren Text."""
     failures = []
     for chunk in range(1, len(NARRATION) + 1):
         streamed, _body, accumulator = stream(
@@ -234,7 +234,7 @@ def main() -> int:
             print(f"  chunk={chunk}: {actual!r}")
         unknown += len(residual_failures)
     else:
-        print("S-14-Praefix-Messung: 215/215 exakt (4 akzeptierte Präfixe, Calls 215/215)")
+        print(f"S-14-Narrationsmessung: {len(NARRATION)}/{len(NARRATION)} ohne Rest, Calls exakt")
     for label, chunks in known_chunk_hits.items():
         if chunks:
             print(

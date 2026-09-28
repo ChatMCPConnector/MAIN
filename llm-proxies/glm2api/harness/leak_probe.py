@@ -18,14 +18,9 @@ import sys
 
 from common import ALLOWED, NARRATION, native_event, stream
 
-# Die einzigen aktuell akzeptierten Reste des S-14-Narration-Holdbacks,
-# exakt nach Chunkgroesse; jeder andere sichtbare Text ist ein Leak.
-KNOWN_NARRATION_RESIDUES = {
-    1: "D",
-    2: "De",
-    3: "Der ",
-    4: "Der ",
-}
+# S-14 soll fuer diese Narration bei jeder Chunkgroesse keinen sichtbaren
+# Text freigeben; jede Abweichung ist ein Leak.
+EXPECTED_NARRATION_OUTPUT = ""
 
 CONTROL_ANSWER = (
     "Die Datei hat 3 Zeilen. Nutze `read` mit dem Pfad, dann `bash` fuer "
@@ -48,7 +43,6 @@ def main() -> int:
     short = "--short" in sys.argv
     total = len(NARRATION)
     leaks = 0
-    known_residues = 0
     calls_lost = 0
     print(f"narration = {total} zeichen, {len(NARRATION.splitlines())} zeilen")
     print(f"{'chunk':>5} | {'sichtbar':<52} | call")
@@ -57,20 +51,15 @@ def main() -> int:
         visible, _body, names = probe_narration(chunk_size)
         if not names:
             calls_lost += 1
-        expected_residue = KNOWN_NARRATION_RESIDUES.get(chunk_size)
-        is_known_residue = visible == expected_residue
-        if visible and not is_known_residue:
+        if visible != EXPECTED_NARRATION_OUTPUT:
             leaks += 1
-        elif is_known_residue:
-            known_residues += 1
-        if not short or visible and not is_known_residue or not names:
+        if not short or visible != EXPECTED_NARRATION_OUTPUT or not names:
             print(
                 f"{chunk_size:>5} | {visible[:52]!r:<52} | "
                 f"{','.join(names) or '—'}"
             )
     print("-" * 90)
     print(f"UNBEKANNTE LEAKS: {leaks}/{total} chunk-groessen")
-    print(f"Bekannte S-14-Reste: {known_residues}/{total}")
     print(f"Aufruf verloren: {calls_lost}/{total}")
 
     print()

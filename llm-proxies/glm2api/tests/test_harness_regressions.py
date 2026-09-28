@@ -98,15 +98,16 @@ def test_sweep_known_exception_does_not_hide_call_failure():
         1,
     )
 
-    assert streamed == "D"
+    assert streamed == ""
     assert any(problem.startswith("aufrufe:") for problem in problems)
     assert not sweep2._is_known_stream_only_difference(
         label, 1, streamed, expected_stream, problems
     )
 
 
-def test_sweep_accepts_only_exact_documented_stream_residue():
-    assert sweep2._is_known_stream_only_difference(
+def test_sweep_no_longer_whitelists_fixed_s14_residue():
+    assert "selbst-steuerung+call" not in sweep2.KNOWN
+    assert not sweep2._is_known_stream_only_difference(
         "selbst-steuerung+call",
         1,
         "D",
@@ -153,12 +154,3 @@ def test_sweep_preamble_followup_expectation_preserves_paragraph_boundary():
     )
 
     assert not problems
-
-
-def test_sweep_known_text_exception_is_specific_to_chunk_and_output():
-    expected = sweep2.KNOWN["selbst-steuerung+call"]
-
-    assert expected[1] == ("D",)
-    assert expected[3] == ("Der ",)
-    assert 2 not in expected
-    assert "Der" not in expected[3]
