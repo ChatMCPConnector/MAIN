@@ -688,3 +688,120 @@ def test_leerer_und_auffaelliger_text_wird_durchgelassen():
 
     assert is_abandon_claim("") is None
     assert is_abandon_claim(None) is None
+
+
+def _sse_client(body: bytes):
+    """Minimaler client gegen den ECHTEN sse-pfad (bytes, nicht dicts) —
+    der dict-mock im testmodul umgeht die chunk-aufteilung des accumulators
+    und taugt nicht fuer den stream-buffertest."""
+    import json as _json
+    from types import SimpleNamespace
+
+    from glm2api.services.glm_client import GLMWebClient, ConcurrentRequestQueue
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+
+        def close(self):
+            pass
+
+        def read(self, size=-1):
+            data, self._body = self._body, b""
+            return data
+
+        def getheader(self, *a, **k):
+            return None
+
+        def info(self):
+            ns = SimpleNamespace()
+            ns.get = lambda *a, **k: None
+            ns.get_content_charset = lambda *a, **k: "utf-8"
+            return ns
+
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = SimpleNamespace(
+        glm_max_concurrency=2, glm_queue_wait_timeout=2, glm_stream_error_max_retries=0,
+        glm_empty_response_max_retries=0, glm_blocked_tool_follow_ups=0,
+        glm_history_max_chars=100000, glm_request_deadline_seconds=10.0,
+        glm_stream_error_retry_interval=0.0, glm_max_output_tokens=16384,
+        glm_persistent_conversation=False, glm_conversation_id="", glm_conversation_file=None,
+        glm_delete_conversation=True, blocked_tool_names=[], debug_dump_all=False,
+    )
+    warnings_seen = []
+    client.logger = SimpleNamespace(
+        warning=lambda msg, *a, **k: warnings_seen.append(str(msg) % a if a else str(msg)),
+        info=lambda *a, **k: None, debug=lambda *a, **k: None,
+    )
+    client.request_queue = ConcurrentRequestQueue(client.logger, wait_timeout=1, max_concurrency=2)
+    client.auth = SimpleNamespace(get_access_token_for_account=lambda i: "tok", get_account_count=lambda: 1)
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (_Resp(body), "a1")
+    client.delete_conversation = lambda cid, assistant_id=None: None
+    return client, warnings_seen
+
+
+def _sse(text: str, logic: str = "p1") -> bytes:
+    import json as _json
+
+    payload = {
+        "status": "process",
+        "parts": [{
+            "logic_id": logic, "status": "process",
+            "content": [{"type": "text", "text": text}],
+        }],
+    }
+    return ("data: " + _json.dumps(payload) + "\n\n").encode("utf-8")
+
+
+FINISH = b'data: {"status":"finish","parts":[]}\n\n'
+
+
+def test_stream_unterdrueckt_echten_abandon_text():
+    """S-25 gegen den echten sse-pfad: der live-abbruch-text darf den
+    client nicht erreichen."""
+    abandon = (
+        "Leider konnte ich die Dateien nicht einlesen: Der `open`-Aufruf "
+        "funktioniert in dieser Umgebung nicht, ich habe ihn siebenmal wiederholt "
+        "bis das Rundenlimit erreicht war. Schick mir bitte eine neue Nachricht."
+    )
+    body = _sse(abandon) + FINISH
+    client, warnings = _sse_client(body)
+    text = "".join(
+        c.decode("utf-8")
+        for c in client.stream_chat_completion({"model": "m", "messages": [{"role": "user", "content": "hi"}]})
+    )
+    assert "Rundenlimit" not in text, "abandon-text darf den client nicht erreichen"
+    assert "Schick mir" not in text
+    assert any("S-25" in w for w in warnings), f"S-25 haette loggen muessen: {warnings}"
+
+
+def test_stream_laesst_normale_antwort_durch():
+    """Der entscheidende gegenbeweis: eine fertige antwort darf NICHT
+    verschluckt werden. Falsch-positive sind schlimmer als ein echo."""
+    ok = (
+        "Beide Dateien sind vollstaendig identisch: alle 224 Zeilen stimmen "
+        "ueberein, zum Beispiel Zeile 22 mit '# ZeroKey'."
+    )
+    body = _sse(ok) + FINISH
+    client, _ = _sse_client(body)
+    text = "".join(
+        c.decode("utf-8")
+        for c in client.stream_chat_completion({"model": "m", "messages": [{"role": "user", "content": "hi"}]})
+    )
+    assert "vollstaendig identisch" in text, "normale antwort muss ankommen"
+    assert "ZeroKey" in text
+
+
+def test_stream_unterdrueckt_abandon_nicht_bei_echtem_fehlschlag():
+    """Bei einem echten `File not found` ist 'ich konnte es nicht lesen'
+    zutreffend — der text muss durchgehen (live: 2x File not found fuer
+    /workspaces/cyber, und das modell sagte zu recht, dass es die dateien
+    nicht lesen konnte)."""
+    honest = "Ich konnte /workspaces/cyber nicht lesen: File not found. Der Pfad existiert nicht."
+    body = _sse(honest) + FINISH
+    client, _ = _sse_client(body)
+    text = "".join(
+        c.decode("utf-8")
+        for c in client.stream_chat_completion({"model": "m", "messages": [{"role": "user", "content": "hi"}]})
+    )
+    assert "File not found" in text, "echter fehlschlag darf nicht unterdrueckt werden"
