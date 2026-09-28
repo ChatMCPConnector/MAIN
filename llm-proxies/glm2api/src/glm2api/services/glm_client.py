@@ -1518,6 +1518,17 @@ class GLMWebClient:
                         # fortsetzung.
                         or suppress_abandon_reason
                     )
+                    # S-28/V-03: die byte-marken der BLOCKIERTEN werkzeugnamen.
+                    # Sie duerfen beim vorab-zustellen der gueltigen calls
+                    # (unten, vor dem accumulator-wechsel) nicht mit
+                    # durchrutschen — V-03 gilt unveraendert.
+                    _blocked_call_markers = [
+                        b'"' + name.encode("utf-8") + b'"'
+                        for name in sorted(
+                            set(blocked)
+                            | set(self.config.blocked_tool_names or [])
+                        )
+                    ]
                     if (
                         needs_correction
                         and blocked_follow_ups < max_blocked_follow_ups
@@ -1595,10 +1606,32 @@ class GLMWebClient:
                         accumulator = new_accumulator()
                         # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
                         # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
+                        # S-28: die gueltigen calls DIESES turns ZUERST
+                        # ausliefern, bevor die korrektur-runde den turn
+                        # uebernimmt. Ohne das gehen sie verloren: die
+                        # korrektur ersetzt den accumulator, und die bereits
+                        # erzeugten `finalize_chunks` werden nie yieldiert.
+                        # Live 2026-09-28 (`ses_f15e98754ffe8E5GoHP4rWsBs6`):
+                        # `read /workspaces/zerokey-v2.0/README.md` wurde
+                        # erfolgreich ausgefuehrt, aber nie zugestellt — das
+                        # modell bekam nie den dateiinhalt und meldete
+                        # "ein vergleich ist nicht moeglich".
+                        #
+                        # V-03 bleibt in kraft: der BLOCKIERTE name
+                        # (`open_url`, `open`, …) darf dabei nicht
+                        # durchrutschen — der test
+                        # `test_blocked_tool_triggers_follow_up_round_stream_
+                        # with_served_content` sichert genau das. Also nur die
+                        # chunks ausliefern, die gueltige calls tragen.
+                        for _chunk in finalize_chunks:
+                            _encoded = _chunk.encode("utf-8")
+                            if b'"tool_calls"' in _encoded and not any(
+                                _blocked_bytes in _encoded for _blocked_bytes in _blocked_call_markers
+                            ):
+                                yield _encoded
                         _seed_drop_counts(accumulator, request_scope_signatures)
                         _seed_loop_guard_counts(accumulator, request_scope_signatures)
-                        if served_content:
-                            accumulator.emitted_role = True
+                        accumulator.emitted_role = True
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         # C-12: ab jetzt ist die follow-up-runde die aktive —
                         # ein retry darunter muss deren kontext behalten.
