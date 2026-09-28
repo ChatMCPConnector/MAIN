@@ -938,11 +938,11 @@ class GLM2APIServer:
                     model=model,
                     label="Responses",
                 )
-                if accumulator._terminal_status != "completed":
+                if accumulator.terminal_status != "completed":
                     return None
                 # Der Adapter hat keinen Abschluss-Callback; nach dem terminalen
                 # Event ist sein interner Output die Quelle fuer die Folgerunde.
-                return accumulator.response_id, accumulator._completed_output
+                return accumulator.response_id, accumulator.completed_output
 
             def _run_accumulated_sse_stream(
                 self,

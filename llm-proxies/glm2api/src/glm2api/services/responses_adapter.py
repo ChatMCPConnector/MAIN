@@ -540,6 +540,24 @@ class ResponsesStreamAccumulator:
         self.sequence_number = 0
         self._pending_sse = ""
 
+    @property
+    def terminal_status(self) -> str | None:
+        """Öffentlicher Lesezugriff auf den terminalen Stream-Status
+        ('completed' oder 'incomplete'). server.py entscheidet danach, ob
+        eine Folgerunde (previous_response_id) startet — ohne in private
+        Attribute zu greifen (Befund aus dem Main-Analyse-Run 2026-09-28:
+        Kapselungsverstoß, der bei Refactoring des Accumulators still
+        brechen kann)."""
+
+        return self._terminal_status
+
+    @property
+    def completed_output(self) -> list[dict[str, object]]:
+        """Öffentlicher Lesezugriff auf den finalen Output des Streams —
+        die Quelle für die Folgerunde mit `previous_response_id`."""
+
+        return self._completed_output
+
     def _record_output(self, output_index: int, item: dict[str, object]) -> None:
         self._completed_output_by_index[output_index] = item
         self._completed_output = [

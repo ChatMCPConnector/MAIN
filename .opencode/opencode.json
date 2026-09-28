@@ -96,13 +96,7 @@
       "models": {
         "zerokey": {
           "name": "ZeroKey",
-          "limit": {
-            "context": 128000,
-            "output": 16384
-          }
-        },
-        "ZeroKey": {
-          "name": "ZeroKey",
+          "reasoning": true,
           "limit": {
             "context": 128000,
             "output": 16384
@@ -120,13 +114,7 @@
       "models": {
         "zerokey": {
           "name": "ZeroKey",
-          "limit": {
-            "context": 128000,
-            "output": 16384
-          }
-        },
-        "chatgpt": {
-          "name": "ZeroKey (chatgpt)",
+          "reasoning": true,
           "limit": {
             "context": 128000,
             "output": 16384

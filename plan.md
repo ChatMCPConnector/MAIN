@@ -1,6 +1,17 @@
 # glm2api-Probleme systematisch beheben
 
-Status: abgeschlossen (Befunde dokumentiert, Cleanup-Kandidaten als Vorschläge offen) · begonnen 2026-09-28
+Status: abgeschlossen · Befunde aus dem Live-Run abgearbeitet (2026-09-28) · begonnen 2026-09-28
+
+## Nachtrag: Befund-Abarbeitung (2026-09-28, zweite Session)
+
+Entscheidungen (Nutzer): TokenRouter-Key bleibt als Literal (Nutzerentscheidung 2026-09-27 gilt), `antigravity-proxy/auth` bleibt getrackt und wird als bewusste Ausnahme dokumentiert, `config.json` gelöscht, `save.sh` signiert mit unsigniertem Fallback.
+
+1. **server.py-Kapselung** — erledigt: `ResponsesStreamAccumulator` bekam öffentliche Lese-Properties `terminal_status`/`completed_output` (responses_adapter.py); `server.py:941–945` nutzt sie statt `accumulator._terminal_status`/`accumulator._completed_output`. Vollsuite 1682 passed; `/v1/responses` live gestreamt (`status: completed`) mit dem neuen Code am Proxy.
+2. **`config.json` gelöscht** — erledigt: leeres `{}` (Autosave 17.09.), nichts referenzierte es.
+3. **`save.sh` signiert mit Fallback** — erledigt: signierter Commit; schlägt die Signatur fehl, wird unsigniert wiederholt **mit lauter WARNUNG** (Persistence bleibt möglich, Signaturverlust ist sichtbar). `bash -n` OK; der Save dieses Arbeitsgangs läuft darüber und ist der erste signierte `save.sh`-Commit.
+4. **`antigravity-proxy/auth` dokumentiert** — erledigt: als getrackte Ausnahme im Infra-Soll-S Abschnitt (Nutzerentscheidung, kein Historie-Rewrite für ein totes Artefakt).
+5. **Doku nachgezogen** — erledigt: Provider-Tabelle um `downloaddoctor`/`cyberpradeep` ergänzt (mit Hinweis: konfiguriert, aber ohne Setup-/Watchdog-Betreuung); Anthropic-Stelle klärt, dass `/v1/messages` glm2api (hat ihn) vs. antigravity (fehlt) trennt; Changelog-Eintrag 2026-09-28 ergänzt.
+6. **TokenRouter-Key** — unverändert (Nutzerentscheidung).
 
 ## Befund aus Session `ses_f17fa33b4ffezxYpm1GYW3sSlv`
 

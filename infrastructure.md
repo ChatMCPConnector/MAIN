@@ -129,6 +129,14 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 | xinjianya | gpt-5.6-sol | xinjianya.key |
 | **glm2api** | glm-5.3 | lokal, Port 8001, kein Key |
 | **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
+| downloaddoctor | ZeroKey (128k Context, 16k Output) | lokal, Port 7250, Platzhalter-Key `opencode` |
+| cyberpradeep | ZeroKey (+ chatgpt-Variante) | lokal, Port 8088, Platzhalter-Key `local` |
+
+- `downloaddoctor`/`cyberpradeep` sind in `opencode.json` konfiguriert (Loopback-only,
+  Platzhalter-Keys) — sie sind **nicht** Teil der Setup-/Watchdog-Kette: setup.sh
+  stellt nur glm2api und antigravity wieder her und startet sie. Wer die beiden
+  nutzt, startet sie selbst (Befund aus dem Main-Analyse-Run 2026-09-28: bis dahin
+  konfiguriert, aber in keiner Doku erwähnt).
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
@@ -379,6 +387,12 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   nach `/usr/local/go` via setup.sh — das Proxy-Binary liegt nicht im Git und wird
   pro Codespace neu gebaut (`scripts/start.sh` baut automatisch nach, Fallback
   `/usr/local/go/bin/go`). PATH via `aliases.sh`.
+- **Getrackte Ausnahme:** `antigravity-proxy/auth` (ELF, ~9,8 MB) ist ein
+  versehentlich committetes Binary — kein Skript referenziert es, das eigentliche
+  Proxy-Binary `antigravity-oauth-proxy` liegt korrekt außerhalb des Git
+  (`.gitignore`) und wird pro Codespace gebaut. Nutzerentscheidung 2026-09-28:
+  bleibt getrackt (kein Historie-Rewrite für ein totes Artefakt), dokumentiert als
+  bewusste Ausnahme statt als Soll-Verstoß.
 - **Deprecated (gelöscht 2026-09-10):** kompletter Chromium-Stack entfernt
   (`infra/browser/` Playwright 1.48.2, `.runtime/ms-playwright/`,
   `.runtime/chromium-profile/`, `browser-install.sh`, CDP-Port 9222).
@@ -449,7 +463,10 @@ Modellname ändert daran nichts. Ein *eigener* Claude-Code-Client wäre mit dies
 Proxy ohnehin nicht möglich: er spricht nur Gemini-nativ (`/v1beta`) und
 OpenAI-kompatibel (`/v1/chat/completions`, `server.go:132-135`) und hat **kein**
 Anthropic-Messages-Endpoint — `/v1/messages` existiert nicht, und es gibt keinen
-Catch-all. Genau den braucht Claude Code.
+Catch-all. Genau den braucht Claude Code. (Klarstellung 2026-09-28: das betrifft
+nur den antigravity-Proxy — der **glm2api**-Proxy hat `/v1/messages` sehr wohl
+(`server.py`, Anthropic-Adapter Z. 743–872). Die beiden Proxys sind an dieser
+Stelle nicht austauschbar.)
 
 **Falls Claude Code später doch als eigener Client dazukommt, ist es trotzdem
 konfigurationsfrei:** seit **v2.1.277** liest er `AGENTS.md` nativ, und der
@@ -865,6 +882,37 @@ Proxy bei jedem Start automatisch hoch.
     * **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):** Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2 springt). Der Fragenmodus schließt erst, wenn Freebuff `Your answer:` / `Your answers:` ausgibt oder der Nutzer Esc / Strg+C drückt.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
+
+- 2026-09-28: **Befund-Abarbeitung aus dem Main-Analyse-Run (read-only
+  `opencode run` über das gesamte Repo, Log `.runtime/opencode-main-analysis.log`).
+  Drei Bereinigungen, zwei bewusste Ausnahmen, ein Code-Fix:**
+  - **`config.json` gelöscht.** Inhalt war ein leeres `{}` (Autosave-Commit vom
+    17.09.), kein Skript und keine Doku referenziert es, der Layout-Abschnitt
+    kennt es nicht — herrkunftsloses Artefakt, weg damit.
+  - **`save.sh` committet jetzt signiert.** Bis hierher lief jeder reguläre Commit
+    über `git -c commit.gpgsign=false` — der in `setup.sh` (2026-09-27) sauber
+    gebaute SSH-Signier-Pfad war für den Normalpfad wirkungslos, der Widerspruch
+    zur Signierungs-Doku stand in der Doku selbst. Jetzt: signierter Commit,
+    schlägt die Signatur fehl (z. B. frischer Codespace vor setup.sh), wird
+    **unsigniert wiederholt — mit lauter WARNUNG**, nicht still. Persistence
+    (Komfort > Sicherheit) bleibt immer möglich, der Verlust der Signatur ist
+    aber sichtbar statt unsichtbar.
+  - **Kapselungs-Fix glm2api:** `server.py` griff auf private Accumulator-
+    Attribute zu (`accumulator._terminal_status`, `accumulator._completed_output`).
+    `ResponsesStreamAccumulator` bekommt öffentliche Lese-Properties
+    (`terminal_status`, `completed_output`), server.py nutzt sie — ein Refactor
+    des Accumulators kann den Folgerunden-Pfad nicht mehr still brechen.
+  - **`antigravity-proxy/auth` bleibt getrackt** (Nutzerentscheidung): 9,8-MB-ELF,
+    von nichts referenziert, als bewusste Ausnahme im Infra-Soll dokumentiert —
+    kein Historie-Rewrite für ein totes Artefakt.
+  - **TokenRouter-Key bleibt als Literal** (Nutzerentscheidung 2026-09-27 gilt,
+    heute bestätigt): Provider wird nicht genutzt, Key wird nicht angefasst.
+  - **Doku nachgezogen:** Provider-Tabelle führt `downloaddoctor`/`cyberpradeep`
+    auf (konfiguriert, aber bisher in keiner Doku; ohne Setup-/Watchdog-Betreuung),
+    und die Anthropic-Stelle klärt die Richtung: `/v1/messages` hat der
+    **glm2api**-Proxy (server.py, Anthropic-Adapter), **nicht** der
+    antigravity-Proxy — die Stelle las sich bisher, als träfe „kein
+    Messages-Endpoint“ beide.
 
 - 2026-09-27: **`.github/copilot-instructions.md` gelöscht — damit ist die Client-Datei-Regel abgeschlossen: im Repo liegt nur noch `AGENTS.md`.** Nutzerentscheidung: Copilot wird nicht benutzt. Die Datei war kein Duplikat, sondern ein 25-Zeilen-Zeiger auf `AGENTS.md` — und genau darin liegt der Unterschied zum Gemini-Fall von zwei Stunden vorher: **bei Gemini war der Default-Dateiname falsch und musste durch eine User-Config ersetzt werden, weil ein leerer Konzept-Kontext ein stiller Totalausfall ist; Copilot liest seine Datei nativ, also räumt das Löschen hier nur auf und bricht nichts.** Ein Pflegeposten ohne Nutzen ist trotzdem ein Pflegeposten, und die Datei stand in vier Stellen: in `AGENTS.md` als „einzige verbleibende Ausnahme", in der Client-Tabelle und in zwei Absätzen dieses Abschnitts, als Check-Liste in `verify-codespace.sh` und als einziger Eintrag des gestrichenen Copilot-Musters. **Der Check hat sich dadurch selbst abgeschafft:** `Save-Regel in allen Client-Dateien` iterierte genau über eine Datei — mit deren Verschwinden war der Check sinnlos, also ist er raus; übrig bleiben `AGENTS.md (Referenz)`, `keine Client-Kopien mehr` (dessen Liste jetzt **auch** `.github/copilot-instructions.md` verbietet, also prüft er die vollständige Negativliste), `Gemini CLI liest AGENTS.md` und der Pfad-Check. **Eine Kopie im Repo ist damit nicht mehr Muster, sondern Fehlerfall** — der Abschnitt sagt das jetzt ausdrücklich, damit der nächste neue Client nicht wieder auf „kurze Kopie plus Check-Zeile" zurückfällt, sondern auf eine User-Config wie bei Gemini. Nebenwirkung: `.github/` verschwindet aus dem Repo, es enthielt nur diese Datei. **Und der Preis ist mitprotokolliert, statt ihn zu verschweigen:** ein Client ohne AGENTS.md-Support und ohne User-Config wäre ab jetzt nicht abgedeckt. Für Gemini und Claude ist das geprüft und gelöst, für Copilot irrelevant, weil der Client nicht verwendet wird — falls er doch einmal genutzt wird, ist `.github/copilot-instructions.md` in zwei Minuten wieder da und der Check schlägt dann sogar an.
 
