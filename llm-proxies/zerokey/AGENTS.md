@@ -1,8 +1,12 @@
 > **Vendored in `MAIN/llm-proxies/zerokey/` (2026-09-29).** This copy is the
-> canonical one — the standalone clone at `/workspaces/downloaddoctor-zerokey` is
-> not. Start it with `MAIN/llm-proxies/scripts/start-zerokey.sh`, not with
-> `./start.sh` (which has no port guard and no credential check) and not with
-> `./zerokey.sh` (that one clones this repo into a subfolder of itself).
+> only one. The two standalone checkouts that used to live under `/workspaces`
+> (`downloaddoctor-zerokey` and the older `zerokey-v2.0`) are deleted; the full
+> git history is preserved in `upstream-history.bundle` next to this file —
+> restore with `git clone llm-proxies/zerokey/upstream-history.bundle <target>`
+> (198 commits, HEAD `11ea0bf`). Start it with
+> `MAIN/llm-proxies/scripts/start-zerokey.sh`, not with `./start.sh` (no port
+> guard, no credential check) and not with `./zerokey.sh` (that one clones this
+> repo into a subfolder of itself).
 >
 > Deliberate deviations from upstream, because the originals would have damaged
 > the surrounding MAIN repo: `"postinstall": "git config core.hooksPath
