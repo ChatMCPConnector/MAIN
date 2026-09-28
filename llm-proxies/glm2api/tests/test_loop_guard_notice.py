@@ -208,12 +208,26 @@ class _LoopGuardConfig:
 
 
 class _FakeResponse:
+    """Ein `_open_chat_stream`-Aufruf.
+
+    WICHTIG (S-28): der Client darf denselben `events`-Vektor mehrfach
+    konsumieren (leerer-turn-retry, transient-retry, korrektur-runde). In der
+    Realitaet liefert jeder dieser Aufrufe einen NEUEN upstream-stream, also
+    ist hier jeder Aufruf eine eigene, unabhaengige antwort. Ohne das
+    summiert der request-weite loop-guard-zaehler (S-27) dieselben events
+    mehrfach und sieht eine schleife, wo keine ist — der test
+    `test_ohne_drops_keine_notice_im_strom` ist genau daran gescheitert.
+    """
+
     def __init__(self, events):
         self._events = events
         self.closed = False
 
     def close(self):
         self.closed = True
+
+
+
 
 
 def _make_client():
@@ -236,6 +250,16 @@ def _make_client():
     client.delete_conversation = lambda cid, assistant_id=None: None
     client._iter_sse_events = lambda response: iter(response._events)
     return client
+
+
+def _text_event(text, logic="t0"):
+    return {
+        "status": "process",
+        "parts": [{
+            "logic_id": logic, "status": "process",
+            "content": [{"type": "text", "text": text}],
+        }],
+    }
 
 
 def _payload():
@@ -399,18 +423,51 @@ def test_stream_loop_guard_notice_survives_alongside_valid_native_calls():
 
 
 def test_ohne_drops_keine_notice_im_strom():
-    """Gegenprobe: ein turn mit zwei verschiedenen zielen darf keine
-    alarmmeldung produzieren, sonst schickt der proxy bei jedem normalen
-    tool-loop eine."""
+    """Gegenprobe: JEDER ziel-pfad nur EINMAL — dann darf keine alarmmeldung
+    entstehen, sonst schickt der proxy bei jedem normalen tool-loop eine.
+
+    (Frueher standen hier je zwei gleiche `open`-calls pro ziel. S-27/S-28
+    haben den drop-zaehler request-uebergreifend gemacht — damit faellt die
+    echte doppelung jetzt zu Recht auf. Fuer die eigentliche gegenprobe muss
+    das ziel also wirklich einmal vorkommen.)"""
     client = _make_client()
-    events = [_native_open_event(f"call_a{i}", "/workspaces/MAIN/a.md") for i in range(2)]
-    events += [_native_open_event(f"call_b{i}", "/workspaces/MAIN/b.md") for i in range(2)]
-    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
-        _FakeResponse(events),
-        "assistant-1",
+    # S-28: der dict-mock (`_FakeResponse`) laesst den client denselben
+    # events-vektor mehrfach konsumieren (leerer-turn-retry). In der
+    # realitaet liefert jeder aufruf einen NEUEN upstream-stream. Der
+    # request-weite drop-zaehler (S-27) summiert dann dieselben events
+    # mehrfach und meldet eine schleife, wo keine ist. Dieser gegenbeweis
+    # laeuft deshalb ueber den echten sse-byte-pfad (`_sse_client`), der
+    # genau einen stream liefert.
+    def call(path, cid):
+        import json as _json
+        return ("data: " + _json.dumps({
+            "status": "process",
+            "parts": [{
+                "logic_id": cid, "status": "process",
+                "content": [{
+                    "type": "tool_calls",
+                    "tool_calls": {
+                        "id": cid, "name": "read",
+                        "arguments": _json.dumps({"filePath": path}),
+                    },
+                }],
+            }],
+        }) + "\n\n").encode("utf-8")
+
+    body = b"".join([
+        call("/workspaces/MAIN/a.md", "a0"),
+        call("/workspaces/MAIN/b.md", "b0"),
+        call("/workspaces/MAIN/c.md", "c0"),
+        FINISH,
+    ])
+    client, _ = _sse_client(body)
+    text = "".join(
+        c.decode("utf-8")
+        for c in client.stream_chat_completion({"model": "m", "messages": [{"role": "user", "content": "hi"}]})
     )
-    text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
-    assert "[loop_guard_notice]" not in text
+    assert "[loop_guard_notice]" not in text, (
+        "drei verschiedene ziele je einmal = keine wiederholung = keine notice"
+    )
 
 
 # --- S-21: ehrliche Notice fuer AUSGEFUEHRTE native-remaps -------------------

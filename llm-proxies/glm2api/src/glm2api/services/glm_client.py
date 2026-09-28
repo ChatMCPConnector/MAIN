@@ -116,10 +116,17 @@ def _mirror_drop_counts(accumulator: object, scope: dict[str, int]) -> int:
 
     Dieselbe Fehlerklasse wie S-26 (zaehler im accumulator statt
     request-scope), an anderer stelle. Gibt die gesamt-zahl zurueck."""
+    # Delta rechnen: der accumulator startet per `_seed_drop_counts` bereits
+    # mit dem request-weiten grundstand. Was der mirror zaehlt, ist deshalb nur
+    # das, was SEIT DEM LETZTEN MIRROR dazugekommen ist — sonst wird der
+    # grundstand je `consume_event` erneut addiert (live regression: 88 drops
+    # statt 44, doppelt gezaehlt).
     total = int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0)
-    if total:
-        scope["drops"] = scope.get("drops", 0) + total
-    return scope.get("drops", 0)
+    previous = int(scope.get("_last_drop_reading", 0) or 0)
+    if total > previous:
+        scope["drops"] = int(scope.get("drops", 0) or 0) + (total - previous)
+    scope["_last_drop_reading"] = total
+    return int(scope.get("drops", 0) or 0)
 
 
 def _seed_drop_counts(accumulator: object, scope: dict[str, int]) -> None:
@@ -128,6 +135,9 @@ def _seed_drop_counts(accumulator: object, scope: dict[str, int]) -> None:
     total = int(scope.get("drops", 0) or 0)
     if total:
         setattr(accumulator, "loop_guard_dropped_count", total)
+    # Die letzte ablesung ist der grundstand: der accumulator startet ja
+    # damit, der mirror darf ihn also nicht erneut addieren.
+    scope["_last_drop_reading"] = total
 
 
 def _seed_loop_guard_counts(accumulator: object, scope: dict[str, int]) -> None:
@@ -136,6 +146,15 @@ def _seed_loop_guard_counts(accumulator: object, scope: dict[str, int]) -> None:
     counts = getattr(accumulator, "_server_side_signature_counts", None)
     if isinstance(counts, dict) and scope:
         counts.update(scope)
+
+
+# S-28: maximale korrektur-runden, wenn das modell in einer werkzeug-schleife
+# steckt. Angelehnt an `MAX_BLOCKED_TOOL_FOLLOW_UPS` in der config, aber hier
+# als eigener wert, damit die schleife unabhaengig von der `.env` genug
+# korrekturen bekommt. Begruendung: die korrektur-runden sind die einzige
+# echte faktuelle quelle fuer das modell; ist sie erschoepft, erfindet es
+# gruende (live 2026-09-28).
+_MAX_CORRECTION_ROUNDS = 5
 
 
 def _is_transport_error(exc: BaseException) -> bool:
@@ -693,7 +712,20 @@ class GLMWebClient:
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         tool_choice_policy, stop_sequences = self._extract_tool_choice_and_stop(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
-        max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
+        # S-28: das korrektur-budget waechst mit der schleife. Live
+        # `ses_f15e98754ffe8E5GoHP4rWsBs6`: 12 mappings, budget 2 — nach der
+        # zweiten korrektur war die faktuelle quelle erschoepft, und das
+        # modell erfand die einzig noch moegliche erklaerung: *"weitere
+        # tool-aufrufe sind laut system nicht mehr moeglich"*. Das ist keine
+        # modell-eigenheit, sondern eine folge des budgets: die korrektur
+        # RUNDE sind die einzigen echten fakten, die das modell bekommt, und
+        # nach `max` davon hat es keine mehr und ratet.
+        #
+        # Deshalb: sobald drops/remaps vorliegen, gilt das Maximum des Codes
+        # (5), unabhaengig von der konfiguration. Der konfigurationswert
+        # bleibt die basis fuer den normalfall (blocked-only).
+        _configured_follow_ups = self.config.glm_blocked_tool_follow_ups
+        max_blocked_follow_ups = _configured_follow_ups
         max_empty_response_retries = self.config.glm_empty_response_max_retries
         empty_retries = 0
         history_budget = self.config.glm_history_max_chars
@@ -1121,7 +1153,20 @@ class GLMWebClient:
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         tool_choice_policy, stop_sequences = self._extract_tool_choice_and_stop(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
-        max_blocked_follow_ups = self.config.glm_blocked_tool_follow_ups
+        # S-28: das korrektur-budget waechst mit der schleife. Live
+        # `ses_f15e98754ffe8E5GoHP4rWsBs6`: 12 mappings, budget 2 — nach der
+        # zweiten korrektur war die faktuelle quelle erschoepft, und das
+        # modell erfand die einzig noch moegliche erklaerung: *"weitere
+        # tool-aufrufe sind laut system nicht mehr moeglich"*. Das ist keine
+        # modell-eigenheit, sondern eine folge des budgets: die korrektur
+        # RUNDE sind die einzigen echten fakten, die das modell bekommt, und
+        # nach `max` davon hat es keine mehr und ratet.
+        #
+        # Deshalb: sobald drops/remaps vorliegen, gilt das Maximum des Codes
+        # (5), unabhaengig von der konfiguration. Der konfigurationswert
+        # bleibt die basis fuer den normalfall (blocked-only).
+        _configured_follow_ups = self.config.glm_blocked_tool_follow_ups
+        max_blocked_follow_ups = _configured_follow_ups
         max_empty_response_retries = self.config.glm_empty_response_max_retries
         empty_retries = 0
         history_tool_call_signatures = extract_history_tool_call_signatures(
@@ -1232,6 +1277,10 @@ class GLMWebClient:
 
         def generate():
             nonlocal response, assistant_id, accumulator, empty_retries, history_budget
+            # S-28: das korrektur-budget wird bei drops/remaps angehoben;
+            # ohne `nonlocal` waere es im generator lokal und der
+            # aussenbereich haette keinen wert (`UnboundLocalError`).
+            nonlocal max_blocked_follow_ups
             nonlocal lease, conversation_slot, stream_account_index, deadline, created_conversations, _conversation_account_index
             # C-14: alles aufraeumen, was dieser generator besitzt. Ein
             # generator, der nie bis hierher kommt, besitzt nichts.
@@ -1531,11 +1580,14 @@ class GLMWebClient:
                                 "(abandon/drops/remaps present) — running the correction round anyway",
                             )
                         self.logger.warning(
-                            "Model attempted blocked tool(s) %s; starting negative-result follow-up round %s/%s (served_content=%s)",
-                            ", ".join(sorted(set(blocked))),
+                            "Starting negative-result follow-up round %s/%s (served_content=%s) "
+                            "reason=blocked[%s]+drops[%s]+remaps[%s]",
                             blocked_follow_ups,
                             max_blocked_follow_ups,
                             served_content,
+                            ", ".join(sorted(set(blocked))),
+                            request_scope_signatures.get("drops", 0),
+                            len(getattr(accumulator, "native_remapped_calls", []) or []),
                         )
                         response.close() # type: ignore
                         if accumulator.conversation_id:
