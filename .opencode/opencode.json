@@ -97,6 +97,17 @@
         "zerokey": {
           "name": "ZeroKey",
           "reasoning": true,
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "none": {
+              "reasoningEffort": "none"
+            }
+          },
           "limit": {
             "context": 128000,
             "output": 16384
@@ -115,6 +126,17 @@
         "zerokey": {
           "name": "ZeroKey",
           "reasoning": true,
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "none": {
+              "reasoningEffort": "none"
+            }
+          },
           "limit": {
             "context": 128000,
             "output": 16384
