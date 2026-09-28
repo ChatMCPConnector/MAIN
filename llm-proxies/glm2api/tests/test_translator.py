@@ -3939,7 +3939,7 @@ def test_t20_optimisation_keeps_the_output_identical():
 
 
 def test_t20_continuing_parts_are_not_separated():
-    """Die eigentliche T-20-symptomatik, gegenprobe zur optimierung:
+    """Die eigentliche T-20-symptomatik, gegenprobe zum S-12-fix:
     ein text, der MITTEN IM SATZ ueber mehrere parts verteilt ist
     ("Die Datei" / "DieDatei"), darf an der part-grenze nicht
     zerrissen werden. Hier ist der satz nicht beendet, also darf

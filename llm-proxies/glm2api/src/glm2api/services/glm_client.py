@@ -658,7 +658,7 @@ class GLMWebClient:
                     # build_response() also populates blocked_tool_attempt_names
                     # (detect_tool_call_names side effect) — call before deciding.
                     result = accumulator.build_response()
-                    # Leer-Turn-Autonomie-Fix (THEMA 1, optimierung.md): der
+                    # Leer-Turn-Autonomie-Fix: der
                     # Upstream liefert gelegentlich KOMPLETT leere runden
                     # (text_len=0, keine calls) — bisher blieb der agent dort
                     # einfach stehen. Solche runden sind transient: retry mit
@@ -1155,7 +1155,7 @@ class GLMWebClient:
                         # ein retry darunter muss deren kontext behalten.
                         active_payload = follow_up
                         continue
-                    # Leer-Turn-Autonomie-Fix (THEMA 1, optimierung.md): komplett
+                    # Leer-Turn-Autonomie-Fix: komplett
                     # leere Upstream-runden (kein text, keine reasoning, keine
                     # calls) liessen den agent bisher STEHEN (stresstest 10:21:
                     # 'finalize status=stop text_len=0 reasoning_len=0'). Bei
@@ -1632,7 +1632,7 @@ class GLMWebClient:
         upstream_model, assistant_id = resolve_upstream_model(requested_model, self.config)
         if filtered_tools is None:
             filtered_tools, _ = self._resolve_tools(openai_payload)
-        # H1/THEMA 1 (optimierung.md): chatglm.cn driftet bei aufgeblähter
+        # H1 aus der kontext-arbeit: chatglm.cn driftet bei aufgeblähter
         # request-historie. Historie VOR der Konvertierung komprimieren, damit
         # budget-grenze auf den rohen messages liegt (nicht auf dem
         # flachen prompt — tools-instructions brauchen ihr eigenes budget).

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Startet glm2api aus dem MAIN-Repo (kein Klon mehr nötig).
 # Code liegt in llm-proxies/glm2api/, .env kommt aus
-# llm-proxies/glm2api.env (gitignored → wird hierher kopiert falls neu).
+# llm-proxies/glm2api/.env.dist (getrackt → wird nach .env kopiert falls neu).
 set -euo pipefail
 
 APP_DIR="/workspaces/MAIN/llm-proxies/glm2api"
-ENV_SRC="/workspaces/MAIN/llm-proxies/glm2api.env"
+ENV_SRC="/workspaces/MAIN/llm-proxies/glm2api/.env.dist"
 LOG="/tmp/opencode/glm2api.log"
 UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
 HOST="127.0.0.1"

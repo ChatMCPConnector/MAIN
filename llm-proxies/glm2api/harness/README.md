@@ -70,9 +70,10 @@ nicht vorgenommen, weil bereits ausgegebene Bytes nicht rücknehmbar sind.
 Die früheren S-15…S-19-Produktionsbefunde waren an den damaligen Fällen
 behoben (2026-09-27). S-15…S-18 waren die Funde aus dem
 Harness-Neuaufbau und sind an `02ceca2` und `9054325` gegengeprüft:
-vorbestehend, nicht von S-10…S-14 verursacht. Die Messungen und die
+vorbestehend, nicht von S-10…S-14 verursacht. Die Messungen selbst sind mit
+den Skripten in diesem Verzeichnis reproduzierbar, die
 Positivkontrollergebnisse (127 von 173 neuen Testfällen rot an `02ceca2`)
-stehen in `../optimierung.md`.
+sind in `tests/test_translator.py` S-15…S-18 gepinnt.
 
 | Befund | Kurzfassung | Stand |
 |---|---|---|

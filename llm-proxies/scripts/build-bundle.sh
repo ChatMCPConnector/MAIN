@@ -4,8 +4,9 @@
 #   ./llm-proxies/scripts/build-bundle.sh          # baut glm2api-bundle.zip nach llm-proxies/dist/
 #
 # Quelle des Bundles: llm-proxies/glm2api (Code, kanonischer Source — kein
-# Patch-Artefakt mehr), llm-proxies/glm2api.env (Config),
-# infra/docs/reverse-engineering (Doku). Kein Klon, keine externen Quellen.
+# Patch-Artefakt mehr), llm-proxies/glm2api/.env.dist (Config, landet im
+# Bundle als app/glm2api.env), infra/docs/reverse-engineering (Doku). Kein
+# Klon, keine externen Quellen.
 #
 # Determinismus (N-2): alle gestagten Dateien bekommen einen festen Zeitstempel
 # (SOURCE_DATE_EPOCH oder Default 0), damit inhaltlich identische Builds
@@ -13,7 +14,7 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APP_DIR="$REPO_ROOT/llm-proxies/glm2api"
-ENV_SRC="$REPO_ROOT/llm-proxies/glm2api.env"
+ENV_SRC="$REPO_ROOT/llm-proxies/glm2api/.env.dist"
 DIST="$REPO_ROOT/llm-proxies/dist"
 STAGE="$DIST/glm2api-bundle"
 ZIP="$DIST/glm2api-bundle.zip"

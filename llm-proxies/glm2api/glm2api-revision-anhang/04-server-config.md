@@ -117,7 +117,7 @@ Der Anthropic-Adapter behandelt `auto`, `any` und `tool`, aber nicht `{"type":"n
 **Empfehlung:** `none` explizit auf `tool_choice="none"` abbilden, alle Anthropic-Varianten strikt validieren und gemischte Tool-Use-/Tool-Result-Blöcke entweder verlustfrei konvertieren oder mit einem klaren 400 ablehnen.
 
 ### S-13 — MITTEL: Konfigurationspfad und Portdefault driften zwischen Code, Beispiel und Betrieb auseinander
-**Ort:** `config.py:205`, `config.py:219-221`, `config.py:280`; `app.py:100-106`; `__main__.py:10-16`; `.env.example:16-18`; betriebliche Vorlage `llm-proxies/glm2api.env:16-18`
+**Ort:** `config.py:205`, `config.py:219-221`, `config.py:280`; `app.py:100-106`; `__main__.py:10-16`; `.env.example:16-18`; betriebliche Vorlage `llm-proxies/glm2api/.env.dist:16-18`
 
 `load_config()` verwendet relativ zum aktuellen Arbeitsverzeichnis `.env`; es gibt keinen stabilen Projekt-/Package-Pfad und keine CLI-Option. Der Code- und Beispieldefault ist Port `8000`, die Betriebsvorlage und der Start-/Health-Vertrag verwenden Port `8001`. `rebuild.sh` warnt selbst vor dem 8000-Fallback, während der Startpfad 8001 prüft.
 
@@ -126,7 +126,7 @@ Der Anthropic-Adapter behandelt `auto`, `any` und `tool`, aber nicht `{"type":"n
 **Empfehlung:** Einen kanonischen Port festlegen und alle Defaults/Vorlagen synchronisieren; Configpfad explizit als CLI-/ENV-Argument übergeben; bei fehlender erwarteter Config fail-closed starten oder den Port explizit per Startargument setzen.
 
 ### S-14 — HOCH: Concurrency-, Queue- und Retry-Budgets sind nicht konsistent begrenzt
-**Ort:** `config.py:224`, `config.py:284`, `config.py:304-312`, `config.py:319-328`; `.env.example:105-149`; `llm-proxies/glm2api.env:90-107`
+**Ort:** `config.py:224`, `config.py:284`, `config.py:304-312`, `config.py:319-328`; `.env.example:105-149`; `llm-proxies/glm2api/.env.dist:90-107`
 
 Der Code-Default für `GLM_MAX_CONCURRENCY` ist 3, die ausgelieferte Vorlage setzt 100. Im Gastmodus werden 100 Account-State-Einträge erzeugt; im automatischen Gast-Fallback gilt das auch, wenn keine Token konfiguriert ist. Bei einem Einzelaccount werden nur zwei Refresh-Token-Einträge (Account plus Guest-Fallback) erzeugt, während die Queue bis zu 100 Slots freigibt und die bevorzugte Ticket-Zuordnung den registrierten Account konzentrieren kann. Es gibt keine Obergrenze. `GLM_QUEUE_WAIT_TIMEOUT_SECONDS=600`, `REQUEST_TIMEOUT_SECONDS=120`, 30 Busy-Retries mit je 2 Sekunden sowie weitere Stream-/Leer-/Follow-up-Retries sind unabhängige Budgets ohne Gesamtdeadline. Die Betriebsvorlage erhöht `GLM_GUEST_MAX_RETRIES` zudem von 3 auf 10.
 
@@ -199,7 +199,7 @@ Ein AST-Abgleich von `config.py` und `.env.example` ergab **31 Codevariablen und
 | `GLM_BLOCKED_TOOL_FOLLOW_UPS` | `2` | `2` | Begrenzt, aber semantisch riskant | Nachfolgerunde kann in eine Text-Fallbackantwort enden (S-10). |
 | `BLOCKED_TOOL_NAMES` | `()` | Liste mit URL-/Browser-/Sandboxnamen | Beispiel ja | Native Namen werden immer zusätzlich blockiert; Code-Default und Beispiel sind absichtlich unterschiedlich, aber nicht transparent. |
 
-**Vorlagen-/Betriebsdrift:** `glm2api.env` und die geprüfte `.env` enthalten nicht `GLM_IMAGE_MODEL_NAME`, `GLM_CONVERSATION_FILE`, `GLM_CONVERSATION_ID`, `GLM_EMPTY_RESPONSE_MAX_RETRIES`, `GLM_HISTORY_MAX_CHARS` und `GLM_BLOCKED_TOOL_FOLLOW_UPS`. Dadurch werden diese sechs Werte nicht aus der Betriebsdatei sichtbar, sondern still vom Code gesetzt. Zusätzlich weicht die Betriebsvorlage bei Port, Debug-Modus, Concurrency und Guest-Retries von `.env.example` ab. Die Variable `GLM_REFRESH_TOKEN` ist in der Betriebsdatei belegt; ihr Wert wurde nicht in diesen Bericht übernommen.
+**Vorlagen-/Betriebsdrift:** `.env.dist` und die geprüfte `.env` enthalten nicht `GLM_IMAGE_MODEL_NAME`, `GLM_CONVERSATION_FILE`, `GLM_CONVERSATION_ID`, `GLM_EMPTY_RESPONSE_MAX_RETRIES`, `GLM_HISTORY_MAX_CHARS` und `GLM_BLOCKED_TOOL_FOLLOW_UPS`. Dadurch werden diese sechs Werte nicht aus der Betriebsdatei sichtbar, sondern still vom Code gesetzt. Zusätzlich weicht die Betriebsvorlage bei Port, Debug-Modus, Concurrency und Guest-Retries von `.env.example` ab. Die Variable `GLM_REFRESH_TOKEN` ist in der Betriebsdatei belegt; ihr Wert wurde nicht in diesen Bericht übernommen.
 
 ## Positiv
 

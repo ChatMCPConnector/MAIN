@@ -14,14 +14,15 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$REPO_ROOT/llm-proxies/glm2api"
-ENV_SRC="$REPO_ROOT/llm-proxies/glm2api.env"
+ENV_SRC="$REPO_ROOT/llm-proxies/glm2api/.env.dist"
 
 if [ ! -d "$APP_DIR/src" ]; then
   echo "FEHLER: $APP_DIR fehlt (Code muss im Repo liegen)."; exit 1
 fi
 
 # 1) .env bereitstellen (Port 8001, Guest-Mode — secret-frei, liegt im Repo
-#    als glm2api.env; im App-Verzeichnis heißt sie .env und ist gitignored)
+#    als .env.dist neben dem Code; im App-Verzeichnis heisst sie .env und
+#    ist gitignored)
 if [ ! -f "$APP_DIR/.env" ] && [ -f "$ENV_SRC" ]; then
   cp "$ENV_SRC" "$APP_DIR/.env"
   echo "    .env installiert (Port 8001, Guest-Mode aktiv)."

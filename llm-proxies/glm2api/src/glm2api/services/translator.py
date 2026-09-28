@@ -68,7 +68,7 @@ URL_PATTERN = re.compile(r"https?://[^\s<>()\"']+")
 
 _LOGGER = logging.getLogger("glm2api.translator")
 
-# THEMA 3 (optimierung.md): C0-Steuerzeichen ausser \n \t \r (plus DEL) sind
+# C0-Steuerzeichen ausser \n \t \r (plus DEL) sind
 # in Tool-Argumenten und sichtbarem Content nie legitim — das Modell streamt
 # sie gelegentlich alsEncoding-Verderb (z.B. 'zur\u0014ck' statt 'zurück').
 _C0_ALLOWED = {"\n", "\t", "\r"}
@@ -1355,8 +1355,8 @@ _PROTOCOL_META_NARRATION_RE, _PROTOCOL_META_NARRATION_TAIL_RE = (
 # 'icht' begann (rest von 'Ber|icht'), war eine praeambel — und die
 # maschinerie verwarf den rest des texts beim call. Gemessen bei
 # chunk-groesse 7: der client sah 'Der Ber' und sonst nichts, mitten
-# im wort (matrix in /tmp/glmtest/order_matrix.py, S-10 im
-# optimierung.md). Die alternativen, die auf leerraum enden
+# im wort (matrix in harness/order_matrix.py, S-10; der
+# nachweis steht in harness/README.md). Die alternativen, die auf leerraum enden
 # ('jetzt ', "i'll now "), bekommen bewusst KEIN abschliessendes `\b`:
 # dort ist der leerraum selbst die grenze, und ein `\b` am textende
 # wuerde sie wieder aushebeln.
@@ -2317,7 +2317,7 @@ def compress_history_messages(
     messages: list[dict[str, object]],
     max_total_chars: int,
 ) -> list[dict[str, object]]:
-    """H1/THEMA 1 aus optimierung.md: chatglm.cn driftet bei aufgeblähter
+    """H1 aus der kontext-arbeit: chatglm.cn driftet bei aufgeblähter
     request-historie (loops, missdeutungen ab ~150k token) — auch wenn das
     modell nominell mehr kann. Die serverseitige Komprimierung hält den Kontext
     stundenlang stabil.

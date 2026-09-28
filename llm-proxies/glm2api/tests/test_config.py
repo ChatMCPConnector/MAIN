@@ -523,7 +523,7 @@ def test_valid_keys_are_never_reported_as_typos(tmp_path):
 
 # --- 2026-09-26: tote keys in den ausgelieferten .env --------------------
 
-# Diese vier standen in `.env`, `.env.example` und `llm-proxies/glm2api.env`
+# Diese vier standen in `.env`, `.env.example` und `llm-proxies/glm2api/.env.dist`
 # und wirkten nicht. Zwei wurden als Nahbeirrung gemeldet, zwei stillschweigend
 # ignoriert — und die beiden stillen hatten zudem exakt den Standardwert.
 _ENV_KEYS_THAT_NEVER_WORKED = (
@@ -534,7 +534,7 @@ _ENV_KEYS_THAT_NEVER_WORKED = (
 )
 
 
-@pytest.mark.parametrize("file_name", [".env.example", "../glm2api.env"])
+@pytest.mark.parametrize("file_name", [".env.example", ".env.dist"])
 @pytest.mark.parametrize("dead,correct", _ENV_KEYS_THAT_NEVER_WORKED)
 def test_shipped_env_files_contain_no_dead_config_key(file_name, dead, correct):
     """Ein key, den `load_config` nicht liest, sieht aus wie eine
@@ -636,7 +636,7 @@ def test_duplicate_key_with_the_same_value_stays_quiet(tmp_path, caplog):
     assert values["GLM_TOKEN_FILE"] == "token.txt"
 
 
-@pytest.mark.parametrize("file_name", [".env.example", "../glm2api.env"])
+@pytest.mark.parametrize("file_name", [".env.example", ".env.dist"])
 def test_shipped_env_files_have_no_duplicate_keys(file_name):
     """Die handgepflegten kopien der betriebsdatei: ein doppelter key ist
     dort immer ein merge-fehler, und die files werden nicht automatisch
