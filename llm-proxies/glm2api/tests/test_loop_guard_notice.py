@@ -805,3 +805,79 @@ def test_stream_unterdrueckt_abandon_nicht_bei_echtem_fehlschlag():
         for c in client.stream_chat_completion({"model": "m", "messages": [{"role": "user", "content": "hi"}]})
     )
     assert "File not found" in text, "echter fehlschlag darf nicht unterdrueckt werden"
+
+
+# --- S-26: der loop-guard-zaehler muss request-uebergreifend zaehlen ----------
+#
+# LIVE-REGRESSION 2026-09-28 (`ses_f161565c6ffeZp78k7WqoSoF06`, agent `build` +
+# `glm-5.3`, auftrag: "lies die README von /workspaces/gibtsnicht und
+# /workspaces/zerokey-v2.0"): das modell rief 21x `open` auf denselben NICHT
+# EXISTIERENDEN pfad, jeder aufruf wurde erneut ausgefuehrt (log: 30x
+# `Mapped native open`, NULL drops). Es kam nie heraus und erfand eine
+# erklaerung, die es nicht gab: *"the system has repeatedly interrupted me
+# telling me to stop calling `open`"*.
+#
+# Ursache: `_server_side_signature_counts` lag im Accumulator, der pro
+# Upstream-Runde neu gebaut wird. Damit sah JEDE Runde "erster Call dieser
+# Signatur" und `_MAX_IDENTICAL_NATIVE_CALLS = 2` griff nie. Der guard ist
+# genau fuer diesen fall da — er hat in diesem pfad nie ausgeloest.
+
+
+def test_loop_guard_zaehlt_ueber_accumulator_grenzen():
+    """Der Zaehlerstand muss in einen frischen accumulator wandern, sonst
+    greift die Wiederholungsgrenze nie (live-regression S-26)."""
+    from glm2api.services.glm_client import _mirror_loop_guard_counts, _seed_loop_guard_counts
+    from glm2api.services.translator import GLMEventAccumulator
+
+    scope: dict[str, int] = {}
+    first = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    first._server_side_signature_counts["read:x"] = 1
+    _mirror_loop_guard_counts(first, scope)         # request-scope spiegeln
+    assert scope == {"read:x": 1}
+
+    second = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+    assert second._server_side_signature_counts == {}, "startet leer"
+    _seed_loop_guard_counts(second, scope)           # in frischen zurueckspielen
+    assert second._server_side_signature_counts.get("read:x") == 1, (
+        "der zaehlerstand muss den accumulator-wechsel ueberleben"
+    )
+
+
+def test_21_fach_wiederholung_wird_jetzt_gebrochen():
+    """Der eigentliche fall: 21x derselbe call ueber 21 'runden'. Mit
+    request-scope-zaehler muss der guard ab dem dritten mal greifen."""
+    from glm2api.services.glm_client import _seed_loop_guard_counts
+    from glm2api.services.translator import GLMEventAccumulator
+
+    scope: dict[str, int] = {}
+    events = []
+    for i in range(21):
+        events.append({
+            "status": "process",
+            "parts": [{
+                "logic_id": f"p{i}", "status": "process",
+                "content": [{
+                    "type": "tool_calls",
+                    "tool_calls": {
+                        "id": f"c{i}", "name": "read",
+                        "arguments": json.dumps({"filePath": "/workspaces/gibtsnicht/README.md"}),
+                    },
+                }],
+            }],
+        })
+    events.append({"status": "finish", "parts": []})
+
+    delivered = 0
+    dropped = 0
+    for ev in events:
+        acc = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash"})
+        _seed_loop_guard_counts(acc, scope)
+        for chunk in acc.consume_event(ev)[0]:
+            if b'"tool_calls"' in chunk.encode("utf-8", "ignore"):
+                delivered += 1
+        from glm2api.services.glm_client import _mirror_loop_guard_counts
+        _mirror_loop_guard_counts(acc, scope)
+        dropped += acc.loop_guard_dropped_count
+
+    assert dropped > 0, "der loop guard haette 21x-wiederholung brechen muessen"
+    assert delivered <= 3, f"hochstens 2 gleiche calls duerfen durch, geliefert: {delivered}"

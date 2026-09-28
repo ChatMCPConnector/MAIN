@@ -83,6 +83,31 @@ _TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
 )
 
 
+def _mirror_loop_guard_counts(accumulator: object, scope: dict[str, int]) -> None:
+    """S-26: den loop-guard-zaehlerstand request-uebergreifend spiegeln.
+
+    Live 2026-09-28 (`ses_f161565c6ffeZp78k7WqoSoF06`): 21x `open` auf denselben
+    nicht existierenden pfad, jeder aufruf erneut ausgefuehrt, null drops. Der
+    Zaehler lag im Accumulator, der pro Upstream-Runde neu gebaut wird — damit
+    sah jede Runde "erster Call dieser Signatur" und `_MAX_IDENTICAL_NATIVE_CALLS`
+    (2) griff nie. Der Guard existiert genau fuer diesen Fall.
+
+    Der Stand wird deshalb nach jedem `consume_event` in ein request-scope dict
+    zurueckgeschrieben und beim frischen Accumulator wieder hineingespeist.
+    """
+    counts = getattr(accumulator, "_server_side_signature_counts", None)
+    if isinstance(counts, dict):
+        scope.update(counts)
+
+
+def _seed_loop_guard_counts(accumulator: object, scope: dict[str, int]) -> None:
+    """S-26: request-uebergreifenden stand in einen frischen accumulator
+    zurueckspielen, damit die wiederholungsgrenze ueber rounds greift."""
+    counts = getattr(accumulator, "_server_side_signature_counts", None)
+    if isinstance(counts, dict) and scope:
+        counts.update(scope)
+
+
 def _is_transport_error(exc: BaseException) -> bool:
     """True fuer Verbindungsabbruch/Timeout/gzip-Fehler beim Lesen."""
     return isinstance(exc, _TRANSPORT_ERRORS) and not isinstance(exc, QueueTimeoutError)
@@ -708,14 +733,36 @@ class GLMWebClient:
         # C-15: conversation_id -> ERZEUGERKONTO. Ohne das konto konnte
         # der aufraeumpfad die falsche conversation loeschen.
         created_conversations: dict[str, int] = {}
+        # S-26: loop-guard-zaehler request-uebergreifend (siehe
+        # `_mirror_loop_guard_counts`). Ohne das sah jede Upstream-Runde "erster
+        # Call dieser Signatur" und die Wiederholungsgrenze griff nie — live
+        # belegt in `ses_f161565c6ffeZp78k7WqoSoF06` (21x `open` auf denselben
+        # nicht existierenden pfad, null drops, das modell erfand ein "the
+        # system has repeatedly interrupted me", das es nicht gab).
+        request_scope_signatures: dict[str, int] = {}
         # C-15: das konto, mit dem die AKTUELLE runde laeuft. Die
         # conversation gehoert diesem konto, nicht irgendeinem.
         _conversation_account_index = account_index
         accumulator = new_accumulator()
+        # S-26: request-uebergreifenden loop-guard-stand einspielen.
+        _seed_loop_guard_counts(accumulator, request_scope_signatures)
         # C-12: retries der non-stream-runde verwenden das payload der
         # aktuellen runde; nach einer follow-up-runde ist das deren payload
         # mit der negativen tool-rueckmeldung.
         active_payload = payload
+
+        # S-26 (live 2026-09-28): der loop-guard-Zaehler muss request-
+        # uebergreifend leben. Er lag im Accumulator, der pro Upstream-Runde
+        # neu gebaut wird — damit sah JEDE Runde "erster Call dieser
+        # Signatur" und die Grenze `_MAX_IDENTICAL_NATIVE_CALLS = 2` griff
+        # nie. Live belegt: die session `ses_f161565c6ffeZp78k7WqoSoF06`
+        # rief 21x `open` auf denselben nicht existierenden pfad
+        # (/workspaces/gibtsnicht/README.md), jeder aufruf wurde erneut
+        # ausgefuehrt (30x `Mapped native open` im log, null drops), und das
+        # modell kam nie heraus: es erfand eine "the system has repeatedly
+        # interrupted me"-erklaerung, die es nicht gab. Der guard ist genau
+        # dafuer da, und er hat in diesem pfad nie ausgeloest.
+        # (Deklaration weiter oben bei `created_conversations`.)
 
         try:
             attempt = 0
@@ -742,6 +789,7 @@ class GLMWebClient:
                                 break
                             raise
                         accumulator.consume_event(event)
+                        _mirror_loop_guard_counts(accumulator, request_scope_signatures)
                         if status in {"finish", "intervene"}:
                             finished = True
                             break
@@ -823,6 +871,8 @@ class GLMWebClient:
                         if accumulator.conversation_id:
                             created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
+                        # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                        _seed_loop_guard_counts(accumulator, request_scope_signatures)
                         _conversation_account_index = self._get_preferred_account_index(lease.ticket)
                         response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
                         continue
@@ -863,6 +913,8 @@ class GLMWebClient:
                         if accumulator.conversation_id:
                             created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
+                        # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                        _seed_loop_guard_counts(accumulator, request_scope_signatures)
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         # C-12: follow-up-runde wird zur aktiven runde
                         active_payload = follow_up
@@ -898,6 +950,8 @@ class GLMWebClient:
                 if accumulator.conversation_id:
                     created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                 accumulator = new_accumulator()
+                # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                _seed_loop_guard_counts(accumulator, request_scope_signatures)
                 _conversation_account_index = self._get_preferred_account_index(lease.ticket)
                 response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
         finally:
@@ -1122,7 +1176,16 @@ class GLMWebClient:
         created_conversations: dict[str, int] = {}
         # C-15: siehe non-stream — pro runde das verwendete konto mitschreiben.
         _conversation_account_index = stream_account_index
+        # S-26: loop-guard-zaehler request-uebergreifend (siehe
+        # `_mirror_loop_guard_counts`). Der accumulator wird pro Upstream-Runde
+        # neu gebaut; ohne diesen request-scope zaehler sah jede Runde "erster
+        # Call dieser Signatur" und die Wiederholungsgrenze griff nie — live
+        # belegt in `ses_f161565c6ffeZp78k7WqoSoF06` (21x `open` auf denselben
+        # fehlenden pfad, null drops, das modell erfand ein "the system has
+        # repeatedly interrupted me", das es nicht gab).
+        request_scope_signatures: dict[str, int] = {}
         accumulator = new_accumulator()
+        _seed_loop_guard_counts(accumulator, request_scope_signatures)
 
         def generate():
             nonlocal response, assistant_id, accumulator, empty_retries, history_budget
@@ -1193,6 +1256,7 @@ class GLMWebClient:
                                 break
                             raise
                         chunks, status = accumulator.consume_event(event)
+                        _mirror_loop_guard_counts(accumulator, request_scope_signatures)
                         for chunk in chunks:
                             encoded = chunk.encode("utf-8")
                             if not served_content and (b'"content"' in encoded or b'"reasoning_content"' in encoded):
@@ -1409,6 +1473,8 @@ class GLMWebClient:
                         if accumulator.conversation_id:
                             created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
+                        # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                        _seed_loop_guard_counts(accumulator, request_scope_signatures)
                         if served_content:
                             accumulator.emitted_role = True
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
@@ -1440,6 +1506,8 @@ class GLMWebClient:
                         if accumulator.conversation_id:
                             created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                         accumulator = new_accumulator()
+                        # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                        _seed_loop_guard_counts(accumulator, request_scope_signatures)
                         _conversation_account_index = self._get_preferred_account_index(lease.ticket)
                         response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
                         continue
@@ -1496,6 +1564,8 @@ class GLMWebClient:
                 if accumulator.conversation_id:
                     created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
                 accumulator = new_accumulator()
+                # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
+                _seed_loop_guard_counts(accumulator, request_scope_signatures)
                 _conversation_account_index = self._get_preferred_account_index(lease.ticket)
                 response, assistant_id = self._open_chat_stream(active_payload, preferred_account_index=_conversation_account_index, filtered_tools=filtered_tools)
 
