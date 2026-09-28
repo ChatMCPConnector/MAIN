@@ -307,6 +307,61 @@ def _blocked_notice_text(names: object) -> str:
     )
 
 
+def _native_remap_notice_text(remapped: object) -> str:
+    """S-21: der native name wurde auf ein echtes Tool umgeschrieben und
+    AUSGEFUEHRT — dem Modell den RICHTIGEN namen nennen.
+
+    Live 2026-09-28 (session `ses_f17123666ffeMwmhdXlMz3HO1l`): das modell rief
+    ~40x `open`. ~34 davon wurden vom proxy auf `read`/`webfetch` gemappt und
+    lieferten ECHTE ergebnisse (der agent las die README). Parallel blockierte
+    der proxy 4 `open`-aufrufe mit `ref_id=turn*search*` und meldete per
+    `blocked_tool_notice`: "open wurde NICHT ausgefuehrt". Das modell bekam
+    damit widerspruechliche rueckmeldung — "open ist tot" neben 15 fertigen
+    `read`-ergebnissen — und produzierte die 15x-identische-open-schleife.
+
+    Diese notice schliesst die Luecke: sie sagt dem Modell, dass sein `open`
+    stillschweigend als `read`/`webfetch` gelaufen ist und es kuenftig den
+    gemappten namen direkt verwenden soll. Ohne sie bleibt das mapping ein
+    versteckter rettungsanker, und das modell sucht den fehler am falschen
+    werkzeug (`open`) statt das richtige (`read`) zu benutzen.
+    """
+    if not isinstance(remapped, (list, tuple, set)):
+        return ""
+    pairs: list[tuple[str, str]] = []
+    for item in remapped:
+        if not (isinstance(item, (list, tuple)) and len(item) >= 2):
+            continue
+        native = str(item[0]).strip()
+        mapped = str(item[1]).strip()
+        if native and mapped and (native, mapped) not in pairs:
+            pairs.append((native, mapped))
+    if not pairs:
+        return ""
+    native_to_mapped: dict[str, list[str]] = {}
+    for native, mapped in pairs:
+        bucket = native_to_mapped.setdefault(native, [])
+        if mapped not in bucket:
+            bucket.append(mapped)
+    sentences = [
+        "[native_remap_notice] Correction to the tool name: "
+        + "; ".join(
+            f"your `{native}` call(s) were transparently executed as "
+            + ", ".join(f"`{m}`" for m in mapped_names)
+            for native, mapped_names in sorted(native_to_mapped.items())
+        )
+        + ". Those results are in this conversation and are real — you did see them. "
+        f"From now on call "
+        + ", ".join(
+            f"`{m}`" for mapped_names in native_to_mapped.values() for m in mapped_names
+        )
+        + " DIRECTLY instead of using the native name. Do not treat the native name as "
+        "a working tool and do not keep retrying it: the mapping is a compatibility "
+        "shim, not a tool contract, and it fails on targets that are not mappable "
+        "(for example a `turn*search*` reference from your own web search)."
+    ]
+    return "".join(sentences)
+
+
 def _loop_guard_notice_text(dropped_count: int, tool_names: object) -> str:
     """T-25 (live 2026-09-26): sichtbarer hinweis auf LOOP-GUARD-DROPS.
 
@@ -800,6 +855,7 @@ class GLMWebClient:
         (terminaler status und abgeschnittener turn) identisch behandelt
         werden. Ohne Signal zaehlt das modell 10 calls gegen 2 ergebnisse
         und schliesst auf ein erfundenes limit (live 2026-09-26)."""
+        self._inject_native_remap_notice(result, accumulator)
         dropped = int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0)
         if dropped <= 0:
             return
@@ -812,6 +868,26 @@ class GLMWebClient:
             "Turn dropped %s identical native call(s) via the loop guard; telling the model the real reason",
             dropped,
         )
+        choices = result.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if not isinstance(message, dict):
+            return
+        existing = str(message.get("content") or "")
+        message["content"] = f"{notice}\n{existing}" if existing else notice
+
+    def _inject_native_remap_notice(self, result: dict[str, object], accumulator: object) -> None:
+        """S-21 (non-stream): gemappte native calls als ECHTE ausfuehrung melden.
+
+        Geht VOR der blocked-notice: das modell muss zuerst erfahren, dass sein
+        `open` als `read` gelaufen ist (Ergebnis ist echt), und DANN, dass die
+        nicht-abbildbaren `open`-versuche wirklich nicht gelaufen sind. Die
+        umgekehrte reihenfolge erzeugt die widerspruechliche botschaft aus dem
+        live-fall 2026-09-28."""
+        notice = _native_remap_notice_text(getattr(accumulator, "native_remapped_calls", []))
+        if not notice:
+            return
         choices = result.get("choices")
         if not isinstance(choices, list) or not choices:
             return
@@ -1215,6 +1291,34 @@ class GLMWebClient:
                                 ),
                                 *finalize_chunks,
                             ]
+                    # S-21 (stream): gemappte native calls als ECHTE ausfuehrung
+                    # melden. Die Notice muss VOR der blocked-notice stehen:
+                    # "dein `open` lief als `read`, das ergebnis ist echt" erst,
+                    # dann "diese `open`-versuche mit `turn*search*` liefen
+                    # nicht". Die umgekehrte Reihenfolge erzeugt die
+                    # widerspruechliche Rueckmeldung aus dem Live-Fall
+                    # 2026-09-28 (15x-identische-open-Schleife). `finalize_chunks`
+                    # wird per prepend gebaut, also muss dieser Block NACH dem
+                    # blocked-block laufen, damit die remap-notice in der
+                    # ausgabe vorn steht.
+                    remap_notice = _native_remap_notice_text(
+                        accumulator.native_remapped_calls
+                    )
+                    if remap_notice:
+                        self.logger.warning(
+                            "Stream turn remapped native tool call(s) and executed them; "
+                            "telling the model the real tool name",
+                        )
+                        remap_delta: dict[str, object] = {"content": remap_notice}
+                        if not accumulator.emitted_role:
+                            remap_delta = {"role": "assistant", "content": remap_notice}
+                            accumulator.emitted_role = True
+                        finalize_chunks = [
+                            accumulator._chunk_json(
+                                {"choices": [{"index": 0, "delta": remap_delta, "finish_reason": None}]}
+                            ),
+                            *finalize_chunks,
+                        ]
                     # T-25 (stream): der loop guard verwirft identische
                     # native calls ohne rueckmeldung. Das modell zaehlt dann
                     # calls gegen ergebnisse, erfindet ein limit und bricht

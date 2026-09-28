@@ -2746,6 +2746,16 @@ class GLMEventAccumulator:
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
     blocked_tool_attempt_names: list[str] = field(default_factory=list)
     _mapped_sandbox_calls: int = 0
+    # S-21 (live 2026-09-28, session `ses_f17123666ffeMwmhdXlMz3HO1l`): ein
+    # nativer name, der auf ein echtes Tool umgeschrieben UND ausgefuehrt
+    # wurde, als (nativ, gemappt)-paar. `blocked_tool_attempt_names` allein
+    # reicht nicht: es trennt "konnte nicht abgebildet werden" (blockiert)
+    # von "wurde abgebildet und lief" (ausgefuehrt). Ohne diese Trennung
+    # bekam das modell die widerspruechliche botschaft "open wurde NICHT
+    # ausgefuehrt" gleichzeitig mit ~15 echten `read`-ergebnissen und
+    # produzierte die 15x-identische-open-schleife. Das paar erlaubt die
+    # ehrliche notice: "open lief als read — nutze read direkt".
+    native_remapped_calls: list[tuple[str, str]] = field(default_factory=list)
     # T-13: true, wenn der turn an einem angebrochenen protokoll endete und
     # deshalb nicht als regulaerer 'stop' gelten darf.
     truncated_turn: bool = False
@@ -3035,6 +3045,11 @@ class GLMEventAccumulator:
                                     if mapped is None:
                                         self.blocked_tool_attempt_names.append(entry_name)
                                         continue
+                                    # S-21: der native name wurde AUSGEFUEHRT
+                                    # (als read/webfetch/bash) — das ist etwas
+                                    # anderes als ein blockierter versuch und
+                                    # muss fuer die notice getrennt bleiben.
+                                    self.native_remapped_calls.append((entry_name, mapped[0]))
                                     entry_name, entry_arguments = mapped
                                 elif entry_name == "execute_sandbox_code":
                                     mapped = map_native_sandbox_tool_call(
@@ -3043,6 +3058,7 @@ class GLMEventAccumulator:
                                     if mapped is None:
                                         self.blocked_tool_attempt_names.append(entry_name)
                                         continue
+                                    self.native_remapped_calls.append((entry_name, mapped[0]))
                                     entry_name, entry_arguments = mapped
                                 if is_blocked_tool_name(entry_name, None):
                                     self.blocked_tool_attempt_names.append(entry_name)
@@ -3156,6 +3172,9 @@ class GLMEventAccumulator:
                                     continue
                                 else:
                                     mapped_name, mapped_args = mapped
+                                    # S-21: AUSGEFUEHRT als mapped_name, nicht
+                                    # blockiert — getrennt merken fuer die notice.
+                                    self.native_remapped_calls.append((tool_name, mapped_name))
                                     tool_name = mapped_name
                                     arguments = mapped_args
                                     if self.logger:
@@ -3194,6 +3213,7 @@ class GLMEventAccumulator:
                                     continue
                                 else:
                                     mapped_name, mapped_args = mapped
+                                    self.native_remapped_calls.append((tool_name, mapped_name))
                                     tool_name = mapped_name
                                     arguments = mapped_args
                                     self._mapped_sandbox_calls += 1

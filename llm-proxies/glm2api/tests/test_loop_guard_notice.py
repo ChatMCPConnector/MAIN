@@ -407,3 +407,133 @@ def test_ohne_drops_keine_notice_im_strom():
     text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
     assert "[loop_guard_notice]" not in text
 
+
+# --- S-21: ehrliche Notice fuer AUSGEFUEHRTE native-remaps -------------------
+#
+# Live-Fall 2026-09-28 (`ses_f17123666ffeMwmhdXlMz3HO1l`): das modell rief
+# ~40x `open`. Die meisten wurden vom proxy auf `read` gemappt und lieferten
+# ECHTE ergebnisse; 4 `open`-aufrufe mit `ref_id=turn*search*` waren blockiert
+# und erzeugten die blocked-notice "open wurde NICHT ausgefuehrt". Das modell
+# bekam damit die widerspruechliche botschaft "open ist tot" NEBEN 15 fertigen
+# `read`-ergebnissen — und produzierte die 15x-identische-open-schleife, weil
+# es aus dieser luecke keine regel ableiten konnte. Die remap-notice schliesst
+# genau diese luecke: sie benennt den gemappten, TATSAECHLICH ausgefuehrten
+# namen und sagt "nutze ihn direkt".
+
+
+def test_remap_notice_nennt_den_gemappten_echten_namen():
+    from glm2api.services.glm_client import _native_remap_notice_text
+
+    notice = _native_remap_notice_text([("open", "read")])
+    # `read` ist der name, unter dem der call WIRKLICH lief.
+    assert "[native_remap_notice]" in notice
+    assert "`open`" in notice and "`read`" in notice
+    # das ergebnis ist echt — sonst wuerde das modell weiter `open` probieren.
+    assert "are real" in notice or "is real" in notice
+    # und es wird zum GEBRAUCH des richtigen namens angewiesen.
+    assert "DIRECTLY" in notice
+
+
+def test_remap_notice_erklaert_open_zu_webfetch_zu_read_mehrfach():
+    from glm2api.services.glm_client import _native_remap_notice_text
+
+    notice = _native_remap_notice_text([("open", "read"), ("open", "webfetch")])
+    assert "`read`" in notice and "`webfetch`" in notice
+    # der native name wird als ausfuehrendes mapping benannt, nicht als tot.
+    assert "transparently executed" in notice
+
+
+def test_remap_notice_nennt_keinen_nicht_mappbaren_pfad():
+    """Sie darf das mapping nicht als verlaesslichen vertrag behaupten —
+    genau daran ist der live-fall gescheitert (nicht-abbildbares ziel)."""
+    from glm2api.services.glm_client import _native_remap_notice_text
+
+    notice = _native_remap_notice_text([("open", "read")])
+    assert "not mappable" in notice
+    assert "compatibility" in notice
+
+
+def test_ohne_remaps_keine_notice():
+    from glm2api.services.glm_client import _native_remap_notice_text
+
+    assert _native_remap_notice_text([]) == ""
+    assert _native_remap_notice_text(None) == ""
+    assert _native_remap_notice_text("kein-paar") == ""
+
+
+def test_stream_remap_notice_erscheint_bei_gemapptem_open():
+    """Ein `open`, das als `read` ausgefuehrt wurde, erzeugt die notice."""
+    client = _make_client()
+    events = [_native_open_event("call_m", "/workspaces/MAIN/README.md")]
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
+        _FakeResponse(events),
+        "assistant-1",
+    )
+    text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
+    assert "[native_remap_notice]" in text
+    assert "`read`" in text
+
+
+def test_stream_remap_und_blocked_notice_koexistieren_konsistent():
+    """Der Kern des Live-Falls: EIN turn mit gemappten `open`-aufrufen
+    (ausgefuehrt) UND blockierten `open`-aufrufen (nicht ausgefuehrt). Beide
+    notices muessen dastehen und sich NICHT widersprechen: die remap-notice
+    zuerst (ergebnis echt), die blocked-notice danach (nur die nicht
+    abbildbaren liefen nicht)."""
+    client = _make_client()
+    # zwei init-events: ein abbildbares open (Pfad -> read) und ein
+    # nicht-abbildbares (turn0search1 -> blockiert), dann das finish-event,
+    # das den turn beendet.
+    events = [
+        _native_open_event("call_ok", "/workspaces/MAIN/README.md"),
+        _native_open_event("call_bad", "turn0search1"),
+        {"status": "finish", "parts": []},
+    ]
+    client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
+        _FakeResponse(events),
+        "assistant-1",
+    )
+    text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
+
+    assert "[native_remap_notice]" in text, "ausgefuehrtes mapping muss sichtbar sein"
+    assert "[blocked_tool_notice]" in text, "blockierter versuch muss sichtbar bleiben"
+    # reihenfolge: erst das echte ergebnis, dann die nicht-ausfuehrung.
+    assert text.index("[native_remap_notice]") < text.index("[blocked_tool_notice]")
+    # die remap-notice sagt "ergebnis ist echt", die blocked-notice
+    # "nicht ausgefuehrt" — kein widerspruch, weil sie verschiedene calls
+    # beschreibt. Kern: das modell wird auf `read` verwiesen.
+    assert "`read`" in text
+
+
+def test_remap_zaehlt_nicht_als_blockiert():
+    """Ein erfolgreich gemappter `open` darf NICHT als blockierter versuch
+    enden — sonst greift die negative-follow-up-runde grundlos und der
+    korrekte `read`-call geht verloren."""
+    from glm2api.services.translator import GLMEventAccumulator
+
+    acc = GLMEventAccumulator(model="m", allowed_tool_names={"read", "webfetch", "bash"})
+    event = {
+        "status": "finish",
+        "parts": [
+            {
+                "id": "p1",
+                "logic_id": "l1",
+                "role": "assistant",
+                "status": "finish",
+                "content": [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": {
+                            "id": "c1",
+                            "name": "open",
+                            "arguments": json.dumps({"open": [{"ref_id": "/workspaces/MAIN/README.md", "lineno": 1}]}),
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    acc.consume_event(event)
+    assert acc.blocked_tool_attempt_names == [], "gemappt darf nicht blockiert sein"
+    assert ("open", "read") in acc.native_remapped_calls
+
