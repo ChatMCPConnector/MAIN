@@ -409,6 +409,66 @@ def test_blocked_tool_triggers_follow_up_round_non_stream():
     assert "Alles erledigt." in json.dumps(result, ensure_ascii=False)
 
 
+def _make_context_error_after_blocked_tool_client():
+    client, calls = _make_follow_up_client(_FollowUpConfig())
+
+    def fake_open(payload, preferred_account_index=None, filtered_tools=None):
+        calls["count"] += 1
+        calls["payloads"].append(payload)
+        if calls["count"] == 1:
+            events = _blocked_tool_events()
+        elif calls["count"] == 2:
+            events = [_error_event(code=10040, message="context exceeded")]
+        else:
+            events = _normal_answer_events()
+        return _FakeResponse(events), "assistant-1"
+
+    client._open_chat_stream = fake_open
+    return client, calls
+
+
+def test_stream_context_retry_shrinks_active_blocked_follow_up_payload():
+    client, calls = _make_context_error_after_blocked_tool_client()
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "mach was"}],
+        "tools": [
+            {"type": "function", "function": {"name": "bash", "parameters": {"type": "object"}}}
+        ],
+    }
+
+    output = "".join(chunk.decode("utf-8") for chunk in client.stream_chat_completion(payload))
+
+    assert calls["count"] == 3
+    assert calls["payloads"][1]["_glm_history_budget"] == 60000
+    correction = " ".join(str(message.get("content", "")) for message in calls["payloads"][1]["messages"])
+    retry_correction = " ".join(str(message.get("content", "")) for message in calls["payloads"][2]["messages"])
+    assert "do NOT exist" in correction
+    assert "do NOT exist" in retry_correction
+    assert "Alles erledigt." in output
+
+
+def test_non_stream_context_retry_shrinks_active_blocked_follow_up_payload():
+    client, calls = _make_context_error_after_blocked_tool_client()
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "mach was"}],
+        "tools": [
+            {"type": "function", "function": {"name": "bash", "parameters": {"type": "object"}}}
+        ],
+    }
+
+    result, _ = client.chat_completion(payload)
+
+    assert calls["count"] == 3
+    assert calls["payloads"][1]["_glm_history_budget"] == 60000
+    correction = " ".join(str(message.get("content", "")) for message in calls["payloads"][1]["messages"])
+    retry_correction = " ".join(str(message.get("content", "")) for message in calls["payloads"][2]["messages"])
+    assert "do NOT exist" in correction
+    assert "do NOT exist" in retry_correction
+    assert "Alles erledigt." in json.dumps(result, ensure_ascii=False)
+
+
 def _mixed_blocked_and_valid_call_event():
     return {
         "status": "finish",

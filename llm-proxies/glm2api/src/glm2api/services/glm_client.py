@@ -1025,7 +1025,7 @@ class GLMWebClient:
                             attempt + 1,
                         )
                         raise retry_exc
-                    history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
+                    history_budget = _halve_history_budget(active_payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 if accumulator.conversation_id:
                     created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
@@ -1698,8 +1698,12 @@ class GLMWebClient:
                 # the stream with a fresh conversation (guest tokens and
                 # fresh sessions die quickly; reasoning replay is harmless).
                 # Bei 10040 ("context exceeded"): kompressions-budget halbieren
-                # und im payload weiterreichen — der retry schrumpft die
-                # historie so lange, bis der upstream mitmacht.
+                # und im aktiven payload weiterreichen — auch ein retry aus
+                # einer Korrekturrunde muss deren Rueckmeldung behalten.
+                if self._deadline_exceeded(deadline):
+                    raise retry_exc or UpstreamAPIError(
+                        502, "request deadline exceeded before stream retry", transient=True
+                    )
                 attempt += 1
                 response.close() # type: ignore
                 self.logger.warning(
@@ -1709,7 +1713,7 @@ class GLMWebClient:
                     retry_exc,
                 )
                 if retry_exc is not None:
-                    history_budget = _halve_history_budget(payload, history_budget, retry_exc, self.logger)
+                    history_budget = _halve_history_budget(active_payload, history_budget, retry_exc, self.logger)
                 time.sleep(self.config.glm_stream_error_retry_interval)
                 if accumulator.conversation_id:
                     created_conversations.setdefault(accumulator.conversation_id, _conversation_account_index)
