@@ -984,6 +984,30 @@ Proxy bei jedem Start automatisch hoch.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
 
+- 2026-09-30: **`limit.output` war die echte Ursache — und ein zweiter, unabhängiger Defekt ist damit sichtbar geworden (offen).**
+
+  Der unmittelbar vorherige Changelog-Eintrag gilt als überholt; **seine Diagnose war falsch**. Kurzfassung der Korrektur: `limit.output` stand auf **16.384** neben `limit.context` = **16.000**. opencode rechnet die Kompaktierungsschwelle als `context − output`; negativ heißt nicht positiv, die Kompaktierung lief **bedingungslos bei jedem Turn**, nicht „nach jedem Turn, weil reserved zu hoch". `reserved` war ein zweiter Fehler mit demselben Symptom, nicht der Auslöser. Fix `output` → **8.000**, Schwelle jetzt 8.000 Tokens bei gemessenen Prompts von ~1.200 (15 %). Details und die 7-Fälle-Matrix im Eintrag darüber; `0b84c38` ist gepusht und wurde bewusst nicht umgeschrieben (destruktiv, laut `AGENTS.md` rückfrage-pflichtig).
+
+  **Live-Beleg der Wirkung, und was erst dadurch auffiel.** Mit `output=8000` greift die Kompaktierung erst bei **8.739** Input-Tokens (Turn-Verlauf: 794 → 2.474 → 8.739), also **nach drei Runden echter Arbeit** — vorher war sie bei **794**, in der ersten Runde. Damit läuft die normale Analyse sauber: 6 → 5 → 6 Tool-Calls, alle `completed`.
+
+  **Der zweite Defekt: Compaction bricht opencode weiterhin ab.** Sobald die Schwelle erreicht ist, startet opencode seinen Summarizer (`agent=compaction`) und **verbietet dort Tool-Calls**. ZeroKey injiziert die vollen Agenten-Instruktionen („emit MHI directives"), das Modell hält sich daran, und opencode bricht den Lauf ab:
+
+      Tool call not allowed while generating summary: read
+
+  Das ist dieselbe Fehlerklasse wie beim Loop, nur eine Ebene tiefer: ZeroKeys Prompt-Vertrag kennt opencodes interne, nicht-werkzeugfähige Phasen (Titel, Compaction) nicht.
+
+  **Messung statt Annahme.** `ZEROKEY_DEBUG_TOOLS=1` schaltet im Pipeline-Setup eine Messzeile frei (`tools=… toolCalling=… raw=… msgs=…`). Ergebnis:
+
+  | Request | `tools` | msgs |
+  |---|---|---|
+  | Titel | `undefined` | 3 |
+  | Build | **16** | 2 |
+
+  opencode sendet die Werkzeugliste also **sehr wohl** — 16 Stück, sie ist nur beim Titel-Request leer. Die naheliegende Regel „keine Werkzeuge angeboten → keine MHI-Anweisung" ist damit zwar für den Titel richtig, war als alleinige Bedingung aber **noch nicht der Fehler**; das Signal, das die Compaction sicher von einem normalen Turn trennt, ist damit **nicht** gefunden.
+
+  **Ein Fix-Versuch wurde zurückgenommen, weil er den Normalpfad zerstörte.** Mit „leeres `tools` → Raw-Modus" verlor der Build-Turn die MHI-Anweisung: der Lauf lieferte nur `Komplette Repository-Analyse von /workspaces/MAIN`, 12 Output-Tokens, Ende. Vermutlich hat der Raw-Pfad auf dem Title-Request den Session-Zustand so verändert, dass der Folgeturn leer blieb. Kein halbfertiger Stand im Repo: Verhalten entfernt, zugehöriger Test (`scripts/test-no-tools-request.js`) und der Eintrag in `package.json` zurückgenommen, Suite wieder 4/4 grün. **Offen, mit Messweg:** der Debug-Schalter bleibt stehen, weil er die Frage beantwortet.
+
+  **Nebenbefund zum Werkzeugkatalog:** ZeroKey braucht die Werkzeugliste des Clients nicht — `engine/tool-defs.js` liefert einen eigenen Katalog pro IDE. Deshalb ist „der Client sendet keine Werkzeuge" als Signal untauglich, sobald ein Client kompatibel ist, aber seinen Katalog nicht spiegelt.
 - 2026-09-30: **KORREKTUR: die Ursache des Resume-Loops war `limit.output`, nicht `compaction.reserved` — die Diagnose in `0b84c38` war falsch.**
 
   **Was falsch war.** Der Commit `0b84c38` und der Changelog-Eintrag `9f53b30` nennen `compaction.reserved` als Ursache: „opencode kompactiert nach JEDER Runde, das Modell liest Continue-if-you-have-next-steps als Resume-Marker". Der Reserve-Wert war tatsächlich zu hoch (15.000 von 16.000 Tokens), aber er war **nicht** der Auslöser. Die Änderung auf 2.000 beseitigte den Dauerzustand nicht, sie verschob ihn nur auf „nach step 1".

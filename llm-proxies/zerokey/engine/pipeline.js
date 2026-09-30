@@ -370,6 +370,19 @@ class StreamPipeline {
       return { prompt, handled: false }
     }
 
+    // DIAGNOSE (2026-09-30): die Annahme, ein Request ohne `tools` sei ein
+    // Summarizer, war FALSCH. opencode sendet fuer ZeroKey offenbar keine
+    // Werkzeugliste — ZeroKey hat einen eigenen Katalog (tool-defs.js) und
+    // braucht sie nicht. Mit dieser Regel lief der normale Turn in den
+    // Raw-Modus: keine MHI-Anweisung, der Modelltext war ein Einzeiler,
+    // Ende. Deshalb hier KEIN Verhalten, nur eine Messzeile.
+    if (process.env.ZEROKEY_DEBUG_TOOLS) {
+      console.warn(
+        `[DEBUG] tools=${Array.isArray(tools) ? tools.length : typeof tools} ` +
+          `toolCalling=${this.toolCalling} raw=${this.rawMode} msgs=${messages.length}`,
+      )
+    }
+
     if (this.rawMode) {
       const { prompt } = await this.compiler.uploadAndFormatPromptForRaw(messages, this, true)
       return { prompt, handled: false }
