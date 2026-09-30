@@ -292,6 +292,44 @@ def _estimate_prompt_chars(payload: dict[str, object]) -> int:
         return 0
 
 
+def _log_history_guards(
+    client: "GLMWebClient",
+    payload: dict[str, object],
+    signatures: set[str],
+) -> None:
+    """B-01-DIAG: wie viele wiederholungen aus der Historie erkennbar sind?
+
+    Live 2026-10-01 (burst-probe-4, 12x `du -sh`): der client sah 14
+    identische `bash`-calls, aber weder der cache-hit (C-01) noch der
+    echo-filter griff EIN einziges mal — beide sehen nur
+    `extract_history_tool_call_signatures` /
+    `extract_history_tool_results`. Ohne diese Zahl ist nicht
+    unterscheidbar, ob der client gar keine/tool-call-historie schickt
+    (dann muesste opencode-seitig oder in der session etwas aendern) oder
+    ob er sie schickt und nur die signaturen nicht matchen (dann ist ein
+    normalisierungsfehler im proxy die ursache). Genau diese eine zahl
+    trennt die beiden faelle.
+    """
+    logger = getattr(client, "logger", None)
+    if not logger:
+        return
+    messages = payload.get("messages", [])
+    role_counts: dict[str, int] = {}
+    if isinstance(messages, list):
+        for message in messages:
+            if isinstance(message, dict):
+                role = str(message.get("role", "?"))
+                role_counts[role] = role_counts.get(role, 0) + 1
+    results = extract_history_tool_results(list(messages)) if isinstance(messages, list) else {}
+    logger.info(
+        "B-01-DIAG history_guards messages=%d roles=%s signatures=%d results=%d",
+        role_counts and sum(role_counts.values()) or 0,
+        sorted(role_counts.items()),
+        len(signatures),
+        len(results),
+    )
+
+
 def _turn_notice_texts(accumulator: GLMEventAccumulator, blocked: list[str]) -> list[str]:
     """S-22/S-24: die Notices eines Turns in der EINZIGEN gueltigen
     Reihenfolge — remap, blocked, loop. An einer Stelle, damit stream- und
@@ -878,6 +916,7 @@ class GLMWebClient:
         history_tool_call_signatures = extract_history_tool_call_signatures(
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
+        _log_history_guards(self, payload, history_tool_call_signatures)
         lease = self.request_queue.acquire(f"chat:{payload.get('model', 'unknown')}")
         # S-14: gesamt-deadline fuer diesen request. Die einzelnen
         # retry-zaehler sind begrenzt, ihre summe nicht — ohne deadline
@@ -1363,6 +1402,7 @@ class GLMWebClient:
         history_tool_call_signatures = extract_history_tool_call_signatures(
             list(payload.get("messages", [])) # type: ignore[arg-type]
         )
+        _log_history_guards(self, payload, history_tool_call_signatures)
         history_budget = self.config.glm_history_max_chars
         prompt_chars = _estimate_prompt_chars(payload)
 
