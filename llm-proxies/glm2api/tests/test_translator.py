@@ -5615,3 +5615,80 @@ def test_convert_messages_recap_omitted_without_tools():
     (prompt,) = convert_messages(messages, None)
     text = str(prompt["content"])
     assert "TOOL DISCIPLINE (restated" not in text
+
+
+# --- D-02: erfundene URLs werden nicht als webfetch ausgeliefert ------------
+
+
+def test_placeholder_url_is_refused_without_user_url_context_entry():
+    """Live-Fall `ses_f0bf422f3ffe1VyJ7Zmjx7kdMN`: 5x `open` ->
+    `webfetch https://example.com` in EINEM turn. Der Mapper befoerderte die
+    erfundene URL bisher sogar — jetzt wird sie abgelehnt, damit das Modell
+    eine ehrliche negative Rueckmeldung bekommt."""
+    from glm2api.services.translator import map_native_open_tool_call
+
+    allowed = {"read", "bash", "webfetch", "grep"}
+    # Kontext ist gesetzt (live-pfad), die URL wurde vom nutzer NICHT genannt
+    user_ctx = {"https://developer.mozilla.org/de"}
+
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "https://example.com"}]}, allowed, user_url_context=user_ctx
+    ) is None
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "example.com"}]}, allowed, user_url_context=user_ctx
+    ) is None
+    # dateiname als TLD (live: `https://infrastructure.md`, Audit-Lauf 2)
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "https://infrastructure.md"}]}, allowed, user_url_context=user_ctx
+    ) is None
+    # reservierte suffixe + loopback
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "http://api.local/v1"}]}, allowed, user_url_context=user_ctx
+    ) is None
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "http://localhost:8001/health"}]}, allowed, user_url_context=user_ctx
+    ) is None
+
+
+def test_real_and_user_named_urls_still_map_to_webfetch():
+    """Der Guard darf keine echten Ziele und keine im Auftrag genannten URLs
+    (inkl. `example.com` als Testziel) blockieren."""
+    from glm2api.services.translator import map_native_open_tool_call
+
+    allowed = {"read", "bash", "webfetch", "grep"}
+    user_ctx = {"https://example.com"}
+
+    # im auftrag genannt -> erlaubt
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "https://example.com"}]}, allowed, user_url_context=user_ctx
+    ) == ("webfetch", {"url": "https://example.com"})
+    # echte domain -> erlaubt
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "https://developer.mozilla.org/en-US/docs/Web/API"}]},
+        allowed,
+        user_url_context={"https://github.com"},
+    ) == ("webfetch", {"url": "https://developer.mozilla.org/en-US/docs/Web/API"})
+    # localhost als echtes auftragsziel -> erlaubt
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "http://localhost:8001/health"}]},
+        allowed,
+        user_url_context={"http://localhost:8001/health"},
+    ) == ("webfetch", {"url": "http://localhost:8001/health"})
+    # ohne kontext (interne/unit-pfade): altes verhalten, kein silent break
+    assert map_native_open_tool_call(
+        {"ref_id": "https://example.com"}, {"webfetch"}
+    ) == ("webfetch", {"url": "https://example.com"})
+
+
+def test_extract_user_url_context_only_reads_user_turns():
+    from glm2api.services.translator import extract_user_url_context
+
+    context = extract_user_url_context([
+        {"role": "user", "content": "Bitte https://github.com/foo/bar pruefen"},
+        # assistant-nennung zaehlt NICHT als auftragsgrundlage
+        {"role": "assistant", "content": "Ich schaue auf https://evil.test/x"},
+        {"role": "user", "content": "und http://localhost:3000 danach"},
+    ])
+    assert "https://github.com/foo/bar" in context
+    assert "http://localhost:3000" in context
+    assert not any("evil.test" in url for url in context)

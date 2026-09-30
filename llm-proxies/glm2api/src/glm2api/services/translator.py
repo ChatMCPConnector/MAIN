@@ -411,6 +411,99 @@ def extract_recent_user_url(messages: list[dict[str, object]]) -> str | None:
     return None
 
 
+# D-02 (Drift-Analyse 2026-09-30): reservierte beispiel-domains (RFC 2606
+# / RFC 6761). `example.com` im ChatGLM-Webkontext ist KEIN echtes ziel,
+# sondern der trainierte fuellwert fuer einen leeren url-slot — live
+# gemessen: 5x `open` -> `webfetch https://example.com` in einem einzigen
+# turn (`ses_f0bf422f3ffe1VyJ7Zmjx7kdMN`).
+_PLACEHOLDER_URL_HOSTS = frozenset({
+    "example.com", "example.org", "example.net", "example.edu",
+    "example.co.uk", "example.xyz", "example.info", "test.example",
+})
+# `.local`/`.test`/`.invalid` sind per RFC 6761/2606 fuer nicht-auflösbare
+# ziele reserviert — im agenten-kontext immer erfunden.
+_PLACEHOLDER_URL_SUFFIXES = (".local", ".test", ".invalid", ".localhost")
+_LOOPBACK_URL_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "[::1]"})
+# D-02: dateiendungen, die im ChatGLM-Kontext regelmaessig als "TLD"
+# missbraucht werden (`https://infrastructure.md`), live belegt im
+# Audit-Lauf 2 (`ses_f0c0a2cf3ffe44hEi80fYRmuXL`).
+_NON_DOMAIN_TLD = frozenset({
+    "md", "txt", "py", "js", "ts", "json", "yaml", "yml", "toml", "sh",
+    "cfg", "ini", "log", "csv", "tsv", "xml", "html", "htm", "php", "rs",
+    "go", "java", "c", "cpp", "h", "hpp", "rb", "pl", "sql", "env", "lock",
+})
+# URLs in fliesstext (http/https mit oder ohne schema).
+_URL_IN_TEXT = re.compile(r"https?://[^\s\"'<>)\]}]+", re.IGNORECASE)
+
+
+def _normalized_url_key(url: str) -> str:
+    """Vergleichsform einer URL: kleinschreibung, ohne `www.`, ohne
+    abschließenden slash. Nur für den kontextabgleich."""
+    candidate = (url or "").strip()
+    if not candidate:
+        return ""
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+    parts = urlsplit(candidate)
+    host = (parts.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = (parts.path or "/").rstrip("/")
+    return f"{parts.scheme.lower()}://{host}{path}"
+
+
+def extract_user_url_context(messages: list[dict[str, object]]) -> set[str]:
+    """D-02: alle URLs, die der NUTZER selbst genannt hat.
+
+    Nur diese gelten als "erfunden-frei". Alles andere, was das Modell als
+    URL liefert, ohne dass der Auftrag es hergibt, ist eine Halluzination —
+    und wird abgefangen, statt als 404 ausgeliefert zu werden."""
+    found: set[str] = set()
+    for message in messages:
+        if str(message.get("role", "")).strip() != "user":
+            continue
+        text = extract_text_content(message.get("content"))
+        for candidate in _URL_IN_TEXT.findall(text or ""):
+            key = _normalized_url_key(candidate)
+            if key:
+                found.add(key)
+    return found
+
+
+def _is_invented_placeholder_url(target: str, user_url_context: set[str] | None) -> bool:
+    """D-02: `target` ist eine erfundene/ziel-lose URL und darf nicht als
+    `webfetch` ausgeliefert werden.
+
+    Nur wenn ein Nutzer-URL-Kontext vorliegt: eine im AUFTRAG genannte URL
+    (inkl. `example.com` als Testziel) bleibt erlaubt.    Ohne Kontext
+    (interne/unit-pfade) gilt das alte verhalten — der guard soll keine
+    korrekte Faehigkeit still zerstoeren."""
+    if user_url_context is None:
+        return False
+    candidate = (target or "").strip()
+    if not candidate:
+        return False
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+    parts = urlsplit(candidate)
+    host = (parts.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    # 1) reservierte beispiel-/loopback-ziele
+    bare_host = host.split("@")[-1].split(":")[0]
+    if bare_host in _PLACEHOLDER_URL_HOSTS or bare_host in _LOOPBACK_URL_HOSTS:
+        return _normalized_url_key(target) not in user_url_context
+    if any(host.endswith(suffix) for suffix in _PLACEHOLDER_URL_SUFFIXES):
+        return True
+    # 2) ein dateiname als domain (`https://infrastructure.md` — live
+    # gemessen im Audit-Lauf 2). Ein TLD aus der dateiendungs-liste ist
+    # keine domain, sondern ein lokaler dateiname.
+    suffix = bare_host.rsplit(".", 1)[-1].lower() if "." in bare_host else ""
+    if suffix in _NON_DOMAIN_TLD:
+        return True
+    return False
+
+
 # Gezieltes Repair fuer ein bekanntes LLM-Quoting-Versagen: das Modell
 # emittiert python-code mit x'key' statt x['key'] (fehlende brackets beim
 # dict-zugriff, beobachtet mit inline `python3 -c "..."` commands).
@@ -981,10 +1074,17 @@ def map_native_open_tool_call(
     allowed_tool_names: set[str] | None = None,
     *,
     unrestricted: bool = False,
+    user_url_context: set[str] | None = None,
 ) -> tuple[str, dict[str, object]] | None:
     """Maps ChatGLM's native open(ref_id=...) call to an allowed OpenCode tool
     (read or webfetch) if the target is a valid path or URL.
-    Returns (mapped_tool_name, mapped_arguments) or None if unmappable."""
+    Returns (mapped_tool_name, mapped_arguments) or None if unmappable.
+
+    `user_url_context` (D-02): die URLs, die der Nutzer selbst genannt hat.
+    Eine erfundene/ziel-lose URL (`example.com`, `https://infra.md`) wird
+    damit ABGELEHNT statt als 404-ausfuehrbarer Call geliefert — das Modell
+    bekommt die negative Rueckmeldung und korrigiert, statt 5x denselben
+    Muell-Call zu wiederholen."""
     parsed = arguments
     if isinstance(arguments, str):
         try:
@@ -1089,6 +1189,15 @@ def map_native_open_tool_call(
         return None
 
     if target.startswith("http://") or target.startswith("https://"):
+        # D-02: reservierte beispiel-ziele und dateinamen-als-TLD sind
+        # erfunden, nicht auftrag. Sie werden NIE als webfetch geliefert.
+        if _is_invented_placeholder_url(target, user_url_context):
+            _LOGGER.warning(
+                "Refusing to map invented placeholder URL %s to webfetch "
+                "(no matching user URL in the request)",
+                target,
+            )
+            return None
         if unrestricted or (allowed_tool_names is not None and "webfetch" in allowed_tool_names):
             if extra_targets:
                 _LOGGER.warning(
@@ -1125,6 +1234,14 @@ def map_native_open_tool_call(
     # datei-erkennung und wurde als read auf einen nicht existierenden
     # dateinamen abgebildet. Eine bare domain ist eine URL.
     if "://" not in target and re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", target):
+        # D-02: dieselbe erfunden-pruefung fuer bare domains.
+        if _is_invented_placeholder_url(target, user_url_context):
+            _LOGGER.warning(
+                "Refusing to map invented placeholder domain %s to webfetch "
+                "(no matching user URL in the request)",
+                target,
+            )
+            return None
         if unrestricted or (allowed_tool_names is not None and "webfetch" in allowed_tool_names):
             if extra_targets:
                 _LOGGER.warning(
@@ -2768,6 +2885,77 @@ def extract_history_tool_call_signatures(messages: list[dict[str, object]]) -> s
     return signatures
 
 
+# C-01: maximale Laenge eines gecachten ergebnisses in der cache-hit-notice.
+_CACHED_RESULT_EXCERPT_CHARS = 600
+
+
+def extract_history_tool_results(messages: list[dict[str, object]]) -> dict[str, str]:
+    """C-01: Signatur -> tatsaechlich geliefertes ergebnis aus der
+    request-historie.
+
+    Nur ergebnisse mit PASSENDER assistant-`tool_calls`-message zaehlen
+    (gleiche T-15-Logik wie im upstream-transkript): eine verwaiste
+    `role: tool`-message ohne ihren call ist kein beweis, dass der call
+    gelaufen ist — und wuerde sonst zur erfundenen cache-treffer-quelle.
+    """
+    by_call_id: dict[str, str] = {}
+    for message in messages:
+        if str(message.get("role", "")) != "assistant":
+            continue
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function", {})
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name", "")).strip()
+            if not name:
+                continue
+            arguments = function.get("arguments", "{}")
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
+            try:
+                normalized = json.dumps(
+                    json.loads(arguments), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+            except json.JSONDecodeError:
+                normalized = arguments
+            call_id = _coerce_call_id(tool_call.get("id"))
+            if call_id:
+                by_call_id[call_id] = f"{name}:{normalized}"
+
+    results: dict[str, str] = {}
+    for message in messages:
+        if str(message.get("role", "")) != "tool":
+            continue
+        signature = by_call_id.get(_coerce_call_id(message.get("tool_call_id")))
+        if not signature:
+            continue
+        text = extract_text_content(message.get("content"))
+        if text:
+            results[signature] = text
+    return results
+
+
+def _cached_result_notice(signature: str, result: str) -> str:
+    """C-01: die cache-hit-meldung. Bewusst als notice formuliert, nicht
+    als ausgefuehrter call: der call ist ein WIEDERHOLUNG eines bereits
+    erledigten auftrags, kein neuer."""
+    excerpt = result.strip()
+    if len(excerpt) > _CACHED_RESULT_EXCERPT_CHARS:
+        excerpt = excerpt[:_CACHED_RESULT_EXCERPT_CHARS] + " …[gekuerzt]"
+    name = signature.split(":", 1)[0].strip() or "tool"
+    return (
+        f"[cached_result_notice] `{name}` with these exact arguments already ran in this "
+        "conversation — its real result is in your history and was NOT re-executed. "
+        f"Do not repeat it; change the argument or continue with the next action. "
+        f"Result excerpt: {excerpt}"
+    )
+
+
 # Status, die eine regulaere, erfolgreiche antwort markieren.
 _SUCCESSFUL_TERMINAL_STATUSES = frozenset({"", "stop", "finish", "completed", "success"})
 
@@ -2777,6 +2965,20 @@ class GLMEventAccumulator:
     model: str
     allowed_tool_names: set[str] | None = None
     fallback_tool_url: str | None = None
+    # D-02: die vom nutzer selbst genannten URLs. Ohne dieses set kennt
+    # der `open`-mapper keine auftrags-grundlage und laesst die alte
+    # bare-domain-abbildung zu (kein stillerSilent-False-Positive).
+    user_url_context: set[str] = field(default_factory=set)
+    # C-01 (Drift-Analyse 2026-09-30): Signatur -> bereits geliefertes
+    # ERGEBNIS aus der request-historie. Damit wird ein wiederholter
+    # identischer call zum cache-hit: er wird NICHT erneut ausgefuehrt
+    # (keine doppelwirkung/kosten) und NICHT still verworfen (das modell
+    # wiederholte dann), sondern das vorhandene Ergebnis wird ihm
+    # gemeldet (cache-hit-statt-fehler).
+    history_tool_results: dict[str, str] = field(default_factory=dict)
+    # Cache-hit-meldungen dieses turns (werden ueber `_turn_notice_texts`
+    # in den zurueckgespiegelten tool-result-kanal gespeist, T-30).
+    cached_result_notices: list[str] = field(default_factory=list)
     debug_enabled: bool = False
     logger: Logger | None = None
     history_tool_call_signatures: set[str] = field(default_factory=set)
@@ -3042,6 +3244,10 @@ class GLMEventAccumulator:
             decisions.append(allowed)
             if not allowed:
                 self.loop_guard_dropped_count += 1
+                # C-01: cache-hit-statt-stille — der call bleibt
+                # unterdrueckt, aber das modell erfaehrt das echte
+                # ergebnis, statt den gleichen call zu wiederholen.
+                self._note_cached_result(signature)
                 function = tool_call.get("function")
                 name = (
                     str(function.get("name", "")).strip()
@@ -3182,7 +3388,9 @@ class GLMEventAccumulator:
                                 entry_arguments = entry.get("arguments", "{}")
                                 if entry_name == "open":
                                     mapped = map_native_open_tool_call(
-                                        entry_arguments, self.allowed_tool_names
+                                        entry_arguments,
+                                        self.allowed_tool_names,
+                                        user_url_context=self.user_url_context,
                                     )
                                     if mapped is None:
                                         self.blocked_tool_attempt_names.append(entry_name)
@@ -3238,6 +3446,10 @@ class GLMEventAccumulator:
                                     normalized = args_str
                                 signature = f"{entry_name}:{normalized}"
                                 if signature in self.history_tool_call_signatures:
+                                    # C-01: das ist der haeufigste cache-hit-
+                                    # fall — der call ist ein echtes echo eines
+                                    # bereits AUSGEFUEHRTEN auftrags.
+                                    self._note_cached_result(signature)
                                     if self.logger:
                                         self.logger.info(
                                             "Dropped echoed native tool_call (history signature match) tool=%s",
@@ -3253,6 +3465,7 @@ class GLMEventAccumulator:
                                             repeat,
                                         )
                                     self.loop_guard_dropped_count += 1
+                                    self._note_cached_result(signature)
                                     if native_entry_name not in self.loop_guard_dropped_tools:
                                         self.loop_guard_dropped_tools.append(native_entry_name)
                                     continue
@@ -3280,7 +3493,11 @@ class GLMEventAccumulator:
                             if tool_name.lower() in {"finish", "intervene", "cancel", "none"}:
                                 continue
                             if tool_name == "open":
-                                mapped = map_native_open_tool_call(arguments, self.allowed_tool_names)
+                                mapped = map_native_open_tool_call(
+                                    arguments,
+                                    self.allowed_tool_names,
+                                    user_url_context=self.user_url_context,
+                                )
                                 if mapped is None:
                                     # T-02: nicht abbildbar heisst in
                                     # jedem fall 'nicht ausfuehrbar' — kein
@@ -3425,6 +3642,7 @@ class GLMEventAccumulator:
                                     normalized = args_str
                                 signature = f"{tool_name}:{normalized}"
                                 if signature in self.history_tool_call_signatures:
+                                    self._note_cached_result(signature)
                                     if self.logger:
                                         self.logger.info(
                                             "Dropped echoed native tool_call (history signature match) tool=%s",
@@ -3468,6 +3686,7 @@ class GLMEventAccumulator:
                                     # notice "read" und das modell sucht den
                                     # fehler im falschen werkzeug.
                                     self.loop_guard_dropped_count += 1
+                                    self._note_cached_result(signature)
                                     native_name = str(tool_calls_data.get("name", "")).strip() or tool_name
                                     if native_name not in self.loop_guard_dropped_tools:
                                         self.loop_guard_dropped_tools.append(native_name)
@@ -5018,6 +5237,23 @@ class GLMEventAccumulator:
             chunks.append("data: [DONE]\n\n")
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE finalize output", chunks)
         return chunks
+
+    def _note_cached_result(self, signature: str) -> bool:
+        """C-01: treat a repeated call as a CACHE HIT, not as an error.
+
+        Returns True when the signature already has a real result in the
+        request history. The call is then still suppressed (no duplicate
+        execution, no side effects, no cost), but the model gets told
+        `cached_result_notice` with the real result instead of silence —
+        because a silent drop made the model repeat forever (live: the
+        loop-guard fired 18x in one audit session and the model kept
+        re-issuing). Returns False when there is no result to point at
+        (then the drop stays silent, as before)."""
+        result = self.history_tool_results.get(signature)
+        if not result:
+            return False
+        self.cached_result_notices.append(_cached_result_notice(signature, result))
+        return True
 
     def _notice_chunk(self, notice: str) -> str:
         """S-22: eine Notice als DENKKANAL statt als sichtbarer text.

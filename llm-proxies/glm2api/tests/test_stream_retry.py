@@ -1594,3 +1594,56 @@ def test_escalation_notice_reaches_tool_result_channel():
     assert "[blocked_tool_notice]" in content
     assert "NOT executed" in content
     assert "TOOL DISCIPLINE" in content
+
+
+# --- C-01: Duplikat als Cache-Hit (Ergebnis statt Stille) ------------------
+
+
+def test_extract_history_tool_results_pairs_calls_with_real_results():
+    """C-01: nur ergebnisse MIT passendem assistant-call zaehlen — eine
+    verwaiste tool-message ist kein beweis (sonst erfindet der proxy
+    cache-treffer)."""
+    from glm2api.services.translator import extract_history_tool_results
+
+    messages = [
+        {"role": "user", "content": "mach"},
+        {"role": "assistant", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "read", "arguments": '{"filePath":"/a.md"}'}},
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "name": "read", "content": "INHALT A"},
+        # verwaist: keine assistant-message mit dieser id
+        {"role": "tool", "tool_call_id": "ghost", "name": "read", "content": "ERFUNDEN"},
+    ]
+    results = extract_history_tool_results(messages)
+    assert results == {'read:{"filePath":"/a.md"}': "INHALT A"}
+    assert all("ERFUNDEN" not in text for text in results.values())
+
+
+def test_repeated_call_with_result_becomes_cache_hit_notice():
+    """C-01: der loop-guard unterdrueckt den wiederholten call weiterhin
+    (keine doppelwirkung), meldet aber das vorhandene ergebnis."""
+    from glm2api.services.translator import GLMEventAccumulator, _cached_result_notice
+
+    signature = 'read:{"filePath":"/workspaces/MAIN/README.md"}'
+    accumulator = GLMEventAccumulator(
+        model="glm-5.3",
+        allowed_tool_names={"read"},
+        history_tool_results={signature: "# README\nZeile 1"},
+    )
+    assert accumulator._note_cached_result(signature) is True
+    assert not accumulator.cached_result_notices == []
+    notice = accumulator.cached_result_notices[0]
+    assert "[cached_result_notice]" in notice
+    assert "already ran" in notice
+    assert "Zeile 1" in notice
+    assert "Do not repeat" in notice
+    # ohne ergebnis: weiterhin stumm (kein erfundener cache-hit)
+    assert accumulator._note_cached_result('bash:{"command":"x"}') is False
+
+
+def test_cached_result_notice_mentions_only_the_tool_name():
+    from glm2api.services.translator import _cached_result_notice
+
+    notice = _cached_result_notice('grep:{"pattern":"TODO","path":"/x"}', "3 treffer")
+    assert "`grep`" in notice
+    assert "3 treffer" in notice

@@ -34,8 +34,10 @@ from .translator import (
     compress_history_messages,
     convert_messages,
     extract_history_tool_call_signatures,
+    extract_history_tool_results,
     extract_recent_user_url,
     extract_text_content,
+    extract_user_url_context,
     filter_tools,
     is_abandon_claim,
     parse_tool_choice_policy,
@@ -316,6 +318,11 @@ def _turn_notice_texts(accumulator: GLMEventAccumulator, blocked: list[str]) -> 
     )
     if loop_notice:
         notices.append(loop_notice)
+    # C-01: cache-hits zuletzt — sie sind die konkrete antwort auf
+    # "warum kam da kein ergebnis": das ergebnis existiert bereits.
+    for cached_notice in list(getattr(accumulator, "cached_result_notices", []) or []):
+        if cached_notice and cached_notice not in notices:
+            notices.append(cached_notice)
     return notices
 
 
@@ -903,6 +910,12 @@ class GLMWebClient:
                 model=str(payload["model"]),
                 allowed_tool_names=allowed_tool_names,
                 fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
+                # D-02: die vom nutzer selbst genannten URLs — damit der
+                # `open`-mapper erfundene platzhalter-ziele erkennt.
+                user_url_context=extract_user_url_context(list(payload.get("messages", []))), # type: ignore[arg-type]
+                # C-01: bereits gelieferte ergebnisse der request-historie —
+                # macht wiederholte calls zu cache-hits.
+                history_tool_results=extract_history_tool_results(list(payload.get("messages", []))), # type: ignore[arg-type]
                 debug_enabled=self.config.debug_dump_all,
                 logger=self.logger,
                 history_tool_call_signatures=history_tool_call_signatures,
@@ -1364,6 +1377,12 @@ class GLMWebClient:
                 model=str(payload["model"]),
                 allowed_tool_names=allowed_tool_names,
                 fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
+                # D-02: die vom nutzer selbst genannten URLs — damit der
+                # `open`-mapper erfundene platzhalter-ziele erkennt.
+                user_url_context=extract_user_url_context(list(payload.get("messages", []))), # type: ignore[arg-type]
+                # C-01: bereits gelieferte ergebnisse der request-historie —
+                # macht wiederholte calls zu cache-hits.
+                history_tool_results=extract_history_tool_results(list(payload.get("messages", []))), # type: ignore[arg-type]
                 debug_enabled=self.config.debug_dump_all,
                 logger=self.logger,
                 history_tool_call_signatures=history_tool_call_signatures,

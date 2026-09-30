@@ -271,7 +271,21 @@ TOOL_DISCIPLINE_RECAP = (
     "Never invent tool names, URLs, or `ref_id`/`turn0search*` references; never repeat an "
     "identical call after you have seen its result. If proxy notices like `[native_remap_notice]`, "
     "`[blocked_tool_notice]` or `[loop_guard_notice]` appear in a tool result, obey them immediately "
-    "and switch to the named tool."
+    "and switch to the named tool. "
+    # D-02/F-01: VERBOTE werden bei glm-5.3 zuverlässig überstimmt (live: `open`
+    # trotz explizitem "DO NOT exist", 5× `example.com` trotz Verbot). Formate
+    # werden dagegen zuverlässig IMITIERT. Deshalb zwei echte Beispiele der
+    # gewuenschten Form — je eines fuer "Datei" und "Suche", exakt in der
+    # Shape, in der der Tool-Call emittiert werden muss. `grep:/pfad` und
+    # `ref_id`-Hüllen sind bewusst NICHT im Beispiel: sie wären sonst als
+    # Muster lesbar (der Mapper akzeptiert sie, siehe `map_native_open_tool_call`).
+    "Correct call shapes, copied exactly: "
+    'file -> {"name":"read","arguments":{"filePath":"/workspaces/MAIN/README.md"}} '
+    'listing/du/size/git -> {"name":"bash","arguments":{"command":"ls -la /workspaces/MAIN"}} '
+    'text search -> {"name":"grep","arguments":{"pattern":"TODO","path":"/workspaces/MAIN"}} '
+    'web page (ONLY a real URL given in the task) -> {"name":"webfetch","arguments":{"url":"https://developer.mozilla.org/en-US/docs/Web/API"}} '
+    "Never: {\"name\":\"open\"...}, {\"name\":\"webfetch\",\"arguments\":{\"url\":\"https://example.com\"}}, "
+    "a URL you did not receive in the task, or a local path inside a url argument."
 )
 
 
