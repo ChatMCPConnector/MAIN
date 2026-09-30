@@ -43,6 +43,8 @@ Normale Code-, Doku- und Config-Edits sind keine Infrastruktur-Änderung: keine 
 - Vor Installation/Start/Löschung genau einen Bestandscheck machen (z. B. vorhandener Build, laufender Prozess, belegter Port). Danach handeln, nicht in Schleifen weiterprüfen.
 - Keine fremden Prozesse beenden, keine Caches/Profile/Installationen löschen ohne einmalige explizite Freigabe des Users. Eine erteilte Freigabe gilt, muss nicht erneut eingeholt werden.
 - Für schwer rückgängig machbare Aktionen Rückweg in einem Satz festhalten (Reinstall-/Restart-Befehl).
+- **Nichts, was hängen kann, ohne Timer starten.** `./infra/scripts/timeout.sh run <sekunden> <kommando>` für jeden Aufruf, der (a) endlos laufen könnte, (b) im Hintergrund läuft, (c) eine Pipe/Subshell offen hält oder (d) ein Kind startet, das weiterläuft. Exit 124 = Zeitüberschreitung, alle anderen Exit-Codes kommen unverändert durch. Das Skript räumt die Prozessgruppe ab und ist der Grund, warum der Bash-Tool-Aufruf nicht im 120-s-Timeout endet.
+- **Nie `pkill -f` bzw. `kill $(pgrep -f …)` direkt benutzen.** Das Muster steht in der Kommandozeile der aufrufenden Shell, also trifft es diese mit — live passiert, der Aufruf brach sich selbst ab und lief in den Timeout (2026-09-30). Stattdessen `./infra/scripts/timeout.sh kill <muster>`: schließt sich selbst und alle Vorfahren aus. `./infra/scripts/timeout.sh selftest` prüft beide Zusicherungen.
 
 ## 5. Persistence
 
