@@ -984,6 +984,34 @@ Proxy bei jedem Start automatisch hoch.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
 
+- 2026-09-30: **opencodes Neben-Requests landen nicht mehr in der Arbeits-Konversation — die wahrscheinlichste Ursache für „Sessions sind kaputt".**
+
+  **Symptom.** `ses_f0b8b5273ffepn1uTEI3d3pf7P` (Titel „Hey – kurzer Plausch"): User sagt `hey`, das Modell antwortet **`Quick check-in`** — 4 Output-Tokens. Kein Fehler, kein Absturz, nur ein wertloser Turn. Dasselbe Muster in älteren Läufen: `Repository-Analyse: Struktur, LLM-Proxies und Infrastruktur von /workspaces/MAIN` (12 Tokens) und `Komplette Repository-Analyse von /workspaces/MAIN` (12 Tokens). **Das sind Titel, keine Antworten.**
+
+  **Ursache, aus dem Binary belegt statt geraten.** `strings` auf `opencode-bin` 1.18.32 zeigt den Neben-Request wörtlich:
+
+      stream({ agent: title, system: [], small: true, tools: {},
+               messages: [{ role: "user", content: "Generate a title for ..." }] })
+
+  **`system: []`** — der Title-Request hat **keine System-Nachricht**. `utils/session-classifier.js` prüfte aber zuerst `messages[0].role`:
+
+      if (!first || first.role !== 'system' || ...) return true
+
+  Keine System-Nachricht ⇒ Rückgabe `true` ⇒ **wird als Arbeits-Turn eingestuft** ⇒ hängt an derselben ChatGPT-Konversation wie die echte Arbeit. Live bestätigt: um 22:34–22:35 kein einziges `[SERVER] EPHEMERAL CALL`, obwohl opencode `agent=title` geschickt hat; der letzte EPHEMERAL-Eintrag lag bei Logzeile 11060, der letzte POST bei 18614. Der Folge-Turn erbt den Titel-Kontext — und antwortet auf „hey" mit einer Titel-Formulierung.
+
+  **Fix.** Erkennung der Neben-Requests **vor** der System-Prüfung und über **alle** Nachrichten statt nur der letzten (der Marker steht in der einzigen User-Nachricht, nicht zwingend in der letzten):
+
+      /generate a title|summari[sz]e|condense the (history|conversation)/i
+
+  Das deckt Titel **und** Compromise ab und fasst nichts an, was vorher klassifiziert wurde. Die offene Default-Zeile `if (ide === 'opencode') return true` bleibt unangetastet — sie ist für unbekannte Identitäten die sichere Ausweichregel.
+
+  **13/13 Regressionstests** in `scripts/test-session-classifier.js`, davon bewusst einer als Grenzfall dokumentiert: ein *Arbeitsauftrag*, der das Wort „summarize" enthält, wird als Neben-Request eingestuft. Das ist der bewusste trade-off — eine echte Session zu verlieren ist teurer als ein Neben-Request, der wie eine Session behandelt wird. Falsch-positiv kostet eine laufende Session, falsch-negativ verfälscht den Modellkontext der nächsten Runden. Zusätzlich abgesichert, dass ein Terax-Arbeitsturn real bleibt.
+
+  **Live-Beleg.** Nach dem Neustart: `EPHEMERAL: 1` im Titel-Request (vorher 0), danach 6 Tool-Calls, alle `completed`, 0 Fehler, 0 Kompaktierung.
+
+  **Ein bewusst verworfener Erklärungsversuch:** zuerst lag der Verdacht auf Prompt-Verschmutzung durch die Kompaktierung. Das war die Beobachtung aus den Fehlläufen, aber der 403/429-Blockade-Vorfall (`chatgpt flagged this device/IP`) hat dazwischengefunkt — die Live-Gegenprobe fehlt deshalb noch. Der Title-Befund ist davon unabhängig und für sich belegt.
+
+  **Weiterhin offen:** der Drift — ~10 % der Turns liefern unbrauchbares. Der Title-Befund erklärt die *wiederholt beobachteten Titel-Antworten*, nicht die Fälle, in denen das Modell mitten in der Arbeit driftet.
 - 2026-09-30: **`limit.output` 8000 → 2000: die Kompaktierung ist damit rechnerisch ausgeschlossen, nicht nur unwahrscheinlich.**
 
   **Nutzerentscheidung:** die Kompaktierung soll gar nicht einsetzen. Das ist die richtige Wahl, weil opencodes Summarizer (`agent=compaction`) **Tool-Calls verbietet**, ZeroKeys `instructions.md` sie dem Modell aber ausdrücklich vorschreibt — jeder Kompaktierungslauf endet mit `Tool call not allowed while generating summary`. ZeroKeys *eigene* Kürzung ist dagegen unkritisch: `limitPrompt` schneidet middle-out und behält Kopf (Auftrag) und Tail (letzte User-Nachricht, neueste Tool-Ergebnisse).
