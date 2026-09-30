@@ -110,6 +110,19 @@ def main():
             f"context-output waere {schwelle} Tokens, also nicht positiv — opencode "
             "kompaktiert dann nach JEDER Runde. Das erzeugt den Resume-Loop."
         )
+    elif schwelle * CHARS_PER_TOKEN <= limit:
+        # Kompaktierung VOR der Kuerzung ist falsch: opencodes Summarizer
+        # verbietet Tool-Calls, ZeroKeys instructions.md schreibt sie aber vor,
+        # der Lauf bricht ab mit "Tool call not allowed while generating
+        # summary". Nutzerentscheidung 2026-09-30: die Kompaktierung soll gar
+        # nicht einsetzen. Also muss ZeroKeys eigene Middle-out-Kuerzung immer
+        # zuerst greifen — die behaelt Kopf (Auftrag) und Tail (letzte
+        # User-Nachricht, neueste Tool-Ergebnisse), der Absturz tut es nicht.
+        fehler.append(
+            f"Kompaktierung waere VOR der Kuerzung erreichbar: Schwelle {schwelle} "
+            f"Tokens (~{schwelle * CHARS_PER_TOKEN} Zeichen) <= promptLimit {limit}. "
+            f"output muss < {ctx - limit // CHARS_PER_TOKEN} sein."
+        )
 
     if reserved >= ctx:
         fehler.append(

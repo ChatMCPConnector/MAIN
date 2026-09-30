@@ -984,6 +984,20 @@ Proxy bei jedem Start automatisch hoch.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
 
+- 2026-09-30: **`limit.output` 8000 → 2000: die Kompaktierung ist damit rechnerisch ausgeschlossen, nicht nur unwahrscheinlich.**
+
+  **Nutzerentscheidung:** die Kompaktierung soll gar nicht einsetzen. Das ist die richtige Wahl, weil opencodes Summarizer (`agent=compaction`) **Tool-Calls verbietet**, ZeroKeys `instructions.md` sie dem Modell aber ausdrücklich vorschreibt — jeder Kompaktierungslauf endet mit `Tool call not allowed while generating summary`. ZeroKeys *eigene* Kürzung ist dagegen unkritisch: `limitPrompt` schneidet middle-out und behält Kopf (Auftrag) und Tail (letzte User-Nachricht, neueste Tool-Ergebnisse).
+
+  **Die Rechnung.** opencode kompactiert ab `context − output` Tokens. Damit die Kürzung immer zuerst greift, muss gelten:
+
+      (context − output) × 4 > promptLimit
+      (16000 − 2000) × 4 = 56.000 Zeichen  >  49.936 Zeichen   ✓
+
+  Bei `output = 8000` war es umgekehrt (32.000 Zeichen < 49.936), also griff die Kompaktierung **vor** der Kürzung — die Reihenfolge war genau verkehrt, und der erste Changelog-Empfehlung, opencode solle „vor ZeroKeys Kürzung kompactieren", war ebenfalls falsch. **Diese Empfehlung ist hiermit korrigiert.** Die Grenze kippt bei `output = 3500` (50.000 Zeichen == promptLimit), deshalb 2000 mit Marge.
+
+  **Zur Prüfung gemacht.** `check-proxy-budget.py` wertet die Regel jetzt als **Fehler**, nicht als Hinweis: liegt die Schwelle vor der Kürzung, meldet der Check das mit dem Sollwert (`output muss < 3500 sein`). **7-Fälle-Matrix** inklusive der beiden Kipp-Punkte 3000 (grün) und 3500 (rot).
+
+  **Live.** Mit `output=2000` lief ein voller MAIN-Analyse-Lauf **ohne jede Kompaktierung** durch. Er endete an etwas anderem: das Modell lieferte einen leeren Turn, der Guard griff wie vorgesehen (`empty-turn (Versuch 1/2)`), ein zweiter Versuch und danach ein `handoff-text` — am Ende blieb nichts Brauchbares. Das ist der offene Drift, nicht die Kompaktierung: 4 Guard-Arten, aber 10 % der Turns sind nicht-deterministisch unbrauchbar und werden nur **abgefangen**, nicht beseitigt.
 - 2026-09-30: **`limit.output` war die echte Ursache — und ein zweiter, unabhängiger Defekt ist damit sichtbar geworden (offen).**
 
   Der unmittelbar vorherige Changelog-Eintrag gilt als überholt; **seine Diagnose war falsch**. Kurzfassung der Korrektur: `limit.output` stand auf **16.384** neben `limit.context` = **16.000**. opencode rechnet die Kompaktierungsschwelle als `context − output`; negativ heißt nicht positiv, die Kompaktierung lief **bedingungslos bei jedem Turn**, nicht „nach jedem Turn, weil reserved zu hoch". `reserved` war ein zweiter Fehler mit demselben Symptom, nicht der Auslöser. Fix `output` → **8.000**, Schwelle jetzt 8.000 Tokens bei gemessenen Prompts von ~1.200 (15 %). Details und die 7-Fälle-Matrix im Eintrag darüber; `0b84c38` ist gepusht und wurde bewusst nicht umgeschrieben (destruktiv, laut `AGENTS.md` rückfrage-pflichtig).
