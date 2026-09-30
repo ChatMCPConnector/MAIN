@@ -3452,6 +3452,11 @@ class GLMEventAccumulator:
                                     )
                                     if mapped is None:
                                         self.blocked_tool_attempt_names.append(entry_name)
+                                        # B-01: listenform desselben bursts
+                                        # (live: der dict-zweig traf 46x).
+                                        self._note_blocked_attempt(
+                                            entry_name, entry_arguments
+                                        )
                                         continue
                                     # S-21: der native name wurde AUSGEFUEHRT
                                     # (als read/webfetch/bash) — das ist etwas
@@ -3567,6 +3572,14 @@ class GLMEventAccumulator:
                                     # gemeldet und NICHT ueber die interne
                                     # sanitize-stelle doch noch abgebildet.
                                     self.blocked_tool_attempt_names.append(tool_name)
+                                    # B-01: auch der blocked-pfad ist ein
+                                    # burst-pfad. Live 2026-10-01 waren es 46
+                                    # nicht abbildbare `open`-aufrufe in EINEM
+                                    # turn. Sie gingen zwar nie an den client,
+                                    # aber sie erzeugen genau die stille pause
+                                    # und den anschliessenden protokollfehler,
+                                    # gegen den der guard sich richtet.
+                                    self._note_blocked_attempt(tool_name, arguments)
                                     if self.logger:
                                         # DIE ARGUMENTE MITLOGGEN. Ein
                                         # verworfener aufruf, dessen
@@ -3660,6 +3673,10 @@ class GLMEventAccumulator:
                             if tool_not_permitted:
                                 if tool_name not in self.blocked_tool_attempt_names:
                                     self.blocked_tool_attempt_names.append(tool_name)
+                                # B-01: auch ein unter dem vertrag nicht
+                                # erlaubter name ist ein burst, wenn er
+                                # wiederholt wird.
+                                self._note_blocked_attempt(tool_name, arguments)
                                 # pro VORKOMMEN, unabhaengig von der
                                 # entdopplung oben — `dropped_call_count`
                                 # zaehlt naemlich jedes fragment einzeln.
@@ -5320,6 +5337,19 @@ class GLMEventAccumulator:
         if key not in self._turn_dropped_tools and tool_name:
             self._turn_dropped_tools[key] = tool_name
 
+    def _note_blocked_attempt(self, tool_name: str, arguments: object) -> None:
+        """B-01: einen NICHT ausfuehrbaren nativen call mitzaehlen.
+
+        Ein Burst aus blockierten aufrufen ist der unangenehmste Fall: nichts
+        laeuft, der client sieht nichts, und ohne rueckmeldung feuert das modell
+        weiter (live 2026-10-01 00:30: 46x `open` mit `ref_id: "dummy"` in einem
+        turn — der turn blieb leer und endete als `tool_protocol_error`).
+        """
+        rendered = (
+            arguments if isinstance(arguments, str) else safe_json_dumps(arguments)
+        )
+        self._note_turn_drop(f"{tool_name}:{rendered}", tool_name)
+
     def _burst_signatures(self) -> set[str]:
         """B-01: alle signaturen, die in diesem turn als burst gelten."""
         return {
@@ -5328,19 +5358,31 @@ class GLMEventAccumulator:
             if count >= _MAX_TURN_DROPS_BEFORE_BURST
         }
 
-    def _burst_notice_for(self, signature: str) -> str:
+    def _burst_notice_for(self, signature: str, executable: bool) -> str:
         tool_name = self._turn_dropped_tools.get(signature, "").strip() or "tool"
-        # `count` ist die Zahl der VERWORFENEN Kopien, nicht die der gesendeten
-        # (live: 29 gesendet, 27 verworfen). Deshalb wird sie als "repeated"
-        # formuliert — so stimmt die Zahl, ohne die Ausfuehrung mitzaehlen zu
-        # muessen.
+        # `count` ist die Zahl der VERWORFENEN Kopien. Beim ausfuehrbaren burst
+        # ist das eine echte wiederholung (live: 29 gesendet, 27 verworfen),
+        # beim blockierten burst sind SENT und VERWORFEN dieselbe Zahl
+        # (live: 46 nicht abbildbare `open`). "repeated" trifft beides.
         count = self._turn_drop_counts.get(signature, 0)
+        if executable:
+            outcome = (
+                "Only the first copy was executable; the repeats produced no output "
+                "at all and were not run. This is a burst, not a tool error — stop, "
+                "wait for the actual tool result, then decide the next single action."
+            )
+        else:
+            outcome = (
+                "Not one copy was executable — every single one was rejected before "
+                "it ran, so repeating them cannot produce anything. This is a "
+                "protocol mismatch, not a transient error: check the tool name and "
+                "the exact argument keys in the declared tool contract, then issue "
+                "ONE call and wait for its result."
+            )
         return (
-            f"[burst_guard_notice] You repeated the SAME `{tool_name}` call {count} times in a "
-            "single turn without waiting for any result. Only the first copy was executable; "
-            "the repeats produced no output at all and were not run. This is a burst, not a "
-            "tool error — stop, wait for the actual tool result, then decide the next single "
-            "action. Do not re-send the same call again."
+            f"[burst_guard_notice] You repeated the SAME `{tool_name}` call {count} "
+            f"times in a single turn without waiting for any result. {outcome} "
+            "Do not re-send the same call again."
         )
 
     def _collapse_turn_burst(self, tool_calls: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -5357,33 +5399,45 @@ class GLMEventAccumulator:
 
         Calls ohne Signatur bleiben unangetastet: ohne Signatur gibt es keine
         Burst-Erkennung, und stilles Wegwerfen waere hier schlimmer als
-        Doppel-Exec.
+        Doppel-Exec. Calls, die gar nicht erst den client erreichen (blocked),
+        werden hier nicht veraendert — die Notice entsteht trotzdem, weil das
+        Modell sonst von einem Burst ohne jede Rueckmeldung zurueckbleibt.
         """
         burst = self._burst_signatures()
-        if not burst or not tool_calls:
+        if not burst:
             return tool_calls
         kept: list[dict[str, object]] = []
         seen: set[str] = set()
+        executable: set[str] = set()
         for tool_call in tool_calls:
             signature = _canonical_signature(_tool_call_signature(tool_call))
+            executable.add(signature)
             if signature in burst:
                 if signature in seen:
                     continue
                 seen.add(signature)
             kept.append(tool_call)
-        if len(kept) == len(tool_calls):
-            return tool_calls
         self.burst_guard_tripped = True
+        # Die Notices entstehen unabhaengig davon, OB gekollabiert wurde: bei
+        # einem burst aus lauter blockierten aufrufen (live: 46 nicht
+        # abbildbare `open`) kommt gar kein call beim client an, es bleibt aber
+        # die meldung, die dem modell sagt, was es tun muss.
         for signature in sorted(burst):
-            self.burst_notices.append(self._burst_notice_for(signature))
+            self.burst_notices.append(self._burst_notice_for(signature, signature in executable))
+        if len(kept) == len(tool_calls):
+            self._log_burst(len(tool_calls), len(kept), len(burst))
+            return tool_calls
+        self._log_burst(len(tool_calls) - len(kept), len(kept), len(burst))
+        return kept
+
+    def _log_burst(self, dropped: int, kept: int, signatures: int) -> None:
         log = self.logger or _LOGGER
         log.info(
             "B-01 burst guard collapsed turn: dropped=%d kept=%d signatures=%d",
-            len(tool_calls) - len(kept),
-            len(kept),
-            len(burst),
+            dropped,
+            kept,
+            signatures,
         )
-        return kept
 
     def _note_cached_result(self, signature: str) -> bool:
         """C-01: treat a repeated call as a CACHE HIT, not as an error.

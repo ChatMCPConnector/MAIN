@@ -228,6 +228,99 @@ def test_gemischte_calls_nur_die_burst_signatur_wird_kollabiert():
     assert sum(1 for arg in commands if "wc -l" in str(arg)) == 3
 
 
+# --- Blockierte Burst (Live-Fall 00:30) -----------------------------------
+
+
+def _unmappable_open_event(call_id: str):
+    """`open` mit `ref_id: "dummy"` — der live-burst. Das ist die form, die
+    `map_native_open_tool_call` NICHT abbilden kann: es gibt weder ein
+    `ref_id`-ziel noch ein echtes webziel, also bleibt nur ein leerer
+    `webfetch`-slot."""
+    return {
+        "status": "finish",
+        "parts": [
+            {
+                "id": f"p{call_id}",
+                "logic_id": f"l{call_id}",
+                "role": "assistant",
+                "status": "finish",
+                "content": [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": {
+                            "id": call_id,
+                            "name": "open",
+                            "arguments": json.dumps({"open": [{"ref_id": "dummy"}]}),
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_burst_aus_blockierten_open_calls_wird_gemeldet():
+    """Live 2026-10-01 00:30: 46 nicht abbildbare `open`-aufrufe in einem
+    turn. Kein einziger kam beim client an, und ohne Rueckmeldung feuerte
+    das modell weiter — der turn blieb leer (`text_len=0`) und endete als
+    `tool_protocol_error`."""
+    acc = _acc()
+    for index in range(46):
+        acc.consume_event(_unmappable_open_event(f"blk_{index}"))
+
+    calls = _client_calls(acc)
+
+    assert calls == [], "blockierte aufrufe duerfen nie zum client"
+    assert acc.burst_guard_tripped is True, "der burst muss trotzdem erkannt werden"
+
+
+def test_blockierter_burst_notice_sagt_dass_nichts_ausgefuehrt_wurde():
+    """Die Notice darf nicht behaupten, die erste Kopie sei ausgefuehrt
+    worden — im blockierten Fall ist keine."""
+    acc = _acc()
+    for index in range(46):
+        acc.consume_event(_unmappable_open_event(f"blk_{index}"))
+    _client_calls(acc)
+
+    notices = _turn_notice_texts(acc, ["open"])
+    burst_text = " ".join(
+        text for text in notices if "[burst_guard_notice]" in text
+    )
+
+    assert burst_text, "der blocked-burst braucht eine eigene notice"
+    assert "Not one copy was executable" in burst_text
+    assert "only the first copy was executable" not in burst_text.lower()
+    assert "protocol mismatch" in burst_text
+
+
+def test_blockierter_burst_benoennt_das_werkzeug_und_die_anzahl():
+    acc = _acc()
+    for index in range(12):
+        acc.consume_event(_unmappable_open_event(f"blk_{index}"))
+    _client_calls(acc)
+
+    burst_text = " ".join(
+        text for text in _turn_notice_texts(acc, []) if "[burst_guard_notice]" in text
+    )
+
+    assert "`open`" in burst_text, "die notice nennt den nativen namen"
+    # Hier sind alle 12 Kopien verworfen worden (kein loop-guard laesst zwei
+    # durch) — deshalb ist die wiederholungszahl hier auch die gesendete.
+    assert "12 times" in burst_text
+
+
+def test_wenige_blockierte_calls_kein_burst():
+    acc = _acc()
+    for index in range(3):
+        acc.consume_event(_unmappable_open_event(f"blk_{index}"))
+
+    calls = _client_calls(acc)
+
+    assert calls == []
+    assert acc.burst_guard_tripped is False
+    assert acc.burst_notices == []
+
+
 # --- Signatur-Kanonisierung (B-01-Fallstrick) ----------------------------
 
 
