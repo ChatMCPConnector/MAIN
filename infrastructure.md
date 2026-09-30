@@ -984,6 +984,30 @@ Proxy bei jedem Start automatisch hoch.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
 
+- 2026-09-30: **KORREKTUR: die Ursache des Resume-Loops war `limit.output`, nicht `compaction.reserved` — die Diagnose in `0b84c38` war falsch.**
+
+  **Was falsch war.** Der Commit `0b84c38` und der Changelog-Eintrag `9f53b30` nennen `compaction.reserved` als Ursache: „opencode kompactiert nach JEDER Runde, das Modell liest Continue-if-you-have-next-steps als Resume-Marker". Der Reserve-Wert war tatsächlich zu hoch (15.000 von 16.000 Tokens), aber er war **nicht** der Auslöser. Die Änderung auf 2.000 beseitigte den Dauerzustand nicht, sie verschob ihn nur auf „nach step 1".
+
+  **Was die echte Ursache war.** `limit.output` stand auf **16.384** neben `limit.context` = **16.000**. opencode rechnet die Kompaktierungsschwelle als `context − output`; das Ergebnis ist **negativ**, die Schwelle ist damit nicht positiv und die Kompaktierung lief **bedingungslos** — unabhängig vom Füllstand, bei jedem Turn. `reserved` war ein zweiter, unabhängiger Fehler mit demselben Symptom, nicht die Ursache. Fix: `limit.output` 16.384 → **8.000** (Schwelle 8.000 Tokens, gemessene Prompts ~1.200, also 15 % Auslastung).
+
+  **Isoliert belegt, eine Variable zur Zeit (context jeweils 16000):**
+
+  | output | reserved | beobachtetes Verhalten |
+  |---|---|---|
+  | 4.000 | 2.000 | `agent=build`, **keine** Kompaktierung |
+  | 16.384 | 2.000 | `agent=compaction` nach step 1 |
+  | 16.384 | 15.000 | Kompaktierung nach jedem Turn |
+
+  **Live-Nachweis der Wirkung.** Vorher: Runde 1 = 6 Discovery-Calls, dann Abbruch mit `Tool call not allowed while generating summary: read` — opencode verbietet Tool-Calls während der Summary, und ZeroKeys `instructions.md` schreibt sie dem Modell ausdrücklich vor. Nachher: Runde 1 = 6 Calls, danach **keine** Kompaktierung, der Turn wuchs auf 5.881 Input-Tokens und endete mit `stop` — unter der 8.000er-Schwelle, also ohne Kompaktierung.
+
+  **Was am Check falsch war.** `check-proxy-budget.py` aus `9f53b30` prüfte `reserved` gegen `context` und war deshalb blind für `output`. Ergänzt ist jetzt `output < context`, plus die Gleichheitsgrenze: bei `output == context` ist die Schwelle **exakt 0**, opencode kompactiert also ebenfalls bei jedem Turn mit mehr als 0 Token — auch das war vorher falsch und ist getestet. **7-Fälle-Matrix** inklusive Reproduktion des Originalzustands.
+
+  **Zwei Testerwartungen von mir waren dabei falsch, nicht der Code:** den Fall `output == context` habe ich zuerst als PASS erwartet (die Schwelle ist aber 0, nicht positiv), die Matrix erwartete dort fälschlich Erfolg. Beides ist im Matrix-Lauf sichtbar gewesen und wurde korrigiert, nicht wegkommentiert.
+
+  **Warum die Historie nicht umgeschrieben wird:** `0b84c38` ist gepusht. Umschreiben (`rebase`/`force-push`) wäre destruktiv und steht laut `AGENTS.md` unter Rückfrage-Pflicht. Diese Korrektur steht deshalb als eigener Eintrag, nicht als Ersetzung — der Commit-Text bleibt als Beleg für den damaligen Irrtum stehen.
+
+  **Unberührt gültig:** `pnpm test` und der Eintrag `f514251` — Stillstands-Erkennung und usage-Meldung hängen nicht an dieser Konfiguration. Der `reserved`-Wert 2.000 bleibt sinnvoll, ist aber nicht die heilende Maßnahme.
+
 - 2026-09-30: **Stillstands-Erkennung verallgemeinert und echte Token-Zahlen gemeldet.** Die zwei Punkte aus dem Testlauf, die keine Upstream-Requests brauchten.
 
   **5. `engine/ask-guard.js`: `isStalledReadRound` + `updateReadMemory`.** `isDuplicateToolRound` erkennt nur eine Wiederholung **gegenüber der Vorrunden-Runde** (>= 60 % Überlappung). Der Live-Loop war genau so gebaut, aber ein pendelndes `A,B → B,C → A,B` hat gegenüber der jeweiligen Vorrunde nur 50 % Überlappung und wäre durchgerutscht. Die neue Regel merkt sich **alle gelesenen Ziele der Session** und feuert, wenn eine Runde ausschließlich bereits bekannte Ziele liest und sich seitdem nichts geändert hat. Ein Round mit **einem einzigen** neuen Ziel gilt als Fortschritt. Der Mutationsschalter ist der Grund, warum das sicher ist: nach einem `write`/`cmd` ist erneutes Lesen echte Arbeit („Datei schreiben, zurücklesen, prüfen") und erlaubt, danach wieder Stillstand. Belegt in E2E-Fall O über **drei getrennte Requests**, weil das Gedächtnis am Session-Objekt hängt und ein Pipeline-Objekt pro Request neu ist. **Zwei eigene Testfehler dabei:** (a) ich hatte das Gedächtnis *vor* der Prüfung gefüllt — in der Pipeline läuft die Prüfung *davor*, also feuert bereits die **zweite** identische Runde, nicht die dritte; (b) die Gegenprobe `A,B` gegen `B,A` war kein Gegenbeweis, das ist derselbe Satz mit 100 % Überlappung. Echtes Unterscheidungsbeispiel ist `A,B → B,C → A,B`.

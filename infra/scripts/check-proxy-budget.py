@@ -1,29 +1,48 @@
 #!/usr/bin/env python3
 """Prueft die Kopplung zwischen opencodes Kontextbudget und ZeroKeys PromptLimit.
 
-Zwei Zahlen MUESSEN zusammenpassen, werden aber an zwei verschiedenen Stellen
-von Hand gepflegt: `limit.context` und `compaction.reserved` in
-`.opencode/opencode.json` (Tokens), `promptLimit` in
-`llm-proxies/zerokey/providers/chatgpt/config.js` (Zeichen). Nichts prueft sie
-gegeneinander — deshalb ist am 2026-09-30 eine Session 20 Requests lang in eine
-Schleife gelaufen.
+Vier Zahlen MUESSEN zusammenpassen, werden aber an zwei verschiedenen Stellen
+von Hand gepflegt: `limit.context`, `limit.output` und `compaction.reserved`
+in `.opencode/opencode.json` (alle Tokens), `promptLimit` in
+`llm-proxies/zerokey/providers/chatgpt/config.js` (Zeichen).
 
-Die Kopplung brach auf zwei Arten:
+DER ECHTE BUG war `output > context`. Am 2026-09-30 stand output=16384 neben
+context=16000. opencode rechnet die Schwelle fuer die Kompaktierung als
+`context - output`, das Ergebnis ist negativ — die Kompaktierung lief also
+**bedingungslos**, nach jedem Turn, unabhaengig vom Fuellstand. Das Modell las
+opencodes synthetischen Satz "Continue if you have next steps" als
+Resume-Marker und schrieb statt zu arbeiten einen Task-Uebergabebericht
+("## Objective / ## Work State"), 1712 -> 2533 -> 3635 Zeichen. Eine
+Live-Session verbrannte 20 Requests damit und lief danach in
+"Tool call not allowed while generating summary": opencode verbietet Tool-Calls
+waehrend der Summary, und ZeroKeys instructions.md schreibt sie dem Modell
+ausdruecklich vor.
+
+Isoliert belegt am 2026-09-30, eine Variable zur Zeit:
+
+    context=16000 output=4000  reserved=2000  -> agent=build, KEINE Kompaktierung
+    context=16000 output=16384 reserved=2000  -> agent=compaction nach step 1
+    context=16000 output=16384 reserved=15000 -> Kompaktierung nach jedem Turn
+
+Die erste Fassion dieses Checks hatte `compaction.reserved` im Verdacht und
+lag falsch; sie pruefte nur reserved gegen context und verfehlte output
+voellig.
+
+Die uebrigen Regeln:
 
   reserved >= context
-      opencode kompactiert nach JEDER Runde und haengt "Continue if you have
-      next steps" an. Das Modell las das als Resume-Marker und schrieb statt zu
-      arbeiten einen Task-Uebergabebericht ("## Objective / ## Work State").
+      Kompaktierung nach jedem Turn, derselbe Effekt.
 
   Arbeitsfenster < 50 % des Kontexts
-      reserved=15000 bei context=16000 liess 1000 Token. Die Menge lag UNTER
-      dem Proxy-Budget, die Zeichen-Pruefung greift also nicht — gebrochen war,
-      dass die Compaction bei 6 % Fuellstand ausloeste.
+      reserved=15000 bei context=1600 liess 1000 Token. Die Menge lag UNTER dem
+      Proxy-Budget, die Zeichen-Pruefung greift also nicht — gebrochen war,
+      dass die Kompaktierung bei 6 % Fuellstand ausloeste.
 
-Ein leichtes Ueberschreiten des Proxy-Budgets ist dagegen ABSICHT: limitPrompt
-schneidet dann middle-out und rettet dabei Kopf (Auftrag) und Tail (letzte
-User-Nachricht, neueste Tool-Ergebnisse). Nur mehr als das Doppelte ist ein
-Fehler, dann waere mehr als die Haelfte weg.
+  Arbeitsfenster > doppeltes Proxy-Budget
+      mehr als die Haelfte des Gespraechs waere abgeschnitten. Ein leichtes
+      Ueberschreiten ist beabsichtigt: limitPrompt schneidet dann middle-out und
+      rettet dabei Kopf (Auftrag) und Tail (letzte User-Nachricht, neueste
+      Tool-Ergebnisse).
 
 Aufruf: check-proxy-budget.py [opencode.json] [chatgpt/config.js]
 Exit 0 = Kopplung stimmt, 1 = Fehler, 2 = Datei nicht lesbar.
@@ -56,12 +75,14 @@ def lade(root):
         if treffer is None:
             raise ValueError(f"kein promptLimit in {zk_p}")
         prompt_limit = int(treffer.group(1).replace("_", ""))
-        ctx = int(cfg["provider"]["downloaddoctor"]["models"]["zerokey"]["limit"]["context"])
+        lim = cfg["provider"]["downloaddoctor"]["models"]["zerokey"]["limit"]
+        ctx = int(lim["context"])
+        out = int(lim["output"])
         reserved = int(cfg["compaction"]["reserved"])
     except (OSError, ValueError, KeyError, TypeError) as err:
         print(f"FEHLER: Dateien nicht lesbar ({err})")
         return None
-    return ctx, reserved, prompt_limit
+    return ctx, out, reserved, prompt_limit
 
 
 def main():
@@ -69,14 +90,26 @@ def main():
     werte = lade(root)
     if werte is None:
         return 2
-    ctx, reserved, limit = werte
+    ctx, out, reserved, limit = werte
 
     fenster = ctx - reserved
     chars = fenster * CHARS_PER_TOKEN
+    schwelle = ctx - out
     fehler = []
 
-    print(f"Client: context={ctx} Tokens, reserved={reserved} -> Fenster {fenster} Tokens (~{chars} Zeichen)")
+    print(f"Client: context={ctx}, output={out} -> Kompaktierung ab {schwelle} Tokens")
+    print(f"        reserved={reserved} -> Fenster {fenster} Tokens (~{chars} Zeichen)")
     print(f"Proxy:  promptLimit={limit} Zeichen")
+
+    # DER BUG VOM 2026-09-30: output > context macht die Schwelle negativ und die
+    # Kompaktierung damit bedingungslos. Steht an erster Stelle, weil es die
+    # einzige Regel ist, die den echten Fehler gefunden hat.
+    if out >= ctx:
+        fehler.append(
+            f"output ({out}) >= context ({ctx}): die Kompaktierungsschwelle "
+            f"context-output waere {schwelle} Tokens, also nicht positiv — opencode "
+            "kompaktiert dann nach JEDER Runde. Das erzeugt den Resume-Loop."
+        )
 
     if reserved >= ctx:
         fehler.append(
