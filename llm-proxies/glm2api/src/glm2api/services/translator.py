@@ -995,6 +995,7 @@ def map_native_open_tool_call(
 
     command = ""
     target = ""
+    delegated_arguments: object = None
     open_list = parsed.get("open")
     extra_targets = 0
     if isinstance(open_list, list) and open_list:
@@ -1002,6 +1003,7 @@ def map_native_open_tool_call(
         if isinstance(first, dict):
             command = str(first.get("command", "") or first.get("cmd", "") or "").strip()
             target = str(first.get("ref_id", "") or first.get("url", "") or first.get("path", "")).strip()
+            delegated_arguments = first.get("arguments", first.get("args"))
         # T-21: weitere ziele wurden stillschweigend verworfen. Der erste
         # MAPPBARE gewinnt; die uebrigen werden wenigstens protokolliert,
         # damit der aufruf nicht als vollstaendig verarbeitet gilt.
@@ -1011,9 +1013,76 @@ def map_native_open_tool_call(
     if command:
         if unrestricted or (allowed_tool_names is not None and "bash" in allowed_tool_names):
             return "bash", {"command": command}
+        return None
 
+    # GLM sometimes wraps an OpenCode call as open(ref_id="grep",
+    # arguments={...}) instead of emitting the declared function name.
+    # Only unwrap a name that is in the caller's actual tool contract, and
+    # still pass its arguments through the normal schema sanitizer. This
+    # does not make arbitrary/unknown `open` targets executable.
+    delegated_name = target.strip().strip("`'\"() ")
+    if (
+        delegated_name
+        and delegated_arguments is not None
+        and (unrestricted or (allowed_tool_names is not None and delegated_name in allowed_tool_names))
+        and not is_blocked_tool_name(delegated_name, None)
+    ):
+        if isinstance(delegated_arguments, dict):
+            return delegated_name, delegated_arguments
+        if isinstance(delegated_arguments, str):
+            try:
+                parsed_delegated = json.loads(delegated_arguments)
+            except json.JSONDecodeError:
+                parsed_delegated = None
+            if isinstance(parsed_delegated, dict):
+                return delegated_name, parsed_delegated
+
+    if not delegated_arguments:
+        delegated_arguments = parsed.get("arguments", parsed.get("args"))
     if not target:
         target = str(parsed.get("ref_id", "") or parsed.get("url", "") or parsed.get("path", "") or parsed.get("file", "")).strip()
+
+    # GLM also encodes shell commands as `ref_id="bash:<command>"`.
+    # Only that explicit prefix can become executable; reject it outright
+    # when bash is not in the declared tool contract (never reinterpret it as
+    # a read path).
+    if target.startswith("bash:"):
+        shell_command = target[len("bash:"):].strip()
+        if not shell_command:
+            return None
+        if unrestricted or (allowed_tool_names is not None and "bash" in allowed_tool_names):
+            return "bash", {"command": shell_command}
+        return None
+    if target.startswith("read:") and (
+        unrestricted or (allowed_tool_names is not None and "read" in allowed_tool_names)
+    ):
+        file_path = target[len("read:"):].strip()
+        if file_path:
+            return "read", {"filePath": file_path}
+
+    # Some streams put the requested tool's arguments at the top level
+    # rather than beside the ref_id in open[]. Honor that shape only for an
+    # explicitly declared, non-blocked function.
+    if (
+        target
+        and delegated_arguments is not None
+        and (unrestricted or (allowed_tool_names is not None and target in allowed_tool_names))
+        and not is_blocked_tool_name(target, None)
+    ):
+        if isinstance(delegated_arguments, dict):
+            return target, delegated_arguments
+        if isinstance(delegated_arguments, str):
+            try:
+                parsed_delegated = json.loads(delegated_arguments)
+            except json.JSONDecodeError:
+                parsed_delegated = None
+            if isinstance(parsed_delegated, dict):
+                return target, parsed_delegated
+
+    # If the model used an allowed tool name as ref_id but omitted its
+    # arguments, leave it unmappable. Do not reinterpret it as a local path.
+    if delegated_name and (unrestricted or (allowed_tool_names is not None and delegated_name in allowed_tool_names)):
+        return None
 
     if not target:
         return None

@@ -1304,8 +1304,11 @@ def test_build_tool_call_instructions_includes_language_lock_and_no_preamble():
     assert "When calling a tool, do NOT output conversational text" in instructions
     assert "Language consistency" in instructions
     assert "NEVER output internal monologue, reasoning, or responses in Chinese" in instructions
+    assert "call the exact declared tool directly" in instructions
+    assert "Never resend a completed identical call" in instructions
 
     assert "Do not output any preamble, commentary, or thoughts in Chinese" in TOOL_FORMAT_REMINDER
+    assert "do not wrap a tool in `open`" in TOOL_FORMAT_REMINDER
 
 
 def test_native_open_maps_to_read_when_target_is_path():
@@ -1316,6 +1319,138 @@ def test_native_open_maps_to_read_when_target_is_path():
         allowed_tool_names={"bash", "read"},
     )
     assert mapped == ("read", {"filePath": "/workspaces/benchmark"})
+
+
+def test_native_open_unwraps_declared_tool_name_and_arguments():
+    from glm2api.services.translator import map_native_open_tool_call
+
+    allowed = {"bash", "grep", "read"}
+    wrapped = {
+        "open": [{
+            "ref_id": "grep",
+            "arguments": {"pattern": "secret-pattern", "path": "/workspaces/MAIN"},
+        }]
+    }
+
+    assert map_native_open_tool_call(wrapped, allowed) == (
+        "grep",
+        {"pattern": "secret-pattern", "path": "/workspaces/MAIN"},
+    )
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "bash", "arguments": '{"command":"git status --short"}'}]},
+        allowed,
+    ) == ("bash", {"command": "git status --short"})
+
+
+def test_native_open_translates_explicit_tool_prefixes_only_when_allowed():
+    from glm2api.services.translator import map_native_open_tool_call
+
+    assert map_native_open_tool_call(
+        {"ref_id": "bash:git status --short"}, {"bash", "read"}
+    ) == ("bash", {"command": "git status --short"})
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "bash:git ls-files", "arguments": {"command": "ignored"}}]},
+        {"bash", "read"},
+    ) == ("bash", {"command": "git ls-files"})
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "bash:git ls-files"}]},
+        {"read"},
+    ) is None
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "bash:git ls-files", "arguments": {"command": "ignored"}}]},
+        {"read"},
+    ) is None
+    assert map_native_open_tool_call(
+        {"ref_id": "read:/workspaces/MAIN/README.md"}, {"read", "bash"}
+    ) == ("read", {"filePath": "/workspaces/MAIN/README.md"})
+    assert map_native_open_tool_call(
+        {"ref_id": "bash:git status --short"}, {"read"}
+    ) is None
+
+
+def test_native_open_does_not_execute_unknown_or_blocked_delegates():
+    from glm2api.services.translator import map_native_open_tool_call
+
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "not_declared", "arguments": {"command": "id"}}]},
+        {"bash", "read"},
+    ) is None
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "open_url", "arguments": {"url": "https://example.com"}}]},
+        {"open_url", "webfetch", "read"},
+    ) is None
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "grep"}]},
+        {"grep", "read"},
+    ) is None
+
+
+def test_native_open_unwrap_is_reported_as_remap_and_executes_only_declared_tool():
+    from glm2api.services.translator import GLMEventAccumulator
+
+    acc = GLMEventAccumulator(
+        model="glm-5.3",
+        allowed_tool_names={"bash", "grep", "read"},
+    )
+    event = {
+        "status": "init",
+        "parts": [{
+            "logic_id": "wrapped-grep",
+            "content": [{
+                "type": "tool_calls",
+                "tool_calls": {
+                    "id": "wrapped-1",
+                    "name": "open",
+                    "arguments": json.dumps({
+                        "open": [{
+                            "ref_id": "grep",
+                            "arguments": {"pattern": "secret-pattern", "path": "/workspaces/MAIN"},
+                        }]
+                    }),
+                },
+            }],
+        }],
+    }
+
+    acc.consume_event(event)
+
+    assert acc.blocked_tool_attempt_names == []
+    assert ("open", "grep") in acc.native_remapped_calls
+    assert len(acc._server_side_tool_calls) == 1
+    call = acc._server_side_tool_calls[0]
+    assert call["function"]["name"] == "grep"
+    assert json.loads(call["function"]["arguments"]) == {
+        "pattern": "secret-pattern",
+        "path": "/workspaces/MAIN",
+    }
+
+
+def test_native_open_unwrap_through_accumulator_is_blocked_without_schema():
+    from glm2api.services.translator import GLMEventAccumulator
+
+    acc = GLMEventAccumulator(model="glm-5.3", allowed_tool_names={"read"})
+    acc.consume_event({
+        "status": "init",
+        "parts": [{
+            "logic_id": "wrapped-grep",
+            "content": [{
+                "type": "tool_calls",
+                "tool_calls": {
+                    "id": "wrapped-2",
+                    "name": "open",
+                    "arguments": '{"open":[{"ref_id":"grep","arguments":{"pattern":"x"}}]}',
+                },
+            }],
+        }],
+    })
+
+    assert acc.native_remapped_calls == []
+    assert acc.blocked_tool_attempt_names == ["open"]
+    assert acc._server_side_tool_calls == []
+
+
+def test_native_open_path_mapping_emits_valid_read_call():
+    from glm2api.services.translator import GLMEventAccumulator
 
     acc = GLMEventAccumulator(model="glm-5.3", allowed_tool_names={"bash", "read"})
     event = {

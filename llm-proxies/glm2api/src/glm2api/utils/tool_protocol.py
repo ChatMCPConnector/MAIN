@@ -196,6 +196,8 @@ def build_tool_call_instructions(
         "",
         "## Filesystem, Code Execution & Web Rules",
         "- For filesystem operations (inspecting, listing, or creating directories like `/workspaces`, reading/writing files), you MUST use `bash` (e.g. `ls`, `mkdir`) or `read`/`write`. NEVER attempt to call `open` on directory paths or files — `open` is NOT a filesystem tool and will fail.",
+        "- For each read/search/list/write operation, call the exact declared tool directly with its schema arguments (`read.filePath`, `grep.pattern/path`, `glob.pattern`, `bash.command`, etc.). Do NOT wrap a tool in `open`, put a tool name in `ref_id`, or turn `bash:`/`read:` pseudo-targets into paths.",
+        "- After each tool result, inspect that result and choose a new, task-relevant call. Never resend a completed identical call, never fetch placeholder/example URLs, and do not claim a tool/round limit. If a call failed, correct its arguments or use an appropriate declared alternative.",
         "- For executing Python, running tests (pytest), or executing code, you MUST use `bash` (e.g. `python3 -m pytest ...`, `python3 script.py`). NEVER attempt to call `execute_sandbox_code`, `code_interpreter`, or any sandbox tool — no sandbox tools exist in this environment.",
         "- For web requests, use `webfetch` (if available). Never call `open`, `open_url`, or `browser`.",
         "",
@@ -241,6 +243,7 @@ TOOL_FORMAT_REMINDER = (
     "or editing files, running commands, or calling any tool, you MUST IMMEDIATELY output the JSON "
     "format from the TOOL USE PROTOCOL with the trailing [] — this is the ONLY way tools get executed. "
     "For filesystem operations (like inspecting/creating /workspaces), use `bash` or `read`/`write` — NEVER call `open`. "
+    "Call the exact declared tool directly with its schema arguments; do not wrap a tool in `open` or encode commands/paths as `ref_id`. After each result, choose a new task-relevant action and never repeat a completed identical call. "
     "For running Python scripts or pytest, use `bash` — NEVER call `execute_sandbox_code`. "
     "Do NOT output plans, summaries, or descriptions in prose instead of calling the tool. "
     "Prose, XML, or fenced blocks will NOT be executed. "

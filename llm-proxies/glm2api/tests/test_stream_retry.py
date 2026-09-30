@@ -299,6 +299,9 @@ def test_blocked_tool_triggers_follow_up_round_stream():
     assert calls["count"] == 2
     follow_up_messages = calls["payloads"][1]["messages"]
     assert any("do NOT exist" in str(m.get("content", "")) for m in follow_up_messages)
+    correction = " ".join(str(m.get("content", "")) for m in follow_up_messages)
+    assert "If actual tool outputs are present" in correction
+    assert "tool results from this round ARE" not in correction
     text = "".join(chunks)
     assert "Alles erledigt." in text
     # T-10: der blockierte name darf ausschliesslich in der expliziten
@@ -468,6 +471,81 @@ def test_mixed_blocked_and_valid_native_calls_are_reported_in_stream():
     assert "[blocked_tool_notice]" in stream_text
     assert "open" in stream_text
     assert "NOT executed" in stream_text
+
+
+def test_mixed_blocked_and_valid_native_calls_skip_internal_follow_up_stream():
+    """Do not consume an internal correction response while OpenCode still
+    needs to execute a valid call and return its real result.
+    """
+    client, calls = _make_follow_up_client(_FollowUpConfig())
+
+    def mixed_only(payload, preferred_account_index=None, filtered_tools=None):
+        calls["count"] += 1
+        calls["payloads"].append(payload)
+        return _FakeResponse([_mixed_blocked_and_valid_call_event()]), "assistant-1"
+
+    client._open_chat_stream = mixed_only
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "inspect README"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"filePath": {"type": "string"}},
+                        "required": ["filePath"],
+                    },
+                },
+            }
+        ],
+    }
+
+    chunks = [chunk.decode("utf-8") for chunk in client.stream_chat_completion(payload)]
+    stream_text = "".join(chunks)
+
+    assert calls["count"] == 1, "no internal correction may pre-empt OpenCode execution"
+    call_chunks = [chunk for chunk in chunks if '"tool_calls"' in chunk]
+    assert any('"name":"read"' in chunk for chunk in call_chunks)
+    assert "[blocked_tool_notice]" in stream_text
+
+
+def test_mixed_blocked_and_valid_native_calls_skip_internal_follow_up_non_stream():
+    client, calls = _make_follow_up_client(_FollowUpConfig())
+    calls["count"] = 0
+
+    def mixed_only(payload, preferred_account_index=None, filtered_tools=None):
+        calls["count"] += 1
+        calls["payloads"].append(payload)
+        return _FakeResponse([_mixed_blocked_and_valid_call_event()]), "assistant-1"
+
+    client._open_chat_stream = mixed_only
+    payload = {
+        "model": "glm-5.3",
+        "messages": [{"role": "user", "content": "inspect README"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"filePath": {"type": "string"}},
+                        "required": ["filePath"],
+                    },
+                },
+            }
+        ],
+    }
+
+    result, _ = client.chat_completion(payload)
+    message = result["choices"][0]["message"]
+
+    assert calls["count"] == 1
+    assert [call["function"]["name"] for call in message["tool_calls"]] == ["read"]
+    assert "[blocked_tool_notice]" in (message.get("reasoning_content") or "")
 
 
 def test_mixed_blocked_and_valid_native_calls_are_reported_non_stream():

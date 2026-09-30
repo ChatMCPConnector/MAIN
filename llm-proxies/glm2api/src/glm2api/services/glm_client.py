@@ -398,10 +398,13 @@ def _build_blocked_tool_follow_up_payload(
             "content": (
                 correction
                 + " Continue the task now with the available tools."
-                " Your tool results from this round ARE in the conversation — read them"
-                " before concluding anything. There is NO tool limit and NO round limit;"
-                " never report one. If a path does not exist, correct the path or choose"
-                " a different one — do not end the task and do not ask for a new message."
+                " If actual tool outputs are present in the conversation, read them"
+                " before concluding anything; blocked attempts above have no result."
+                " There is NO tool limit and NO round limit; never report one."
+                " If a path does not exist, correct the path or choose a different one —"
+                " do not end the task and do not ask for a new message."
+                " Do not claim a tool succeeded unless its corresponding tool output is present."
+                " Continue only from results actually present in the history."
                 " Output ONLY the structured tool call for the next step."
                 " Do NOT output any apologies, conversational text, or meta-explanations."
             ),
@@ -962,8 +965,14 @@ class GLMWebClient:
                     )
                     if (
                         needs_correction
+                        and not has_valid_calls
                         and blocked_follow_ups < max_blocked_follow_ups
                     ):
+                        # Never run an internal correction while valid tool
+                        # calls are waiting for OpenCode to execute them. The
+                        # client only sends their results in its NEXT request;
+                        # an internal GLM round here would falsely tell the
+                        # model that results are already available.
                         # Negative tool-result round instead of silently
                         # dropping blocked tool calls (see stream path).
                         # V-02: nur wenn der Turn KEINE gueltigen Calls
@@ -1484,27 +1493,17 @@ class GLMWebClient:
                         b'"tool_calls"' in chunk.encode("utf-8", "ignore") and b'"name"' in chunk.encode("utf-8", "ignore")
                         for chunk in finalize_chunks
                     )
-                    # S-23: die Folge-runde feuert bei JEDER rueckmeldung,
-                    # die das Modell sehen muss — auch wenn der turn gueltige
-                    # calls enthaelt. Ohne das erreicht die remap-/loop-notice
-                    # das modell nie: ein SSE-delta erreicht den client, nicht
-                    # die konversation (live 2026-09-28: 13x `open`, davon 11
-                    # als `read` ausgefuehrt, keine notice angekommen → falsche
-                    # "open funktioniert nicht"-diagnose + erfundenes
-                    # "rundenlimit" + aufgaben-abandon).
-                    #
-                    # V-02 bleibt gewahrt, aber richtig gelesen: es verbietet,
-                    # gueltige calls zu VERWERFEN, nicht, eine korrektur zu
-                    # schicken. Die `_build_..._follow_up_payload`-funktion
-                    # nimmt nur den gerenderten text auf, nicht die calls —
-                    # die calls liegen unveraendert in `finalize_chunks` und
-                    # werden danach normal ausgeliefert. `turn_has_valid_calls`
-                    # als bedingung zu pruefen war der bug: in genau dem fall,
-                    # den die notices verhindern sollen (viele `open`, alle als
-                    # `read` erfolgreich), ist `turn_has_valid_calls` true und
-                    # die korrektur wurde deshalb NIE gesendet. live belegt:
-                    # 13 gemappte `open` + 9 loop-drops, `blocked_follow_ups=0`
-                    # in allen vier turns.
+                    # Korrektur-runden sind nur sicher, wenn dieser turn
+                    # KEINE ausfuehrbaren calls enthaelt. Sobald ein gueltiger
+                    # call ausgeliefert wird, kann dessen Ergebnis erst in der
+                    # naechsten OpenCode-Anfrage vorliegen; eine interne Runde
+                    # hier wuerde die naechste Modellantwort ohne dieses echte
+                    # Ergebnis verbrauchen und den Call/Turn entkoppeln.
+                    # Remap-/Loop-Notices gehen in diesem Fall als Delta mit,
+                    # und OpenCode liefert den Call normal aus. Die naechste
+                    # Anfrage bringt anschliessend die tatsaechliche Ausgabe.
+                    # Fuer einen blockierten-only-turn bleibt die interne
+                    # Negativ-Korrektur moeglich, weil nichts auszufuehren ist.
                     needs_correction = bool(
                         blocked
                         or getattr(accumulator, "native_remapped_calls", [])
@@ -1531,8 +1530,14 @@ class GLMWebClient:
                     ]
                     if (
                         needs_correction
+                        and not turn_has_valid_calls
                         and blocked_follow_ups < max_blocked_follow_ups
                     ):
+                        # A valid call is handed to OpenCode below. Its
+                        # output cannot exist until the client executes it and
+                        # sends the next request, so never pre-empt that with
+                        # an internal model round. Correct inline only when
+                        # this turn has no executable calls to deliver.
                         # Follow-up round with a negative tool result
                         # instead of forwarding the blocked-call notice
                         # as final assistant text.
@@ -1606,23 +1611,11 @@ class GLMWebClient:
                         accumulator = new_accumulator()
                         # S-26: request-uebergreifenden loop-guard-stand uebernehmen.
                         # S-27: drop-zaehler request-uebergreifend (siehe `_mirror_drop_counts`).
-                        # S-28: die gueltigen calls DIESES turns ZUERST
-                        # ausliefern, bevor die korrektur-runde den turn
-                        # uebernimmt. Ohne das gehen sie verloren: die
-                        # korrektur ersetzt den accumulator, und die bereits
-                        # erzeugten `finalize_chunks` werden nie yieldiert.
-                        # Live 2026-09-28 (`ses_f15e98754ffe8E5GoHP4rWsBs6`):
-                        # `read /workspaces/zerokey-v2.0/README.md` wurde
-                        # erfolgreich ausgefuehrt, aber nie zugestellt — das
-                        # modell bekam nie den dateiinhalt und meldete
-                        # "ein vergleich ist nicht moeglich".
-                        #
-                        # V-03 bleibt in kraft: der BLOCKIERTE name
-                        # (`open_url`, `open`, …) darf dabei nicht
-                        # durchrutschen — der test
-                        # `test_blocked_tool_triggers_follow_up_round_stream_
-                        # with_served_content` sichert genau das. Also nur die
-                        # chunks ausliefern, die gueltige calls tragen.
+                        # In diesem Pfad gab es keine ausfuehrbaren Calls
+                        # (siehe turn_has_valid_calls-Guard). Nur die sichere
+                        # blockierte-only-Korrektur wird intern fortgesetzt;
+                        # die urspruengliche Turn-Ausgabe wird nicht als
+                        # vermeintlicher Tool-Resultat-Ersatz weitergereicht.
                         for _chunk in finalize_chunks:
                             _encoded = _chunk.encode("utf-8")
                             if b'"tool_calls"' in _encoded and not any(
