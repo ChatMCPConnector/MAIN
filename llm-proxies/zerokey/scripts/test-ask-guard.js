@@ -11,8 +11,11 @@ const {
   isDriftText,
   isHandoffText,
   isDuplicateToolRound,
+  isStalledReadRound,
+  updateReadMemory,
   buildNudge,
 } = require('../engine/ask-guard')
+const { buildUsage } = require('../engine/usage')
 
 console.debug = () => {}
 console.warn = () => {}
@@ -207,6 +210,113 @@ check(
     'one matching call is not enough (needs 2)',
   )
 
+  // ── stalled read rounds (Verallgemeinerung von duplicate) ─────────────────
+  const SEP = '¦'
+  const A = `read${SEP}filePath=/workspaces/MAIN/AGENTS.md`
+  const B = `read${SEP}filePath=/workspaces/MAIN/README.md`
+  const mem = () => ({ reads: new Set(), mutated: false })
+
+  // Reihenfolge wie in der Pipeline: erst pruefen, dann das Gedaechtnis falten.
+  // Lauf 1: leere Historie, A und B sind neu -> kein Stillstand, wird gemerkt.
+  {
+    const m = mem()
+    check(!isStalledReadRound([A, B], m.reads, m.mutated), 'neue Ziele sind kein Stillstand')
+    const neu = updateReadMemory([A, B], m)
+    check(neu, 'erste Runde mit neuen Zielen zaehlt als Fortschritt')
+    check(m.reads.size === 2, 'beide Ziele sind jetzt bekannt')
+    check(m.mutated === false, 'eine reine Lese-Runde setzt den Mutationsschalter nicht')
+  }
+  // Lauf 2: exakt dieselben zwei erneut. Das ist bereits der Stillstand — die
+  // Ergebnisse stehen seit Lauf 1 im Gespraech. Der beobachtete Live-Loop
+  // (dreimal dieselbe Discovery-Runde) wird also beim ZWEITEN Mal gefangen,
+  // nicht erst beim dritten.
+  {
+    const m = mem()
+    updateReadMemory([A, B], m)
+    check(
+      isStalledReadRound([A, B], m.reads, m.mutated),
+      'zweite identische Lese-Runde ist der Stillstand',
+    )
+  }
+  // Das wandernde Muster A,B -> B,C -> A,B. Gegenueber der VORRUNDEN-Runde
+  // betraegt die Ueberlappung nur 50 % und bleibt damit unter der 60-%-Schwelle;
+  // gegenueber der ganzen Session sind alle Ziele aber laengst gelesen. Genau
+  // diesen Fall sieht isDuplicateToolRound nicht.
+  {
+    const C = `read${SEP}filePath=/workspaces/MAIN/infrastructure.md`
+    const m = mem()
+    updateReadMemory([A, B], m)
+    updateReadMemory([B, C], m)
+    check(
+      !isDuplicateToolRound([A, B], [B, C]),
+      'Gegenprobe: Ueberlappungstest sieht A,B nach B,C nicht (50 % < 60 %)',
+    )
+    check(
+      isStalledReadRound([A, B], m.reads, m.mutated),
+      'wanderndes A,B -> B,C -> A,B wird als Stillstand erkannt',
+    )
+  }
+  // Nach einem Write ist Wiederlesen echte Arbeit.
+  {
+    const m = mem()
+    updateReadMemory([A, B], m)
+    updateReadMemory([`write${SEP}filePath=/x.md${SEP}content=a`], m)
+    check(
+      !isStalledReadRound([A, B], m.reads, m.mutated),
+      'nach einem Write ist erneutes Lesen erlaubt',
+    )
+    updateReadMemory([A, B], m)
+    check(isStalledReadRound([A, B], m.reads, m.mutated), 'aber danach ist es wieder Stillstand')
+  }
+  // Ein einziges neues Ziel macht die ganze Runde zur Fortschrittsrunde.
+  {
+    const m = mem()
+    updateReadMemory([A, B], m)
+    check(
+      !isStalledReadRound(
+        [A, B, `read${SEP}filePath=/workspaces/MAIN/infra/README.md`],
+        m.reads,
+        m.mutated,
+      ),
+      'ein einziges neues Ziel macht die Runde wertvoll',
+    )
+  }
+  // Runden mit gemischten Werkzeugen sind immer Arbeit.
+  {
+    const m = mem()
+    updateReadMemory([A, B], m)
+    check(
+      !isStalledReadRound([A, B, `grep${SEP}pattern=x${SEP}path=/w`], m.reads, m.mutated),
+      'eine Runde mit grep (neues Ziel) ist Arbeit',
+    )
+  }
+  check(!isStalledReadRound([A, B], new Set(), false), 'ohne Historie ist nichts ein Stillstand')
+  check(
+    !isStalledReadRound([A], mem().reads, false),
+    'eine einzelne Lese-Runde ist kein Stillstand',
+  )
+  check(!isStalledReadRound([A, B], undefined, false), 'fehlende Historie ist kein Stillstand')
+
+  // ── usage ─────────────────────────────────────────────────────────────────
+  {
+    // 4.649 Zeichen groesster realer Prompt bei 49.936 Grenze (2026-09-30).
+    const u = buildUsage({ chars: 4649, truncated: false }, 1200)
+    check(u.prompt_tokens === 1162, `prompt_tokens 4649 Zeichen -> 1162 (ist ${u.prompt_tokens})`)
+    check(
+      u.completion_tokens === 300,
+      `completion_tokens 1200 Zeichen -> 300 (ist ${u.completion_tokens})`,
+    )
+    check(u.total_tokens === u.prompt_tokens + u.completion_tokens, 'total = prompt + completion')
+    const leer = buildUsage(undefined, 0)
+    check(
+      leer.prompt_tokens === 0 && leer.total_tokens === 0,
+      'fehlende Kennzahlen ergeben 0, kein NaN',
+    )
+    check(Number.isFinite(leer.total_tokens), 'keine NaN bei fehlenden Daten')
+    const kurz = buildUsage({ chars: 5 }, 0)
+    check(kurz.prompt_tokens === 1, '5 Zeichen auf 1 Token gerundet (nicht 0)')
+  }
+
   // ── nudges ────────────────────────────────────────────────────────────────
   for (const reason of [
     'generic-ask',
@@ -214,6 +324,7 @@ check(
     'drift-text',
     'handoff-text',
     'duplicate-tools',
+    'stalled-reads',
   ]) {
     const n1 = buildNudge(reason)
     check(n1.includes('<internal>') && n1.includes('</internal>'), `${reason} nudge is wrapped`)

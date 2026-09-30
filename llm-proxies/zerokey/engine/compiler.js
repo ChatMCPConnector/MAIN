@@ -181,12 +181,13 @@ class ToolCompiler {
 
     if (total <= limit) {
       const prompt = blocks.join(BLOCK_SEP)
-      console.debug('[PROMPT] FINAL', {
+      this.lastPrompt = {
         chars: prompt.length,
         bytes: Buffer.byteLength(prompt, 'utf8'),
         limit,
         truncated: false,
-      })
+      }
+      console.debug('[PROMPT] FINAL', this.lastPrompt)
       return prompt
     }
 
@@ -249,13 +250,15 @@ class ToolCompiler {
 
     const prompt = [...head, DROPPED_MARKER, ...tail].join(BLOCK_SEP)
 
-    console.debug('[PROMPT] FINAL', {
+    const stats = {
       chars: prompt.length,
       bytes: Buffer.byteLength(prompt, 'utf8'),
       limit,
       truncated: true,
       droppedTurns: tailStart - head.length,
-    })
+    }
+    console.debug('[PROMPT] FINAL', stats)
+    this.lastPrompt = stats
 
     return prompt
   }

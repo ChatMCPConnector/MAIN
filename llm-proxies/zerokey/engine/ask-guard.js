@@ -200,6 +200,56 @@ function isDuplicateToolRound(payloads, previousPayloads) {
   return overlap >= 2 && overlap >= 0.6 * sigs.length
 }
 
+/**
+ * True when a round reads nothing it has not read before, and nothing has
+ * changed since. The generalisation of isDuplicateToolRound: that one needs a
+ * recognisable repeat against the *previous* round, this one remembers every
+ * read target in the session and catches the wandering variant —
+ * A, B, A, B — that no overlap test can see.
+ *
+ * A re-read right after a write is normal work ("write the file, read it back
+ * to check"), so the session remembers whether anything was mutated. Until
+ * something is, a pure re-read round is treated as the stall it is.
+ *
+ * @param {string[]} payloads - this round's raw MHI tool payloads
+ * @param {Set<string>|undefined} seenReads - read signatures already used
+ * @param {boolean} mutated - did anything get written/run since the last round
+ * @returns {boolean}
+ */
+function isStalledReadRound(payloads, seenReads, mutated) {
+  if (!seenReads || seenReads.size === 0 || mutated) return false
+  if (!Array.isArray(payloads) || payloads.length < 2) return false
+  const sigs = payloads.map(toolSignature)
+  // Anything but pure reads means real work.
+  if (sigs.some((s) => s === null)) return false
+  // A round that reaches for even one unseen target is making progress.
+  if (sigs.some((s) => !seenReads.has(s))) return false
+  return sigs.length >= 2
+}
+
+/**
+ * Folds a round into the session's read/mutation memory.
+ *
+ * `memory.mutated` answers one question for the NEXT round: did anything
+ * change? A round that wrote, ran a command or edited a file sets it, which is
+ * what makes the following re-read legitimate work instead of a stall. A round
+ * of pure reads clears it again — nothing happened, so reading the same thing
+ * once more is pointless.
+ *
+ * @param {string[]} payloads - raw MHI tool payloads of the round
+ * @param {{reads?: Set<string>, mutated?: boolean}} memory - session-held state
+ * @returns {boolean} whether this round opened at least one new read target
+ */
+function updateReadMemory(payloads, memory) {
+  if (!memory) return true
+  const reads = memory.reads || (memory.reads = new Set())
+  const sigs = (payloads || []).map(toolSignature)
+  const sawNewRead = sigs.some((s) => s !== null && !reads.has(s))
+  for (const s of sigs) if (s !== null) reads.add(s)
+  memory.mutated = sigs.some((s) => s === null)
+  return sawNewRead
+}
+
 // Appended to the prompt when a wasted turn is retried, so the model continues
 // the task instead of stalling. Phrased as an internal note — the model treats
 // <internal> as operator context, not as user text.
@@ -235,6 +285,12 @@ const NUDGES = {
     'Do not re-issue the same calls — take the next unfinished step of the task',
     'instead, or, if the task is complete, give the final answer.',
   ],
+  'stalled-reads': [
+    'Your previous turn re-read files you have already read in this session, and',
+    'nothing changed since. Those results are already in the conversation.',
+    'Do not read them again — take the next unfinished step of the task instead:',
+    'work on a part not yet inspected, or, if the task is complete, answer.',
+  ],
 }
 
 /**
@@ -261,5 +317,7 @@ module.exports = {
   isDriftText,
   isHandoffText,
   isDuplicateToolRound,
+  isStalledReadRound,
+  updateReadMemory,
   buildNudge,
 }

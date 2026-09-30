@@ -12,7 +12,15 @@ const {
 } = require('./triggers')
 const { isRealChatSession } = require('../utils/session-classifier')
 const { ephemeralSession } = require('../utils/ephemeral-session')
-const { isGenericAsk, isDriftText, isHandoffText, isDuplicateToolRound } = require('./ask-guard')
+const {
+  isGenericAsk,
+  isDriftText,
+  isHandoffText,
+  isDuplicateToolRound,
+  isStalledReadRound,
+  updateReadMemory,
+} = require('./ask-guard')
+const { buildUsage } = require('./usage')
 
 let callCounter = 0
 
@@ -153,6 +161,14 @@ class StreamPipeline {
     // detection. Read from the session so it survives across requests.
     this._roundPayloads = []
     this._prevRoundPayloads = this.session?._lastToolRound || null
+    // Read targets seen in this session + the "did anything change" latch.
+    // Like _lastToolRound this lives on the session, because a new pipeline is
+    // built per request while the session outlives it.
+    this._readMemory = (this.session &&
+      (this.session._readMemory ||= { reads: new Set(), mutated: false })) || {
+      reads: new Set(),
+      mutated: false,
+    }
     this.toolIndex = this.compiler.tools
     this.lastChar = ''
     this._maxToolLen = Math.max(...Object.keys(this.compiler.tools).map((k) => k.length)) + 3
@@ -176,6 +192,7 @@ class StreamPipeline {
     }
 
     this.tokenUsage = {}
+    this._modelChars = 0
     this._finished = false
 
     // bindUploader curries the API's uploadFile — must be set per-request.
@@ -256,8 +273,14 @@ class StreamPipeline {
     // retry budget: a loop keeps producing calls, a stall never gets this far.
     const duplicate =
       this._toolCallCount > 0 && isDuplicateToolRound(this._roundPayloads, this._prevRoundPayloads)
+    // Generalisation of duplicate: every read target in this round was already
+    // read earlier and nothing changed since. Catches the wandering A,B,A,B loop
+    // that no overlap test can see.
+    const stalled =
+      this._toolCallCount > 0 &&
+      isStalledReadRound(this._roundPayloads, this._readMemory.reads, this._readMemory.mutated)
 
-    if ((askOnly || empty || drift || handoff || duplicate) && retry) {
+    if ((askOnly || empty || drift || handoff || duplicate || stalled) && retry) {
       const reason = askOnly
         ? 'generic-ask'
         : empty
@@ -266,7 +289,9 @@ class StreamPipeline {
             ? 'drift-text'
             : handoff
               ? 'handoff-text'
-              : 'duplicate-tools'
+              : duplicate
+                ? 'duplicate-tools'
+                : 'stalled-reads'
       try {
         console.warn(
           `[ASK-GUARD] ${reason}, re-prompting to continue` +
@@ -276,6 +301,12 @@ class StreamPipeline {
       } catch (err) {
         console.error('[ASK-GUARD] retry failed:', err.message)
       }
+    }
+
+    // Only fold an accepted round into the memory: a round we just threw away
+    // must not count as work the model already did.
+    if (!duplicate && !stalled) {
+      updateReadMemory(this._roundPayloads, this._readMemory)
     }
 
     // Remember this round so the next one can be compared against it. Stored on
@@ -291,7 +322,13 @@ class StreamPipeline {
       )
     }
 
-    this.emit({}, this._toolCallCount > 0 ? 'tool_calls' : 'stop', this.tokenUsage)
+    // Echte usage statt {}: siehe engine/usage.js. Ohne das meldete opencode
+    // fuer jeden Turn 0 Tokens und konnte das Context-Wachstum nicht sehen.
+    this.emit(
+      {},
+      this._toolCallCount > 0 ? 'tool_calls' : 'stop',
+      buildUsage(this.compiler.lastPrompt, this._modelChars),
+    )
     this.res.write('data: [DONE]\n\n')
     this.res.end()
     this.session.lastUsed = new Date().toISOString()
@@ -400,6 +437,10 @@ class StreamPipeline {
   // ── block scanning ───────────────────────────────────────────────────────
 
   scan(text) {
+    // Modell-Ausgabe mitzaehlen fuer die usage-Meldung. ZeroKey erhaelt vom
+    // Upstream keine Token-Zahlen, deshalb stand in jedem step-finish
+    // tokens: 0 — der Client konnte sein Context-Wachstum nicht sehen.
+    this._modelChars += text ? text.length : 0
     if (this.rawMode) {
       this.emitText(text)
       return

@@ -398,6 +398,35 @@ async function run(label, upstreamTurns, { expectRetry }) {
     delete session._lastToolRound
   }
 
+  // O) Stillstand ueber mehrere Runden. Der Live-Loop war eine Discovery-Runde
+  //    dreimal hintereinander; hier laeuft dieselbe Logik ueber drei getrennte
+  //    Requests, weil das Gedaechtnis am Session-Objekt haengt.
+  {
+    session._readMemory = undefined
+    session._lastToolRound = undefined
+    const r1 = [
+      `read${SEP}filePath=/workspaces/MAIN/AGENTS.md`,
+      `read${SEP}filePath=/workspaces/MAIN/README.md`,
+    ]
+    const r2 = [
+      `read${SEP}filePath=/workspaces/MAIN/README.md`,
+      `read${SEP}filePath=/workspaces/MAIN/infrastructure.md`,
+    ]
+    const r3 = [
+      `read${SEP}filePath=/workspaces/MAIN/AGENTS.md`,
+      `read${SEP}filePath=/workspaces/MAIN/README.md`,
+    ]
+
+    const a = await run('O1 neue Ziele', [r1], { expectRetry: false })
+    check(a.attempts === 0, 'O: erste Runde mit neuen Zielen wird nicht gebremst')
+    const b = await run('O2 neues Ziel', [r2], { expectRetry: false })
+    check(b.attempts === 0, 'O: eine Runde mit einem neuen Ziel wird nicht gebremst')
+    const c = await run('O3 nur bekannte Ziele', [r3, reads], { expectRetry: true })
+    check(c.attempts === 1, 'O: die dritte Runde wiederholt nur Bekanntes und wird gebremst')
+    delete session._readMemory
+    delete session._lastToolRound
+  }
+
   if (failed) {
     console.error(`\n${failed} check(s) failed`)
     process.exit(1)
