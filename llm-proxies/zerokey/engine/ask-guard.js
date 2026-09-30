@@ -86,6 +86,120 @@ function isDriftText(text) {
   return true
 }
 
+// ── handoff drift ─────────────────────────────────────────────────────────
+//
+// Observed live in session ses_f0d24ecf8ffeyVk9PdMT42EOEY (2026-09-30): instead
+// of working, the model answered with a task-handover document — literally the
+// compaction template opencode itself uses ("## Objective", "## Important
+// Details", "## Work State", "### Completed", "## Next Move", "## Relevant
+// Files"), in German on round 3 and English on rounds 1 and 4.
+//
+// It is a stall, not an answer: the run produced 1712 → 2533 → 3635 characters
+// of plan and zero repository findings. Cause was a config feedback loop, not
+// the model — ZeroKey truncates at 50k chars while opencode believed the model
+// had 16k tokens with 15k reserved for compaction, so compaction fired after
+// *every* turn and opencode's synthetic "Continue if you have next steps" was
+// read by the model as a resume-from-handoff marker.
+//
+// The template is a compaction artefact, so two or more of these headings in a
+// tool-calling turn is a reliable marker. isDriftText deliberately rejects
+// headings (a structured text is an answer) — which is exactly why this shape
+// slipped past it.
+const HANDOFF_HEADINGS = [
+  /^#{1,6}\s*objective\b/im,
+  /^#{1,6}\s*important details\b/im,
+  /^#{1,6}\s*work state\b/im,
+  /^#{1,6}\s*(next move|next steps)\b/im,
+  /^#{1,6}\s*relevant files\b/im,
+  /^#{1,6}\s*(completed|active|blocked|in progress)\b/im,
+]
+
+/**
+ * True when a turn is a task-handover/compaction document rather than work.
+ *
+ * @param {string} text - the turn's visible text
+ * @returns {boolean}
+ */
+function isHandoffText(text) {
+  if (typeof text !== 'string') return false
+  const t = text.trim()
+  if (!t) return false
+  let hits = 0
+  for (const re of HANDOFF_HEADINGS) if (re.test(t)) hits++
+  return hits >= 2
+}
+
+// ── duplicate tool rounds ─────────────────────────────────────────────────
+//
+// The same session showed the second failure mode: the discovery round
+// (ls + 4 globs + find) was emitted three times in a row, each time with
+// cosmetic variation — glob max=50 → max=200 → max=100, "**/AGENTS.md" →
+// "**/*AGENTS.md", "find /workspaces/MAIN" → "cd /workspaces/MAIN && find .".
+// Twenty upstream requests burned, no ASK-GUARD fired, because every one of
+// those turns *did* emit tool calls — the guard only rescues tool-less turns.
+//
+// Repetition is judged by overlap, not set equality, so cosmetic tweaks do not
+// hide it. Only the pure-read tools qualify: a round that also ran bash, wrote
+// a file or changed the tree is doing something and must pass through.
+const READ_ONLY_TOOLS = new Set(['read', 'ls', 'glob', 'grep', 'view_image'])
+
+// Result caps carry no meaning: re-globbing with max=200 instead of max=50
+// returns a superset, but in a session that already holds the max=50 answer the
+// repeat is still redundant work.
+const CAP_KEYS = /^(max|limit|till|timeout)$/
+
+/**
+ * Normalise one raw MHI payload ("glob¦path=/x¦pattern=<star>¦max=50") into a
+ * comparable signature, dropping result caps.
+ *
+ * @param {string} payload
+ * @returns {string|null} null when the tool is not pure-read
+ */
+function toolSignature(payload) {
+  const parts = String(payload).split('¦')
+  const name = parts[0]
+  if (!READ_ONLY_TOOLS.has(name)) return null
+  const args = parts
+    .slice(1)
+    .map((a) => {
+      const eq = a.indexOf('=')
+      const key = eq === -1 ? a : a.slice(0, eq)
+      if (key === 'pattern') {
+        // Observed across rounds: glob "**/AGENTS.md" then "**/*AGENTS.md".
+        const v = eq === -1 ? a : a.slice(eq + 1)
+        return `${key}=${v.replace(/\*\*\/\*/g, '**/')}`
+      }
+      return a
+    })
+    .filter((a) => a && !CAP_KEYS.test(a.split('=')[0]))
+    .sort()
+  return `${name}¦${args.join('¦')}`
+}
+
+/**
+ * True when a round is a repeat of the previous round's calls — a loop.
+ *
+ * Requires at least two read-only calls and at least 60% overlap, so a single
+ * legitimate re-read is never suppressed.
+ *
+ * @param {string[]} payloads - this round's raw MHI tool payloads
+ * @param {string[]|undefined} previousPayloads - the previous round's
+ * @returns {boolean}
+ */
+function isDuplicateToolRound(payloads, previousPayloads) {
+  if (!Array.isArray(previousPayloads) || !previousPayloads.length) return false
+  if (!Array.isArray(payloads) || payloads.length < 2) return false
+
+  const sigs = payloads.map(toolSignature)
+  // A round that contains anything but pure reads is doing real work.
+  if (sigs.some((s) => s === null)) return false
+
+  const prev = new Set(previousPayloads.map(toolSignature).filter(Boolean))
+  if (!prev.size) return false
+  const overlap = sigs.filter((s) => prev.has(s)).length
+  return overlap >= 2 && overlap >= 0.6 * sigs.length
+}
+
 // Appended to the prompt when a wasted turn is retried, so the model continues
 // the task instead of stalling. Phrased as an internal note — the model treats
 // <internal> as operator context, not as user text.
@@ -109,15 +223,43 @@ const NUDGES = {
     'do, do not offer a menu of options. Continue the task now: emit the next MHI',
     'directives, or if the task is already complete, give the final answer.',
   ],
+  'handoff-text': [
+    'Your previous turn was a task-handover summary, not work. Such a summary is',
+    'never a deliverable here: do not restate the objective, the work state or a plan.',
+    'The task is still running — perform its next step now and emit the MHI directives',
+    'for it. Summarise only after the final step is done.',
+  ],
+  'duplicate-tools': [
+    'Your previous turn repeated tool calls that were already made and answered.',
+    'Those results are already in the conversation; repeating them changes nothing.',
+    'Do not re-issue the same calls — take the next unfinished step of the task',
+    'instead, or, if the task is complete, give the final answer.',
+  ],
 }
 
 /**
  * Build the retry nudge for a given wasted-turn reason.
- * @param {'generic-ask'|'empty-turn'} reason
+ *
+ * On the second attempt the text is tightened: the model already ignored a
+ * neutral reminder once, so the second one states plainly that the turn was
+ * wasted and that no further attempt is made.
+ *
+ * @param {'generic-ask'|'empty-turn'|'drift-text'|'handoff-text'|'duplicate-tools'} reason
+ * @param {number} [attempt] - 1 for the first retry, 2 for the last one
  */
-function buildNudge(reason) {
+function buildNudge(reason, attempt = 1) {
   const lines = NUDGES[reason] || NUDGES['empty-turn']
-  return ['', '<internal>', ...lines, '</internal>'].join('\n')
+  const body =
+    attempt >= 2
+      ? [...lines, 'This is the last retry — a third wasted turn ends the turn as failed.']
+      : lines
+  return ['', '<internal>', ...body, '</internal>'].join('\n')
 }
 
-module.exports = { isGenericAsk, isDriftText, buildNudge }
+module.exports = {
+  isGenericAsk,
+  isDriftText,
+  isHandoffText,
+  isDuplicateToolRound,
+  buildNudge,
+}

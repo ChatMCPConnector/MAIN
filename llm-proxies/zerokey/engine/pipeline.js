@@ -12,7 +12,7 @@ const {
 } = require('./triggers')
 const { isRealChatSession } = require('../utils/session-classifier')
 const { ephemeralSession } = require('../utils/ephemeral-session')
-const { isGenericAsk, isDriftText } = require('./ask-guard')
+const { isGenericAsk, isDriftText, isHandoffText, isDuplicateToolRound } = require('./ask-guard')
 
 let callCounter = 0
 
@@ -149,6 +149,10 @@ class StreamPipeline {
     this._toolCallCount = 0
     this._hasVisibleText = false
     this._visibleText = ''
+    // Raw MHI payloads of this round, plus the previous round's, for loop
+    // detection. Read from the session so it survives across requests.
+    this._roundPayloads = []
+    this._prevRoundPayloads = this.session?._lastToolRound || null
     this.toolIndex = this.compiler.tools
     this.lastChar = ''
     this._maxToolLen = Math.max(...Object.keys(this.compiler.tools).map((k) => k.length)) + 3
@@ -244,9 +248,25 @@ class StreamPipeline {
     // The same clarification, written as plain text instead of ⟦ask⟧.
     const drift =
       this._toolCallCount === 0 && this._hasVisibleText && isDriftText(this._visibleText)
+    // A compaction/handover document instead of work — same stall, different shape.
+    const handoff =
+      this._toolCallCount === 0 && this._hasVisibleText && isHandoffText(this._visibleText)
+    // Repeating the previous round's calls. This one fires *with* tool calls, so
+    // it needs the raw payloads, and it must not consume the single tool-less
+    // retry budget: a loop keeps producing calls, a stall never gets this far.
+    const duplicate =
+      this._toolCallCount > 0 && isDuplicateToolRound(this._roundPayloads, this._prevRoundPayloads)
 
-    if ((askOnly || empty || drift) && retry) {
-      const reason = askOnly ? 'generic-ask' : empty ? 'empty-turn' : 'drift-text'
+    if ((askOnly || empty || drift || handoff || duplicate) && retry) {
+      const reason = askOnly
+        ? 'generic-ask'
+        : empty
+          ? 'empty-turn'
+          : drift
+            ? 'drift-text'
+            : handoff
+              ? 'handoff-text'
+              : 'duplicate-tools'
       try {
         console.warn(
           `[ASK-GUARD] ${reason}, re-prompting to continue` +
@@ -256,6 +276,13 @@ class StreamPipeline {
       } catch (err) {
         console.error('[ASK-GUARD] retry failed:', err.message)
       }
+    }
+
+    // Remember this round so the next one can be compared against it. Stored on
+    // the session (not the pipeline) because a new pipeline is built per request
+    // while the session outlives it.
+    if (this._toolCallCount > 0 && !duplicate) {
+      this.session._lastToolRound = [...this._roundPayloads]
     }
 
     if (this.suppressedAsks.length) {
@@ -469,6 +496,7 @@ class StreamPipeline {
       )
     }
 
+    this._roundPayloads = runnable
     this._toolCallCount = emitToolCalls(
       this.compiler,
       this.session,

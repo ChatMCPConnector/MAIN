@@ -6,7 +6,13 @@
 // needed to answer. isGenericAsk diverts it; genuine blockers must pass.
 //
 // Run: node scripts/test-ask-guard.js
-const { isGenericAsk, isDriftText } = require('../engine/ask-guard')
+const {
+  isGenericAsk,
+  isDriftText,
+  isHandoffText,
+  isDuplicateToolRound,
+  buildNudge,
+} = require('../engine/ask-guard')
 
 console.debug = () => {}
 console.warn = () => {}
@@ -110,6 +116,112 @@ check(
 
   // A long generic-flavoured answer is still a deliverable.
   check(!isDriftText('What should I do? '.repeat(120)), 'overlong text is never drift (length cap)')
+
+  // ── handoff drift ─────────────────────────────────────────────────────────
+  // Verbatim shape from ses_f0d24ecf8ffeyVk9PdMT42EOEY, where the model spent
+  // four rounds writing handover documents instead of analysing the repo.
+  const OBSERVED_HANDOFF = [
+    '## Objective\n- Analyse des Repositorys unter `/workspaces/MAIN` strukturiert fortsetzen.\n\n## Important Details\n- Keine Aenderungen, Commits, Pushes oder Loeschungen durchfuehren.\n\n## Work State\n### Completed\n- Top-Level-Struktur mit glob und find geprueft.\n\n### Blocked\n- Keine Blocker.\n',
+    '## Objective\n- Analyze the complete repository under `/workspaces/MAIN` in a structured way.\n\n## Important Details\n- User requested tool-driven analysis only.\n\n## Work State\n### Active\n- Repository exploration has not yet started.\n\n## Next Move\n1. Read the root documentation.',
+    '## Objective\n- Fortsetzung.\n\n## Relevant Files\n- `/workspaces/MAIN/AGENTS.md`\n- `/workspaces/MAIN/README.md`',
+  ]
+  for (const [i, text] of OBSERVED_HANDOFF.entries()) {
+    check(isHandoffText(text), `observed handover document #${i + 1} is drift`)
+    check(!isDriftText(text), `handover #${i + 1} is deliberately NOT plain-text drift`)
+  }
+  check(
+    isHandoffText('## Work State\n### Completed\n- x\n\n### Active\n- y\n'),
+    'EN subheadings count too',
+  )
+  check(
+    !isHandoffText('## Objective\n- one heading only is not enough'),
+    'one heading is not a handover',
+  )
+  check(!isHandoffText('The ## Objective was clear.'), 'a heading word in prose is not a handover')
+  check(
+    !isHandoffText(
+      '## Objective\nThe objective is to serve traffic.\n\n## Notes\nPort 7250 is live.',
+    ),
+    'an answer that happens to use headings is kept',
+  )
+  check(!isHandoffText(''), 'empty text is not a handover')
+  check(!isHandoffText(null), 'null is not a handover')
+
+  // ── duplicate tool rounds ─────────────────────────────────────────────────
+  // The discovery round of ses_f0d24ecf8ffeyVk9PdMT42EOEY, three times over,
+  // with the cosmetic variation the model used to disguise it.
+  const ROUND_A = [
+    'ls¦path=/workspaces/MAIN',
+    'glob¦path=/workspaces/MAIN¦pattern=*¦max=50',
+    'glob¦path=/workspaces/MAIN¦pattern=**/AGENTS.md¦max=20',
+    'glob¦path=/workspaces/MAIN¦pattern=**/README.md¦max=20',
+    'glob¦path=/workspaces/MAIN¦pattern=**/infrastructure.md¦max=20',
+  ]
+  const ROUND_B = [
+    'ls¦path=/workspaces/MAIN',
+    'glob¦path=/workspaces/MAIN¦pattern=*¦max=200',
+    'glob¦path=/workspaces/MAIN¦pattern=**/AGENTS.md¦max=20',
+    'glob¦path=/workspaces/MAIN¦pattern=**/README.md¦max=20',
+    'glob¦path=/workspaces/MAIN¦pattern=**/infrastructure.md¦max=20',
+  ]
+  const ROUND_C = [
+    'ls¦path=/workspaces/MAIN',
+    'glob¦path=/workspaces/MAIN¦pattern=*¦max=100',
+    'glob¦path=/workspaces/MAIN¦pattern=**/*AGENTS.md¦max=20',
+    'glob¦path=/workspaces/MAIN¦pattern=**/*README.md¦max=20',
+    'glob¦path=/workspaces/MAIN¦pattern=**/*infrastructure.md¦max=20',
+  ]
+  check(isDuplicateToolRound(ROUND_B, ROUND_A), 'identical round repeated (only max changed)')
+  check(
+    isDuplicateToolRound(ROUND_C, ROUND_B),
+    'glob patterns **/X.md -> **/*X.md still count as a repeat',
+  )
+  check(!isDuplicateToolRound(ROUND_A, null), 'first round is never a duplicate')
+  check(!isDuplicateToolRound(ROUND_A, []), 'no previous round is never a duplicate')
+  check(
+    !isDuplicateToolRound(ROUND_A, [
+      'ls¦path=/workspaces/MAIN/llm-proxies',
+      'glob¦path=/workspaces/MAIN/llm-proxies¦pattern=**/*.js¦max=20',
+      'grep¦pattern=acquireSlot¦path=/workspaces/MAIN/llm-proxies',
+      'read¦filePath=/workspaces/MAIN/infrastructure.md',
+    ]),
+    'a genuinely different round is not a duplicate',
+  )
+  check(
+    !isDuplicateToolRound(['read¦filePath=/workspaces/MAIN/AGENTS.md'], ROUND_A),
+    'a single re-read is legitimate and must pass',
+  )
+  check(
+    !isDuplicateToolRound([...ROUND_A, 'cmd¦run=git status¦till=30'], ROUND_A),
+    'a round that also runs a command is doing work',
+  )
+  check(
+    !isDuplicateToolRound(
+      ['write¦filePath=/workspaces/MAIN/x.md¦content=a', 'read¦filePath=/workspaces/MAIN/y.md'],
+      ['write¦filePath=/workspaces/MAIN/x.md¦content=a', 'read¦filePath=/workspaces/MAIN/y.md'],
+    ),
+    'mutating tools are never loop-detected',
+  )
+  check(
+    !isDuplicateToolRound(['glob¦path=/workspaces/MAIN¦pattern=*¦max=50'], ROUND_A),
+    'one matching call is not enough (needs 2)',
+  )
+
+  // ── nudges ────────────────────────────────────────────────────────────────
+  for (const reason of [
+    'generic-ask',
+    'empty-turn',
+    'drift-text',
+    'handoff-text',
+    'duplicate-tools',
+  ]) {
+    const n1 = buildNudge(reason)
+    check(n1.includes('<internal>') && n1.includes('</internal>'), `${reason} nudge is wrapped`)
+    check(!n1.includes('last retry'), `${reason} first attempt has no escalation`)
+    const n2 = buildNudge(reason, 2)
+    check(n2.includes('last retry'), `${reason} second attempt escalates`)
+    check(n2.length > n1.length, `${reason} escalation is longer`)
+  }
 }
 
 if (failed) {

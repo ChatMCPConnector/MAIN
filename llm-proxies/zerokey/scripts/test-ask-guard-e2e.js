@@ -334,6 +334,56 @@ async function run(label, upstreamTurns, { expectRetry }) {
     check(/nicht verfügbar/.test(body), 'J: split block is reported as unavailable')
   }
 
+  // K) Handover document instead of work: retried. Shape observed in
+  // ses_f0d24ecf8ffeyVk9PdMT42EOEY, where four rounds were spent writing
+  // "## Objective / ## Work State / ## Next Move" instead of analysing MAIN.
+  {
+    const handoff =
+      '## Objective\n- Analyse des Repositorys unter `/workspaces/MAIN` fortsetzen.\n\n' +
+      '## Important Details\n- Keine Aenderungen durchfuehren.\n\n' +
+      '## Work State\n### Completed\n- Top-Level-Struktur geprueft.\n\n' +
+      '### Blocked\n- Keine Blocker.\n'
+    const { names } = await run('K handoff document', [[handoff], reads], { expectRetry: true })
+    check(names.includes('glob') && names.includes('read'), 'K: work delivered after the retry')
+  }
+
+  // L) The same read-only round twice: a loop. Retried, because burning upstream
+  // requests on an identical discovery round is the failure this guards.
+  {
+    session._lastToolRound = [...reads]
+    const { names } = await run('L duplicate read round', [[...reads], reads], {
+      expectRetry: true,
+    })
+    check(names.includes('glob'), 'L: the loop round is retried and work is delivered')
+    delete session._lastToolRound
+  }
+
+  // M) A read round followed by the same read round is a loop, but a round that
+  // also runs a command is not — the command may legitimately depend on the
+  // read, so it must never be suppressed.
+  {
+    session._lastToolRound = [...reads]
+    const withCmd = [...reads, `cmd${SEP}run=git status${SEP}till=30`]
+    // withCmd ist bereits die flache Turn-Liste — ein zusaetzliches [] ergibt
+    // einen einzigen kommagetrennten Block statt drei.
+    const { names, attempts } = await run('M round with a command', [withCmd, reads], {
+      expectRetry: false,
+    })
+    check(attempts === 0, 'M: a round that runs a command is never treated as a loop')
+    check(names.length >= 3, 'M: all three calls are delivered')
+    delete session._lastToolRound
+  }
+
+  // N) A single repeated read is legitimate work and must survive untouched —
+  // it is the common "re-read after an edit" shape.
+  {
+    session._lastToolRound = [`read${SEP}filePath=/workspaces/MAIN/AGENTS.md`]
+    const one = [`read${SEP}filePath=/workspaces/MAIN/AGENTS.md`]
+    const { attempts } = await run('N single re-read', [one, reads], { expectRetry: false })
+    check(attempts === 0, 'N: a single re-read is not a loop')
+    delete session._lastToolRound
+  }
+
   if (failed) {
     console.error(`\n${failed} check(s) failed`)
     process.exit(1)

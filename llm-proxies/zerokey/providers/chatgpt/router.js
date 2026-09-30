@@ -76,29 +76,41 @@ async function buildChatGPTRouter(parsedFetch, session, _userData = null) {
         }
       }
 
-      // Two turn shapes stop the agent without doing anything: a turn that is
-      // nothing but a generic clarification, and a turn that produced no output
-      // at all. Both are replayed once with a nudge to continue. Bounded to one
-      // retry so a model that keeps drifting cannot loop.
-      let retried = false
+      // Four turn shapes stop the agent without doing anything: a turn that is
+      // nothing but a generic clarification, a turn that produced no output at
+      // all, a turn that wrote the clarification (or a handover document) as
+      // plain text, and a round that merely repeats the previous round's calls.
+      // All four are replayed with a nudge to continue.
+      //
+      // Two attempts, not one: measured live on 2026-09-30 a single retry fixed
+      // 3 of 4 rescued turns, the fourth re-drifted and had no second chance.
+      // Bounded at 2 so a model that keeps drifting cannot loop against upstream.
+      let attempts = 0
       const retryWastedTurn = async ({ asks, reason }) => {
-        if (retried || pipeline.ephemeralMode || pipeline.rawMode) return false
-        retried = true
-        console.warn(`[ASK-GUARD] ${reason}, re-prompting to continue:`, asks)
+        if (attempts >= 2 || pipeline.ephemeralMode || pipeline.rawMode) return false
+        attempts++
+        console.warn(
+          `[ASK-GUARD] ${reason} (Versuch ${attempts}/2), re-prompting to continue` +
+            (asks && asks.length ? `: ${asks.join(' | ')}` : ''),
+        )
 
         const next = new StreamPipeline(res, activeSession, 'chatgpt', req.ide, messages)
         next.onFinalChunk = pipeline.onFinalChunk
+        // The retry gets its own guard, so a turn that stalls again is caught
+        // instead of reaching the user as a blocking question. It may only
+        // report — the attempt budget above is the loop bound.
+        const reReport = () => false
 
         await acquireSlot('ChatGPT')
         const retryStream = await chatgptApi.chatCompletion(
-          prompt + buildNudge(reason),
+          prompt + buildNudge(reason, attempts),
           activeSession.chatSessionId,
           activeSession.parentMessageId,
           model,
           attachments,
           thinkingEnabled,
         )
-        await chatgptStreamHandler(retryStream, activeSession, next)
+        await chatgptStreamHandler(retryStream, activeSession, next, reReport)
         return true
       }
 
