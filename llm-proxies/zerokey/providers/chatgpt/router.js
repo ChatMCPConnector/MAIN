@@ -117,15 +117,18 @@ async function buildChatGPTRouter(parsedFetch, session, userData = null) {
 
       await chatgptStreamHandler(stream, activeSession, pipeline, retryWastedTurn)
     } catch (error) {
-      // Ein ChatGPT-Stundenlimit (429) muss die Sperre ueber einen Neustart
-      // hinweg ueberleben. Der Provider-Cooldown in utils/rate-limiter.js ist
-      // fluechtig, users.json war bisher unberuehrt — nach einem Restart lief der
-      // naechste Request wieder ins 429 statt zu warten.
-      if (error && error.statusCode === 429 && typeof error.cooldownMs === 'number') {
+      // Eine Sperre des Upstream muss einen Neustart ueberleben. Ohne das wartet
+      // nach einem Proxy-Neustart der naechste Request wieder gegen die Sperre
+      // statt sie zu beachten. Deckt 429 (Stundenlimit) UND 403 "unusual
+      // activity" ab — beide setzen in api.js ein cooldownMs. Die erste Fassung
+      // filterte auf statusCode === 429 und hat den 403-Fall live verfehlt
+      // (2026-09-30, 22:11): waitUntil blieb leer.
+      if (error && typeof error.cooldownMs === 'number') {
         const ok = setAccountCooldown(userData, 'chatgpt', 'main', error.cooldownMs, error.message)
         console.warn(
-          `[users] Stundenlimit bis ${new Date(Date.now() + error.cooldownMs).toISOString()}` +
-            (ok ? ' (in users.json gesichert)' : ' (NICHT gesichert — nur im RAM)'),
+          `[users] Sperre bis ${new Date(Date.now() + error.cooldownMs).toISOString()}` +
+            ` (HTTP ${error.statusCode ?? error.status ?? '?'})` +
+            (ok ? ' — in users.json gesichert' : ' — NICHT gesichert, nur im RAM'),
         )
       }
       return pipeline.onError(error)
