@@ -273,6 +273,97 @@ print("  Wortgrenzen-Patch: erfolgreich (saubere Zeilen-/Wortgrenzen bei Strg+Li
 PYEOF
 }
 
+# History-Delete-Patch: Ermoeglicht das Loeschen von Chats in /history ueber die Tastatur
+# (Delete, Ctrl+D, Ctrl+X), da Freebuff von Haus aus nur Mausklick [x] anbietet,
+# die Maus im Terminal aber bewusst deaktiviert ist.
+patch_history_delete() {
+  local bin="${NATIVE_DIR}/freebuff"
+  [ -f "$bin" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[freebuff] WARN: kein python3 -> History-Delete-Patch uebersprungen"
+    return 0
+  fi
+  python3 - "$bin" <<'PYEOF'
+import os, re, sys
+
+path = sys.argv[1]
+data = open(path, "rb").read()
+
+if b'k==="delete"' in data and b"Del / Ctrl+D to remove" in data:
+    print("  History-Delete-Patch: bereits gepatcht")
+    sys.exit(0)
+
+pattern = re.compile(
+    rb'(?P<fn>[a-zA-Z0-9_$]+)=(?P<react>[a-zA-Z0-9_$]+)\.useCallback\(\((?P<key>[a-zA-Z0-9_$]+)\)=>\{'
+    rb'if\((?P=key)\.name==="escape"\)\{if\((?P<query>[a-zA-Z0-9_$]+)\.length>0\)(?P<setQuery>[a-zA-Z0-9_$]+)\(""\);else (?P<cancel>[a-zA-Z0-9_$]+)\(\);return!0\}'
+    rb'if\((?P=key)\.name==="up"\)return (?P<setIndex>[a-zA-Z0-9_$]+)\(\(([a-zA-Z0-9_$]+)\)=>Math\.max\(0,[a-zA-Z0-9_$]+-1\)\),!0;'
+    rb'if\((?P=key)\.name==="down"\)\{let [a-zA-Z0-9_$]+=Math\.min\((?P<items>[a-zA-Z0-9_$]+)\.length,(?P<consts>[a-zA-Z0-9_$]+)\.MAX_RENDERED_CHATS\)-1;return (?P=setIndex)\(\([a-zA-Z0-9_$]+\)=>Math\.min\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\+1\)\),!0\}'
+    rb'let (?P<rightVar>[a-zA-Z0-9_$]+)=(?P=key)\.name==="right"&&!(?P=key)\.ctrl&&!(?P=key)\.meta&&!(?P=key)\.option&&!(?P=key)\.shift;'
+    rb'if\((?P<isEnter>[a-zA-Z0-9_$]+)\((?P=key)\)\|\|(?P=rightVar)\)\{let [a-zA-Z0-9_$]+=(?P=items)\[(?P<index>[a-zA-Z0-9_$]+)\];if\([a-zA-Z0-9_$]+\)(?P<openChat>[a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+\.id\);return!0\}'
+    rb'if\((?P=key)\.name==="c"&&(?P=key)\.ctrl\)return (?P=cancel)\(\),!0;'
+    rb'return!1\},\[(?P=query),(?P=setQuery),(?P=setIndex),(?P=items),(?P=index),(?P=openChat),(?P=cancel)\]\)'
+)
+
+before_pattern = re.compile(
+    rb'(?P<action>[a-zA-Z0-9_$]+)=(?P<react>[a-zA-Z0-9_$]+)\.useCallback\(\(([a-zA-Z0-9_$]+)\)=>\{(?P<fn>[a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+\.id\)\},\[(?P=fn)\]\),'
+)
+
+match = pattern.search(data)
+if not match:
+    print("  History-Delete-Patch: Muster nicht gefunden -> unangetastet")
+    sys.exit(0)
+
+m_before = list(before_pattern.finditer(data[max(0, match.start()-150):match.start()]))
+if len(m_before) < 2:
+    print("  History-Delete-Patch: Delete-Action nicht gefunden -> unangetastet")
+    sys.exit(0)
+
+deleteAction = m_before[1].group('action').decode('latin1')
+g = {k: v.decode('latin1') for k, v in match.groupdict().items()}
+g['deleteAction'] = deleteAction
+orig = match.group()
+
+base_repl = (
+    f"{g['fn']}={g['react']}.useCallback(({g['key']})=>"
+    f"{{let k={g['key']}.name,s={g['items']}[{g['index']}];"
+    f"if(k===\"escape\")return {g['query']}?{g['setQuery']}(\"\"):{g['cancel']}(),!0;"
+    f"if(k===\"up\")return {g['setIndex']}(s=>Math.max(0,s-1)),!0;"
+    f"if(k===\"down\")return {g['setIndex']}(s=>Math.min(Math.min({g['items']}.length,{g['consts']}.MAX_RENDERED_CHATS)-1,s+1)),!0;"
+    f"if(s&&(k===\"delete\"||{g['key']}.ctrl&&(k===\"d\"||k===\"x\")))return {g['deleteAction']}(s),!0;"
+    f"if({g['isEnter']}({g['key']})||k===\"right\"&&!{g['key']}.meta&&!{g['key']}.option&&!{g['key']}.shift)return s&&{g['openChat']}(s.id),!0;"
+    f"if({g['key']}.ctrl&&k===\"c\")return {g['cancel']}(),!0;"
+    f"return!1"
+)
+suffix = f"}},[{g['query']},{g['setQuery']},{g['setIndex']},{g['items']},{g['index']},{g['openChat']},{g['cancel']}])"
+
+pad = len(orig) - (len(base_repl) + len(suffix))
+if pad < 0:
+    print("  History-Delete-Patch: Code laenger als Original -> unangetastet")
+    sys.exit(0)
+
+repl = (base_repl + (" " * pad) + suffix).encode('latin1')
+assert len(repl) == len(orig), "Laengendifferenz"
+
+out = bytearray(data)
+out[match.start():match.end()] = repl
+
+footer_orig = b"Click [\\xD7] to remove"
+footer_repl = b"Del / Ctrl+D to remove"
+if out.count(footer_orig) == 1:
+    f_idx = out.find(footer_orig)
+    out[f_idx:f_idx+len(footer_orig)] = footer_repl
+
+assert len(out) == len(data), "Dateigroesse darf sich nicht aendern"
+
+tmp = path + ".patched"
+with open(tmp, "wb") as f:
+    f.write(bytes(out))
+os.chmod(tmp, 0o755)
+os.replace(tmp, path)
+print("  History-Delete-Patch: erfolgreich (Delete/Ctrl+D/Ctrl+X loescht Session)")
+PYEOF
+}
+
 # Nach dem Patch pruefen, ob das Binary noch startet; sonst Backup zurueck.
 verify_after_patch() {
   local bin="${NATIVE_DIR}/freebuff"
@@ -302,6 +393,7 @@ if [ -x "$WRAPPER" ] && is_latest_installed && [ -s "${NATIVE_DIR}/freebuff" ]; 
   patch_scroll_step
   patch_arrow_scroll
   patch_word_boundary
+  patch_history_delete
   verify_after_patch
   echo "[freebuff] v$(installed_version) (aktuellste) bereits installiert (${APP_DIR}); Wrapper: ${WRAPPER}"
   exit 0
@@ -328,6 +420,7 @@ cleanup_partial_downloads
 patch_scroll_step
 patch_arrow_scroll
 patch_word_boundary
+patch_history_delete
 verify_after_patch
 
 if [ -s "${NATIVE_DIR}/credentials.json" ]; then

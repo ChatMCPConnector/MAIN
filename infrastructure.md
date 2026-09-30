@@ -695,7 +695,16 @@ Freebuff besitzt keine Keybinding-Konfigurationsdatei. Deshalb wird die Trennung
    Steht der Cursor nach Zeilenumbrüchen am Zeilenanfang (`|Hey`), springt `Strg+Links` bzw. löscht
    `Strg+Backspace` präzise bis zum Zeilenende der vorigen Zeile (`Hey|`), statt das Wort mitzureißen.
 
-3. **PTY-Filter (`infra/scripts/freebuff-pty.py`):**
+3. **Vendor-Binary-Patch für Session-Löschung in `/history` (`patch_history_delete` in `infra/scripts/freebuff-install.sh`):**
+   Freebuff implementiert das Löschen von Chats in `/history` ausschließlich per Mausklick auf `[×]` (`onClick: () => f(X, v)`),
+   bietet jedoch kein Tastaturkürzel im UI an (`onKeyIntercept` leitete nur Up/Down/Right/Enter/Esc/Ctrl+C ab).
+   Weil das Mouse-Reporting für das benutzerdefinierte Setup (Mausrad-Scrollen, native Terminal-Auswahl, Copy/Paste)
+   im PTY-Filter bewusst deaktiviert ist, empfing die App keine Mausklicks und Sessions waren unlöschbar.
+   Der atomare Patch erweitert `onKeyIntercept` um `Delete` (`Entf`), `Ctrl+D` und `Ctrl+X` auf der fokussierten Session
+   (`s = F[R]`), ruft die native Löschaktion `l(s)` auf und aktualisiert die Statuszeile längengleich
+   (`Click [×] to remove` -> `Del / Ctrl+D to remove`).
+
+4. **PTY-Filter (`infra/scripts/freebuff-pty.py`):**
    * **Im Chat-Fenster (1:1 Replikation von PageUp/PageDown):**
      Egal ob der Prompt leer ist oder Text darin getippt wird: Auf-/Ab-Pfeile werden
      **immer und sofort zu `PageUp` (`\x1b[5~`) und `PageDown` (`\x1b[6~`)**.
@@ -719,7 +728,7 @@ Freebuff besitzt keine Keybinding-Konfigurationsdatei. Deshalb wird die Trennung
       - Der PTY-Filter übersetzt `Strg+Links` auf `Alt+Links`, `Strg+Rechts` auf `Alt+Rechts` und `Strg+Backspace` auf `\x17`.
       - Bleibt in allen Modi (Chat, Menüs, Modals) aktiv, ohne das Binary anzufassen.
 
-**4. Umleiten des Rads selbst geht nicht.** `.vscode/keybindings.json` mit
+**5. Umleiten des Rads selbst geht nicht.** `.vscode/keybindings.json` mit
 `mousewheel up`/`down` ist **kein gültiges Keybinding**: VS Code listet als
 akzeptierte `key`-Werte Buchstaben, Ziffern, Pfeile, `pageup`/`pagedown`,
 `home`/`end`, `tab`/`enter`/`escape`/`space`/`backspace`/`delete` und
@@ -727,7 +736,7 @@ Nummernblock — `mousewheel` steht nicht darin und wird nicht dispatcht. Die
 probeweise eingefügte Datei ist entfernt; der Weg ist im Changelog dokumentiert,
 damit ihn niemand wieder geht.
 
-**5. Scroll-Schrittweite: kein Versions-Pin, Patch per Mustersuche.**
+**6. Scroll-Schrittweite: kein Versions-Pin, Patch per Mustersuche.**
 freebuff aktualisiert sich so schnell, dass ein Pin ständig veraltet — der
 Nutzer hat ihn am 2026-09-27 abgeschafft. `freebuff-install.sh` installiert
 jetzt `freebuff@latest` und überspringt nur, wenn die installierte Version
@@ -892,6 +901,11 @@ glm2api selbst kommt komplett mit (Code im Repo).
 **Proxy-Verhalten nach Stopp:** Prozesse sterben, `/tmp` (Logs) wird geleert —
 Code, venv und .env in MAIN überleben alles. Der Boot-Mechanismus zieht den
 Proxy bei jedem Start automatisch hoch.
+
+- 2026-09-30: **Freebuff Session-Löschung in `/history` per Tastatur (`Delete`, `Ctrl+D`, `Ctrl+X`):**
+  - **Befund:** Im `/history`-Menü konnten keine Sessions gelöscht werden. Die Analyse des Vendor-Bundles ergab: Freebuff implementierte das Entfernen (`actionLabel: "[×]"`, `onAction`) ausschließlich über einen Mausklick-Handler (`onClick: () => f(X, v)`), bot jedoch kein einziges Tastaturkürzel im UI (`onKeyIntercept` leitete nur Up/Down/Right/Enter/Esc/Ctrl+C weiter). Da das Mouse-Reporting für das benutzerdefinierte Setup (Mausrad-Scrollen, native Terminal-Auswahl, Copy/Paste) im PTY-Filter bewusst deaktiviert ist, empfing die App keine Mausklicks und Sessions waren unlöschbar.
+  - **Lösung:** Neuer atomarer Vendor-Patch `patch_history_delete` in `infra/scripts/freebuff-install.sh`. Er erweitert den `onKeyIntercept`-Callback in der History-Komponente um die Erkennung von `Delete` (`Entf`), `Ctrl+D` und `Ctrl+X` auf der fokussierten Session (`s = F[R]`), ruft die native Löschaktion `l(s)` auf und aktualisiert die Statuszeile exakt längengleich (`Click [×] to remove` -> `Del / Ctrl+D to remove`).
+  - **Unberührt:** Alle bestehenden Mechanismen (Mausrad-Scrollen, Arrow-Patches, PTY-Filter, native Pfeil-Navigation in Menüs, Copy/Paste) bleiben zu 100% unverändert.
 
 - 2026-09-28: **Die `open`-Verbots-Warnung war an den falschen Agenten gebunden — sie wurde in der Default-Session nie geladen.** Konsequenz aus dem S-21-Fall (`ses_f17123666ffeMwmhdXlMz3HO1l`): die Session lief als `agent: build` (`opencode.json` `default_agent`, Zeile 292), und die gesamte Warnung stand in `.opencode/agent/glm2api.md`. **Die Schicht war falsch gewählt:** `open` ist kein Werkzeug *dieses Agenten*, sondern *jeder* opencode-Session — `open`, `open_url`, `browse`, `web.run` und `execute_sandbox_code` gehören zu Chat-Oberflächen, nicht zu opencode. Ein Agenten-Prompt kann das nicht abdecken, weil Agent und Modell in opencode **unabhängig** gewählt werden und es keine bedingte Zuordnung „Agent X nur bei Modell Y" gibt. **Lösung:** neue zentrale Datei `.opencode/INSTRUCTIONS-glm2api.md`, geladen per `"instructions"` in `.opencode/opencode.json`. opencode kombiniert `instructions` mit `AGENTS.md` und lädt sie in **jede** Session. Die Tool-Sektion im Agenten-Prompt ist dadurch auf einen Verweis plus die agentenspezifischen Rollen (`todowrite`/`glob`/`grep`/`task`/`question`) reduziert — **eine Quelle statt zwei, damit sie nicht auseinanderlaufen.** AGENTS.md blieb bewusst unberührt: es ist laut Repo-Regel die clientübergreifende Quelle (Gemini CLI liest sie mit), glm2api-Spezifika gehören dort nicht hin. **Zwei Befunde, die erst das Messen ergab:** (a) **Der Pfad in `instructions` wird vom Projekt-Root aus aufgelöst, nicht relativ zur Config-Datei.** `INSTRUCTIONS-glm2api.md` (Config-relativ gelesen) wurde stillschweigend **nicht** geladen — das Modell kannte die Inhalte nicht, die Datei existierte, opencode meldete nichts. Erst der Dreifach-Vergleich `./INSTRUCTIONS-glm2api.md` → kein Marker, `.opencode/INSTRUCTIONS-glm2api.md` → **Marker erkannt**, `INSTRUCTIONS-glm2api.md` → kein Marker hat es aufgedeckt. Das ist die Fehlerklasse „sieht aus wie es wirkt": ohne den Markertest hätte ich eine korrete Datei an der falschen Stelle liegen lassen und es als Erfolg gemeldet. (b) **`instructions` lädt bedingungslos für ALLE Modelle** — live gegengeprüft: eine `antigravity/gemini-3.8-flash`-Session sah die Datei ebenfalls und bestätigte, `open` existiere dort ohnehin nicht. opencode kann das nicht pro Modell bedingen, deshalb ist die Datei strikt getrennt: **Abschnitt A** (`open` existiert nicht, `read`/`webfetch`/`bash` stattdessen, Pfade absolut, keine Probe-Fetches) ist für *jedes* Modell wahr, **B** (das stille `open`→`read`-Mapping) und **C** (die drei Notices, kein erfundenes Limit) sind als „nur bei `glm-5.3`" markiert, mit ausdrücklichem Hinweis, sie bei anderen Providern zu ignorieren. Das ist Text, keine technische Absicherung — der Grund ist explizit dokumentiert, damit jemand die Datei nicht für eine modelspezifische hält. **Verifiziert:** Marker-Test glm2api → Abschnitt C vorhanden; Marker-Test antigravity → Datei geladen, Bedingtheit erkannt; JSON valide; Live-Session mit `build` + `glm-5.3` (derselbe Ordnervergleich, der die Fehlschleife ausgelöst hatte) → Client sieht nur `read`/`bash`, keine unmaskierten `open`-Calls.
 
