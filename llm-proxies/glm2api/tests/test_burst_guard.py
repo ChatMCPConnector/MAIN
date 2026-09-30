@@ -38,6 +38,24 @@ TARGET = "/workspaces/MAIN/README.md"
 COMMAND = "du -sh /workspaces/MAIN/.runtime/* | sort -rh | head -15"
 
 
+def _text_protocol_bash_event(call_id: str, command: str, workdir: str | None = None):
+    """Der call als TEXT-PROTOKOLL — die form, die das modell real sendet
+    (`{"tool_calls":[…]}[]` im content), nicht als native parts."""
+    arguments: dict[str, object] = {"command": command}
+    if workdir:
+        arguments["workdir"] = workdir
+    protocol = {"tool_calls": [{"name": "bash", "arguments": arguments}]}
+    return {
+        "status": "finish",
+        "parts": [
+            {
+                "logic_id": f"l{call_id}",
+                "content": [{"type": "text", "text": json.dumps(protocol) + "[]"}],
+            }
+        ],
+    }
+
+
 def _acc():
     return GLMEventAccumulator(model="glm-5.3", allowed_tool_names={"bash", "read", "webfetch"})
 
@@ -319,6 +337,66 @@ def test_wenige_blockierte_calls_kein_burst():
     assert calls == []
     assert acc.burst_guard_tripped is False
     assert acc.burst_notices == []
+
+
+# --- Cross-Turn-Echo im Text-Protokoll (Live-Befund burst-diag) -----------
+
+
+def test_textprotokoll_echo_einer_ausgefuehrten_historie_wird_unterdrueckt():
+    """Der Live-Befund, der zum Fix fuehrte (2026-10-01, `burst-diag`):
+
+    Der Client sah 14x denselben `du -sh`, obwohl `B-01-DIAG` in jeder Runde
+    `signatures=1 results=1` meldete — die Historie war da. Sie wurde nur
+    nicht geprueft: der Echo-Filter lief ausschliesslich gegen NATIVE calls,
+    und das Modell schickt seine calls als text-protokoll
+    (`{"tool_calls":…}[]`). Damit startete der Zaehler jede Runde bei null
+    und der erste identische Call war immer wieder „erlaubt"."""
+    signature = json.dumps(
+        {"command": "du -sh /workspaces/MAIN"}, separators=(",", ":")
+    )
+    acc = GLMEventAccumulator(
+        model="glm-5.3",
+        allowed_tool_names={"bash", "read", "webfetch"},
+        history_tool_call_signatures={f"bash:{signature}"},
+        history_tool_results={f"bash:{signature}": "114M\t/workspaces/MAIN"},
+    )
+    acc.consume_event(_text_protocol_bash_event("echo_0", "du -sh /workspaces/MAIN"))
+
+    calls = _client_calls(acc)
+
+    assert calls == [], "ein call, dessen ergebnis in der historie liegt, laeuft nicht noch einmal"
+    assert acc.cached_result_notices, "das modell bekommt das vorhandene ergebnis"
+
+
+def test_textprotokoll_call_ohne_historie_treffer_laeuft_normal():
+    """Gegenprobe: ohne Echo in der Historie bleibt der erste Call
+    ausfuehrbar — der Fix darf keinen normalen Turn lahmlegen."""
+    acc = _acc()
+    acc.consume_event(_text_protocol_bash_event("fresh_0", "du -sh /workspaces/MAIN"))
+
+    calls = _client_calls(acc)
+
+    assert len(calls) == 1
+    assert acc.cached_result_notices == []
+
+
+def test_textprotokoll_echo_erkennt_die_signatur_trotz_schluesselreihenfolge():
+    """Die Historie-Signaturen kommen sortiert, `_tool_call_signature` nicht
+    — ohne Kanonisierung sieht der Filter sein eigenes Echo nicht."""
+    history = json.dumps(
+        {"workdir": "/workspaces/MAIN", "command": "ls -la"},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    acc = GLMEventAccumulator(
+        model="glm-5.3",
+        allowed_tool_names={"bash", "read", "webfetch"},
+        history_tool_call_signatures={f"bash:{history}"},
+        history_tool_results={f"bash:{history}": "out"},
+    )
+    acc.consume_event(_text_protocol_bash_event("ord_0", "ls -la", workdir="/workspaces/MAIN"))
+
+    assert _client_calls(acc) == [], "schluesselreihenfolge darf den echo-filter nicht aushebeln"
 
 
 # --- Signatur-Kanonisierung (B-01-Fallstrick) ----------------------------

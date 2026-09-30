@@ -3287,6 +3287,30 @@ class GLMEventAccumulator:
                 continue
 
             signature = _tool_call_signature(tool_call)
+            # B-01-FIX: der echo-filter fehlte hier. Er prueft nur den
+            # NATIVEN pfad (Z. ~3500), das modell schickt seine calls aber
+            # als text-protokoll (`{"tool_calls":…}[]`). Folge live
+            # (2026-10-01, burst-diag): der client sah 14x denselben
+            # `du -sh`, obwohl `B-01-DIAG` in jeder runde `signatures=1
+            # results=1` meldete — die historie war da und wurde nur nicht
+            # geprueft. Ohne diese zeile startet der zaehler in jeder runde
+            # bei null, der erste identische call ist damit immer wieder
+            # "erlaubt", und C-01 (cache-hit) kam nie zur ausfuehrung,
+            # weil er nur im drop-zweig haengt.
+            if _canonical_signature(signature) in {
+                _canonical_signature(item) for item in self.history_tool_call_signatures
+            }:
+                decisions_pre = self._loop_guard_text_call_decisions.setdefault(
+                    signature, []
+                )
+                decisions_pre.append(False)
+                self._note_cached_result(_canonical_signature(signature))
+                if self.logger:
+                    self.logger.info(
+                        "Dropped echoed text tool_call (history signature match) tool=%s",
+                        str((tool_call.get("function") or {}).get("name", "") or "tool"),
+                    )
+                continue
             occurrence = occurrence_by_signature.get(signature, 0)
             occurrence_by_signature[signature] = occurrence + 1
             decisions = self._loop_guard_text_call_decisions.setdefault(signature, [])
