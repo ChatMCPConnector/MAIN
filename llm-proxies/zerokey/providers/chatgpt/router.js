@@ -2,13 +2,14 @@ const express = require('express')
 
 const { StreamPipeline } = require('../../engine/pipeline')
 const { buildNudge } = require('../../engine/ask-guard')
+const { setAccountCooldown } = require('../../utils/users-file')
 const { ChatGPTAPI } = require('./api')
 const { chatgptStreamHandler } = require('./stream-handler')
 const { acquireSlot } = require('../../utils/rate-limiter')
 const { validateMessages } = require('../../utils/route-helpers')
 const chatgptApi = new ChatGPTAPI()
 
-async function buildChatGPTRouter(parsedFetch, session, _userData = null) {
+async function buildChatGPTRouter(parsedFetch, session, userData = null) {
   console.debug('[ChatGPT] Initializing from parsed capture JSON')
   await chatgptApi.initializeFromJSON(parsedFetch)
 
@@ -116,6 +117,17 @@ async function buildChatGPTRouter(parsedFetch, session, _userData = null) {
 
       await chatgptStreamHandler(stream, activeSession, pipeline, retryWastedTurn)
     } catch (error) {
+      // Ein ChatGPT-Stundenlimit (429) muss die Sperre ueber einen Neustart
+      // hinweg ueberleben. Der Provider-Cooldown in utils/rate-limiter.js ist
+      // fluechtig, users.json war bisher unberuehrt — nach einem Restart lief der
+      // naechste Request wieder ins 429 statt zu warten.
+      if (error && error.statusCode === 429 && typeof error.cooldownMs === 'number') {
+        const ok = setAccountCooldown(userData, 'chatgpt', 'main', error.cooldownMs, error.message)
+        console.warn(
+          `[users] Stundenlimit bis ${new Date(Date.now() + error.cooldownMs).toISOString()}` +
+            (ok ? ' (in users.json gesichert)' : ' (NICHT gesichert — nur im RAM)'),
+        )
+      }
       return pipeline.onError(error)
     }
   })

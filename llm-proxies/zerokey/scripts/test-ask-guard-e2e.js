@@ -35,10 +35,24 @@ const mhi = (s) =>
 // A scripted upstream: `turns` is a list of turns, each a list of MHI blocks
 // the model emits in that turn. Every block needs its own append event —
 // scanning is incremental and only closes a block on ⟧.
+//
+// The type assertion is not paranoia: nesting a turn one level too deep
+// ([[blocks]] instead of [blocks]) turns three blocks into ONE block whose
+// payload is the comma-joined string "glob¦…,ls¦…,cmd¦…". The parser then
+// correctly reports one malformed call, the test sees a short tool list and
+// passes — while asserting nothing about the case it was written for. That
+// happened on 2026-09-30 and cost a debugging round.
 function fakeStream(turns) {
   const chunks = []
-  for (const turn of turns) {
-    for (const block of turn) {
+  for (const [t, turn] of turns.entries()) {
+    if (!Array.isArray(turn)) throw new TypeError(`Runde ${t} ist kein Array: ${typeof turn}`)
+    for (const [b, block] of turn.entries()) {
+      if (typeof block !== 'string') {
+        throw new TypeError(
+          `Runde ${t}, Block ${b} ist kein String (${Array.isArray(block) ? 'Array' : typeof block}). ` +
+            `Ein Turn ist eine flache Liste von Block-Strings — vermutlich ein Array zu viel verschachtelt.`,
+        )
+      }
       chunks.push(mhi(OPEN + block + CLOSE))
       chunks.push(mhi('\n'))
     }

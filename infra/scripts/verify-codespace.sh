@@ -96,6 +96,15 @@ check "zerokey-Credentials"      bash -c '
   [ -s "$f" ] || { echo "FEHLT: $f (ChatGPT-Cookies) — secrets.sh unlock ODERHAR aus ~/.config/landscape/"; exit 1; }
   python3 -c "import json,sys;d=json.load(open(sys.argv[1]));u=d.get(\"chatgpt\",{}).get(\"main\",{});h=u.get(\"parsedFetch\",{}).get(\"headers\",{});sys.exit(0 if any(\"cookie\" in k.lower() for k in h) else 1)" "$f" \
     && echo "ChatGPT-Cookies vorhanden" || { echo "kein Cookie-Header in users.json"; exit 1; }'
+
+# Kopplung Client-Budget <-> Proxy-Budget. Am 2026-09-30 lief eine Session
+# 20 Requests lang in eine Schleife, weil opencode limit.context=16000 TOKENS
+# bei compaction.reserved=15000 fuer nur ~1000 Token echte Arbeit hatte. Die
+# Logik steht in check-proxy-budget.py, damit sie einzeln lauffaehig und
+# millisekundenschnell pruefbar ist (ein Heredoc in bash -c hat hier zweimal
+# in Quote-Fehler gefuehrt).
+check "zerokey Budget-Kopplung"  bash -c 'python3 "$REPO_ROOT/infra/scripts/check-proxy-budget.py"'
+
 info "Quoten" "$(bash "$REPO_ROOT/infra/scripts/quota.sh" 2>/dev/null | grep -E 'Gemini|Claude' | tr -s ' ' | tr '\n' '|' | cut -c1-90)"
 
 echo "== 5. Daemons =="

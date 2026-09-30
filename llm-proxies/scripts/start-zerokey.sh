@@ -46,6 +46,29 @@ if [ ! -f "$APP_DIR/temp/users.json" ]; then
     exit 1
 fi
 
+# Beendet einen PID und wartet, bis er wirklich weg ist — mit Notbremse.
+# Ein blosses `kill; sleep 1` ist unzuverlaessig: der Prozess haelt den Port
+# noch, wenn der neue Start ihn prueft, und der neue Server scheitert dann an
+# "Adresse bereits belegt". Live beobachtet am 2026-09-30.
+stop_pid() {
+    local pid="$1" i
+    [ -n "$pid" ] || return 0
+    kill -0 "$pid" 2>/dev/null || return 0
+    kill "$pid" 2>/dev/null || true
+    for i in $(seq 1 20); do            # max 10s auf SIGTERM
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.5
+    done
+    echo "WARN: PID $pid reagiert nicht auf SIGTERM — SIGKILL."
+    kill -9 "$pid" 2>/dev/null || true
+    for i in $(seq 1 10); do            # max 5s danach
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.5
+    done
+    echo "FEHLER: PID $pid laesst sich nicht beenden."
+    return 1
+}
+
 # Läuft er schon? Dann nur prüfen, nicht doppelt starten.
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
     if curl -sf -m 3 "$MODELS_URL" >/dev/null 2>&1; then
@@ -53,8 +76,8 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; the
         exit 0
     fi
     echo "WARN: PID $(cat "$PIDFILE") lebt, antwortet aber nicht — beende ihn."
-    kill "$(cat "$PIDFILE")" 2>/dev/null || true
-    sleep 1
+    stop_pid "$(cat "$PIDFILE")" || exit 1
+    rm -f "$PIDFILE"
 fi
 
 # Port-Belegung prüfen: ist es UNSER Proxy oder ein fremder Prozess?
