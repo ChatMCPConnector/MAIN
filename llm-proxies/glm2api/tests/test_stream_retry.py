@@ -1375,3 +1375,222 @@ def test_sse_response_is_closed_on_normal_completion():
     response = _Resp()
     list(client._iter_sse_events(response))
     assert response.closed is True
+
+
+# --- T-30: Feedback-Kanal "Tool-Result" ------------------------------------
+
+
+def _notice_turn_events():
+    """Ein Turn, der `open` nativ mappt UND identische Wiederholungen droppt
+    (remap + loop) und daneben einen gueltigen `read`-Call liefert."""
+    return [
+        {
+            "status": "finish",
+            "parts": [
+                {
+                    "logic_id": "p1",
+                    "status": "finish",
+                    "content": [
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {
+                                "name": "open",
+                                "id": "open-1",
+                                "arguments": {"open": [{"ref_id": "/workspaces/MAIN/README.md"}]},
+                            },
+                        },
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {
+                                "name": "open",
+                                "id": "open-2",
+                                "arguments": {"open": [{"ref_id": "/workspaces/MAIN/README.md"}]},
+                            },
+                        },
+                        {
+                            "type": "tool_calls",
+                            "tool_calls": {
+                                "name": "read",
+                                "id": "read-good",
+                                "arguments": {"filePath": "/workspaces/MAIN/README.md"},
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    ]
+
+
+def test_stream_notice_is_anchored_to_next_tool_result():
+    """T-30: Nach einem Turn mit Remap/Loop-Drops muss die Rueckmeldung im
+    naechsten Client-Request IM Tool-Result stehen — nicht als Echo des
+    Upstream-Verlaufs, sondern als echter Anker."""
+    client, calls = _make_client([_notice_turn_events()])
+    payload = {
+        "model": "glm-5.3",
+        "conversation_id": "conv-notice-1",
+        "messages": [
+            {"role": "user", "content": "inspect"},
+            {"role": "tool", "tool_call_id": "old", "name": "bash", "content": "old output"},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"filePath": {"type": "string"}},
+                        "required": ["filePath"],
+                    },
+                },
+            }
+        ],
+    }
+    list(client.stream_chat_completion(dict(payload)))
+
+    follow_up = {
+        "model": "glm-5.3",
+        "conversation_id": "conv-notice-1",
+        "messages": [
+            {"role": "user", "content": "inspect"},
+            {"role": "assistant", "tool_calls": [{"id": "read-good", "type": "function", "function": {"name": "read", "arguments": "{\"filePath\": \"/workspaces/MAIN/README.md\"}"}}]},
+            {"role": "tool", "tool_call_id": "read-good", "name": "read", "content": "file contents here"},
+        ],
+        "tools": payload["tools"],
+    }
+    client._anchor_pending_result_notice(follow_up)
+    tool_message = follow_up["messages"][2]
+    assert isinstance(tool_message["content"], str)
+    assert "[native_remap_notice]" in tool_message["content"]
+    assert "[loop_guard_notice]" in tool_message["content"]
+    assert "TOOL DISCIPLINE" in tool_message["content"]
+    assert tool_message["content"].index("[native_remap_notice]") < tool_message["content"].index("file contents here")
+    # Der Original-Inhalt bleibt erhalten (nach dem Anker).
+    assert "file contents here" in tool_message["content"]
+
+
+def test_notice_is_consumed_once():
+    """Der Merker ist exhaustiv: der zweite Request derselben Konversation
+    sieht keine duplizierte Rueckmeldung."""
+    client, calls = _make_client([_notice_turn_events()])
+    payload = {
+        "model": "glm-5.3",
+        "conversation_id": "conv-once",
+        "messages": [{"role": "user", "content": "inspect"}],
+        "tools": [
+            {"type": "function", "function": {"name": "read", "parameters": {"type": "object"}}}
+        ],
+    }
+    list(client.stream_chat_completion(dict(payload)))
+
+    request = {
+        "conversation_id": "conv-once",
+        "messages": [
+            {"role": "tool", "tool_call_id": "t1", "name": "read", "content": "result"},
+        ],
+    }
+    client._anchor_pending_result_notice(request)
+    first = request["messages"][0]["content"]
+    client._anchor_pending_result_notice(request)
+    second = request["messages"][0]["content"]
+    # Der Merker ist exhaustiv: die zweite Ankerung ist ein No-op — der
+    # Text bleibt exakt der des ersten Ankers (kein Duplikat, kein
+    # zusaetzlicher Anker-Block). Der RECAP erwaehnt die Marker-Namen
+    # selbst, deshalb je 2 Vorkommen (1 echte Notice + 1 RECAP-Erwahnung).
+    assert "[native_remap_notice]" in first
+    assert second == first
+    assert second.count("[native_remap_notice]") == first.count("[native_remap_notice]")
+    assert second.count("TOOL DISCIPLINE") == 1
+
+
+def test_notice_without_tool_result_becomes_synthetic_system_tool_message():
+    """Ohne Tool-Result in der Historie (Textantwort des Clients) wird die
+    Rueckmeldung als synthetische Tool-Nachricht `system` angehaengt — kein
+    erfundener Call, keine Echo-Gefahr."""
+    client, calls = _make_client([_notice_turn_events()])
+    payload = {
+        "model": "glm-5.3",
+        "conversation_id": "conv-synth",
+        "messages": [{"role": "user", "content": "inspect"}],
+        "tools": [
+            {"type": "function", "function": {"name": "read", "parameters": {"type": "object"}}}
+        ],
+    }
+    list(client.stream_chat_completion(dict(payload)))
+
+    request = {
+        "conversation_id": "conv-synth",
+        "messages": [{"role": "user", "content": "weiter ohne tool"}],
+    }
+    client._anchor_pending_result_notice(request)
+    assert len(request["messages"]) == 2
+    synthetic = request["messages"][1]
+    assert synthetic["role"] == "tool"
+    assert synthetic["name"] == "system"
+    assert synthetic["tool_call_id"] == "system-notice"
+    assert "[native_remap_notice]" in synthetic["content"]
+
+
+def test_non_stream_notice_is_anchored_to_next_tool_result():
+    """Non-Streaming-Pfad: identische Vormerkung wie im Stream-Pfad."""
+    client, calls = _make_client([_notice_turn_events()])
+    payload = {
+        "model": "glm-5.3",
+        "conversation_id": "conv-ns",
+        "messages": [{"role": "user", "content": "inspect"}],
+        "tools": [
+            {"type": "function", "function": {"name": "read", "parameters": {"type": "object"}}}
+        ],
+    }
+    client.chat_completion(dict(payload))
+
+    request = {
+        "conversation_id": "conv-ns",
+        "messages": [
+            {"role": "tool", "tool_call_id": "t1", "name": "read", "content": "result"},
+        ],
+    }
+    client._anchor_pending_result_notice(request)
+    assert "[native_remap_notice]" in request["messages"][0]["content"]
+
+
+def test_escalation_notice_reaches_tool_result_channel():
+    """prepend_blocked_notice (T-10-Eskalation) darf nicht nur im Denkkanal
+    landen — der Sink schreibt sie zusaetzlich in die konversationsweite
+    Vormerkung."""
+    from types import SimpleNamespace as _NS
+
+    from glm2api.services.translator import GLMEventAccumulator
+
+    client, calls = _make_client([_notice_turn_events()])
+    accumulator = GLMEventAccumulator(
+        model="glm-5.3",
+        allowed_tool_names={"read"},
+        fallback_tool_url=None,
+        debug_enabled=False,
+        logger=_NS(warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None),
+        history_tool_call_signatures=set(),
+        prompt_chars=0,
+        max_output_tokens=1024,
+        tool_choice_mode="auto",
+        tool_choice_name=None,
+        stop_sequences=(),
+    )
+    esc_payload = {"conversation_id": "conv-esc"}
+    accumulator._pending_result_notice_sink = lambda notice_text: client._append_pending_result_notice_text(
+        esc_payload, notice_text
+    )
+    accumulator.prepend_blocked_notice("open", [])
+    request = {
+        "conversation_id": "conv-esc",
+        "messages": [
+            {"role": "tool", "tool_call_id": "t1", "name": "read", "content": "result"},
+        ],
+    }
+    client._anchor_pending_result_notice(request)
+    content = request["messages"][0]["content"]
+    assert "[blocked_tool_notice]" in content
+    assert "NOT executed" in content
+    assert "TOOL DISCIPLINE" in content

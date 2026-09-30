@@ -32,6 +32,7 @@ from ..utils.tool_protocol import (
     BLOCKED_NATIVE_TOOL_NAMES,
     is_blocked_tool_name,
     CANONICAL_TOOL_CALL_EXAMPLE,
+    TOOL_DISCIPLINE_RECAP,
     TOOL_FORMAT_REMINDER,
     build_tool_call_instructions as _protocol_build_tool_call_instructions,
     filter_tools,
@@ -2674,7 +2675,10 @@ def convert_messages(
     # langem Reasoning (60k+ Tokens im max/deep_thinking Modus) oder Tool-Result-Runden
     # sofort mit dem JSON-Tool-Call startet statt in Prosa/Plaene abzudriften.
     if tools and tool_choice_policy.get("mode") != "none":
-        prompt = prompt + "\n\n" + TOOL_FORMAT_REMINDER
+        # T-29: zuerst der Tool-Disziplin-RECAP (Name + Quellen-Disziplin),
+        # dann der Format-Reminder. Beide am ENDE des Prompts — der einzige
+        # Ort, den die History-Kompression nie anruehrt.
+        prompt = prompt + "\n\n" + TOOL_DISCIPLINE_RECAP + "\n\n" + TOOL_FORMAT_REMINDER
     return [{"role": "user", "content": [{"type": "text", "text": prompt + "\n\nAssistant: "}]}]
 
 
@@ -5065,6 +5069,19 @@ class GLMEventAccumulator:
             name.strip() for name in blocked_names_text.split(",") if name.strip()
         )
         notice_chunk = self._notice_chunk(notice)
+        # T-30: der Denkkanal wird vom Client (OpenCode) verworfen und nie
+        # zurueckgespiegelt. Damit diese Eskalations-Stufe (T-10: das Modell
+        # behauptet, den blockierten Call ausgefuehrt zu haben) das Modell
+        # GARANTIERT erreicht, wird sie zusaetzlich als konversationsweite
+        # Rueckmeldung vorgemerkt — der Client-Verlauf liefert beim naechsten
+        # Request ein Tool-Result, an das der Service sie anhaengt.
+        # `self._anchor`-Hooks fehlen hier bewusst: der Accumulator kennt
+        # den Service nicht; der Service liest den Merker beim naechsten
+        # Request ueber `_take_pending_result_notice` (via accumulate in
+        # `_pending_result_notices`, gesetzt vom Aufrufer, falls vorhanden).
+        pending_store = getattr(self, "_pending_result_notice_sink", None)
+        if callable(pending_store):
+            pending_store(notice)
         return [notice_chunk, *finalize_chunks]
 
     def build_response(self, status: str | None = None) -> dict[str, object]:

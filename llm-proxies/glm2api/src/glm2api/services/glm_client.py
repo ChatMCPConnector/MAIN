@@ -27,6 +27,7 @@ from typing import Callable, Iterator
 from ..config import AppConfig
 from ..logging_utils import debug_dump, redact_sensitive_text
 from .glm_auth import GLMAccessTokenManager, build_sign
+from ..utils.tool_protocol import TOOL_DISCIPLINE_RECAP
 from .translator import (
     BLOCKED_NATIVE_TOOL_NAMES,
     GLMEventAccumulator,
@@ -34,6 +35,7 @@ from .translator import (
     convert_messages,
     extract_history_tool_call_signatures,
     extract_recent_user_url,
+    extract_text_content,
     filter_tools,
     is_abandon_claim,
     parse_tool_choice_policy,
@@ -610,6 +612,13 @@ class GLMWebClient:
         #   * eine runde haelt sie fuer ihre dauer exklusiv.
         self._persistent_conversation_account: int | None = None
         self._conversation_lock = threading.Lock()
+        # T-30: vorgemerkte Proxy-Rueckmeldungen (remaps/drops/blocked) pro
+        # Konversation. Sie werden an das naechste echte Tool-Result
+        # angehaengt — der einzige Kanal, den OpenCode dem Modell garantiert
+        # zurueckspiegelt (der Denkkanal wird vom Client verworfen, siehe
+        # S-22/S-23-Lehre in `_build_blocked_tool_follow_up_payload`).
+        self._pending_result_notices: dict[str, str] = {}
+        self._pending_result_notice_lock = threading.Lock()
         # Wird nur gehalten, solange eine runde die conversation nutzt.
         self._conversation_use_lock = threading.RLock()
 
@@ -710,8 +719,128 @@ class GLMWebClient:
                 stop_sequences.extend(str(item) for item in source if item)
         return policy, tuple(dict.fromkeys(stop_sequences))
 
+    # ------------------------------------------------------------------
+    # T-30 (Live-Analyse 2026-09-30): Feedback-Kanal "Tool-Result".
+    #
+    # Der Denkkanal (`reasoning_content`) ist ein Ausgabekanal zum Clienten:
+    # OpenCode gibt ihn nicht als `reasoning`-Part aus und spiegelt ihn in
+    # der Folgeanfrage NICHT zurueck — das Modell sieht seine own notices
+    # nie (S-22/S-23, 87 Loop-Guard-Drops im Log wirkten fuer das Modell wie
+    # "Erfolg ohne Ergebnis"). Ein echtes Tool-Result dagegen kommt als
+    # `role: "tool"` zurueck und landet 1:1 im Modellkontext.
+    # ------------------------------------------------------------------
+    _RESULT_NOTICE_MAX_CHARS = 1800
+
+    def _ensure_notice_store(self) -> tuple[dict[str, str], threading.Lock]:
+        """T-30: Lazy-Init des Vormerk-Speichers. Der Client wird in Teilen
+        der Testsuite per `__new__` ohne `__init__` gebaut — der Speicher
+        darf deshalb nicht nur im Konstruktor existieren."""
+        store = getattr(self, "_pending_result_notices", None)
+        lock = getattr(self, "_pending_result_notice_lock", None)
+        if not isinstance(store, dict):
+            store = {}
+            self._pending_result_notices = store
+        if not isinstance(lock, type(threading.Lock())):
+            lock = threading.Lock()
+            self._pending_result_notice_lock = lock
+        return store, lock
+
+    def _conversation_key(self, payload: dict[str, object]) -> str:
+        return str(payload.get("conversation_id", "") or "")
+
+    def _store_pending_result_notice(
+        self,
+        payload: dict[str, object],
+        accumulator: object,
+        blocked: list[str],
+    ) -> None:
+        """T-30: Rueckmeldungen des soeben beendeten Turns vormerken.
+
+        Reihenfolge wie `_turn_notice_texts` (remap -> blocked -> loop) plus
+        dem Disziplin-RECAP. Bewusst VOR der Follow-up-Entscheidung aufgerufen:
+        die client-seitige Historie enthaelt interne Korrektur-Runden nie, die
+        Ankerung stellt deshalb sicher, dass die Rueckmeldung trotzdem ankommt.
+        """
+        notices = _turn_notice_texts(accumulator, list(blocked or []))
+        if not notices:
+            return
+        self._append_pending_result_notice_text(payload, " \n".join(notices))
+
+    def _append_pending_result_notice_text(self, payload: dict[str, object], text: str) -> None:
+        """T-30: Rohtext an die vorgemerkte Rueckmeldung derselben Konversation
+        anhaengen. Der Disziplin-RECAP wird erst beim Anker ergaenzt (genau
+        einmal), damit Mehrex-Legungen ihn nicht vervielfaeltigen."""
+        if not text:
+            return
+        store, lock = self._ensure_notice_store()
+        key = self._conversation_key(payload)
+        with lock:
+            existing = store.get(key, "")
+            combined = f"{existing}\n{text}" if existing else text
+            store[key] = combined
+
+    def _take_pending_result_notice(self, payload: dict[str, object]) -> str:
+        """T-30: vorgemerkte Rueckmeldung abholen (und verbrauchen)."""
+        store, lock = self._ensure_notice_store()
+        key = self._conversation_key(payload)
+        with lock:
+            return store.pop(key, "")
+
+    def _anchor_pending_result_notice(self, payload: dict[str, object]) -> None:
+        """T-30: vorgemerkte Rueckmeldung an das LETZTE Tool-Result der
+        Request-Historieanhaengen — genau das sieht das Modell beim
+        naechsten Denkschritt zuerst.
+
+        Sonderfall: liefert der Client KEIN Tool-Result (erste Runde oder
+        Textantwort), wird die Rueckmeldung als eigene Tool-Nachricht mit
+        dem Namen `system` angehaengt — der Upstream-Transkript-Serializer
+        rendert sie als Werkzeugprotokoll-Block, den das Modell als
+        Systemrueckmeldung liest (kein erfundener Call, keine Echo-Gefahr:
+        die Call-ID `system-notice` existiert in keiner Historie).
+        """
+        notice = self._take_pending_result_notice(payload)
+        if not notice:
+            return
+        # T-30: der RECAP kommt genau hier dazu — naehe zum Aktionszeitpunkt.
+        if len(notice) > self._RESULT_NOTICE_MAX_CHARS:
+            notice = notice[: self._RESULT_NOTICE_MAX_CHARS - 20] + " …[truncated]"
+        notice = f"{notice}\n\n{TOOL_DISCIPLINE_RECAP}"
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return
+        target_index: int | None = None
+        for index in range(len(messages) - 1, -1, -1):
+            if str(messages[index].get("role", "")) == "tool":
+                target_index = index
+                break
+        anchored = False
+        if target_index is not None:
+            message = messages[target_index]
+            existing = message.get("content")
+            existing_text = extract_text_content(existing) if existing else ""
+            message["content"] = f"{notice}\n\n---\n{existing_text}".strip()
+            anchored = True
+        if not anchored:
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": "system-notice",
+                    "name": "system",
+                    "content": notice,
+                }
+            )
+        self.logger.warning(
+            "T-30: pending proxy feedback anchored to %s of the next request "
+            "(tool-result channel reaches the model; reasoning deltas do not)",
+            f"tool result #{target_index}" if anchored else "a synthetic system tool message",
+        )
+
     def chat_completion(self, payload: dict[str, object]) -> tuple[dict[str, object], str | None]:
         payload = dict(payload)  # lokal kopierbar fuer retry-mutationen (10040-budget)
+        # T-30: Holder fuer die jeweils aktive Runde. Im Stream-Pfad lebt
+        # `active_payload` generator-lokal und ist fuer die Fabrik-Closure
+        # nicht sichtbar — der Holder transportiert die aktive Runde hinein.
+        _active_round_payload_holder: list = []
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         tool_choice_policy, stop_sequences = self._extract_tool_choice_and_stop(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
@@ -770,7 +899,7 @@ class GLMWebClient:
             effective_max_tokens = self.config.glm_max_output_tokens
 
         def new_accumulator() -> GLMEventAccumulator:
-            return GLMEventAccumulator(
+            accumulator_obj = GLMEventAccumulator(
                 model=str(payload["model"]),
                 allowed_tool_names=allowed_tool_names,
                 fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
@@ -789,6 +918,15 @@ class GLMWebClient:
                 ),
                 stop_sequences=stop_sequences,
             )
+            # T-30: Eskalations-Notices (prepend_blocked_notice) zusaetzlich
+            # in den Tool-Result-Kanal vormerken. Der Holder wird auf die
+            # jeweils aktive Runde gesetzt; bis dahin gilt das Ausgangs-Payload.
+            accumulator_obj._pending_result_notice_sink = ( # type: ignore[union-attr]
+                lambda notice_text: self._append_pending_result_notice_text(
+                    _active_round_payload_holder[0] or payload, notice_text
+                )
+            )
+            return accumulator_obj
 
         # C-15: bei transient-retry, leer-retry und follow-up wird ein neuer
         # accumulator erzeugt. Die bis dahin erhaltene conversation_id
@@ -817,6 +955,11 @@ class GLMWebClient:
         # aktuellen runde; nach einer follow-up-runde ist das deren payload
         # mit der negativen tool-rueckmeldung.
         active_payload = payload
+        _active_round_payload_holder.clear()
+        _active_round_payload_holder.append(active_payload)
+        # T-30: vorgemerkte Rueckmeldung ins letzte Tool-Result anhaengen
+        # (siehe Stream-Pfad).
+        self._anchor_pending_result_notice(active_payload)
 
         # S-26 (live 2026-09-28): der loop-guard-Zaehler muss request-
         # uebergreifend leben. Er lag im Accumulator, der pro Upstream-Runde
@@ -952,6 +1095,13 @@ class GLMWebClient:
                         message_obj = choices_obj[0].get("message")
                         if isinstance(message_obj, dict):
                             has_valid_calls = bool(message_obj.get("tool_calls"))
+                    # T-30: Rueckmeldung fuer das naechste Tool-Result
+                    # vormerken (siehe Stream-Pfad).
+                    self._store_pending_result_notice(
+                        active_payload,
+                        accumulator,
+                        list(accumulator.blocked_tool_attempt_names),
+                    )
                     # S-23: wie im stream-pfad — die Folge-runde feuert bei
                     # JEDER rueckmeldung, die das modell sehen muss, nicht nur
                     # bei blockierten tools. Begruendung siehe
@@ -998,11 +1148,17 @@ class GLMWebClient:
                         response, assistant_id = self._open_chat_stream(follow_up, preferred_account_index=self._get_preferred_account_index(lease.ticket), filtered_tools=filtered_tools)
                         # C-12: follow-up-runde wird zur aktiven runde
                         active_payload = follow_up
+                        _active_round_payload_holder.clear()
+                        _active_round_payload_holder.append(active_payload)
+                        # T-30: siehe Stream-Pfad — keine Ankerung noetig, die
+                        # Korrektur-Nachricht enthaelt die Rueckmeldungen.
                         continue
                     # S-22: ALLE notices eines turns an EINER stelle, in
                     # fester reihenfolge, im DENKKANAL statt im sichtbaren
                     # text. Siehe die ausfuehrliche begruendung im
                     # stream-pfad. Reihenfolge: remap -> blocked -> loop.
+                    # T-30: zusaetzlich fuer das naechste Tool-Result vormerken.
+                    self._store_pending_result_notice(active_payload, accumulator, [])
                     self._inject_turn_notices(result, accumulator)
                     return result, accumulator.conversation_id
                 if retry_exc is None:
@@ -1055,6 +1211,9 @@ class GLMWebClient:
         # obwohl er der fall ist, in dem dem modell die erklaerung am
         # meisten fehlt: es hat calls gesendet und keine ergebnisse
         # gesehen. Also auch hier. S-22: alle notices, im denkkanal.
+        # T-30: auch der letzte Turn einer Non-Streaming-Runde merkt seine
+        # Rueckmeldung fuer den naechsten Client-Request vor.
+        self._store_pending_result_notice(active_payload, accumulator, [])
         final_result = accumulator.build_response()
         self._inject_turn_notices(final_result, accumulator)
         return final_result, accumulator.conversation_id
@@ -1159,6 +1318,10 @@ class GLMWebClient:
 
     def stream_chat_completion(self, payload: dict[str, object]):
         payload = dict(payload)  # lokal kopierbar fuer retry-mutationen (10040-budget)
+        # T-30: Holder fuer die jeweils aktive Runde. Im Stream-Pfad lebt
+        # `active_payload` generator-lokal und ist fuer die Fabrik-Closure
+        # nicht sichtbar — der Holder transportiert die aktive Runde hinein.
+        _active_round_payload_holder: list = []
         filtered_tools, allowed_tool_names = self._resolve_tools(payload)
         tool_choice_policy, stop_sequences = self._extract_tool_choice_and_stop(payload)
         max_stream_retries = self.config.glm_stream_error_max_retries
@@ -1197,7 +1360,7 @@ class GLMWebClient:
             effective_max_tokens = self.config.glm_max_output_tokens
 
         def new_accumulator() -> GLMEventAccumulator:
-            return GLMEventAccumulator(
+            accumulator_obj = GLMEventAccumulator(
                 model=str(payload["model"]),
                 allowed_tool_names=allowed_tool_names,
                 fallback_tool_url=extract_recent_user_url(list(payload.get("messages", []))), # type: ignore[arg-type]
@@ -1216,6 +1379,15 @@ class GLMWebClient:
                 ),
                 stop_sequences=stop_sequences,
             )
+            # T-30: Eskalations-Notices (prepend_blocked_notice) zusaetzlich
+            # in den Tool-Result-Kanal vormerken. Der Holder wird auf die
+            # jeweils aktive Runde gesetzt; bis dahin gilt das Ausgangs-Payload.
+            accumulator_obj._pending_result_notice_sink = ( # type: ignore[union-attr]
+                lambda notice_text: self._append_pending_result_notice_text(
+                    _active_round_payload_holder[0] or payload, notice_text
+                )
+            )
+            return accumulator_obj
 
         # C-14: lease und upstream-stream werden NICHT schon beim aufruf der
         # methode geoeffnet, sondern erst beim ersten pull des generators.
@@ -1309,6 +1481,12 @@ class GLMWebClient:
             # tool-rueckmeldung der follow-up-runde weg — der retry loeste
             # denselben blockierten call erneut aus.
             active_payload = payload
+            _active_round_payload_holder.clear()
+            _active_round_payload_holder.append(active_payload)
+            # T-30: falls ein frueherer Request dieser Konversation eine
+            # Rueckmeldung vorgemerkt hat, geht sie jetzt ins erste
+            # Tool-Result der Historie (garantiert zurueckgespiegelt).
+            self._anchor_pending_result_notice(active_payload)
             attempt = 0
             blocked_follow_ups = 0
             # Namen, die in IRGEND EINER runde dieses turns blockiert
@@ -1504,6 +1682,12 @@ class GLMWebClient:
                     # Anfrage bringt anschliessend die tatsaechliche Ausgabe.
                     # Fuer einen blockierten-only-turn bleibt die interne
                     # Negativ-Korrektur moeglich, weil nichts auszufuehren ist.
+                    # T-30: die Rueckmeldungen dieses Turns fuer das naechste
+                    # echte Tool-Result vormerken. Bewusst VOR der
+                    # Follow-up-Entscheidung: die client-seitige Historie
+                    # enthaelt interne Korrektur-Runden nie — die Ankerung
+                    # stellt sicher, dass die Rueckmeldung trotzdem ankommt.
+                    self._store_pending_result_notice(active_payload, accumulator, blocked)
                     needs_correction = bool(
                         blocked
                         or getattr(accumulator, "native_remapped_calls", [])
@@ -1629,6 +1813,13 @@ class GLMWebClient:
                         # C-12: ab jetzt ist die follow-up-runde die aktive —
                         # ein retry darunter muss deren kontext behalten.
                         active_payload = follow_up
+                        _active_round_payload_holder.clear()
+                        _active_round_payload_holder.append(active_payload)
+                        # T-30: KEINE zusaetzliche Ankerung hier — die
+                        # Korrektur-Nachricht von
+                        # `_build_blocked_tool_follow_up_payload` traegt die
+                        # Rueckmeldungen bereits in sich; eine zweite Kopie
+                        # als synthetisches Tool-Result waere Redundanz.
                         continue
                     # Leer-Turn-Autonomie-Fix: komplett
                     # leere Upstream-runden (kein text, keine reasoning, keine

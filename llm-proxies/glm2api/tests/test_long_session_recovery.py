@@ -249,7 +249,15 @@ def test_long_session_waits_for_client_tool_results_before_correction():
         for index in range(len(paths))
     ), "the next model round must include the actual prior OpenCode tool result"
     assert "Audit complete" in state["final_text"]
-    assert not any("[native_remap_notice]" in str(payload) for payload in state["payloads"]), (
+    # T-30: die Rueckmeldungen (remap/loop) duerfen ausschliesslich im
+    # Tool-Result-Kanal der Folge-Requests stehen — NIE als eigenstaendige
+    # Korrektur-Payload-Generierung vor dem echten Client-Result (das war
+    # der alte Bug: Stale-Turns vor der echten Rueckgabe).
+    assert not any(
+        "[native_remap_notice]" in str(payload.get("messages", [{}])[0])
+        and "real file result" not in str(payload)
+        for payload in state["payloads"]
+    ), (
         "successful tool results should not trigger stale pre-execution correction payloads"
     )
 
@@ -358,5 +366,15 @@ def test_long_session_history_is_bounded_by_client_results_not_proxy_internals()
         prior_payload = state["payloads"][index]
         serialized = json.dumps(prior_payload.get("messages", []), ensure_ascii=False)
         assert f"actual OpenCode output for /workspaces/MAIN/read-{index - 1}.md" in serialized
-        assert "[native_remap_notice]" not in serialized
-        assert "[loop_guard_notice]" not in serialized
+        # T-30: die Marker duerfen AUSSCHLIESSLICH in der Message stehen, die
+        # auch das echte Client-Result traegt (neuer Rueckmelde-Kanal) — nie
+        # in einer eigenstaendigen Upstream-Korrektur-Nachricht.
+        for message in prior_payload.get("messages", []):
+            message_text = json.dumps(message, ensure_ascii=False)
+            if "[native_remap_notice]" in message_text or "[loop_guard_notice]" in message_text:
+                assert str(message.get("role")) == "tool", (
+                    "notice markers must live inside a tool result, not upstream text"
+                )
+                assert "actual OpenCode output" in message_text, (
+                    "notice must be anchored to the client result it belongs to"
+                )

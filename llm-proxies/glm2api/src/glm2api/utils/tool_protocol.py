@@ -254,6 +254,27 @@ TOOL_FORMAT_REMINDER = (
 )
 
 
+# T-29 (Live-Analyse 2026-09-30): Der Tool-Disziplin-Kopf (System-Prompt von
+# OpenCode mit INSTRUCTIONS-glm2api.md) steht am ANFANG des Transkripts und
+# faellt bei langen Sessions zuerst in die History-Kompression. Der hier
+# verankerte RECAP steht dagegen am PROMPT-ENDE (nach dem letzten User-Turn,
+# vor TOOL_FORMAT_REMINDER) und ist damit kompressionssicher — er beginnt
+# IMMER mit `[System instruction — highest priority]`, damit das Modell ihn
+# nie als Teil der eigenen Narration liest. Regeln bewusst redundant zum
+# Kopf: unter langem Kontext gewinnt nicht der Recall (den hat das Modell,
+# live geprueft), sondern die Naehe zum Aktionszeitpunkt.
+TOOL_DISCIPLINE_RECAP = (
+    "[System instruction — highest priority] TOOL DISCIPLINE (restated closest to your action point): "
+    "The COMPLETE tool contract is the TOOL SCHEMAS list above. `open`, `open_url`, `browse`, "
+    "`web_search`, `execute_sandbox_code` and `sandbox` DO NOT exist here — use `read` "
+    "(absolute filePath) for files, `webfetch` (full https URL) for web pages, `bash` for commands. "
+    "Never invent tool names, URLs, or `ref_id`/`turn0search*` references; never repeat an "
+    "identical call after you have seen its result. If proxy notices like `[native_remap_notice]`, "
+    "`[blocked_tool_notice]` or `[loop_guard_notice]` appear in a tool result, obey them immediately "
+    "and switch to the named tool."
+)
+
+
 def tools_to_prompt(
     tools: list[dict[str, object]],
     blocked_tool_names: set[str] | None = None,

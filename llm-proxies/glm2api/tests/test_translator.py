@@ -5569,3 +5569,49 @@ def test_self_steering_without_tool_calls_is_preserved_in_stream_and_body(chunk_
     assert message.get("content") == _SELF_STEERING_TEXT_ONLY, (chunk_size, message)
     assert not message.get("tool_calls")
     assert choice.get("finish_reason") == "stop"
+
+
+# --- T-29: Tool-Disziplin-RECAP am Prompt-Ende -----------------------------
+
+
+def test_convert_messages_appends_tool_discipline_recap_at_prompt_tail():
+    """T-29: der Disziplin-RECAP muss am PROMPT-ENDE stehen — nach dem
+    letzten User-Turn, vor dem Format-Reminder. Genau dieser Teil ueberlebt
+    die History-Kompression immer (sie sammelt von neu nach alt und haengt
+    Werkzeugvertrag + Reminder frisch an)."""
+    from glm2api.utils.tool_protocol import TOOL_FORMAT_REMINDER
+
+    messages = [
+        {"role": "system", "content": "Du bist ein Build-Agent. " + "Historie " * 800},
+        {"role": "user", "content": "Lies die Datei."},
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "read a file",
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
+    (prompt,) = convert_messages(messages, tools)
+    text = prompt["content"][0]["text"]
+
+    user_index = text.index("User: Lies die Datei.")
+    recap_index = text.index("TOOL DISCIPLINE (restated")
+    reminder_index = text.index(TOOL_FORMAT_REMINDER[:60])
+    assert user_index < recap_index < reminder_index
+    recap = text[recap_index:reminder_index]
+    assert "`open`" in recap
+    assert "DO NOT exist here" in recap
+    assert "[System instruction — highest priority]" in text[recap_index - 60 : recap_index]
+
+
+def test_convert_messages_recap_omitted_without_tools():
+    """Ohne Werkzeuge gibt es auch keinen Disziplin-RECAP (Text-only-Runs
+    bleiben unangetastet)."""
+    messages = [{"role": "user", "content": "Nur eine Frage, keine Werkzeuge."}]
+    (prompt,) = convert_messages(messages, None)
+    text = str(prompt["content"])
+    assert "TOOL DISCIPLINE (restated" not in text
