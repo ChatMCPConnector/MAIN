@@ -312,6 +312,12 @@ def _turn_notice_texts(accumulator: GLMEventAccumulator, blocked: list[str]) -> 
         blocked_notice = _blocked_notice_text(blocked)
         if blocked_notice:
             notices.append(blocked_notice)
+    # B-01: die burst-meldung kommt an eigene stelle VOR der
+    # loop-guard-meldung — sie ist deren eskalation und traegt die
+    # handlungsanweisung ("warte auf ein ergebnis"), nicht nur die zaehlung.
+    for burst_notice in list(getattr(accumulator, "burst_notices", []) or []):
+        if burst_notice and burst_notice not in notices:
+            notices.append(burst_notice)
     loop_notice = _loop_guard_notice_text(
         int(getattr(accumulator, "loop_guard_dropped_count", 0) or 0),
         getattr(accumulator, "loop_guard_dropped_tools", []),

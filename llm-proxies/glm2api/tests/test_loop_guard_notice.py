@@ -118,14 +118,19 @@ def test_loop_guard_gilt_ueber_dict_und_listenform_gemeinsam():
 
 
 def test_loop_guard_begrenzt_identische_textprotokoll_calls():
+    # Vier gleiche calls: zwei sind erlaubt, zwei fallen — und das ist NOCH
+    # kein burst (Schwelle: 5 verwarfene kopien). Ab sieben gleichen calls
+    # greift B-01 und reduziert auf eine ausfuehrung, siehe
+    # `test_burst_guard.py`.
     acc = _acc()
-    acc.consume_event(_text_read_event(10))
+    acc.consume_event(_text_read_event(4))
     acc.finalize("finish")
     message = acc.build_response()["choices"][0]["message"]
 
     assert len(message.get("tool_calls") or []) == 2
-    assert acc.loop_guard_dropped_count == 8
+    assert acc.loop_guard_dropped_count == 2
     assert acc.loop_guard_dropped_tools == ["read"]
+    assert acc.burst_guard_tripped is False
 
 
 def test_zwei_absichtlich_gleiche_text_calls_bleiben_erlaubt():
@@ -316,9 +321,11 @@ def test_non_stream_antwort_enthaelt_die_loop_guard_notice():
 
 
 def test_stream_guard_notice_gilt_auch_fuer_textprotokoll_calls():
+    # Vier gleiche calls (kein burst, siehe `test_burst_guard.py`): der
+    # loop-guard laesst zwei durch und meldet die zwei verwarfenen.
     client = _make_client()
     client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
-        _FakeResponse([_text_read_event(10)]),
+        _FakeResponse([_text_read_event(4)]),
         "assistant-1",
     )
 
@@ -326,13 +333,14 @@ def test_stream_guard_notice_gilt_auch_fuer_textprotokoll_calls():
 
     assert text.count("filePath") == 2
     assert "[loop_guard_notice]" in text
-    assert "8 identical read call" in text
+    assert "2 identical read call" in text
 
 
 def test_non_stream_guard_notice_gilt_auch_fuer_textprotokoll_calls():
+    # Vier gleiche calls (kein burst, siehe `test_burst_guard.py`).
     client = _make_client()
     client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
-        _FakeResponse([_text_read_event(10)]),
+        _FakeResponse([_text_read_event(4)]),
         "assistant-1",
     )
 
@@ -341,7 +349,7 @@ def test_non_stream_guard_notice_gilt_auch_fuer_textprotokoll_calls():
 
     assert len(message.get("tool_calls") or []) == 2
     assert "[loop_guard_notice]" in (message.get("reasoning_content") or "")
-    assert "8 identical read call" in message["reasoning_content"]
+    assert "2 identical read call" in message["reasoning_content"]
     assert "[loop_guard_notice]" not in (message.get("content") or "")
 
 

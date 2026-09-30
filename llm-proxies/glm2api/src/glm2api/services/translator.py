@@ -661,6 +661,51 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
 # und die part-verkettung haette mitten im echo-präfix umgebrochen.
 # T-04: maximale anzahl identischer nativer calls pro turn
 _MAX_IDENTICAL_NATIVE_CALLS = 2
+
+def _canonical_signature(signature: str) -> str:
+    """B-01: eine Signatur auf EINE Schreibweise bringen.
+
+    Die Drop-Pfade bauen die Signatur unterschiedlich — der native Pfad
+    (Z. ~3470) normalisiert die Argumente mit `sort_keys=True`,
+    `_tool_call_signature` ruft `safe_json_dumps` auf (ohne Sortierung).
+    Fuer `_note_turn_drop` und `_collapse_turn_burst` muessen beide Seiten
+    denselben String liefern, sonst findet der Burst-Guard den einen
+    uebrig gebliebenen Client-Call nicht und der Burst bleibt unerkannt.
+    """
+    name, separator, rendered = signature.partition(":")
+    if not separator:
+        return signature
+    try:
+        parsed = json.loads(rendered)
+    except (json.JSONDecodeError, TypeError):
+        return signature
+    if isinstance(parsed, str):
+        return signature
+    try:
+        normalized = json.dumps(
+            parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    except (TypeError, ValueError):
+        return signature
+    return f"{name}:{normalized}"
+
+
+# B-01 (Live 2026-10-01, 00:11): burst-grenze. Innerhalb EINES turns
+# feuert das modell denselben aufruf bis zu 29x hintereinander, ohne je auf
+# ein ergebnis zu warten — jeder block mit leerem `思考结束` (denken
+# beendet) davor. Der loop-guard verwirft die wiederholungen still, aber
+# das modell sieht das nie und feuert weiter; es entsteht eine pause von
+# ~30 identischen, unnutzen rounds.
+#
+# Deshalb: sobald der loop-guard fuer EINE signatur in einem turn so oft
+# zuschlaegt, ist es kein Wiederholungsfehler mehr, sondern ein Burst —
+# der turn wird am CLIENT vollstaendig gerissen (kein doppel-exec, keine
+# 2x-gesendeten calls) und das modell bekommt stattdessen eine klare
+# Meldung ueber den tool-result-kanal (T-30), dass es auf ein ergebnis
+# warten soll. Die Schwelle liegt bewusst ueber `_MAX_IDENTICAL_NATIVE_CALLS`:
+# 2-3 gleiche aufrufe in einem turn sind noch normal (paralleles prüfen),
+# ab 5 ist es blindes feuern.
+_MAX_TURN_DROPS_BEFORE_BURST = 5
 # S-17: der apostroph `'` war hier ein satzzeichen — und ist es nicht. Er
 # ist im englischen der **eroeffner** eines kontrahens ("I'll", "don't",
 # "it's") und im deutschen der possessiv ("Modelle's Preise"). Eine part,
@@ -2979,6 +3024,17 @@ class GLMEventAccumulator:
     # Cache-hit-meldungen dieses turns (werden ueber `_turn_notice_texts`
     # in den zurueckgespiegelten tool-result-kanal gespeist, T-30).
     cached_result_notices: list[str] = field(default_factory=list)
+    # B-01: turn-lokale drop-zaehler pro signatur. Der loop-guard zaehlt
+    # request-uebergreifend (`_server_side_signature_counts`) — fuer die
+    # burst-erkennung brauchen wir aber die Drops INNERHALB eines turns,
+    # weil genau dort das modell ohne zu warten feuert. Ein neuer turn ist
+    # ein neuer accumulator, die zaehler sind damit automatisch turn-lokal.
+    _turn_drop_counts: dict[str, int] = field(default_factory=dict)
+    _turn_dropped_tools: dict[str, str] = field(default_factory=dict)
+    # Gefuellt, wenn ein burst erkannt wurde (die notices gehen ueber
+    # `_turn_notice_texts` in den zurueckgespiegelten kanal).
+    burst_notices: list[str] = field(default_factory=list)
+    burst_guard_tripped: bool = False
     debug_enabled: bool = False
     logger: Logger | None = None
     history_tool_call_signatures: set[str] = field(default_factory=set)
@@ -3244,6 +3300,8 @@ class GLMEventAccumulator:
             decisions.append(allowed)
             if not allowed:
                 self.loop_guard_dropped_count += 1
+                # B-01: turn-lokal mitzaehlen (burst-erkennung).
+                self._note_turn_drop(signature, str((tool_call.get("function") or {}).get("name", "")) if isinstance(tool_call.get("function"), dict) else "")
                 # C-01: cache-hit-statt-stille — der call bleibt
                 # unterdrueckt, aber das modell erfaehrt das echte
                 # ergebnis, statt den gleichen call zu wiederholen.
@@ -3450,6 +3508,7 @@ class GLMEventAccumulator:
                                     # fall — der call ist ein echtes echo eines
                                     # bereits AUSGEFUEHRTEN auftrags.
                                     self._note_cached_result(signature)
+                                    self._note_turn_drop(signature, entry_name)
                                     if self.logger:
                                         self.logger.info(
                                             "Dropped echoed native tool_call (history signature match) tool=%s",
@@ -3465,6 +3524,7 @@ class GLMEventAccumulator:
                                             repeat,
                                         )
                                     self.loop_guard_dropped_count += 1
+                                    self._note_turn_drop(signature, entry_name)
                                     self._note_cached_result(signature)
                                     if native_entry_name not in self.loop_guard_dropped_tools:
                                         self.loop_guard_dropped_tools.append(native_entry_name)
@@ -3643,6 +3703,7 @@ class GLMEventAccumulator:
                                 signature = f"{tool_name}:{normalized}"
                                 if signature in self.history_tool_call_signatures:
                                     self._note_cached_result(signature)
+                                    self._note_turn_drop(signature, tool_name)
                                     if self.logger:
                                         self.logger.info(
                                             "Dropped echoed native tool_call (history signature match) tool=%s",
@@ -3686,6 +3747,7 @@ class GLMEventAccumulator:
                                     # notice "read" und das modell sucht den
                                     # fehler im falschen werkzeug.
                                     self.loop_guard_dropped_count += 1
+                                    self._note_turn_drop(signature, tool_name)
                                     self._note_cached_result(signature)
                                     native_name = str(tool_calls_data.get("name", "")).strip() or tool_name
                                     if native_name not in self.loop_guard_dropped_tools:
@@ -4680,6 +4742,11 @@ class GLMEventAccumulator:
         merged_raw_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
         all_tool_calls = sanitize_tool_calls(merged_raw_calls, fallback_url=self.fallback_tool_url)
         all_tool_calls = self._apply_text_tool_call_loop_guard(all_tool_calls)
+        # B-01: burst = derselbe call viele male in EINEM turn. Der loop-guard
+        # hat die kopien still verworfen; hier bleibt von jeder burst-signatur
+        # genau eine ausfuehrung uebrig, damit der client nicht doppelt
+        # ausfuehrt. Live: 29x `du -sh` in einer sekunde.
+        all_tool_calls = self._collapse_turn_burst(all_tool_calls)
         # S-07: die praeambel-verwurf-logik in `consume_event` laeuft nur,
         # wenn in DEMSELBEN event ein sichtbarer delta ankommt. Traegt der
         # aufruf in einem eigenen event (der haeufige fall: die
@@ -5238,6 +5305,86 @@ class GLMEventAccumulator:
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE finalize output", chunks)
         return chunks
 
+    def _note_turn_drop(self, signature: str, tool_name: str) -> None:
+        """B-01: einen vom loop-guard/echo-filter verworfenen aufruf
+        turn-lokal zaehlen. Ab `_MAX_TURN_DROPS_BEFORE_BURST` zaehlungen
+        derselben signatur gilt der turn als burst.
+
+        Die signatur wird kanonisiert, weil die drop-pfade sie unterschiedlich
+        bauen: der native pfad normalisiert mit `sort_keys=True`,
+        `_tool_call_signature` ohne. Ohne kanonisierung findet der burst-guard
+        den verbliebenen client-call nicht und der burst bleibt unerkannt.
+        """
+        key = _canonical_signature(signature)
+        self._turn_drop_counts[key] = self._turn_drop_counts.get(key, 0) + 1
+        if key not in self._turn_dropped_tools and tool_name:
+            self._turn_dropped_tools[key] = tool_name
+
+    def _burst_signatures(self) -> set[str]:
+        """B-01: alle signaturen, die in diesem turn als burst gelten."""
+        return {
+            signature
+            for signature, count in self._turn_drop_counts.items()
+            if count >= _MAX_TURN_DROPS_BEFORE_BURST
+        }
+
+    def _burst_notice_for(self, signature: str) -> str:
+        tool_name = self._turn_dropped_tools.get(signature, "").strip() or "tool"
+        # `count` ist die Zahl der VERWORFENEN Kopien, nicht die der gesendeten
+        # (live: 29 gesendet, 27 verworfen). Deshalb wird sie als "repeated"
+        # formuliert — so stimmt die Zahl, ohne die Ausfuehrung mitzaehlen zu
+        # muessen.
+        count = self._turn_drop_counts.get(signature, 0)
+        return (
+            f"[burst_guard_notice] You repeated the SAME `{tool_name}` call {count} times in a "
+            "single turn without waiting for any result. Only the first copy was executable; "
+            "the repeats produced no output at all and were not run. This is a burst, not a "
+            "tool error — stop, wait for the actual tool result, then decide the next single "
+            "action. Do not re-send the same call again."
+        )
+
+    def _collapse_turn_burst(self, tool_calls: list[dict[str, object]]) -> list[dict[str, object]]:
+        """B-01: bei einem Burst bleibt von der Signatur GENAU EIN Call
+        uebrig — die uebrigen Kopien gehen gar nicht erst an den Client.
+
+        Der loop-guard laesst pro Signatur bewusst zwei identische Calls zu
+        (`_MAX_IDENTICAL_NATIVE_CALLS = 2`), damit echte Wiederholungen nach
+        einem Fehler nicht gekillt werden. Im Burst-Fall ist aber klar,
+        dass die zweite Kopie denselben Doppel-Exec bedeutet — der Live-Befund
+        war ein 29x repeated `du -sh`. Deshalb wird hier auf eine Ausfuehrung
+        reduziert und die Meldung geht stattdessen ueber `_turn_notice_texts`
+        in den zurueckgespiegelten Tool-Result-Kanal (T-30).
+
+        Calls ohne Signatur bleiben unangetastet: ohne Signatur gibt es keine
+        Burst-Erkennung, und stilles Wegwerfen waere hier schlimmer als
+        Doppel-Exec.
+        """
+        burst = self._burst_signatures()
+        if not burst or not tool_calls:
+            return tool_calls
+        kept: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for tool_call in tool_calls:
+            signature = _canonical_signature(_tool_call_signature(tool_call))
+            if signature in burst:
+                if signature in seen:
+                    continue
+                seen.add(signature)
+            kept.append(tool_call)
+        if len(kept) == len(tool_calls):
+            return tool_calls
+        self.burst_guard_tripped = True
+        for signature in sorted(burst):
+            self.burst_notices.append(self._burst_notice_for(signature))
+        log = self.logger or _LOGGER
+        log.info(
+            "B-01 burst guard collapsed turn: dropped=%d kept=%d signatures=%d",
+            len(tool_calls) - len(kept),
+            len(kept),
+            len(burst),
+        )
+        return kept
+
     def _note_cached_result(self, signature: str) -> bool:
         """C-01: treat a repeated call as a CACHE HIT, not as an error.
 
@@ -5453,6 +5600,8 @@ class GLMEventAccumulator:
         merged_raw_calls = _merge_tool_calls(self._server_side_tool_calls, xml_tool_calls)
         all_tool_calls = sanitize_tool_calls(merged_raw_calls, fallback_url=self.fallback_tool_url)
         all_tool_calls = self._apply_text_tool_call_loop_guard(all_tool_calls)
+        # B-01: siehe finalize() — burst-guard auch im non-stream-pfad.
+        all_tool_calls = self._collapse_turn_burst(all_tool_calls)
         # T-06: siehe finalize() — ein turn, dessen einziger call
         # unbrauchbar war (fehlendes pflichtargument), ist kein leerer
         # erfolg, sondern ein fehlerhafter turn.

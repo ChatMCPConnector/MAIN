@@ -787,11 +787,13 @@ def test_accumulator_signature_dedup_for_repeated_native_parts():
         )
     response = accumulator.build_response()
     tool_calls = response["choices"][0]["message"].get("tool_calls", [])
-    # T-04: die schleife wird gebrochen, aber NICHT auf einen einzigen
-    # aufruf reduziert — bis zu zwei identische aufrufe pro turn sind
-    # zulaessig (ein wiederholungsversuch ist plausibel, 36 gleiche
-    # aufrufe sind es nicht). Vorher ueberlebte hier nur der erste.
-    assert len(tool_calls) == 2
+    # T-04: die schleife wird gebrochen, aber bei ZWEI bis VIER identischen
+    # aufrufen nicht auf einen einzigen reduziert — ein wiederholungsversuch
+    # ist plausibel. Bei 36 ist er es nicht (B-01, live 2026-10-01: 29x
+    # `du -sh` in einer sekunde): dann bleibt genau eine ausfuehrung uebrig
+    # und das modell bekommt die burst-notice.
+    assert len(tool_calls) == 1
+    assert accumulator.burst_guard_tripped is True
 
 
 def test_accumulator_ignores_unallowed_native_tool_call_blocks():
@@ -2998,9 +3000,11 @@ def test_two_deliberate_identical_native_calls_both_survive():
 
 
 def test_identical_call_loop_is_broken_at_two():
-    """T-04: die Degenerationsschleife (live: 36 identische Sandbox-Calls)
-    darf nicht 36 Ausführungen erzeugen. Zwei identische Aufrufe bleiben
-    zulässig — ein Wiederholungsversuch ist plausibel."""
+    """T-04/B-01: die Degenerationsschleife (live: 36 identische Sandbox-Calls,
+    später 29x `du -sh` am Stück) darf nicht 36 Ausführungen erzeugen — und
+    bei dieser Menge auch nicht zwei, sondern genau eine. Zwei identische
+    Aufrufe bleiben zulässig, solange es kein Burst ist (siehe
+    `test_burst_guard.py`)."""
     accumulator = GLMEventAccumulator(model="glm-test", allowed_tool_names={"read"})
     for index in range(36):
         accumulator.consume_event(
@@ -3025,7 +3029,9 @@ def test_identical_call_loop_is_broken_at_two():
         )
     calls = accumulator.build_response()["choices"][0]["message"].get("tool_calls", [])
 
-    assert len(calls) == 2
+    # B-01: 36 identische calls in EINEM turn sind ein burst, kein
+    # wiederholungsversuch — der client fuehrt genau einmal aus.
+    assert len(calls) == 1
 
 
 def test_reasoning_call_is_delivered_once_in_the_stream():
