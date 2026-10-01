@@ -5,9 +5,35 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "==> [landscape] Systempakete..."
-sudo apt-get update -qq
-sudo apt-get install -y -qq curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential python3 python3-pip python3-venv python-is-python3 ca-certificates gnupg nodejs npm xvfb x11vnc novnc websockify libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 inotify-tools > /dev/null
+# Warum das nicht mehr ein nackter `apt-get install` ist (2026-10-01): unter
+# `set -euo pipefail` hat EIN fehlendes Paket den gesamten Codespace-Aufbau
+# gekillt — kein opencode, kein Secret-Unlock, kein Proxy, kein Watchdog. Die
+# GUI-/Audio-Pakete haben zudem versionsabhaengige Namen (`libgtk-3-0t64` & Co.
+# gibt es erst ab Debian 24.04; `devcontainer.json:3` nennt das Image nur
+# implizit). Deshalb: Fehler sammeln, weiterlaufen, am Ende alles auf einmal
+# melden. Der Aufbau soll mit einer kaputten Browser-Abhaengigkeit trotzdem
+# opencode installieren.
+declare -a APT_FEHLER=()
+apt_install() {   # apt_install <paket...>
+  echo "    $*"
+  if sudo apt-get install -y -qq "$@" > /dev/null; then return 0; fi
+  APT_FEHLER+=("$*")
+  echo "    WARN: Installation fehlgeschlagen: $*"
+  return 1
+}
+
+sudo apt-get update -qq > /dev/null || echo "    WARN: apt-get update fehlgeschlagen."
+apt_install curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential \
+  python3 python3-pip python3-venv python-is-python3 ca-certificates gnupg \
+  nodejs npm xvfb x11vnc novnc websockify inotify-tools || true
+# GUI-/Audio-Abhaengigkeiten: t64-Namen zuerst, sonst die klassischen Namen.
+apt_install libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 \
+  || apt_install libgtk-3-0 libdbus-glib-1-2 libxt6 libasound2 || true
 sudo rm -rf /var/lib/apt/lists/*
+if [ "${#APT_FEHLER[@]}" -gt 0 ]; then
+  echo "    HINWEIS: ${#APT_FEHLER[@]} Paketgruppe(n) nicht installierbar — Setup laeuft weiter:"
+  printf '      - %s\n' "${APT_FEHLER[@]}"
+fi
 
 # python-is-python3 legt /usr/bin/python an. Ohne das gibt es nur python3, und
 # alles, was bare `python` aufruft (Tooling, Editor-Integrationen, fremde
