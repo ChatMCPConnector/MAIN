@@ -111,7 +111,18 @@ check_layer chain "Passphrase-Kandidaten"    bash -c '
   out=$("$REPO_ROOT/infra/scripts/secrets.sh" status 2>&1)
   printf "%s" "$out" | grep -q "Passphrase: OK" || { printf "%s" "$out" | tail -1; exit 1; }
   echo "Bundle laesst sich entschluesseln"'
-check_layer code  "Secrets nicht world-readable" bash -c '
+check_layer code  "Secret-Rechte: Werkzeug verdrahtet" bash -c '
+  # Der Dateimodus selbst ist Codespace-Zustand (chain): Git kennt nur das
+  # executable-Bit, ein frischer Checkout bekommt 644 — dort waere ein Check
+  # auf 600 immer rot. Was der Code *verspricht* (Werkzeug existiert, ist
+  # ausfuehrbar, und setup.sh ruft es auf), ist dagegen ueberall pruefbar.
+  sp="$REPO_ROOT/infra/scripts/secret-perms.sh"
+  [ -f "$sp" ] || { echo "infra/scripts/secret-perms.sh fehlt"; exit 1; }
+  [ -x "$sp" ] || { echo "secret-perms.sh ist nicht ausfuehrbar"; exit 1; }
+  grep -q "secret-perms.sh" "$REPO_ROOT/.devcontainer/setup.sh" \
+    || { echo "setup.sh ruft secret-perms.sh nicht auf"; exit 1; }
+  echo "secret-perms.sh vorhanden + in setup.sh verdrahtet"'
+check_layer chain "Secrets nicht world-readable" bash -c '
   bad=""
   for f in config/passphrase config/secrets.enc config/secrets.manifest \
            llm-proxies/glm2api/.env llm-proxies/zerokey/temp/users.json; do
@@ -225,21 +236,32 @@ check_layer code  "nested AGENTS.md tragen einen MAIN-Hinweis" bash -c '
     -not -path "*/node_modules/*" -not -path "*/.venv/*" -not -path "*/.git/*" 2>/dev/null)
   [ -z "$bad" ] || { echo "ohne MAIN-Hinweis:$bad"; exit 1; }
   echo "nested AGENTS.md haben den Hinweis"'
-check_layer code  "Gemini CLI liest AGENTS.md" bash -c '
+check_layer code  "Gemini-Context verdrahtet" bash -c '
+  # Wie oben: die Datei in $HOME ist Codespace-Zustand. Der Code-Part ist:
+  # das Skript existiert und schreibt genau context.fileName=[AGENTS.md].
+  g="$REPO_ROOT/infra/scripts/gemini-context.sh"
+  [ -f "$g" ] || { echo "infra/scripts/gemini-context.sh fehlt"; exit 1; }
+  [ -x "$g" ] || { echo "gemini-context.sh ist nicht ausfuehrbar"; exit 1; }
+  grep -q "AGENTS.md" "$g" || { echo "Skript nennt AGENTS.md nicht"; exit 1; }
+  echo "gemini-context.sh setzt context.fileName=[AGENTS.md]"'
+check_layer chain "Gemini CLI liest AGENTS.md" bash -c '
   bash "$REPO_ROOT/infra/scripts/gemini-context.sh" status >/dev/null 2>&1 \
     || { echo "context.fileName != [AGENTS.md] - Gemini CLI haette leeren Kontext"; exit 1; }
   echo "context.fileName=[AGENTS.md]"'
 check_layer code  "Pfadbegrenztes Commit dokumentiert" bash -c '
   grep -q "git commit -- <pfad>" "$REPO_ROOT/AGENTS.md" || { echo "fehlt"; exit 1; }
   echo "nur eigene Pfade"'
-check_layer code  "Lint-Hook verdrahtet" bash -c '
-  # ruff + mypy liefen sonst nur von Hand (AGENTS.md §6). Der Hook ist
-  # pfad-scoped und fasst den Index nicht an — hier wird nur geprueft, dass er
-  # ueberhaupt greift (setup.sh setzt core.hooksPath).
+check_layer code  "Lint-Hook im Repo" bash -c '
+  # Repo-Fakt (ueberall pruefbar): der Hook liegt im Repo und ist startbar.
+  [ -f "$REPO_ROOT/.githooks/pre-commit" ] || { echo ".githooks/pre-commit fehlt im Repo"; exit 1; }
+  [ -x "$REPO_ROOT/.githooks/pre-commit" ] || { echo "pre-commit nicht ausfuehrbar (git checkout verliert ggf. das exec-Bit)"; exit 1; }
+  echo ".githooks/pre-commit vorhanden + ausfuehrbar"'
+check_layer chain "core.hooksPath = .githooks" bash -c '
+  # Codespace-Fakt: das setzt setup.sh (repo-lokale git-Config). In einem
+  # frischen Checkout steht hier nichts — deshalb chain, nicht code.
   hp=$(git config --local core.hooksPath)
   [ "$hp" = ".githooks" ] || { echo "core.hooksPath=${hp:-<leer>} (erwartet .githooks) — setup.sh erneut laufen lassen"; exit 1; }
-  [ -x "$REPO_ROOT/.githooks/pre-commit" ] || { echo ".githooks/pre-commit fehlt oder ist nicht ausfuehrbar"; exit 1; }
-  echo "core.hooksPath=.githooks, pre-commit ausfuehrbar"'
+  echo "core.hooksPath=.githooks"'
 check_layer code  "Makefile deckt Hook ab" bash -c '
   # AGENTS.md §6 verweist jetzt auf `make check`, der Hook bleibt fuer den
   # Commit. Beide duerfen nicht auseinanderlaufen — genau das war die Luecke
@@ -259,13 +281,17 @@ check_layer code  "Go-Lint antigravity (vet+fmt)" bash -c '
   # Go hatte bis 2026-10-01 keinen einzigen automatischen Check. `mise` ist
   # nicht installiert, also direkt go vet + gofmt (das Binary liegt in
   # /usr/local/go/bin, siehe setup.sh/aliases.sh).
-  GO=/usr/local/go/bin/go
-  [ -x "$GO" ] || { echo "go fehlt ($GO) - setup.sh"; exit 1; }
+  # Go liegt im Codespace unter /usr/local/go/bin, auf einem CI-Runner im PATH —
+  # beides muss funktionieren, sonst schlaegt der Job an der Toolchain statt am
+  # Code fehl (PLAN Stufe 2).
+  GO=$(command -v go || true)
+  [ -n "$GO" ] || { echo "go fehlt (weder /usr/local/go/bin/go noch im PATH) - setup.sh"; exit 1; }
   cd "$REPO_ROOT/llm-proxies/antigravity-proxy" || exit 1
   "$GO" vet ./... >/dev/null 2>&1 || { echo "go vet rot"; exit 1; }
   # gofmt -l ist READ-ONLY (gibt nur Namen aus). Bewusst NICHT `go fmt` — das
   # wuerde Dateien schreiben, und ein Verifier darf nichts aendern.
-  GOFMT=/usr/local/go/bin/gofmt
+  GOFMT="$(dirname "$GO")/gofmt"
+  command -v gofmt >/dev/null 2>&1 && GOFMT=$(command -v gofmt)
   if [ -x "$GOFMT" ]; then
     un=$("$GOFMT" -l . 2>/dev/null | grep -v "^vendor/" || true)
     [ -z "$un" ] || { echo "unformatiert: $un"; exit 1; }
