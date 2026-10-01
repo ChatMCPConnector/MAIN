@@ -169,6 +169,14 @@ check "Gemini CLI liest AGENTS.md" bash -c '
 check "Pfadbegrenztes Commit dokumentiert" bash -c '
   grep -q "git commit -- <pfad>" "$REPO_ROOT/AGENTS.md" || { echo "fehlt"; exit 1; }
   echo "nur eigene Pfade"'
+check "Lint-Hook verdrahtet" bash -c '
+  # ruff + mypy liefen sonst nur von Hand (AGENTS.md §6). Der Hook ist
+  # pfad-scoped und fasst den Index nicht an — hier wird nur geprueft, dass er
+  # ueberhaupt greift (setup.sh setzt core.hooksPath).
+  hp=$(git config --local core.hooksPath)
+  [ "$hp" = ".githooks" ] || { echo "core.hooksPath=${hp:-<leer>} (erwartet .githooks) — setup.sh erneut laufen lassen"; exit 1; }
+  [ -x "$REPO_ROOT/.githooks/pre-commit" ] || { echo ".githooks/pre-commit fehlt oder ist nicht ausfuehrbar"; exit 1; }
+  echo "core.hooksPath=.githooks, pre-commit ausfuehrbar"'
 
 echo "== 9. Provider live =="
 if [ "$LIVE" -eq 1 ]; then

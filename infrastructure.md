@@ -449,6 +449,15 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   **nicht** mit einem, der sich nicht auflösen lässt (Tippfehler ⇒ Push tot bis
   zum nächsten Codespace). Override: `GIT_USER_NAME=… GIT_USER_EMAIL=… auth.sh setup`
   — nur mit Bedacht, MAIN ist öffentlich und eine echte Adresse landet mit im Commit.
+- **Linter automatisch im Commit (seit 2026-10-01):** `.githooks/pre-commit`
+  (versioniert im Repo) läuft `ruff` + `mypy` für glm2api — aber **nur** wenn
+  gestagte `.py`/`.toml` unter `llm-proxies/glm2api/` betroffen sind, damit
+  Commits an zerokey/Doku/Infra nicht ausgebremst werden. `setup.sh` setzt
+  `core.hooksPath=.githooks` (vom Repo-Root, relativ — genau das machte das
+  entfernte zerokey-`postinstall` falsch, das denselben Wert aus einem
+  Unterordner ins Leere bog). Der Hook fasst den Index **nicht** an (kein
+  `git add`, kein `--fix`); Notausstieg `git commit --no-verify`.
+  `verify-codespace.sh` prüft die Verdrahtung.
 - **Go-Toolchain:** Go 1.25.7 (gepinnt, entspricht `mise.toml` im antigravity-proxy)
   nach `/usr/local/go` via setup.sh — das Proxy-Binary liegt nicht im Git und wird
   pro Codespace neu gebaut (`scripts/start.sh` baut automatisch nach, Fallback
@@ -984,6 +993,8 @@ Proxy bei jedem Start automatisch hoch.
     * **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):** Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2 springt). Der Fragenmodus schließt erst, wenn Freebuff `Your answer:` / `Your answers:` ausgibt oder der Nutzer Esc / Strg+C drückt.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
+
+- 2026-10-01 (3): **`ruff` + `mypy` laufen jetzt im Commit statt von Hand — als pfad-scoped Git-Hook.** Anlass war der Nutzerwunsch, die in (1) eingeführten Linter zu verdrahten. **Neu:** `.githooks/pre-commit` (versioniert, `setup.sh` setzt `core.hooksPath=.githooks`). Der Hook läuft `ruff check .` + `mypy src` in `llm-proxies/glm2api/` und bricht den Commit bei Befunden ab. **Zwei Eigenschaften, die ihn in diesem shared Repo überhaupt erst tragbar machen:** (a) **pfad-scoped** — `git diff --cached --name-only` muss eine `.py`/`.toml` unter `llm-proxies/glm2api/` zeigen, sonst Exit 0; Commits an zerokey/Infra/Doku kostet er nichts. (b) **kein Index-Eingriff** — kein `git add`, kein `ruff --fix`, kein `--no-verify` im Aufrufer; er liest nur. Genau das war die Lehre aus dem 2026-09-29 entfernten zerokey-`.githooks` (machte `git add` über alle Änderungen und bog den Hookpfad des Haupt-Repos um) — der neue Hook tunt beides nicht. Timer kommt von `infra/scripts/timeout.sh` (AGENTS.md §4), der Hook darf nie hängen. Aktivierung bewusst in `setup.sh` statt `postinstall`: ein `postinstall` läuft bei jedem `pnpm install` und würde den Wert erneut aus einem Unterordner setzen. **Verifiziert:** Skip-Pfad (nichts glm2api gestaged → Exit 0, keine Ausgabe) und Run-Pfad (leere `.py` gestaged → `ruff` + `mypy` grün, Exit 0) je direkt getestet; `bash -n` auf Hook/setup/verify; `verify-codespace.sh` **27 PASS, 0 FAIL** mit neuem Check "Lint-Hook verdrahtet". `AGENTS.md` §6 um die Automatik-Zeile ergänzt.
 
 - 2026-10-01 (2): **Die glm2api-Audit-Doku und `structure.md` sind doch raus.** Direkte Fortsetzung des Eintrags darunter: was dort als "nicht gelöscht" begründet stand, wurde auf Nutzerwunsch doch entfernt — der Audit (`glm2api-revision.md`, 116 K, plus `glm2api-revision-anhang/`, 7 Dateien/200 K) war statisch und nur noch ein Erinnerungsstück an den Stand vom 28.09., `structure.md` nur eine Kurzfassung desselben Codes. **Mitgelöscht statt stehen gelassen:** der Bundle-Bau hätte sonst gebrochen — `build-bundle.sh:34` kopierte `structure.md` in einer festen `for`-Liste unter `set -euo pipefail`, der Eintrag ist entfernt. Drei Verweisstellen nachgezogen: `glm2api/README.md` (Abschnitt "Architektur & Betrieb" → "Betrieb"), `scripts/bundle/README.md` (Baum-Zeile + Detailverweis) — die dritte ist `bundle/README.md` selbst, das ebenfalls ins Bundle kopiert wird. Die Changelog-Einträge des 2026-09-27, die `glm2api-revision.md` als bewusst geduldeten Proxy-Audit beschreiben, bleiben **unangetastet** (Historie wird nicht umgeschrieben); nur der gestrige 2026-10-01-Eintrag desselben Tages wurde auf den tatsächlichen Ausgang korrigiert. **Verifiziert:** `build-bundle.sh` läuft grün durch (Bundle-Verifikation OK), 1750 Tests grün, `ruff`/`mypy` je Exit 0.
 

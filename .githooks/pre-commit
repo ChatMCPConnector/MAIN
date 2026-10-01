@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — MAIN-Repo: laesst die glm2api-Linter automatisch laufen.
+#
+# Warum es diesen Hook gibt: `ruff` + `mypy` sind in
+# llm-proxies/glm2api/pyproject.toml gepinnt, liefen aber bisher nur "von Hand"
+# (AGENTS.md §6). Der Hook faehrt sie vor jedem Commit automatisch.
+#
+# Zwei Eigenschaften, an denen hier NICHTS geaendert werden darf:
+#   1. Der Hook fasst den Index nicht an (kein `git add`, kein `--fix`). In
+#      diesem geteilten Repo hat ein Hook mit `git add` schon fremde, parallel
+#      gestagte Aenderungen mitcommittet (infrastructure.md, Changelog
+#      2026-09-29). Der Hook liest nur und bricht ab.
+#   2. Er laeuft nur, wenn gestagte Dateien den glm2api-Python-Code betreffen —
+#      Commits an zerokey/Doku/Infra werden nicht ausgebremst.
+#
+# Aktiviert per `git config core.hooksPath .githooks` (macht .devcontainer/setup.sh).
+# Notausstieg: `git commit --no-verify`.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+APP="$ROOT/llm-proxies/glm2api"
+
+# Pfad-Scope: nur .py/.toml unter llm-proxies/glm2api/. Gelöschte Dateien (D)
+# sind bewusst raus — auf dem Rest zu linten ist trotzdem sinnvoll, aber ein
+# reiner Loeschcommit soll nicht die volle Lint-Kette triggern.
+changed="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
+case "$changed" in
+  *llm-proxies/glm2api/*.py*|*llm-proxies/glm2api/*.toml*) ;;
+  *) exit 0 ;;
+esac
+
+[ -d "$APP" ] || exit 0
+[ -x "$ROOT/infra/scripts/timeout.sh" ] || {
+  echo "[pre-commit] WARN: infra/scripts/timeout.sh fehlt — Lint uebersprungen." >&2
+  exit 0
+}
+
+cd "$APP" || exit 0
+
+# Timer (AGENTS.md §4): der Hook darf nie haengen. timeout.sh raeumt die
+# Prozessgruppe ab und laesst Exitcodes unveraendert durch (124 = Timeout).
+run() { "$ROOT/infra/scripts/timeout.sh" run "$1" "${@:2}"; }
+
+echo "[pre-commit] glm2api-Code geaendert -> ruff + mypy..."
+
+if ! run 120 uv run ruff check .; then
+  echo "[pre-commit] ruff hat Befunde — Commit abgebrochen (Details oben)." >&2
+  exit 1
+fi
+if ! run 180 uv run mypy src; then
+  echo "[pre-commit] mypy hat Befunde — Commit abgebrochen (Details oben)." >&2
+  exit 1
+fi
+
+echo "[pre-commit] ruff + mypy gruen."

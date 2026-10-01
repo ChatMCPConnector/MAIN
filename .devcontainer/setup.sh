@@ -171,6 +171,21 @@ else
   echo "    WARN: kein $SIGN_KEY — Commits bleiben unsigniert (nicht fatal)."
 fi
 
+echo "==> [landscape] Git-Hooks aktivieren (pre-commit: ruff + mypy fuer glm2api)..."
+# core.hooksPath zeigt auf die VERSIONIERTE .githooks/ im Repo — jeder Account
+# bekommt denselben Hook, kein per-Clone-Gefrickel. Der Pfad ist bewusst relativ:
+# er loest vom Repo-Root auf, und genau deshalb setzt ihn NUR dieses Skript aus
+# dem Repo-Root. Das 2026-09-29 entfernte zerokey-`postinstall` setzte denselben
+# Wert aus einem Unterordner und bog damit den Haupt-Repo-Hookpfad ins Leere aus
+# (infrastructure.md) — hier passiert das nicht.
+if [ -x "$REPO_ROOT/.githooks/pre-commit" ]; then
+  git -C "$REPO_ROOT" config core.hooksPath .githooks
+  chmod +x "$REPO_ROOT/.githooks/pre-commit" 2>/dev/null || true
+  echo "    core.hooksPath = .githooks (ruff + mypy laufen im Commit)"
+else
+  echo "    WARN: $REPO_ROOT/.githooks/pre-commit fehlt — Linter laufen wieder von Hand."
+fi
+
 echo "==> [landscape] rclone (Google-Drive-Backup) installieren..."
 # rclone für gdrive-backup.sh (Repo-Sicherung nach Drive, unabhängig von GitHub).
 # Auth (rclone.conf mit Refresh-Token) kommt aus dem Secrets-Bundle via secrets.sh unlock.

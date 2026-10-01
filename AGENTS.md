@@ -79,6 +79,13 @@ messen. Existiert für jede Sprache:
 | antigravity-proxy (Go) | `cd llm-proxies/antigravity-proxy && mise run test` (formatiert mit `mise run format`) |
 | Shell | `bash -n <skript>` (und, wo möglich, ein Trockenlauf) |
 
+**Automatik:** `.githooks/pre-commit` laufen `ruff` + `mypy` fuer glm2api bei
+jedem Commit, der `.py`/`.toml` unter `llm-proxies/glm2api/` betrifft (schlägt
+der Check fehl, bricht der Commit ab). Aktiviert `setup.sh` per
+`core.hooksPath=.githooks`. Der Hook fasst den Index **nicht** an — der
+obige Befehl bleibt trotzdem der volle Check (Tests laufen dort mit).
+Notausstieg: `git commit --no-verify`.
+
 ## 7. Anti-Drift (kein neues Rad)
 
 - **Erst suchen, dann bauen:** kein neues Skript/Tool/Doku-File, wenn ein
