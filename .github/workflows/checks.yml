@@ -81,7 +81,10 @@ jobs:
         with:
           # Aus go.mod lesen, nicht hier eintragen — sonst driftet der Job an
           # der Toolchain statt am Code (PLAN Stufe 2).
-          go-version-file: go.mod
+          # ACHTUNG: der Pfad ist relativ zum Repo-Root, NICHT zum
+          # `working-directory` des Jobs — sonst: „go version file does not
+          # exist" (hat der erste Lauf gezeigt).
+          go-version-file: llm-proxies/antigravity-proxy/go.mod
           cache-dependency-path: llm-proxies/antigravity-proxy/go.sum
       - name: go vet
         run: go vet ./...
@@ -105,12 +108,16 @@ jobs:
         with:
           # engines.node sagt ">=18"; der Codespace nutzt eine aktuelle LTS.
           node-version: '22'
-          cache: pnpm
-          cache-dependency-path: llm-proxies/zerokey/pnpm-lock.yaml
+      # corepack NACH setup-node, und bewusst OHNE `cache: pnpm` in der
+      # Node-Action: die Cache-Ermittlung sucht pnpm auf dem PATH, bevor es
+      # aktiviert ist, und bricht mit „Unable to locate executable file: pnpm"
+      # ab (hat der erste Lauf gezeigt). Ohne Cache ist der Job nur ein paar
+      # Sekunden langsamer, aber robust — ein Cache-Fehler wäre ein rotes
+      # Roteichen, das nichts über den Code sagt.
       - name: corepack + pnpm (Pin aus packageManager)
         run: |
           corepack enable
-          echo "pnpm $(pnpm --version)"
+          echo "pnpm $(pnpm --version) (Pin aus packageManager)"
       # --frozen-lockfile: schlägt fehl, wenn package.json und Lockfile
       # auseinanderlaufen. Danach der Diff-Test: schreibt jemand am Lockfile
       # vorbei, sieht es dieser Job.
@@ -160,10 +167,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: '3.14'
+      # Kein setup-uv: die --code-Checks brauchen nur `python3` (Budget-Python,
+      # System-Interpreter auf dem Runner), kein uv-Projekt. Mit `enable-cache`
+      # wäre der Post-Step gescheitert („cache path does not exist"), weil es
+      # im Repo-Root keine uv.lock gibt.
       - uses: actions/setup-go@v5
         with:
           go-version-file: llm-proxies/antigravity-proxy/go.mod
