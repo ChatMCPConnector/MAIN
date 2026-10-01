@@ -2,7 +2,8 @@
 # verify-codespace.sh: Beweist, dass ein Codespace vollständig funktionsfähig ist.
 #
 #   ./infra/scripts/verify-codespace.sh            # schnell (read-only, ~30 s)
-#   ./infra/scripts/verify-codespace.sh --live     # + echte Provider-Calls (langsam)
+#   ./infra/scripts/verify-codespace.sh --live     # + echte Provider-Calls (langsam),
+#                                                   #   inkl. voller glm2api-Smoke-Test
 #
 # read-only: startet nichts, installiert nichts, committet nichts. Der einzige
 # Schreibzugriff ist der Push-Dry-Run von `git push --dry-run` (verändert nichts)
@@ -201,13 +202,19 @@ check "MAIN-JS Syntax (node --check)" bash -c '
     node --check "$REPO_ROOT/$f" >/dev/null 2>&1 || bad="$bad $f"
   done < <(git -C "$REPO_ROOT" ls-files infra | grep -E "\.js$")
   [ -z "$bad" ] || { echo "Syntaxfehler:$bad"; exit 1; }
-  echo "infra-JS syntaktisch ok"'
-
-echo "== 9. Provider live =="
+  echo "infra-JS syntaktisch ok"'echo "== 9. Provider live =="
 if [ "$LIVE" -eq 1 ]; then
   check "keys.sh doctor"         bash "$REPO_ROOT/infra/scripts/keys.sh" doctor
+  # Voller Live-Smoke-Test des glm2api-Proxys (drei API-Formate + Tool-Call-
+  # Roundtrip ueber 2 Turns). Gehoert bewusst hierher und nicht in die schnelle
+  # Runde: er macht echte Upstream-Calls und dauert Minuten. timeout.sh als
+  # Schutz (AGENTS.md §4), das Skript selbst hat kein Gesamtlimit.
+  check "glm2api Smoke-Test (live)" bash -c '
+    mkdir -p /tmp/opencode
+    bash "$REPO_ROOT/infra/scripts/timeout.sh" run 400 bash "$REPO_ROOT/llm-proxies/scripts/smoke-test.sh"'
 else
-  skipt "keys.sh doctor" "uebersprungen (--live fuer echte Provider-Calls)"
+  skipt "keys.sh doctor"         "uebersprungen (--live fuer echte Provider-Calls)"
+  skipt "glm2api Smoke-Test (live)" "uebersprungen (--live fuer echte Provider-Calls)"
 fi
 
 echo ""
