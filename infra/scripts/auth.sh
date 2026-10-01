@@ -70,8 +70,19 @@ store_token() {
   printf 'https://x-access-token:%s@github.com\n' "$token" > "$CREDS_FILE"
   chmod 600 "$CREDS_FILE"
   git config --local credential.helper "store --file $CREDS_FILE"
-  # GPG-Signing blockiert non-interactive Commits -> lokal aus (global bleibt an)
-  git config --local commit.gpgsign false
+  # GPG-Signing blockiert non-interactive Commits, wenn gar kein Signierer
+  # hinterlegt ist. Fuehrende Stelle ist `setup.sh`: es richtet SSH-Signierung
+  # ein (gpg.format=ssh, user.signingkey, allowedSignersFile) und setzt
+  # `commit.gpgsign=true` (infrastructure.md, Abschnitt Commit-Signierung).
+  # auth.sh hat hier unbedingt auf false gesetzt und damit bei jedem manuellen
+  # `./infra/scripts/auth.sh setup` die Signierung wieder abgeschaltet — genau
+  # der Widerspruch auth.sh vs. setup.sh, den die Doku als A11 fuehrt. Jetzt
+  # wird nur noch abgeschaltet, wenn wirklich keiner konfiguriert ist.
+  if git config --local user.signingkey >/dev/null 2>&1; then
+    git config --local commit.gpgsign true
+  else
+    git config --local commit.gpgsign false
+  fi
   # gh CLI gleich mit anmelden (still, für API-Calls)
   if command -v gh >/dev/null 2>&1; then
     printf '%s' "$token" | gh auth login --with-token >/dev/null 2>&1 || true
