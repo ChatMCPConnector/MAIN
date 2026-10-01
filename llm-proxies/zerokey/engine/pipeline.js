@@ -16,6 +16,7 @@ const {
   isGenericAsk,
   isDriftText,
   isHandoffText,
+  isNoAccessText,
   isDuplicateToolRound,
   isStalledReadRound,
   updateReadMemory,
@@ -244,6 +245,10 @@ class StreamPipeline {
    *  - empty: the model produced neither tool calls nor any visible text —
    *    a turn of pure whitespace. Nothing to suppress, still nothing to do.
    *
+   * Three more shapes reach here as plain text rather than as a suppressed ask:
+   * a generic clarification written out, a task-handover document, and a claim
+   * that the agent has no access to the user's machine.
+   *
    * A turn that produced a real answer is never retried: `text` is what makes
    * it a finished turn rather than a wasted one.
    *
@@ -268,6 +273,12 @@ class StreamPipeline {
     // A compaction/handover document instead of work — same stall, different shape.
     const handoff =
       this._toolCallCount === 0 && this._hasVisibleText && isHandoffText(this._visibleText)
+    // The agent claims it cannot reach the machine and asks for uploads. The
+    // tools are in its own request; asking the user for file contents is not
+    // something any tool call could resolve. Observed three turns in a row in
+    // ses_f06959c34ffem62VA5MinVvP4a (2026-10-01), each one producing no work.
+    const noAccess =
+      this._toolCallCount === 0 && this._hasVisibleText && isNoAccessText(this._visibleText)
     // Repeating the previous round's calls. This one fires *with* tool calls, so
     // it needs the raw payloads, and it must not consume the single tool-less
     // retry budget: a loop keeps producing calls, a stall never gets this far.
@@ -280,7 +291,7 @@ class StreamPipeline {
       this._toolCallCount > 0 &&
       isStalledReadRound(this._roundPayloads, this._readMemory.reads, this._readMemory.mutated)
 
-    if ((askOnly || empty || drift || handoff || duplicate || stalled) && retry) {
+    if ((askOnly || empty || drift || handoff || noAccess || duplicate || stalled) && retry) {
       const reason = askOnly
         ? 'generic-ask'
         : empty
@@ -289,9 +300,11 @@ class StreamPipeline {
             ? 'drift-text'
             : handoff
               ? 'handoff-text'
-              : duplicate
-                ? 'duplicate-tools'
-                : 'stalled-reads'
+              : noAccess
+                ? 'no-access'
+                : duplicate
+                  ? 'duplicate-tools'
+                  : 'stalled-reads'
       try {
         console.warn(
           `[ASK-GUARD] ${reason}, re-prompting to continue` +

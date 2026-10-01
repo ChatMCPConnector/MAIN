@@ -129,6 +129,72 @@ function isHandoffText(text) {
   return hits >= 2
 }
 
+// ── no-access drift ───────────────────────────────────────────────────────
+//
+// Observed live in session ses_f06959c34ffem62VA5MinVvP4a (2026-10-01): three
+// turns in a row, no tool call at all, each one telling the user it could not
+// reach the machine and asking for the files to be uploaded instead.
+//
+//   "Ich habe keinen Zugriff auf deine lokale Maschine oder dieses Repository
+//    in diesem Chat."
+//   "Ich habe hier keinen Zugriff auf dein `/workspaces/MAIN`."
+//   "kannst du entweder: die relevanten Dateien/Ordner hier hochladen"
+//
+// It reads like a blocker but is the same stall as the others: the agent *does*
+// have read/bash/glob on the user's machine, the tool list is in its request, and
+// the turn produced no work. Asking for an upload is not resolvable by any tool
+// call — there is no upload tool — so it parks the run until the user answers.
+//
+// isDriftText cannot see it: none of these are "what should I do next?" turns.
+// The distinguishing feature is a claim about capability plus an offer to work
+// from pasted content, so that is what is matched here.
+const ACCESS_DENY =
+  /\b(kein(?:en|em)?\s+zugriff|keine\s+zugriffs?n?rechte?n?\b|nicht\s+zugreifen|kann\s+ich\s+nicht\s+auf)\b/i
+const ACCESS_DENY_EN =
+  /\b(i\s+(?:do\s+not|don'?t|cannot|can'?t)\s+have\s+access|no\s+access\s+to\s+(?:your|the)\b|unable\s+to\s+access)/i
+
+// A denial scoped to the whole machine/workspace rather than to one artifact.
+// "kein Zugriff auf Port 7250" is a real blocker and must not match — the
+// difference is the scope word, not the phrasing.
+const GENERAL_DENY =
+  /\b(?:lokale[nrs]?\s+|deine[rns]?\s+|dieser?\s+)*(maschine|arbeitsverzeichnis|dateisystem|workspace|working\s+directory|repository|repo|ordner|dateien)\b/i
+const GENERAL_DENY_EN =
+  /\b(?:your|the|this)\s+(?:local\s+)?(machine|filesystem|file\s+system|workspace|working\s+directory|repository|repo|files|folders)\b/i
+
+// "laden Sie die Dateien hoch", "fügen Sie die Inhalte ein", "paste the contents"
+const SUPPLY_OFFER =
+  /(hoch\s*laden|hochgeladen|hier\s+einf(?:ü|ue)g|hier\s+hoch|stelle\s+die\s+\w+\s+(?:bereit|zur\s+verfügung)|einf(?:ü|ue)gen\s+sie\s+die|kopier(?:e|en)\s+sie\s+den\s+(?:inhalt|code)|upload\s+(?:the|your)|paste\s+(?:the|your|its)\s+(?:contents?|files?|output))/i
+
+/**
+ * True when a tool-less turn claims the agent cannot reach the user's machine
+ * and offers to work from pasted or uploaded content instead.
+ *
+ * Like isDriftText this skips the CONCRETE escape: the whole point is that the
+ * turn names a path (`/workspaces/MAIN`). What separates it from an answer is
+ * shape, not vocabulary — an answer is structured, a capability denial is a
+ * short paragraph plus a menu of ways to hand over the files.
+ *
+ * @param {string} text - the turn's visible text
+ * @returns {boolean}
+ */
+function isNoAccessText(text) {
+  if (typeof text !== 'string') return false
+  const t = text.trim()
+  if (!t) return false
+  // A structured text is an answer, not a stall.
+  if (/```|^#{1,6}\s|^\s*\|/m.test(t)) return false
+  if (t.length > 1600) return false
+
+  const denied = ACCESS_DENY.test(t) || ACCESS_DENY_EN.test(t)
+  if (!denied) return false
+
+  // Either the denial is about the machine/workspace as a whole, or it is paired
+  // with an explicit offer to take the content from the user instead. A denial
+  // about one concrete thing plus no offer is a legitimate blocker.
+  const general = GENERAL_DENY.test(t) || GENERAL_DENY_EN.test(t)
+  return general || SUPPLY_OFFER.test(t)
+}
+
 // ── duplicate tool rounds ─────────────────────────────────────────────────
 //
 // The same session showed the second failure mode: the discovery round
@@ -291,6 +357,15 @@ const NUDGES = {
     'Do not read them again — take the next unfinished step of the task instead:',
     'work on a part not yet inspected, or, if the task is complete, answer.',
   ],
+  'no-access': [
+    'Your previous turn said you have no access to the user\'s machine or files.',
+    'That is not true here: your request declares tools that run on this machine',
+    '— read, glob, grep, bash, write, edit — with the working directory already set.',
+    'There is no upload mechanism and nothing to paste; the files are on disk and the',
+    'tools read them. Do not ask the user for file contents or claim you cannot see',
+    'the repository. Start from the working directory: list it, then read what the',
+    'task needs, windowing large files instead of reading them whole.',
+  ],
 }
 
 /**
@@ -316,6 +391,7 @@ module.exports = {
   isGenericAsk,
   isDriftText,
   isHandoffText,
+  isNoAccessText,
   isDuplicateToolRound,
   isStalledReadRound,
   updateReadMemory,

@@ -10,6 +10,7 @@ const {
   isGenericAsk,
   isDriftText,
   isHandoffText,
+  isNoAccessText,
   isDuplicateToolRound,
   isStalledReadRound,
   updateReadMemory,
@@ -315,6 +316,96 @@ check(
     check(Number.isFinite(leer.total_tokens), 'keine NaN bei fehlenden Daten')
     const kurz = buildUsage({ chars: 5 }, 0)
     check(kurz.prompt_tokens === 1, '5 Zeichen auf 1 Token gerundet (nicht 0)')
+
+    // Die stille Kuerzung muss am Client ankommen. Ohne dieses Feld sah ein
+    // Turn auf einem middle-out beschnittenen Prompt unauffaellig aus.
+    check(
+      u.prompt_truncated === false,
+      'ungekuerzter Prompt meldet prompt_truncated:false',
+    )
+    check(
+      buildUsage({ chars: 49936, truncated: true }, 0).prompt_truncated === true,
+      'gekuerzter Prompt meldet prompt_truncated:true',
+    )
+    check(
+      buildUsage(undefined, 0).prompt_truncated === false,
+      'fehlende Kennzahlen melden keine Kuerzung (nicht undefined)',
+    )
+    check(
+      buildUsage({ chars: 5 }, 0).prompt_truncated === false,
+      'fehlendes truncated-Flag gilt als ungekuerzt',
+    )
+  }
+
+  // ── no-access drift ───────────────────────────────────────────────────────
+  //
+  // The three turns are the real assistant text from
+  // ses_f06959c34ffem62VA5MinVvP4a, verbatim. All three produced no tool call
+  // while read/bash/glob sat declared in the same request.
+  {
+    const OBSERVED_NO_ACCESS = [
+      'Es sieht so aus, als wären hier mehrere vorherige Nachrichten als wiederholte Agent-Anweisungen eingefügt worden. Die eigentliche Unterhaltung ist dadurch etwas durcheinandergeraten.\n\nZuletzt hattest du eine Analyse des Verzeichnisses `/workspaces/MAIN` angefordert, aber die Nachrichten enthielten nur Anweisungen für einen hypothetischen MHI-Agenten und keine echten ausgeführten Ergebnisse. Ich habe keinen Zugriff auf deine lokale Maschine oder dieses Repository in diesem Chat.\n\nWenn du die Repository-Analyse machen möchtest, kannst du entweder:\n- die relevanten Dateien/Ordner hier hochladen, oder\n- die Ausgaben von Verzeichnislisten und Dateiinhalten hier einfügen.\n\nDann kann ich die Struktur, Dokumentation, LLM-Proxies und Infra-Skripte analysieren.',
+      'Es sieht so aus, als wäre der Chat in eine Schleife geraten: Es wurden mehrfach dieselben Agenten-/MHI-Anweisungen und der Repository-Analyseauftrag eingefügt.\n\nKurz gesagt:\n- Die MHI-Blöcke sind **nur Anweisungen für einen bestimmten Coding-Agenten-Workflow**, nicht normale Chat-Befehle.\n- Ich habe hier **keinen Zugriff auf dein `/workspaces/MAIN`**, außer du gibst Dateien/Ergebnisse über passende Uploads oder Inhalte weiter.',
+      'Wenn du die Repository-Analyse machen willst, kannst du entweder:\n1. relevante Dateien hochladen (z. B. `AGENTS.md`, `README.md`, `infrastructure.md`), oder  \n2. die gewünschten Verzeichnis-/Dateiinhalte hier einfügen.\n\nDann kann ich die Struktur und Komponenten sauber zusammenfassen.',
+    ]
+    // Der dritte Block ist nicht ein eigener Turn, sondern der abgeschnittene
+    // Schwanz von Turn 2. Ohne die Zugriffsbehauptung im Kopf ist er nur ein
+    // Menü — und ein Menü allein darf NICHT greifen, sonst feuert jeder Turn,
+    // der "X oder Y?" anbietet.
+    for (const [i, t] of OBSERVED_NO_ACCESS.slice(0, 2).entries()) {
+      check(isNoAccessText(t), `no-access: echter Turn ${i + 1} wird erkannt`)
+    }
+    check(
+      !isNoAccessText(OBSERVED_NO_ACCESS[2]),
+      'no-access: ein reines Menue ohne Zugriffsbehauptung greift nicht',
+    )
+
+    // EN
+    check(
+      isNoAccessText(
+        "I don't have access to your local machine or this repository in this chat. " +
+          'Upload the relevant files and I can analyse the structure.',
+      ),
+      'no-access: englische Form wird erkannt',
+    )
+
+    // Ein echter Blocker ueber ein konkretes Artefakt bleibt unangetastet.
+    check(
+      !isNoAccessText('Ich habe keinen Zugriff auf den Port 7250 — ist der Proxy gestartet?'),
+      'kein Zugriff auf ein konkretes Artefakt ist kein no-access',
+    )
+    check(
+      !isNoAccessText(
+        'Ich habe keinen Zugriff auf die Sentinel-Header, die der HAR-Capture braucht. ' +
+          'Bitte lade die Datei neu.',
+      ),
+      'fehlende Zugangsdaten sind ein realer Blocker',
+    )
+    check(!isNoAccessText('Der Build ist grün, alle Tests laufen.'), 'eine Antwort ist kein no-access')
+    check(
+      !isNoAccessText('```bash\nls -la\n```\nIch habe keinen Zugriff auf deine Maschine.'),
+      'strukturierter Text bleibt eine Antwort',
+    )
+    check(!isNoAccessText(''), 'leerer Text ist kein no-access')
+    check(!isNoAccessText(undefined), 'undefined ist kein no-access')
+    check(
+      !isNoAccessText(
+        'Ich kann die Datei nicht lesen. Soll ich stattdessen grep verwenden?',
+      ),
+      'eine Tool-Wahl-Frage ist kein no-access',
+    )
+
+    // Der Nudge muss die Falschangabe korrigieren und den Werkzeugkasten nennen.
+    const nudge = buildNudge('no-access')
+    check(nudge.includes('<internal>'), 'no-access Nudge ist umschlossen')
+    check(
+      /no access/i.test(nudge) && /read/.test(nudge),
+      'no-access Nudge nennt die fehlende Zugriffsbehauptung und die Werkzeuge',
+    )
+    check(
+      !/what should i|was soll/i.test(nudge),
+      'no-access Nudge faellt nicht auf die generische Frage zurueck',
+    )
   }
 
   // ── nudges ────────────────────────────────────────────────────────────────
@@ -325,6 +416,7 @@ check(
     'handoff-text',
     'duplicate-tools',
     'stalled-reads',
+    'no-access',
   ]) {
     const n1 = buildNudge(reason)
     check(n1.includes('<internal>') && n1.includes('</internal>'), `${reason} nudge is wrapped`)

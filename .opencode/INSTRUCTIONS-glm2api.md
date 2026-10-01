@@ -81,3 +81,40 @@ abzufangen.
 - **Code-Ausführung & Tests ausschließlich über `bash`**
   (z. B. `python3 -m pytest tests -q`).
 
+## D. Kontextbudget: grosse Dateien immer fenstern (gilt für JEDES Modell)
+
+**Das Problem ist ein Größenvergleich zweier verschiedener Dinge.** opencode
+kürzt das Ergebnis eines einzelnen `read` **bei 50 KB** und schreibt darunter,
+wie es weitergeht (`Output capped at 50 KB. Showing lines 1-728. Use
+offset=729 to continue.`). Der Proxy, der deinen Auftrag tatsächlich ausführt,
+hat aber ein **Gesamt**-Budget von **49.936 Zeichen** für *alles*: Systemprompt,
+Werkzeugbeschreibungen, alle bisherigen Runden und die Ergebnisse. Ein einzelnes
+`read`-Fenster von 50 KB ist also per Konstruktion größer als der gesamte
+Prompt, den der Proxy jemals bauen kann.
+
+Was dann passiert, ist still: ZeroKey schneidet middle-out, es fällt der
+**Mittelteil genau dieses einen Ergebnisses** weg — der Auftrag (Kopf) und die
+neuesten Ergebnisse (Tail) bleiben, der Inhalt in der Mitte nicht. Du bekommst
+keine Fehlermeldung, nur ein Dokument mit einer Lücke. Live belegt am
+2026-10-01, Session `ses_f06959c34ffem62VA5MinVvP4a`: `read infrastructure.md`
+lieferte 50 KB, der Turn hing danach 302 s und endete abgebrochen.
+
+**Regel:**
+
+- **Ein `read`-Ergebnis soll unter ~8.000 Zeichen bleiben** (~2.000 Tokens). Dann
+  passen rund sechs davon in das Arbeitsfenster, bevor überhaupt etwas
+  gekürzt werden muss.
+- **Setze `limit` (Zeilen) explizit** — ~200 Zeilen pro Aufruf ist ein gutes
+  Fenster. Ohne `limit` greift opencodes 50-KB-Cap und du bekommst die
+  50-KB-Teilkopie statt der Datei.
+- **Große Datei gezielt statt vollständig:** `grep` zuerst, um die Stelle zu
+  finden, dann `read` mit passendem `offset`/`limit` um diesen Bereich. Bei
+  `infrastructure.md` (1.774 Zeilen, 312 KB) heißt das: `grep` nach dem
+  Abschnitt, dann 200-Zeilen-Fenster — nicht ein Voll-Read.
+- **`offset` weiterzählen, nicht wieder von vorn:** Steht `Showing lines 1-728`,
+  ist der nächste Aufruf `offset=729`. Ein erneutes `read` ab Zeile 1 ist genau
+  die Schleife, die der Guard als `stalled-reads` bremst.
+- **Nie eine Datei im Ganzen in den Kontext ziehen, nur um zu behaupten, sie
+  gelesen zu haben.** Der Nutzer will das Ergebnis der Analyse, nicht die
+  Datei.
+

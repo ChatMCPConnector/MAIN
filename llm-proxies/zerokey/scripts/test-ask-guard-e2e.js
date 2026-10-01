@@ -61,6 +61,49 @@ function fakeStream(turns) {
   return Readable.from([Buffer.from(chunks.join(''))])
 }
 
+// Like fakeStream, but the turns are raw assistant TEXT with no MHI wrapper —
+// the shape of a turn that explains itself instead of calling a tool. The other
+// cases all script tool blocks, so text-only drift needs its own builder.
+function fakeTextStream(turns) {
+  const chunks = []
+  for (const turn of turns) {
+    chunks.push(mhi(turn))
+  }
+  chunks.push('data: [DONE]\n\n')
+  return Readable.from([Buffer.from(chunks.join(''))])
+}
+
+// Run a text-only upstream through the pipeline, the same way run() does for
+// tool turns, and report what the guard decided.
+async function runText(label, upstreamTurns, { expectRetry, expectReason }) {
+  const res = fakeRes()
+  const pipeline = new StreamPipeline(res, session, 'chatgpt', 'opencode', messages)
+  pipeline.ephemeralMode = false
+  pipeline.rawMode = false
+
+  let attempts = 0
+  let reason = null
+  const { chatgptStreamHandler } = require('../providers/chatgpt/stream-handler')
+  const retry = async (info) => {
+    attempts++
+    reason = info.reason
+    const next = new StreamPipeline(res, session, 'chatgpt', 'opencode', messages)
+    next.ephemeralMode = false
+    next.rawMode = false
+    await chatgptStreamHandler(fakeStream(upstreamTurns.slice(1)), session, next)
+    return true
+  }
+
+  await chatgptStreamHandler(fakeTextStream(upstreamTurns.slice(0, 1)), session, pipeline, retry)
+
+  const names = res.toolNames()
+  console.log(`\n[${label}]`)
+  console.log(`  attempts=${attempts} reason=${reason} tools=[${names}]`)
+  check(attempts === (expectRetry ? 1 : 0), `${label}: retry count ${expectRetry ? 1 : 0}`)
+  if (expectRetry) check(reason === expectReason, `${label}: reason is ${expectReason} (ist ${reason})`)
+  return { res, names, attempts }
+}
+
 // Collect everything the pipeline writes to the fake response.
 function fakeRes() {
   const out = { chunks: [], ended: false }
@@ -110,6 +153,16 @@ const messages = [
 const genericAsk = `ask${SEP}question=What change or coding task should I perform in this project?`
 const realAsk = `ask${SEP}question=Which port should the server listen on?`
 const reads = [`glob${SEP}path=/workspaces${SEP}pattern=*`, `ls${SEP}path=/workspaces/MAIN`]
+
+// Verbatim assistant turn from ses_f06959c34ffem62VA5MinVvP4a: the model denies
+// access to the machine and offers to work from uploaded files instead.
+const OBSERVED_NO_ACCESS_TURN =
+  'Es sieht so aus, als wäre der Chat in eine Schleife geraten: Es wurden ' +
+  'mehrfach dieselben Agenten-/MHI-Anweisungen und der Repository-Analyseauftrag ' +
+  'eingefügt.\n\nKurz gesagt:\n- Die MHI-Blöcke sind **nur Anweisungen für einen ' +
+  'bestimmten Coding-Agenten-Workflow**, nicht normale Chat-Befehle.\n- Ich habe ' +
+  'hier **keinen Zugriff auf dein `/workspaces/MAIN`**, außer du gibst ' +
+  'Dateien/Ergebnisse über passende Uploads oder Inhalte weiter.'
 
 async function run(label, upstreamTurns, { expectRetry }) {
   const res = fakeRes()
@@ -425,6 +478,33 @@ async function run(label, upstreamTurns, { expectRetry }) {
     check(c.attempts === 1, 'O: die dritte Runde wiederholt nur Bekanntes und wird gebremst')
     delete session._readMemory
     delete session._lastToolRound
+  }
+
+  // P) Live belegt in ses_f06959c34ffem62VA5MinVvP4a (2026-10-01): der Agent
+  //    behauptete drei Turns hintereinander, keinen Zugriff auf die Maschine zu
+  //    haben, und bat um Uploads — obwohl read/glob/bash im selben Request
+  //    deklariert waren. Dreimal hintereinander, weil isDriftText das nicht
+  //    sieht: das ist keine "was soll ich als Naechstes tun"-Runde.
+  {
+    const noAccess = OBSERVED_NO_ACCESS_TURN
+    const { names } = await runText('P no-access drift', [noAccess, reads], {
+      expectRetry: true,
+      expectReason: 'no-access',
+    })
+    check(
+      names.includes('glob') && names.includes('read'),
+      'P: die Arbeit des Retry erreicht die IDE',
+    )
+  }
+
+  // Q) Gegenprobe derselben Form: eine echte Antwort ohne Tool-Call ist eine
+  //    fertige Antwort und darf nicht gebremst werden.
+  {
+    const answer =
+      'Die Proxy-Kette laeuft in dieser Reihenfolge: Antigravity (9878), ' +
+      'glm2api (8001), ZeroKey (7250). Jede Stufe spricht OpenAI-kompatibel.'
+    const { attempts } = await runText('Q echte Antwort', [answer], { expectRetry: false })
+    check(attempts === 0, 'Q: eine Antwort ohne Tool-Call ist kein Stillstand')
   }
 
   if (failed) {
