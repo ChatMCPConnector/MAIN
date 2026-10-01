@@ -327,6 +327,28 @@ else
   fi
 fi
 
+echo "==> [landscape] pnpm (gepinnt) installieren..."
+# start-zerokey.sh ruft zwingend `pnpm install --frozen-lockfile`. Weder
+# setup.sh noch devcontainer.json haben pnpm installiert — die benutzte Version
+# war damit nicht reproduzierbar (zerokey.sh:107 holte sie per `npm i -g pnpm`
+# UNgepinnt). Quelle der Wahrheit ist das packageManager-Feld in
+# llm-proxies/zerokey/package.json.
+PNPM_PIN="$(sed -nE 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@([^"]+)".*/\1/p' "$REPO_ROOT/llm-proxies/zerokey/package.json" 2>/dev/null | head -1)"
+: "${PNPM_PIN:=10.13.1}"   # Notnagel, falls package.json fehlt
+if command -v corepack >/dev/null 2>&1; then
+  corepack enable >/dev/null 2>&1 || true
+  # `prepare` ist in neueren Node-Versionen deprecated, `install --global` der
+  # Nachfolger — deshalb der zweite Versuch.
+  if corepack prepare "pnpm@$PNPM_PIN" --activate >/dev/null 2>&1 \
+     || corepack install --global "pnpm@$PNPM_PIN" >/dev/null 2>&1; then
+    echo "    pnpm $PNPM_PIN (corepack) aktiv."
+  else
+    echo "    WARN: corepack konnte pnpm@$PNPM_PIN nicht aktivieren — manuell: corepack install --global pnpm@$PNPM_PIN"
+  fi
+else
+  echo "    WARN: corepack fehlt — pnpm nicht gepinnt installierbar (start-zerokey.sh braucht es)."
+fi
+
 echo "==> [landscape] LLM-Proxy zerokey wiederherstellen & starten..."
 # ZeroKey (ChatGPT-Web-Provider, Port 7250) liegt komplett im Repo unter
 # llm-proxies/zerokey/ — kein Klon. start-zerokey.sh macht pnpm install
