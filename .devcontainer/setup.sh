@@ -104,6 +104,13 @@ done
 mkdir -p "$HOME/.local/bin"
 ln -sf "$REPO_ROOT/infra/scripts/quota.sh" "$HOME/.local/bin/quota"
 
+echo "==> [landscape] Secret-Rechte haerten (600/700, Default-ACL)..."
+# Der Codespace-FS erbt eine Default-ACL `rwx rwx rwx`, die `umask` aushebelt.
+# secret-perms.sh setzt die Secret-Pfade explizit und entfernt die zu weite
+# Default-ACL der empfindlichen Verzeichnisse. Muss VOR dem Unlock laufen, damit
+# neu geschriebene Dateien (.env, temp/users.json) dem umask folgen.
+bash "$REPO_ROOT/infra/scripts/secret-perms.sh" || echo "    WARN: secret-perms.sh fehlgeschlagen."
+
 echo "==> [landscape] Secrets entsperren (falls Bundle + Passphrase da)..."
 if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
   # SECRETS_NO_PROMPT + </dev/null: der Unlock darf den Codespace-Build NIE auf

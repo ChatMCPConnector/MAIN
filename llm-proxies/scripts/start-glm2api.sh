@@ -3,6 +3,9 @@
 # Code liegt in llm-proxies/glm2api/, .env kommt aus
 # llm-proxies/glm2api/.env.dist (getrackt → wird nach .env kopiert falls neu).
 set -euo pipefail
+# glm2api/.env traegt den echten GLM_REFRESH_TOKEN (per sed injiziert) — nicht
+# world-readable anlegen. umask 077 macht das `cp` unten zu 600.
+umask 077
 
 APP_DIR="/workspaces/MAIN/llm-proxies/glm2api"
 ENV_SRC="/workspaces/MAIN/llm-proxies/glm2api/.env.dist"

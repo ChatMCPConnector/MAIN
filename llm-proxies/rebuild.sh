@@ -11,6 +11,9 @@
 # (2/2 Tasks vollautonom in je 1 Run, 0 Abbrüche) — hellogml (Guest-Token-
 # Erschöpfung bei Lang-Runs) und chat2api (Markup-Fragilität) wurden entfernt.
 set -uo pipefail
+# glm2api/.env traegt den echten GLM_REFRESH_TOKEN (per sed injiziert) — nicht
+# world-readable anlegen. umask 077 macht das `cp` unten zu 600.
+umask 077
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$REPO_ROOT/llm-proxies/glm2api"

@@ -139,6 +139,9 @@ get_passphrase() {
 }
 
 cmd_lock() {
+  # Bundle + Manifest sollen 600 sein, nicht umask-abhaengig world-readable.
+  # (Der einmalige Bestand wurde separat auf 600 gesetzt.)
+  umask 077
   local stage; stage="$(mktemp -d)"
   trap "rm -rf '$stage'" EXIT
   local found=0

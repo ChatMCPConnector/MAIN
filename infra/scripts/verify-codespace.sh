@@ -67,6 +67,17 @@ check "Passphrase-Kandidaten"    bash -c '
   out=$("$REPO_ROOT/infra/scripts/secrets.sh" status 2>&1)
   printf "%s" "$out" | grep -q "Passphrase: OK" || { printf "%s" "$out" | tail -1; exit 1; }
   echo "Bundle laesst sich entschluesseln"'
+check "Secrets nicht world-readable" bash -c '
+  bad=""
+  for f in config/passphrase config/secrets.enc config/secrets.manifest \
+           llm-proxies/glm2api/.env llm-proxies/zerokey/temp/users.json; do
+    [ -e "$f" ] || continue
+    m="$(stat -c %a "$f" 2>/dev/null)"
+    [ "$m" = "600" ] || bad="$bad $f($m)"
+  done
+  if [ -d .runtime ] && [ "$(stat -c %a .runtime 2>/dev/null)" != "700" ]; then bad="$bad .runtime"; fi
+  [ -z "$bad" ] || { echo "weltlesbar:$bad"; exit 1; }
+  echo "alle 600, .runtime 700"'
 info "LANDSCAPE_PAT" "$([ -n "${LANDSCAPE_PAT:-}" ] && echo "gesetzt (${#LANDSCAPE_PAT} B)" || echo "nicht gesetzt (ok, Token-Datei genutzt)")"
 info "LANDSCAPE_PASSPHRASE" "$([ -n "${LANDSCAPE_PASSPHRASE:-}" ] && echo "gesetzt (${#LANDSCAPE_PASSPHRASE} B)" || echo "nicht gesetzt (ok, Repo-Fallback)")"
 

@@ -7,6 +7,10 @@
 # GITIGNORIERT: Runtime, kein Quelltext. Fehlt die Datei, startet der Proxy
 # nicht sinnvoll — siehe infrastructure.md, Abschnitt "ZeroKey".
 set -euo pipefail
+# temp/users.json (ChatGPT-Cookies) wird zur Laufzeit von der Node-App selbst
+# atomar neu geschrieben — dann zaehlt deren umask, nicht das einmalige
+# `chmod 600` unten. umask hier vererbt sich auf den node-Prozess.
+umask 077
 
 APP_DIR="/workspaces/MAIN/llm-proxies/zerokey"
 LOG="/tmp/opencode/zerokey.log"

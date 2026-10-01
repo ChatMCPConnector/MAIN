@@ -24,6 +24,8 @@
 #   ./infra/scripts/gdrive-backup.sh status    # Remote-Stand zeigen
 #   ./infra/scripts/gdrive-backup.sh restore [target-dir]
 set -uo pipefail
+# .runtime/ traegt das volle-History-Bundle (116 MB) — nicht world-readable.
+umask 077
 cd "$(dirname "$0")/../.."
 
 readonly RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
