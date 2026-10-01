@@ -41,6 +41,20 @@ else
   fi
 fi
 
+# 3. zerokey (Port 7250)
+# Fehlte hier bisher (die Schritte liefen 0,1,2,4,5,6). Nach jedem Resume blieb
+# zerokey tot, bis der 30-s-Proxy-Watchdog ihn startete — bei totem Watchdog
+# dauerhaft. Gegenprobe wie bei den anderen: /v1/models antwortet = laeuft.
+if curl -sf -m 2 http://127.0.0.1:7250/v1/models >/dev/null 2>&1; then
+  echo "[boot] zerokey läuft bereits."
+else
+  if [ -x "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" ]; then
+    bash "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" >/dev/null 2>&1 \
+      && echo "[boot] zerokey gestartet." \
+      || echo "[boot] WARN: zerokey Start fehlgeschlagen."
+  fi
+fi
+
 # 4. opencode-server (Port 4096)
 if curl -sf -m 2 http://127.0.0.1:4096/ >/dev/null 2>&1; then
   echo "[boot] opencode-server läuft bereits."
