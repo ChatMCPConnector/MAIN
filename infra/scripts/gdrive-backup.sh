@@ -90,7 +90,13 @@ require_auth() {
 }
 
 cmd_backup() {
-  require_auth || exit 0  # save.sh-Hook darf Push nie gefährden
+  # exit 1 statt exit 0 (2026-10-01): `save.sh` ruft diesen Hook mit `|| true`
+  # auf und wertet AUSSCHLIESSLICH den Exit-Code aus, um die Warnung
+  # "Drive-Backup fehlgeschlagen" zu drucken. Mit exit 0 war ein komplett
+  # totes Backup (kein rclone, kein Remote, kein Auth) von einem gesunden nicht
+  # unterscheidbar — der einzige Bruch in einem sonst fail-closed Skript. Der
+  # Push bleibt trotzdem sicher: save.sh faengt den Fehler ab.
+  require_auth || exit 1
   # Lock: der Autosave-Daemon feuert alle 30 Min ungefragt, dazu kommt jeder
   # manuelle 'gdrive backup'. Ohne Lock teilen sich zwei Läufe dieselbe Datei
   # (.runtime/MAIN.new.bundle) — das 'rm -f' am Ende des einen löscht die Datei,
