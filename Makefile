@@ -66,7 +66,7 @@ ci: check verify-code
 
 ## lint-py: glm2api mit ruff + mypy (identisch zum Hook)
 lint-py:
-	cd $(GLMAPI) && $(TIMEOUT) run 120 uv run ruff check .
+	cd $(GLMAPI) && $(TIMEOUT) run 120 uv run ruff chek .
 	cd $(GLMAPI) && $(TIMEOUT) run 180 uv run mypy src
 
 ## test-py: glm2api-Testsuite
