@@ -177,6 +177,31 @@ check "Lint-Hook verdrahtet" bash -c '
   [ "$hp" = ".githooks" ] || { echo "core.hooksPath=${hp:-<leer>} (erwartet .githooks) — setup.sh erneut laufen lassen"; exit 1; }
   [ -x "$REPO_ROOT/.githooks/pre-commit" ] || { echo ".githooks/pre-commit fehlt oder ist nicht ausfuehrbar"; exit 1; }
   echo "core.hooksPath=.githooks, pre-commit ausfuehrbar"'
+check "Go-Lint antigravity (vet+fmt)" bash -c '
+  # Go hatte bis 2026-10-01 keinen einzigen automatischen Check. `mise` ist
+  # nicht installiert, also direkt go vet + gofmt (das Binary liegt in
+  # /usr/local/go/bin, siehe setup.sh/aliases.sh).
+  GO=/usr/local/go/bin/go
+  [ -x "$GO" ] || { echo "go fehlt ($GO) - setup.sh"; exit 1; }
+  cd "$REPO_ROOT/llm-proxies/antigravity-proxy" || exit 1
+  "$GO" vet ./... >/dev/null 2>&1 || { echo "go vet rot"; exit 1; }
+  # gofmt -l ist READ-ONLY (gibt nur Namen aus). Bewusst NICHT `go fmt` — das
+  # wuerde Dateien schreiben, und ein Verifier darf nichts aendern.
+  GOFMT=/usr/local/go/bin/gofmt
+  if [ -x "$GOFMT" ]; then
+    un=$("$GOFMT" -l . 2>/dev/null | grep -v "^vendor/" || true)
+    [ -z "$un" ] || { echo "unformatiert: $un"; exit 1; }
+  fi
+  echo "go vet ok, gofmt sauber"'
+check "MAIN-JS Syntax (node --check)" bash -c '
+  # MAIN hat kein Root-ESLint; der einzige eigene JS-Code ist infra/mcp. Ein
+  # Syntax-Check (kein neues Toolchain) faengt kaputte Dateien vor dem Start.
+  bad=""
+  while IFS= read -r f; do
+    node --check "$REPO_ROOT/$f" >/dev/null 2>&1 || bad="$bad $f"
+  done < <(git -C "$REPO_ROOT" ls-files infra | grep -E "\.js$")
+  [ -z "$bad" ] || { echo "Syntaxfehler:$bad"; exit 1; }
+  echo "infra-JS syntaktisch ok"'
 
 echo "== 9. Provider live =="
 if [ "$LIVE" -eq 1 ]; then

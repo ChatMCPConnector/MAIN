@@ -439,7 +439,7 @@ const TOOLS = {
           args.path = internal.path
         }
         if (args.pattern && args.pattern.startsWith('/')) {
-          const firstWildcard = args.pattern.search(/[*?\[]/)
+          const firstWildcard = args.pattern.search(/[*?[]/)
           if (firstWildcard !== -1) {
             const lastSlash = args.pattern.lastIndexOf('/', firstWildcard)
             if (lastSlash > 0) {
@@ -494,7 +494,7 @@ const TOOLS = {
         const filePattern = internal.glob && !internal.glob.startsWith('/') && !internal.glob.includes('/') ? internal.glob : null
 
         if (rawPath) {
-          const clean = rawPath.replace(/[\/\\]\*\*?.*$/, '').replace(/[\/\\][*?\[].*$/, '')
+          const clean = rawPath.replace(/[/\\]\*\*?.*$/, '').replace(/[/\\][*?[].*$/, '')
           args.path = clean || rawPath
         }
         if (filePattern) {

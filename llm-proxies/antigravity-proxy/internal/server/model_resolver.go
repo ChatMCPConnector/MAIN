@@ -195,10 +195,6 @@ func isGemini36FlashModel(modelLower string) bool {
 		modelLower == modelGemini36FlashTiered
 }
 
-func isGemini35FlashModel(modelLower string) bool {
-	return strings.Contains(modelLower, "3.5-flash") || modelLower == modelGemini35FlashHigh
-}
-
 func isGemini31FlashLiteModel(modelLower string) bool {
 	return strings.Contains(modelLower, "3.1-flash-lite") ||
 		strings.Contains(modelLower, "3.5-flash") ||

@@ -76,8 +76,17 @@ messen. Existiert für jede Sprache:
 |---|---|
 | glm2api (Python) | `cd llm-proxies/glm2api && uv run pytest -q && uv run ruff check . && uv run mypy src` |
 | zerokey (JS) | `cd llm-proxies/zerokey && pnpm lint && pnpm check && pnpm test` |
-| antigravity-proxy (Go) | `cd llm-proxies/antigravity-proxy && mise run test` (formatiert mit `mise run format`) |
+| antigravity-proxy (Go) | `cd llm-proxies/antigravity-proxy && go vet ./... && go test ./...` (Format: `gofmt -w .`) |
 | Shell | `bash -n <skript>` (und, wo möglich, ein Trockenlauf) |
+
+`mise` ist hier **nicht** installiert: die `mise.toml`-Tasks des vendorten
+antigravity-proxy (`mise run test`/`format`) sind der Upstream-Weg, laufen aber
+nur mit mise. Deshalb stehen oben die direkten `go`-Befehle (Go liegt unter
+`/usr/local/go/bin`, auf dem PATH via `aliases.sh`).
+
+Bei zerokey ist `pnpm lint`/`check`/`test` der belastbare Check; `pnpm format`
+(prettier) ist auf dem vendorten Baum derzeit **nicht** sauber (5 Dateien, u.a.
+Prosa-Instruktionen) — ein blindes `--write` kann Instruktionstexte umbrechen.
 
 **Automatik:** `.githooks/pre-commit` laufen `ruff` + `mypy` fuer glm2api bei
 jedem Commit, der `.py`/`.toml` unter `llm-proxies/glm2api/` betrifft (schlägt
