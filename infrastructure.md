@@ -835,10 +835,14 @@ Bann nicht mehr, genau dann wird das Backup gebraucht.
   bis zu 6 h Commits unwiederbringlich, weil der Codespace selbst ephemer ist.
   Das ist echter Datenverlust, kein Tuning. Also: **voller Upload bei jedem
   Save mit neuem Commit.**
-  **Offen und wichtiger als jede Optimierung:** rclone nutzt einen *geteilten*
-  Google-`client_id`, den Google 2026 abschaltet. Dann bricht das Backup aus —
-  und weil `save.sh` den Hook mit `|| true` aufruft (damit ein Push nie
-  scheitert), bliebe das unbemerkt. Eigener `client_id` ist der Pfad.
+  **Eigener Google-`client_id` (2026-10-01): erledigt.** rclone nutzte den
+  *geteilten* Client, den Google 2026 abschaltet (und warnte bei jedem Upload).
+  Jetzt liegt ein eigener OAuth-Client (Typ **Desktop-App**, Projekt
+  `423042998961`) in `~/.config/rclone/rclone.conf` (`client_id` +
+  `client_secret`), der Token ist darauf neu ausgestellt, und die Warnung ist
+  weg. Der Client steht im Modus **Testing** — das Konto *muss* im Consent-Screen
+  als **Testnutzer** eingetragen sein, sonst antwortet Google mit
+  `403 access_denied` (live erlebt).
 - **Trigger:** `save.sh` ruft nach jedem erfolgreichen Push den Backup-Hook
   auf — damit sichert auch der Autosave-Daemon (alle 30 Min) automatisch nach
   Drive. Fehlt die rclone-Auth, überspringt sich der Hook selbst (Push-Erfolg
@@ -1014,6 +1018,8 @@ Proxy bei jedem Start automatisch hoch.
     * **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):** Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2 springt). Der Fragenmodus schließt erst, wenn Freebuff `Your answer:` / `Your answers:` ausgibt oder der Nutzer Esc / Strg+C drückt.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
+
+- 2026-10-01 (11): **rclone sichert jetzt über einen eigenen Google-`client_id` — die vom Plan notierte Abschalt-Frist ist entschärft.** rclone warnte bei jedem Upload, es nutze einen *geteilten* Client, den Google 2026 abschaltet; danach wäre das Drive-Backup ausgefallen (`save.sh` ruft den Hook mit `|| true` auf, es bliebe unbemerkt). Ein eigener OAuth-Client (Typ **Desktop-App**, Projekt `423042998961`) wurde eingerichtet, `client_id` + `client_secret` stehen in `~/.config/rclone/rclone.conf`, der Refresh-Token ist über `rclone authorize drive <id> <secret>` neu ausgestellt und in die Config geschrieben (`~/.config/rclone/`, nicht `~/.config/landscape/`). Bundle via `secrets.sh lock` mitgezogen. **Drei Fallen, die dabei Zeit gekostet haben:** (a) die App im Modus *Testing* erlaubt nur **Testnutzer** — der Kontoeintrag im Consent-Screen (`…/auth/audience`) war die Lösung für `403 access_denied`; der frühere Reiter „OAuth consent screen" heißt jetzt „Google Auth Platform". (b) Beim Bestätigen mit `</dev/null` bricht `rclone config reconnect` mit EOF ab — `yes | rclone …` nötig. (c) `rclone config update gdrive client_secret=…` verschlüsselt (obfuskiert) das Feld doppelt, wenn das Secret base64-artig und ≥22 Zeichen ist: erst `rclone obscure` + `--no-obscure` (mit `config_refresh_token=false`, sonst versucht `config update` einen Token-Refresh) schreibt korrekt — geprüft mit `rclone reveal`. Zusätzlich schickte ein im Codespace-Firefox offen gebliebener *alter* Auth-Tab beim zweiten Versuch den alten `state` („Auth state doesn't match"); gelöst über `rclone authorize` (fasst die Config nicht an) statt `reconnect`. **Verifiziert:** `rclone about gdrive:` liest das echte Drive, `gdrive-backup.sh backup --force` lädt hoch + rotiert + verifiziert (119.241.241 Bytes, MD5 geprüft), **ohne** die geteilte-client_id-Warnung. Der Backup-Pfad selbst blieb unverändert.
 
 - 2026-10-01 (10): **Boot-Hang und `pkill -f` im Boot-Pfad beseitigt (A3/A4).** Zwei Befunde aus der zweiten Plan-Recherche, beide live belegt. **(A3)** `start-on-boot.sh` (postStartCommand, läuft bei jedem Resume) rief `secrets.sh unlock` **ohne** `SECRETS_NO_PROMPT=1` und **ohne** `</dev/null` auf — während `setup.sh` beides korrekt macht. `secrets.sh` fragt nur bei vorhandenem TTY (`[ -t 0 ]`), der Resume kann also unsichtbar auf eine Passphrase warten (die Ausgabe geht nach `/dev/null`). Jetzt dieselben zwei Flags wie in `setup.sh`. **(A4)** `opencode-server.sh` beendete Reste mit `pkill -f "opencode-bin serve"` — genau das Muster, das laut `AGENTS.md §4` die aufrufende Shell mitgetroffen hat (live passiert 2026-09-30). Ersetzt durch `timeout.sh kill "opencode-bin serve"`, das sich selbst und alle Vorfahren ausschließt; der `SCRIPT_DIR` wird aus `BASH_SOURCE` aufgelöst, damit der Helfer unabhängig vom cwd gefunden wird. **Verifiziert:** `bash -n` grün; `timeout.sh kill` mit Nicht-Muster liefert Exit 1 ohne Selbst-Treffer; `opencode-server.sh status` antwortet weiter (HTTP 200 auf 4096); `verify-codespace.sh` **30 PASS, 0 FAIL, 2 SKIP**.
 
