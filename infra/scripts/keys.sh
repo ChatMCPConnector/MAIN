@@ -72,6 +72,10 @@ cmd_ensure() {
 }
 
 cmd_status() {
+  # Exit-Code muss ehrlich sein: `verify-codespace.sh` prüft ihn („Key-Dateien
+  # OK"). Früher endete die Funktion immer auf einem echo (Exit 0) — der Check
+  # konnte nie rot werden, auch wenn ein Key fehlte oder leer war.
+  local rc=0
   echo "Key-Dateien in $KEYDIR:"
   local entry name provider endpoint model st
   for entry in "${KEYS[@]}"; do
@@ -79,22 +83,27 @@ cmd_status() {
     st="$(state_of "$name")"
     case "$st" in
       ok)   printf '  %-18s %-10s %s (%s)\n' "$name" "[OK]" "$provider" "$model" ;;
-      leer) printf '  %-18s %-10s %s (%s)\n' "$name" "[LEER]" "$provider" "$model" ;;
-      *)    printf '  %-18s %-10s %s (%s)\n' "$name" "[FEHLT]" "$provider" "$model" ;;
+      leer) printf '  %-18s %-10s %s (%s)\n' "$name" "[LEER]" "$provider" "$model"; rc=1 ;;
+      *)    printf '  %-18s %-10s %s (%s)\n' "$name" "[FEHLT]" "$provider" "$model"; rc=1 ;;
     esac
   done
-  # Dateien, die opencode.json referenziert, aber nicht in KEYS stehen
-  local f extra=0
+  # Dateien, die opencode.json referenziert, aber nicht in KEYS stehen. Ein
+  # leerer/fehlender {file:...}-Key blockiert opencode — zählt deshalb als Fehler.
+  local f
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     f="${f/#\~/$HOME}"
     grep -q "^$(basename "$f")|" <<<"$(printf '%s\n' "${KEYS[@]}")" && continue
-    extra=1
-    printf '  %-18s %-10s (nur in opencode.json referenziert)\n' "$(basename "$f")" "[$(state_of "$(basename "$f")")]"
+    st="$(state_of "$(basename "$f")")"
+    printf '  %-18s %-10s (nur in opencode.json referenziert)\n' "$(basename "$f")" "[$st]"
+    [ "$st" = "ok" ] || rc=1
   done < <(referenced_files)
-  [ "$extra" -eq 0 ] || true
   echo ""
   echo "Fix bei [LEER]/[FEHLT]: ./infra/scripts/keys.sh restore   (Live-Check: keys.sh doctor)"
+  if [ "$rc" -ne 0 ]; then
+    echo "STATUS: FEHLER — mindestens eine Key-Datei ist LEER/FEHLT."
+  fi
+  return "$rc"
 }
 
 # Live-Test: 1 Token anfordern. Es werden Status UND Body ausgewertet, weil
@@ -191,7 +200,9 @@ cmd_doctor() {
   done
   echo ""
   [ "$failed" -eq 0 ] && echo "Alle geprueften Provider antworten." || echo "Mindestens ein Provider ist nicht nutzbar (siehe oben)."
-  return 0
+  # Ehrlicher Exit-Code für `verify-codespace.sh --live` („keys.sh doctor"):
+  # jeder nicht nutzbare Provider ist ein FAIL, nicht nur ein Text.
+  return "$failed"
 }
 
 # Fehlende Keys aus dem Bundle nachziehen. Ruft secrets.sh unlock auf und

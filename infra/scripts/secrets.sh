@@ -239,6 +239,10 @@ cmd_unlock() {
 }
 
 cmd_status() {
+  # Exit-Code ist hier die einzige ehrliche Aussage: `verify-codespace.sh` wertet
+  # ihn aus. Früher endete die Funktion immer auf `keys.sh status` (Exit 0) und
+  # konnte damit nie rot werden — auch bei falscher Passphrase nicht.
+  local rc=0
   if [ -f "$BUNDLE" ]; then
     echo "Bundle: $BUNDLE ($(wc -c < "$BUNDLE" | tr -d ' ') Bytes, verschlüsselt)"
     [ -f "$MANIFEST" ] && { echo "Inhalt:"; sed 's/^/  /' "$MANIFEST"; }
@@ -247,6 +251,7 @@ cmd_status() {
       echo "Passphrase: OK (ein Kandidat entschlüsselt das Bundle)"
     else
       echo "Passphrase: FEHLT/FALSCH — Unlock würde scheitern."
+      rc=1
       if [ -n "${LANDSCAPE_PASSPHRASE:-}" ] && looks_like_pat "$LANDSCAPE_PASSPHRASE"; then
         echo "  Grund: LANDSCAPE_PASSPHRASE enthält einen PAT, nicht die Passphrase."
         echo "  Fix:   Inhalt von config/passphrase als Secret setzen (siehe infrastructure.md)."
@@ -258,9 +263,17 @@ cmd_status() {
     DECRYPTED_TARBALL=""
   else
     echo "Kein Bundle vorhanden. Mit './infra/scripts/secrets.sh lock' erstellen."
+    rc=1
   fi
   echo ""
-  bash ./infra/scripts/keys.sh status
+  # keys.sh status ist reine Zusatzinfo; sein Exit-Code darf den Bundle-Status
+  # nicht verfälschen (sonst koppelt sich dieser Check an ein fremdes Skript).
+  bash ./infra/scripts/keys.sh status || true
+  if [ "$rc" -ne 0 ]; then
+    echo ""
+    echo "STATUS: FEHLER — Bundle ist nicht (mit den vorhandenen Kandidaten) entschlüsselbar."
+  fi
+  return "$rc"
 }
 
 case "${1:-status}" in

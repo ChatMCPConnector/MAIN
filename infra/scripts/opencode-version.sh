@@ -51,7 +51,7 @@ lock_version() {
 }
 
 cmd_check() {
-  local d i l k
+  local d i l k rc=0
   d="$(declared_version || true)"; i="$(installed_version || true)"
   l="$(latest_version || true)"; k="$(lock_version || true)"
   printf '%-14s %s\n' "Repo-Pin" "${d:-FEHLT (.opencode/package.json)}"
@@ -60,22 +60,28 @@ cmd_check() {
   printf '%-14s %s\n' "Latest" "${l:-nicht ermittelbar (offline?)}"
   echo ""
   if [ -z "$d" ]; then echo "FEHLER: kein Pin im Repo — opencode ist ungepinnt."; return 1; fi
+  # Lock != Pin ist ein Repo-Defekt (opencode schreibt den Dep beim TUI-Start
+  # um) und muss rot werden.
   if [ "$k" != "$d" ]; then
     echo "WARNUNG: Lock ($k) != Pin ($d) — 'opencode-version.sh bump $d' zieht den Lock nach."
+    rc=1
   fi
   if [ -n "$i" ] && [ "$i" != "$d" ]; then
     echo "ACHTUNG: installiert ist $i, gepinnt ist $d."
     echo "          Neuer Codespace: automatisch korrekt (setup.sh installiert den Pin)."
     echo "          Dieser Codespace: './infra/scripts/opencode-version.sh install'"
     echo "          Ursache ohne Pin: opencode überschreibt den Dep beim TUI-Start."
+    rc=1
   fi
+  # Ein verfügbares Upstream-Update ist KEIN Repo-Defekt — bewusst nur Hinweis.
+  # Als FAIL würde der Check nach jedem Release rot und damit ignoriert.
   if [ -n "$l" ] && [ "$l" != "$d" ]; then
     echo "UPDATE verfuegbar: $d -> $l   ('opencode-version.sh bump')"
   fi
-  if [ -n "$i" ] && [ "$i" = "$d" ] && { [ -z "$l" ] || [ "$l" = "$d" ]; } && [ "$k" = "$d" ]; then
-    echo "Alles konsistent."
+  if [ "$rc" -eq 0 ]; then
+    echo "Alles konsistent (Pin, Lock und installierte Version)."
   fi
-  return 0
+  return "$rc"
 }
 
 cmd_bump() {
