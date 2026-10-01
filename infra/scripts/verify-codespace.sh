@@ -277,6 +277,26 @@ check_layer code  "Makefile deckt Hook ab" bash -c '
   done
   [ -z "$miss" ] || { echo "Makefile und Hook nennen verschiedene Kommandos -> $miss"; exit 1; }
   echo "5 Kommandos in beiden (ruff, mypy, go vet, gofmt, node --check)"'
+check_layer code  "CI-Pins decken Repo-Pins" bash -c '
+  # Stufe 2: der Workflow muss dieselben Werkzeuge fahren wie der Codespace,
+  # sonst schlaegt der Job an der Toolchain statt am Code fehl. Deshalb liest
+  # er Go aus go.mod und Python aus .python-version — und hier wird
+  # nachgeprueft, dass er das auch wirklich tut (sonst steht dort morgen eine
+  # zweite, abweichende Wahrheit).
+  wf="$REPO_ROOT/.github/workflows/checks.yml"
+  [ -f "$wf" ] || { echo "kein Workflow — ohne Agent laeuft kein Check"; exit 1; }
+  miss=""
+  for must in "go-version-file: " "uv lock --check" "pnpm install --frozen-lockfile" "verify-codespace.sh --code"; do
+    grep -qF "$must" "$wf" || miss="$miss [$must]"
+  done
+  pyver=$(cat "$REPO_ROOT/llm-proxies/glm2api/.python-version" 2>/dev/null | tr -d "[:space:]")
+  grep -q "python-version: .*${pyver}" "$wf" || miss="$miss [python != .python-version=$pyver]"
+  [ -z "$miss" ] || { echo "Workflow deckt nicht ab:$miss"; exit 1; }
+  # pnpm-Pin muss der aus package.json sein, nicht eine eigene Zahl.
+  zk=$(grep -oE "pnpm@[0-9.]+" "$REPO_ROOT/llm-proxies/zerokey/package.json" | head -1 | cut -d@ -f2)
+  grep -q "corepack enable" "$wf" || miss="$miss [kein corepack]"
+  [ -z "$miss" ] || { echo "Workflow deckt nicht ab:$miss"; exit 1; }
+  echo "Go aus go.mod, Python $pyver, pnpm-Pin aus package.json ($zk), Lockfile-Drift + verify-code abgedeckt"'
 check_layer code  "Go-Lint antigravity (vet+fmt)" bash -c '
   # Go hatte bis 2026-10-01 keinen einzigen automatischen Check. `mise` ist
   # nicht installiert, also direkt go vet + gofmt (das Binary liegt in

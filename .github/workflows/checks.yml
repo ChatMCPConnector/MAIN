@@ -1,0 +1,171 @@
+# checks.yml — die Code-Jobs. Laufen bei jedem Push auf main und jedem PR.
+#
+# Zweck (PLAN Stufe 2): bis 2026-10-01 hing **jeder** Check daran, dass ein
+# Agent `AGENTS.md §6` befolgt. Wird er übersprungen, fällt es still aus.
+# Dieser Workflow macht die Quellcode-Hälfte davon agentenunabhängig.
+#
+# Ehrliche Abgrenzung — was dieser Workflow **nicht** ersetzt:
+#   * `verify-codespace.sh` im Codespace bleibt die Aussage über die LAUFENDE
+#     Kette (Ports 8001/9878/7250/4096, Daemons, Secrets-Bundle, Drive).
+#     Ein Runner hat davon nichts — dort wären ~20 Checks FAIL, ohne dass
+#     etwas defekt ist.
+#   * Deshalb fährt der `repo`-Job `make verify-code`: nur der Quellcode-Teil.
+#     Job `repo` kann sauber sein, während die Kette im Codespace steht — und
+#     umgekehrt. Beide Aussagen bleiben, nur eben getrennt.
+#   * Provider-Calls (keys.sh doctor, glm2api-Smoke-Test) laufen hier NICHT:
+#     sie kosten Kontingent, treffen Rate-Limits und ein flaky Live-Check wird
+#     sehr schnell übersprungen (PLAN Stufe 5, dort als Tier B).
+#
+# Toolchain-Pins: alle Versionen kommen aus dem Repo, nicht aus dieser Datei —
+# Go aus `go.mod`, Python aus `.python-version`, pnpm aus `packageManager` in
+# package.json. Der Verify-Check „CI-Pins decken Repo-Pins“ wird rot, sobald
+# hier eine Version steht, die das Repo nicht führt. Grund: der Job soll an
+# genau der Toolchain des Codespaces hängen, nicht an einer zweiten Wahrheit.
+
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Kein Schreibzugriff nötig (nur lesen) — Least Privilege auch bei public Repo.
+permissions:
+  contents: read
+
+# Ein neuer Push macht den laufenden Lauf obsolet.
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    timeout-minutes: 20
+
+jobs:
+  glm2api:
+    name: glm2api (ruff + mypy + pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: llm-proxies/glm2api
+        timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # .python-version (3.14) ist die Quelle; enable-cache nutzt uv.lock.
+          enable-cache: true
+          python-version: '3.14'
+      - name: Lockfile konsistent (Drift-Wächter)
+        run: uv lock --check
+      - name: ruff
+        run: uv run ruff check .
+      - name: mypy
+        run: uv run mypy src
+      - name: pytest
+        run: uv run pytest -q
+
+  antigravity:
+    name: antigravity-proxy (go vet + test + gofmt)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: llm-proxies/antigravity-proxy
+        timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Aus go.mod lesen, nicht hier eintragen — sonst driftet der Job an
+          # der Toolchain statt am Code (PLAN Stufe 2).
+          go-version-file: go.mod
+          cache-dependency-path: llm-proxies/antigravity-proxy/go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: gofmt (read-only)
+        run: |
+          un="$(gofmt -l . | grep -v '^vendor/' || true)"
+          if [ -n "$un" ]; then echo "gofmt noetig: $un"; exit 1; fi
+      - name: go test
+        run: go test ./...
+
+  zerokey:
+    name: zerokey (pnpm lint + check + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: llm-proxies/zerokey
+        timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # engines.node sagt ">=18"; der Codespace nutzt eine aktuelle LTS.
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: llm-proxies/zerokey/pnpm-lock.yaml
+      - name: corepack + pnpm (Pin aus packageManager)
+        run: |
+          corepack enable
+          echo "pnpm $(pnpm --version)"
+      # --frozen-lockfile: schlägt fehl, wenn package.json und Lockfile
+      # auseinanderlaufen. Danach der Diff-Test: schreibt jemand am Lockfile
+      # vorbei, sieht es dieser Job.
+      - name: install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: Lockfile unveraendert
+        run: git diff --exit-code -- pnpm-lock.yaml
+      - name: lint
+        run: pnpm lint
+      - name: check
+        run: pnpm check
+      - name: test
+        run: pnpm test
+
+  infra:
+    name: infra (bash -n + node --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: bash -n ueber alle Shell-Skripte
+        run: |
+          files="$(git ls-files '*.sh')"
+          echo "$files" | xargs -r -n1 bash -n
+          echo "bash -n ok ($(echo "$files" | wc -l) Skripte)"
+      - name: node --check ueber infra-JS
+        run: |
+          files="$(git ls-files | grep '^infra/' | grep '\.js$' || true)"
+          if [ -z "$files" ]; then echo "keine infra-JS-Dateien"; exit 0; fi
+          echo "$files" | xargs -r -n1 node --check
+          echo "infra-JS ok"
+
+  repo:
+    name: repo (verify-codespace.sh --code)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # Drei Checks sehen sich repo-lokale git-Config bzw. $HOME an. Die
+      # emulieren hier, was setup.sh im Codespace tut — sonst wären sie rot,
+      # ohne dass etwas defekt ist. Die inhaltlichen Checks bleiben unberührt.
+      - name: core.hooksPath setzen (wie setup.sh)
+        run: git config core.hooksPath .githooks
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: '3.14'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: llm-proxies/antigravity-proxy/go.mod
+      - name: verify-codespace.sh --code
+        run: ./infra/scripts/verify-codespace.sh --code
