@@ -3,6 +3,7 @@
 # Erlaubt beliebig viele parallele Terminals/Tabs, ohne dass Sessions sich terminieren.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST="127.0.0.1"
 PORT="4096"
 HEALTH_URL="http://${HOST}:${PORT}/"
@@ -62,7 +63,10 @@ case "${1:-status}" in
       fi
       rm -f "${PIDFILE}"
     fi
-    pkill -f "opencode-bin serve" 2>/dev/null || true
+    # AGENTS.md §4: kein `pkill -f` — das Muster steht in der Kommandozeile der
+    # aufrufenden Shell und trifft sie mit. `timeout.sh kill` schließt sich
+    # selbst und alle Vorfahren aus; exit 1 = kein Prozess passt (harmlos).
+    bash "$SCRIPT_DIR/timeout.sh" kill "opencode-bin serve" 2>/dev/null || true
     echo "[opencode-server] Gestoppt."
     ;;
 

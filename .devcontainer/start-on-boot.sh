@@ -8,7 +8,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 0. Secrets entsperren, falls nötig (z.B. nach Container-Neustart)
 if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" ] || [ -f "$REPO_ROOT/config/passphrase" ]; }; then
   if [ ! -f "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ]; then
-    bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock >/dev/null 2>&1 || true
+    # SECRETS_NO_PROMPT + </dev/null: derselbe Boot-Hang wie in setup.sh — ohne
+    # die beiden Flags kann secrets.sh bei vorhandenem TTY interaktiv nach der
+    # Passphrase fragen, und der Boot wartet unsichtbar (Ausgabe geht nach
+    # /dev/null). keys.sh ensure legt bei Fehlschlag Platzhalter an.
+    SECRETS_NO_PROMPT=1 bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock </dev/null >/dev/null 2>&1 || true
   fi
 fi
 
