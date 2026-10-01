@@ -457,7 +457,10 @@ const TOOLS = {
   grep: {
     desc: 'Search file contents. query=text|regex. ?path=directory. ?glob=file extension pattern. ?max caps.',
     grammar: 'query={str|regex}|(path={str})?|(glob={regex})?|(max={0-200})?',
-    eg: [{ query: 'search*', regex: true, glob: '*.js', max: 20 }, { query: 'foo', path: '/workspaces/bar' }],
+    eg: [
+      { query: 'search*', regex: true, glob: '*.js', max: 20 },
+      { query: 'foo', path: '/workspaces/bar' },
+    ],
     keys: { query: ' ', queryR: ' ', regex: true, glob: ' ', path: ' ', max: 200 },
     transformer: (params) => {
       if (params.query) {
@@ -490,8 +493,15 @@ const TOOLS = {
       params: { query: 'pattern' },
       default: { pattern: ' ' },
       transform: (args, internal) => {
-        const rawPath = internal.path || (internal.glob && (internal.glob.startsWith('/') || internal.glob.includes('/')) ? internal.glob : null)
-        const filePattern = internal.glob && !internal.glob.startsWith('/') && !internal.glob.includes('/') ? internal.glob : null
+        const rawPath =
+          internal.path ||
+          (internal.glob && (internal.glob.startsWith('/') || internal.glob.includes('/'))
+            ? internal.glob
+            : null)
+        const filePattern =
+          internal.glob && !internal.glob.startsWith('/') && !internal.glob.includes('/')
+            ? internal.glob
+            : null
 
         if (rawPath) {
           const clean = rawPath.replace(/[/\\]\*\*?.*$/, '').replace(/[/\\][*?[].*$/, '')

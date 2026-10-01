@@ -1,55 +1,82 @@
 #!/usr/bin/env bash
-# .githooks/pre-commit — MAIN-Repo: laesst die glm2api-Linter automatisch laufen.
+# .githooks/pre-commit — MAIN-Repo: laesst die Checks der betroffenen Sprache
+# automatisch laufen, statt sie "von Hand" zu fahren.
 #
-# Warum es diesen Hook gibt: `ruff` + `mypy` sind in
-# llm-proxies/glm2api/pyproject.toml gepinnt, liefen aber bisher nur "von Hand"
-# (AGENTS.md §6). Der Hook faehrt sie vor jedem Commit automatisch.
+#   llm-proxies/glm2api/**.py|toml  -> ruff check + mypy src   (Python)
+#   llm-proxies/antigravity-proxy/** -> go vet + gofmt -l       (Go)
+#   infra/**.js                      -> node --check            (MAIN-eigenes JS)
 #
-# Zwei Eigenschaften, an denen hier NICHTS geaendert werden darf:
-#   1. Der Hook fasst den Index nicht an (kein `git add`, kein `--fix`). In
-#      diesem geteilten Repo hat ein Hook mit `git add` schon fremde, parallel
-#      gestagte Aenderungen mitcommittet (infrastructure.md, Changelog
-#      2026-09-29). Der Hook liest nur und bricht ab.
-#   2. Er laeuft nur, wenn gestagte Dateien den glm2api-Python-Code betreffen —
-#      Commits an zerokey/Doku/Infra werden nicht ausgebremst.
+# zerokeys `pnpm lint` laeuft hier bewusst NICHT: das braucht node_modules und
+# ist der eigene, handgestartete `pnpm precommit` (llm-proxies/zerokey/).
+#
+# Drei Eigenschaften, an denen hier NICHTS geaendert werden darf:
+#   1. Der Hook fasst den Index nicht an (kein `git add`, kein `--fix`/`--write`
+#      an den Quelldateien). In diesem geteilten Repo hat ein Hook mit `git add`
+#      schon fremde, parallel gestagte Aenderungen mitcommittet
+#      (infrastructure.md, Changelog 2026-09-29). Der Hook liest nur und bricht ab.
+#   2. Er laeuft nur, wenn gestagte Dateien die jeweilige Sprache betreffen —
+#      Commits an Doku/Infra werden nicht ausgebremst.
+#   3. Nichts ohne Timer (AGENTS.md §4) — alles laeuft ueber timeout.sh.
 #
 # Aktiviert per `git config core.hooksPath .githooks` (macht .devcontainer/setup.sh).
 # Notausstieg: `git commit --no-verify`.
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
-APP="$ROOT/llm-proxies/glm2api"
+TIMEOUT="$ROOT/infra/scripts/timeout.sh"
+[ -x "$TIMEOUT" ] || { echo "[pre-commit] WARN: $TIMEOUT fehlt — Checks uebersprungen." >&2; exit 0; }
+run() { "$TIMEOUT" run "$1" "${@:2}"; }
 
-# Pfad-Scope: nur .py/.toml unter llm-proxies/glm2api/. Gelöschte Dateien (D)
-# sind bewusst raus — auf dem Rest zu linten ist trotzdem sinnvoll, aber ein
-# reiner Loeschcommit soll nicht die volle Lint-Kette triggern.
+# Gestagte, hinzugefuegte/geaenderte Dateien (Loeschungen interessieren nicht).
 changed="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
-case "$changed" in
-  *llm-proxies/glm2api/*.py*|*llm-proxies/glm2api/*.toml*) ;;
-  *) exit 0 ;;
-esac
+[ -n "$changed" ] || exit 0
 
-[ -d "$APP" ] || exit 0
-[ -x "$ROOT/infra/scripts/timeout.sh" ] || {
-  echo "[pre-commit] WARN: infra/scripts/timeout.sh fehlt — Lint uebersprungen." >&2
-  exit 0
-}
+fail=0
 
-cd "$APP" || exit 0
-
-# Timer (AGENTS.md §4): der Hook darf nie haengen. timeout.sh raeumt die
-# Prozessgruppe ab und laesst Exitcodes unveraendert durch (124 = Timeout).
-run() { "$ROOT/infra/scripts/timeout.sh" run "$1" "${@:2}"; }
-
-echo "[pre-commit] glm2api-Code geaendert -> ruff + mypy..."
-
-if ! run 120 uv run ruff check .; then
-  echo "[pre-commit] ruff hat Befunde — Commit abgebrochen (Details oben)." >&2
-  exit 1
-fi
-if ! run 180 uv run mypy src; then
-  echo "[pre-commit] mypy hat Befunde — Commit abgebrochen (Details oben)." >&2
-  exit 1
+# --- 1) glm2api (Python): ruff + mypy -------------------------------------
+# hier-string statt Pipe: `printf | grep -q` kann unter pipefail per SIGPIPE
+# faelschlich rot werden (grep -q beendet die Pipe vorzeitig).
+if grep -qE '^llm-proxies/glm2api/.*\.(py|toml)$' <<< "$changed"; then
+  echo "[pre-commit] glm2api (Python) geaendert -> ruff + mypy..."
+  cd "$ROOT/llm-proxies/glm2api" || exit 0
+  run 120 uv run ruff check . || { echo "[pre-commit] ruff hat Befunde — Commit abgebrochen." >&2; fail=1; }
+  run 180 uv run mypy src      || { echo "[pre-commit] mypy hat Befunde — Commit abgebrochen." >&2; fail=1; }
 fi
 
-echo "[pre-commit] ruff + mypy gruen."
+# --- 2) antigravity-proxy (Go): go vet + gofmt ----------------------------
+if grep -qE '^llm-proxies/antigravity-proxy/.*\.go$|^llm-proxies/antigravity-proxy/(go\.mod|go\.sum)$' <<< "$changed"; then
+  echo "[pre-commit] antigravity-proxy (Go) geaendert -> go vet + gofmt..."
+  GO=""
+  for c in /usr/local/go/bin/go "$(command -v go 2>/dev/null)"; do
+    [ -n "$c" ] && [ -x "$c" ] && { GO="$c"; break; }
+  done
+  if [ -z "$GO" ]; then
+    echo "[pre-commit] WARN: kein go gefunden — Go-Check uebersprungen." >&2
+  else
+    cd "$ROOT/llm-proxies/antigravity-proxy" || exit 0
+    run 180 "$GO" vet ./... || { echo "[pre-commit] go vet rot — Commit abgebrochen." >&2; fail=1; }
+    GOFMT=/usr/local/go/bin/gofmt
+    [ -x "$GOFMT" ] || GOFMT="$(command -v gofmt 2>/dev/null || true)"
+    if [ -n "$GOFMT" ] && [ -x "$GOFMT" ]; then
+      # READ-ONLY: -l listet nur (ein Verifier darf nichts schreiben, `go fmt` taete das).
+      un="$("$GOFMT" -l . 2>/dev/null | grep -v '^vendor/' || true)"
+      [ -z "$un" ] || { echo "[pre-commit] gofmt noetig: $un" >&2; fail=1; }
+    fi
+  fi
+fi
+
+# --- 3) MAIN-eigenes JS (infra/): node --check ----------------------------
+# Nur MAINs eigener JS-Code. Vendorte Proxies (zerokey) haben eigene Checks.
+js="$(printf '%s\n' "$changed" | grep -E '^infra/.*\.js$' || true)"
+if [ -n "$js" ]; then
+  echo "[pre-commit] infra-JS geaendert -> node --check..."
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$ROOT/$f" ] || continue
+    run 30 node --check "$ROOT/$f" >/dev/null 2>&1 \
+      || { echo "[pre-commit] Syntaxfehler: $f" >&2; fail=1; }
+  done <<< "$js"
+fi
+
+[ "$fail" -eq 0 ] || { echo "[pre-commit] Abbruch — siehe oben." >&2; exit 1; }
+echo "[pre-commit] Checks gruen."

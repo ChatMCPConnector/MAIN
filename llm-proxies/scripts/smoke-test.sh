@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # smoke-test.sh: Live-Smoke-Test gegen den laufenden glm2api-Proxy (Port 8001).
-# Deckt die offenen Testlücken aus glm-api-audit.md ab, soweit ohne externen
-# Aufwand verifizierbar: alle drei API-Formate + Tool-Call-Roundtrip (2 Turns).
+# Verifiziert ohne externen Aufwand: alle drei API-Formate + Tool-Call-Roundtrip
+# (2 Turns). Ergaenzt verify-codespace.sh (das nur Health + einen Live-Call prueft).
 # Voraussetzung: Proxy laeuft (start-glm2api.sh / watchdog).
 # Verwendung: ./llm-proxies/scripts/smoke-test.sh
 set -u

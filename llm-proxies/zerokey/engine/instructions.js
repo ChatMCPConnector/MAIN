@@ -30,7 +30,10 @@ class Instructions {
    */
   getUnlimited() {
     const memory = this.getExtra('agent').content
-    const content = this.getExtra('instructions').content.replace(/<memory>.*?<\/memory>\n?/s, memory)
+    const content = this.getExtra('instructions').content.replace(
+      /<memory>.*?<\/memory>\n?/s,
+      memory,
+    )
     return { content, hash: this._sha(content) }
   }
 

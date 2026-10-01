@@ -88,12 +88,22 @@ Bei zerokey ist `pnpm lint`/`check`/`test` der belastbare Check; `pnpm format`
 (prettier) ist auf dem vendorten Baum derzeit **nicht** sauber (5 Dateien, u.a.
 Prosa-Instruktionen) — ein blindes `--write` kann Instruktionstexte umbrechen.
 
-**Automatik:** `.githooks/pre-commit` laufen `ruff` + `mypy` fuer glm2api bei
-jedem Commit, der `.py`/`.toml` unter `llm-proxies/glm2api/` betrifft (schlägt
-der Check fehl, bricht der Commit ab). Aktiviert `setup.sh` per
-`core.hooksPath=.githooks`. Der Hook fasst den Index **nicht** an — der
-obige Befehl bleibt trotzdem der volle Check (Tests laufen dort mit).
-Notausstieg: `git commit --no-verify`.
+**Automatik:** `.githooks/pre-commit` fährt die Checks der **betroffenen**
+Sprache bei jedem Commit, der die jeweiligen Dateien stagt — schlägt ein Check
+fehl, bricht der Commit ab:
+
+| gestagte Dateien | läuft |
+|---|---|
+| `llm-proxies/glm2api/**.py`/`toml` | `ruff check .` + `mypy src` |
+| `llm-proxies/antigravity-proxy/**` (`.go`, `go.mod`/`go.sum`) | `go vet ./...` + `gofmt -l` |
+| `infra/**.js` | `node --check` |
+
+Aktiviert `setup.sh` per `core.hooksPath=.githooks`. Der Hook fasst den Index
+**nicht** an (kein `git add`, kein `--fix`/`--write`) und läuft nur, wenn die
+Sprache betroffen ist — Doku-/Infra-Commits kostet er nichts. Die Tabellen-
+Befehle oben bleiben der **volle** Check (Tests laufen dort mit, der Hook
+lintet nur). zerokeys `pnpm precommit` bleibt handgestartet (braucht
+`node_modules`). Notausstieg: `git commit --no-verify`.
 
 ## 7. Anti-Drift (kein neues Rad)
 

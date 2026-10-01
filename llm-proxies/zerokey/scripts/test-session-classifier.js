@@ -25,7 +25,11 @@ const cases = [
   ['Compaction "condense the history"', [USER('Condense the history into a handover.')], false],
   [
     'Titel-Marker NICHT in der letzten Nachricht',
-    [{ role: 'system', content: SYS }, USER('Generate a title for this conversation.'), USER('weiter')],
+    [
+      { role: 'system', content: SYS },
+      USER('Generate a title for this conversation.'),
+      USER('weiter'),
+    ],
     false,
   ],
   [
@@ -44,11 +48,7 @@ const cases = [
   ['leere Liste', [], true],
   ['undefined', undefined, true],
   ['null-Nachricht', [null], true],
-  [
-    'System ohne Content',
-    [{ role: 'system' }, USER('mach was')],
-    true,
-  ],
+  ['System ohne Content', [{ role: 'system' }, USER('mach was')], true],
 ]
 
 let failed = 0
@@ -72,7 +72,10 @@ for (const [name, msgs, wantReal] of cases) {
 }
 
 // Andere IDEs duerfen nicht mitgerissen werden.
-const other = isRealChatSession('terax', [{ role: 'system', content: 'You are Terax, an AI agent' }, USER('x')])
+const other = isRealChatSession('terax', [
+  { role: 'system', content: 'You are Terax, an AI agent' },
+  USER('x'),
+])
 if (!other) {
   console.log('FAIL terax-Arbeitsturn wird als ephemeral eingestuft')
   failed++

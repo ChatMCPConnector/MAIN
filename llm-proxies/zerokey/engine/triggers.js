@@ -193,7 +193,7 @@ const staticTriggers = [
 
       const { content } = instructions.getExtra('test')
       return content.split('#{cwd}#').join(TEST_ROOT)
-    }
+    },
   },
 ]
 
@@ -223,7 +223,6 @@ function buildExtraTriggers() {
 }
 
 const triggers = [...staticTriggers, ...buildExtraTriggers()]
-
 
 function showAvailableMcpTags(reqTools, parser) {
   const autoMaps = buildAutoAliasMaps(reqTools || [])
