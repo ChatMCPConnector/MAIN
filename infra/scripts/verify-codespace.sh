@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # verify-codespace.sh: Beweist, dass ein Codespace vollständig funktionsfähig ist.
 #
-#   ./infra/scripts/verify-codespace.sh            # schnell (read-only, ~30 s)
+#   ./infra/scripts/verify-codespace.sh            # Kette (read-only, ~30 s) — Default
+#   ./infra/scripts/verify-codespace.sh --code     # nur Quellcode: Repo, Doku, Lint.
+#                                                   #   Keine Dienste/Ports/Secrets noetig
+#                                                   #   → das ist der Modus fuer CI.
 #   ./infra/scripts/verify-codespace.sh --live     # + echte Provider-Calls (langsam),
 #                                                   #   inkl. voller glm2api-Smoke-Test
+#
+# Drei Modi, weil ~80 % der Checks *laufende Dinge* pruefen (Port 8001, Daemon,
+# Bundle). Auf einem CI-Runner waere das ~20x FAIL, ohne dass etwas defekt ist
+# (PLAN Stufe 1). Jeder Check traegt daher eine Ebene: code | chain | live. Passt
+# die Ebene nicht zum Modus, wird der Check uebersprungen (SKIP), nicht rot.
 #
 # read-only: startet nichts, installiert nichts, committet nichts. Der einzige
 # Schreibzugriff ist der Push-Dry-Run von `git push --dry-run` (verändert nichts)
@@ -21,7 +29,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 export REPO_ROOT
 LIVE=0
-[ "${1:-}" = "--live" ] && LIVE=1
+MODE=chain
+case "${1:-}" in
+  --code) MODE=code ;;   # nur Quellcode — Voraussetzung fuer CI (PLAN Stufe 1/2)
+  --live) MODE=live; LIVE=1 ;;
+  "")     ;;
+  *)      echo "Aufruf: $0 [--code|--live]   (unbekanntes Argument: $1)" >&2; exit 2 ;;
+esac
 
 pass=0; fail=0; skip=0
 declare -a FAILED=()
@@ -44,11 +58,41 @@ check() {
 info() { printf '  ----  %-34s %s\n' "$1" "$2"; }
 skipt() { printf '  \033[33mSKIP\033[0m  %-34s %s\n' "$1" "$2"; skip=$((skip+1)); }
 
+# check_layer <ebene> <name> <command...>  — welcher Modus darf was pruefen?
+#
+#   code   nur Repo + Toolchain   → darf ueberall laufen (auch CI-Runner)
+#   chain  braucht laufende Dienste, Ports, entschluesseltes Bundle
+#   live   braucht echte Provider-Calls
+#
+# Grund (2026-10-01): rund 80 % der Checks pruefen *laufende Dinge* — Prozess
+# auf Port 8001, Daemon, Bundle-Zustand. Unveraendert auf einem GitHub-Runner
+# gefahren waeren das ~20 FAILs, weil dort nie etwas gestartet wurde. Ein roter
+# Job, den man zu ignorieren lernt, ist schlimmer als gar keiner (PLAN Stufe 1).
+# Deshalb: Ebene passt nicht zum Modus → SKIP, nicht FAIL.
+check_layer() {
+  local layer="$1" name="$2"; shift 2
+  case "$layer" in
+    code)  check "$name" "$@" ;;
+    chain) if [ "$MODE" = "code" ]; then skipt "$name" "uebersprungen (--code: nur Quellcode)"; return; fi
+           check "$name" "$@" ;;
+    live)  if [ "$MODE" = "code" ]; then skipt "$name" "uebersprungen (--code: nur Quellcode)"; return; fi
+           if [ "$LIVE" -eq 0 ]; then skipt "$name" "uebersprungen (--live fuer echte Provider-Calls)"; return; fi
+           check "$name" "$@" ;;
+    *)     printf 'unbekannte Ebene "%s" bei Check "%s"\n' "$layer" "$name" >&2; exit 2 ;;
+  esac
+}
+
+case "$MODE" in
+  code)  echo "== Modus: CODE — nur Quellcode, kein Laufzeit-Zustand ==" ;;
+  live)  echo "== Modus: LIVE — Kette + echte Provider-Calls ==" ;;
+  *)     echo "== Modus: CHAIN (Standard) — diese Codespace-Instanz ==" ;;
+esac
+
 echo "== 1. Repo, Auth, Identität =="
-check "Git-Repo + Remote"        bash -c 'git rev-parse --git-dir >/dev/null && git remote get-url origin >/dev/null'
+check_layer code  "Git-Repo + Remote"        bash -c 'git rev-parse --git-dir >/dev/null && git remote get-url origin >/dev/null'
 info "Arbeitsbaum" "$(if [ -z "$(git status --porcelain)" ]; then echo sauber; else echo "$(git status --porcelain | wc -l | tr -d ' ') Datei(en) geaendert (in der Parallel-Session normal)"; fi)"
-check "Push moeglich (dry-run)"  bash -c 'GIT_TERMINAL_PROMPT=0 git push --dry-run origin $(git rev-parse --abbrev-ref HEAD) >/dev/null 2>&1 || echo "nur pull noetig"'
-check "Identitaet == Token-Account" bash -c '
+check_layer chain "Push moeglich (dry-run)"  bash -c 'GIT_TERMINAL_PROMPT=0 git push --dry-run origin $(git rev-parse --abbrev-ref HEAD) >/dev/null 2>&1 || echo "nur pull noetig"'
+check_layer chain "Identitaet == Token-Account" bash -c '
   cfg_name=$(git config --local user.name); cfg_mail=$(git config --local user.email)
   tok_login=$(curl -fsS -m 15 -H "Authorization: Bearer $(cat "$HOME/.config/landscape/pat")" \
               -H "Accept: application/vnd.github+json" https://api.github.com/user \
@@ -61,13 +105,13 @@ info "HEAD" "$(git log --oneline -1 | cut -c1-60)"
 info "commits" "$(git rev-list --count HEAD)"
 
 echo "== 2. Secrets =="
-check "Bundle entschluesselbar"  bash "$REPO_ROOT/infra/scripts/secrets.sh" status
-check "Key-Dateien OK"           bash "$REPO_ROOT/infra/scripts/keys.sh" status
-check "Passphrase-Kandidaten"    bash -c '
+check_layer chain "Bundle entschluesselbar"  bash "$REPO_ROOT/infra/scripts/secrets.sh" status
+check_layer chain "Key-Dateien OK"           bash "$REPO_ROOT/infra/scripts/keys.sh" status
+check_layer chain "Passphrase-Kandidaten"    bash -c '
   out=$("$REPO_ROOT/infra/scripts/secrets.sh" status 2>&1)
   printf "%s" "$out" | grep -q "Passphrase: OK" || { printf "%s" "$out" | tail -1; exit 1; }
   echo "Bundle laesst sich entschluesseln"'
-check "Secrets nicht world-readable" bash -c '
+check_layer code  "Secrets nicht world-readable" bash -c '
   bad=""
   for f in config/passphrase config/secrets.enc config/secrets.manifest \
            llm-proxies/glm2api/.env llm-proxies/zerokey/temp/users.json; do
@@ -82,28 +126,28 @@ info "LANDSCAPE_PAT" "$([ -n "${LANDSCAPE_PAT:-}" ] && echo "gesetzt (${#LANDSCA
 info "LANDSCAPE_PASSPHRASE" "$([ -n "${LANDSCAPE_PASSPHRASE:-}" ] && echo "gesetzt (${#LANDSCAPE_PASSPHRASE} B)" || echo "nicht gesetzt (ok, Repo-Fallback)")"
 
 echo "== 3. opencode =="
-check "opencode installiert"     bash -c 'command -v opencode >/dev/null || [ -x "$HOME/.opencode/bin/opencode" ]'
-check "Versions-Pin konsistent"  bash "$REPO_ROOT/infra/scripts/opencode-version.sh" check
-check "opencode-Server antwortet" bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:4096/ && echo "HTTP 200 auf 4096"'
-check "MCP registriert"          bash -c 'grep -q "\"opencode-sessions\"" .opencode/opencode.json && echo "opencode-sessions in .opencode/opencode.json"'
+check_layer chain "opencode installiert"     bash -c 'command -v opencode >/dev/null || [ -x "$HOME/.opencode/bin/opencode" ]'
+check_layer code  "Versions-Pin konsistent"  bash "$REPO_ROOT/infra/scripts/opencode-version.sh" check
+check_layer chain "opencode-Server antwortet" bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:4096/ && echo "HTTP 200 auf 4096"'
+check_layer code  "MCP registriert"          bash -c 'grep -q "\"opencode-sessions\"" .opencode/opencode.json && echo "opencode-sessions in .opencode/opencode.json"'
 info "opencode" "$(opencode --version 2>/dev/null || echo '?')"
 
 echo "== 4. LLM-Proxies (Health + echter Call) =="
-check "glm2api Health"           bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:8001/v1/models && echo "GET /v1/models ok"'
-check "glm2api antwortet"        bash -c '
+check_layer chain "glm2api Health"           bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:8001/v1/models && echo "GET /v1/models ok"'
+check_layer chain "glm2api antwortet"        bash -c '
   r=$(curl -fsS -m 120 http://127.0.0.1:8001/v1/chat/completions -H "Content-Type: application/json" \
       -d "{\"model\":\"glm-5.3\",\"messages\":[{\"role\":\"user\",\"content\":\"say OK\"}],\"max_tokens\":8}")
   printf "%s" "$r" | grep -q "\"content\"" || { echo "keine content-Antwort"; exit 1; }
   echo "glm-5.3 liefert Antwort"'
-check "antigravity Health"       bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:9878/v1/models && echo "GET /v1/models ok"'
-check "antigravity antwortet"    bash -c '
+check_layer chain "antigravity Health"       bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:9878/v1/models && echo "GET /v1/models ok"'
+check_layer chain "antigravity antwortet"    bash -c '
   key=$(python3 -c "import json;print(json.load(open(\".opencode/opencode.json\"))[\"provider\"][\"antigravity\"][\"options\"][\"apiKey\"])" 2>/dev/null)
   r=$(curl -fsS -m 120 http://127.0.0.1:9878/v1/chat/completions -H "Content-Type: application/json" \
       -H "Authorization: Bearer $key" -d "{\"model\":\"gemini-3.8-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"say OK\"}],\"max_tokens\":8}")
   printf "%s" "$r" | grep -q "\"content\"" || { echo "keine content-Antwort"; exit 1; }
   echo "gemini-3.8-flash liefert Antwort"'
-check "zerokey Health"           bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:7250/v1/models && echo "GET /v1/models ok"'
-check "zerokey-Credentials"      bash -c '
+check_layer chain "zerokey Health"           bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:7250/v1/models && echo "GET /v1/models ok"'
+check_layer chain "zerokey-Credentials"      bash -c '
   f="$REPO_ROOT/llm-proxies/zerokey/temp/users.json"
   [ -s "$f" ] || { echo "FEHLT: $f (ChatGPT-Cookies) — secrets.sh unlock ODERHAR aus ~/.config/landscape/"; exit 1; }
   python3 -c "import json,sys;d=json.load(open(sys.argv[1]));u=d.get(\"chatgpt\",{}).get(\"main\",{});h=u.get(\"parsedFetch\",{}).get(\"headers\",{});sys.exit(0 if any(\"cookie\" in k.lower() for k in h) else 1)" "$f" \
@@ -115,20 +159,27 @@ check "zerokey-Credentials"      bash -c '
 # Logik steht in check-proxy-budget.py, damit sie einzeln lauffaehig und
 # millisekundenschnell pruefbar ist (ein Heredoc in bash -c hat hier zweimal
 # in Quote-Fehler gefuehrt).
-check "zerokey Budget-Kopplung"  bash -c 'python3 "$REPO_ROOT/infra/scripts/check-proxy-budget.py"'
+check_layer code  "zerokey Budget-Kopplung"  bash -c 'python3 "$REPO_ROOT/infra/scripts/check-proxy-budget.py"'
 
-info "Quoten" "$(bash "$REPO_ROOT/infra/scripts/quota.sh" 2>/dev/null | grep -E 'Gemini|Claude' | tr -s ' ' | tr '\n' '|' | cut -c1-90)"
+# Die Quoten-Anzeige macht echte Upstream-Calls. Im --code-Modus gibt es
+# dafür weder Proxy noch Quota — dort bleibt sie leer, statt einen Network-
+# Call zu machen, der an der Zielplattform statt am Code scheitert.
+if [ "$MODE" = "code" ]; then
+  info "Quoten" "uebersprungen (--code: kein Netzwerk)"
+else
+  info "Quoten" "$(bash "$REPO_ROOT/infra/scripts/quota.sh" 2>/dev/null | grep -E 'Gemini|Claude' | tr -s ' ' | tr '\n' '|' | cut -c1-90)"
+fi
 
 echo "== 5. Daemons =="
 # Kein autosave-daemon-Check mehr (Nutzerentscheidung 2026-09-27)
-check "config-watchdog"          bash -c 'pgrep -f "config-watchdog.sh" >/dev/null && echo "laeuft"'
-check "proxy-watchdog"           bash -c 'pgrep -f "proxy-watchdog.sh" >/dev/null && echo "laeuft"'
+check_layer chain "config-watchdog"          bash -c 'pgrep -f "config-watchdog.sh" >/dev/null && echo "laeuft"'
+check_layer chain "proxy-watchdog"           bash -c 'pgrep -f "proxy-watchdog.sh" >/dev/null && echo "laeuft"'
 
 echo "== 6. Browser-Runtime =="
-check "Firefox installiert"      bash -c '[ -x .runtime/firefox/firefox ] && .runtime/firefox/firefox --version 2>/dev/null | head -1'
+check_layer chain "Firefox installiert"      bash -c '[ -x .runtime/firefox/firefox ] && .runtime/firefox/firefox --version 2>/dev/null | head -1'
 
 echo "== 7. Drive-Backup =="
-check "beide Generationen"      bash -c '
+check_layer chain "beide Generationen"      bash -c '
   out=$("$REPO_ROOT/infra/scripts/gdrive-backup.sh" status 2>&1)
   printf "%s" "$out" | grep -q "current: vorhanden" || { echo "current FEHLT"; exit 1; }
   printf "%s" "$out" | grep -q "backup: vorhanden"  || { echo "backup FEHLT"; exit 1; }
@@ -138,11 +189,11 @@ echo "== 8. Agenten-Anweisungen =="
 # Ein Agent muss die Save-Pflicht kennen, ohne dass der Nutzer sie wiederholen
 # muss. Jeder Client liest eine andere Datei — fehlt eine oder steht die Regel
 # nicht drin, faellt das hier auf, statt beim naechsten Sessionende auf.
-check "AGENTS.md (Referenz)" bash -c '
+check_layer code  "AGENTS.md (Referenz)" bash -c '
   [ -f "$REPO_ROOT/AGENTS.md" ] || { echo "FEHLT"; exit 1; }
   grep -q "save.sh" "$REPO_ROOT/AGENTS.md" || { echo "Save-Regel fehlt"; exit 1; }
   echo "hat die Save-Regel"'
-check "keine divergierenden Client-Kopien" bash -c '
+check_layer code  "keine divergierenden Client-Kopien" bash -c '
   # Root: die verbotenen Namen dürfen gar nicht existieren.
   for f in GEMINI.md CLAUDE.md .cursorrules AGENT.md .github/copilot-instructions.md; do
     [ -e "$REPO_ROOT/$f" ] && { echo "im Root: $f"; exit 1; }
@@ -160,7 +211,7 @@ check "keine divergierenden Client-Kopien" bash -c '
     \( -name GEMINI.md -o -name CLAUDE.md -o -name .cursorrules -o -name AGENT.md \) -print 2>/dev/null)
   [ -z "$bad" ] || { echo "divergierend:$bad"; exit 1; }
   echo "eine Quelle je Verzeichnis"'
-check "nested AGENTS.md tragen einen MAIN-Hinweis" bash -c '
+check_layer code  "nested AGENTS.md tragen einen MAIN-Hinweis" bash -c '
   # Vendored Unterordner haben ihr eigenes AGENTS.md. Das darf keinen
   # Upstream-Stand behaupten (driftete schon: antigravity-Proxys Datei war
   # upstreams CLAUDE.md mit falschem Port, zerokeys Datei widersprach sich
@@ -174,14 +225,14 @@ check "nested AGENTS.md tragen einen MAIN-Hinweis" bash -c '
     -not -path "*/node_modules/*" -not -path "*/.venv/*" -not -path "*/.git/*" 2>/dev/null)
   [ -z "$bad" ] || { echo "ohne MAIN-Hinweis:$bad"; exit 1; }
   echo "nested AGENTS.md haben den Hinweis"'
-check "Gemini CLI liest AGENTS.md" bash -c '
+check_layer code  "Gemini CLI liest AGENTS.md" bash -c '
   bash "$REPO_ROOT/infra/scripts/gemini-context.sh" status >/dev/null 2>&1 \
     || { echo "context.fileName != [AGENTS.md] - Gemini CLI haette leeren Kontext"; exit 1; }
   echo "context.fileName=[AGENTS.md]"'
-check "Pfadbegrenztes Commit dokumentiert" bash -c '
+check_layer code  "Pfadbegrenztes Commit dokumentiert" bash -c '
   grep -q "git commit -- <pfad>" "$REPO_ROOT/AGENTS.md" || { echo "fehlt"; exit 1; }
   echo "nur eigene Pfade"'
-check "Lint-Hook verdrahtet" bash -c '
+check_layer code  "Lint-Hook verdrahtet" bash -c '
   # ruff + mypy liefen sonst nur von Hand (AGENTS.md §6). Der Hook ist
   # pfad-scoped und fasst den Index nicht an — hier wird nur geprueft, dass er
   # ueberhaupt greift (setup.sh setzt core.hooksPath).
@@ -189,7 +240,7 @@ check "Lint-Hook verdrahtet" bash -c '
   [ "$hp" = ".githooks" ] || { echo "core.hooksPath=${hp:-<leer>} (erwartet .githooks) — setup.sh erneut laufen lassen"; exit 1; }
   [ -x "$REPO_ROOT/.githooks/pre-commit" ] || { echo ".githooks/pre-commit fehlt oder ist nicht ausfuehrbar"; exit 1; }
   echo "core.hooksPath=.githooks, pre-commit ausfuehrbar"'
-check "Makefile deckt Hook ab" bash -c '
+check_layer code  "Makefile deckt Hook ab" bash -c '
   # AGENTS.md §6 verweist jetzt auf `make check`, der Hook bleibt fuer den
   # Commit. Beide duerfen nicht auseinanderlaufen — genau das war die Luecke
   # vor dem Makefile: vier Stellen sagten je, was zu pruefen ist, und nichts
@@ -204,7 +255,7 @@ check "Makefile deckt Hook ab" bash -c '
   done
   [ -z "$miss" ] || { echo "Makefile und Hook nennen verschiedene Kommandos -> $miss"; exit 1; }
   echo "5 Kommandos in beiden (ruff, mypy, go vet, gofmt, node --check)"'
-check "Go-Lint antigravity (vet+fmt)" bash -c '
+check_layer code  "Go-Lint antigravity (vet+fmt)" bash -c '
   # Go hatte bis 2026-10-01 keinen einzigen automatischen Check. `mise` ist
   # nicht installiert, also direkt go vet + gofmt (das Binary liegt in
   # /usr/local/go/bin, siehe setup.sh/aliases.sh).
@@ -220,7 +271,7 @@ check "Go-Lint antigravity (vet+fmt)" bash -c '
     [ -z "$un" ] || { echo "unformatiert: $un"; exit 1; }
   fi
   echo "go vet ok, gofmt sauber"'
-check "MAIN-JS Syntax (node --check)" bash -c '
+check_layer code  "MAIN-JS Syntax (node --check)" bash -c '
   # MAIN hat kein Root-ESLint; der einzige eigene JS-Code ist infra/mcp. Ein
   # Syntax-Check (kein neues Toolchain) faengt kaputte Dateien vor dem Start.
   bad=""
@@ -228,20 +279,16 @@ check "MAIN-JS Syntax (node --check)" bash -c '
     node --check "$REPO_ROOT/$f" >/dev/null 2>&1 || bad="$bad $f"
   done < <(git -C "$REPO_ROOT" ls-files infra | grep -E "\.js$")
   [ -z "$bad" ] || { echo "Syntaxfehler:$bad"; exit 1; }
-  echo "infra-JS syntaktisch ok"'echo "== 9. Provider live =="
-if [ "$LIVE" -eq 1 ]; then
-  check "keys.sh doctor"         bash "$REPO_ROOT/infra/scripts/keys.sh" doctor
-  # Voller Live-Smoke-Test des glm2api-Proxys (drei API-Formate + Tool-Call-
-  # Roundtrip ueber 2 Turns). Gehoert bewusst hierher und nicht in die schnelle
-  # Runde: er macht echte Upstream-Calls und dauert Minuten. timeout.sh als
-  # Schutz (AGENTS.md §4), das Skript selbst hat kein Gesamtlimit.
-  check "glm2api Smoke-Test (live)" bash -c '
-    mkdir -p /tmp/opencode
-    bash "$REPO_ROOT/infra/scripts/timeout.sh" run 400 bash "$REPO_ROOT/llm-proxies/scripts/smoke-test.sh"'
-else
-  skipt "keys.sh doctor"         "uebersprungen (--live fuer echte Provider-Calls)"
-  skipt "glm2api Smoke-Test (live)" "uebersprungen (--live fuer echte Provider-Calls)"
-fi
+  echo "infra-JS syntaktisch ok"'
+echo "== 9. Provider live =="
+# Voller Live-Smoke-Test des glm2api-Proxys (drei API-Formate + Tool-Call-
+# Roundtrip ueber 2 Turns). Gehoert bewusst hierher und nicht in die schnelle
+# Runde: er macht echte Upstream-Calls und dauert Minuten. timeout.sh als
+# Schutz (AGENTS.md §4), das Skript selbst hat kein Gesamtlimit.
+check_layer live  "keys.sh doctor"         bash "$REPO_ROOT/infra/scripts/keys.sh" doctor
+check_layer live  "glm2api Smoke-Test (live)" bash -c '
+  mkdir -p /tmp/opencode
+  bash "$REPO_ROOT/infra/scripts/timeout.sh" run 400 bash "$REPO_ROOT/llm-proxies/scripts/smoke-test.sh"'
 
 echo ""
 echo "=============================================="
@@ -251,5 +298,8 @@ if [ "$fail" -gt 0 ]; then
   echo "=============================================="
   exit 1
 fi
-echo "Alles gruen — die Kette steht automatisch."
+case "$MODE" in
+  code) echo "Quellcode gruen — Aussage: der Code ist in Ordnung. Die laufende Kette ist damit NICHT geprueft; das macht der chain-Modus im Codespace." ;;
+  *)    echo "Alles gruen — die Kette steht automatisch." ;;
+esac
 echo "=============================================="

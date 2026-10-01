@@ -27,7 +27,7 @@ ZEROKEY     := llm-proxies/zerokey
 GO     := $(if $(wildcard /usr/local/go/bin/go),/usr/local/go/bin/go,go)
 GOFMT  := $(if $(wildcard /usr/local/go/bin/gofmt),/usr/local/go/bin/gofmt,gofmt)
 
-.PHONY: help check check-fast verify smoke check-all \
+.PHONY: help check check-fast verify verify-code smoke check-all ci \
         lint-py test-py lint-go test-go lint-js lint-zk test-zk syntax-sh
 
 ## help: alle Targets mit Kurzbeschreibung
@@ -45,12 +45,24 @@ check-fast: lint-py lint-go lint-js syntax-sh
 verify:
 	cd $(ROOT) && $(TIMEOUT) run 300 ./infra/scripts/verify-codespace.sh
 
+## verify-code: nur der Quellcode-Teil von verify-codespace.sh.
+# Braucht keine laufenden Dienste, kein Bundle, kein Netz — genau der Modus,
+# den ein GitHub-Actions-Runner fahren kann (PLAN Stufe 1/2).
+verify-code:
+	cd $(ROOT) && $(TIMEOUT) run 300 ./infra/scripts/verify-codespace.sh --code
+
 ## smoke: echter Live-Smoke-Test gegen den laufenden glm2api (dauert Minuten)
 smoke:
 	cd $(ROOT) && $(TIMEOUT) run 400 bash ./llm-proxies/scripts/smoke-test.sh
 
 ## check-all: check + verify (Quelle + laufende Kette in einem Lauf)
 check-all: check verify
+
+## ci: exakt das, was .github/workflows/checks.yml fahren soll. Ohne Dienste,
+# ohne Secrets, ohne Netz — ein Runner kann das. Wenn das hier gruen ist und der
+# Workflow rot, ist einer von beiden kaputt (das ist der Zweck: zwei Wege, eine
+# Wahrheit).
+ci: check verify-code
 
 ## lint-py: glm2api mit ruff + mypy (identisch zum Hook)
 lint-py:

@@ -78,6 +78,8 @@ Normale Code-, Doku- und Config-Edits sind keine Infrastruktur-Änderung: keine 
 | `make check` | alle Schnell-Checks inkl. Tests — der volle Gate-Lauf |
 | `make check-fast` | nur Lint/Syntax, ohne Tests (= Hook-Niveau) |
 | `make verify` | `verify-codespace.sh` (read-only, prüft die **laufende** Kette) |
+| `make verify-code` | nur der Quellcode-Teil — braucht keine Dienste, kein Bundle, kein Netz |
+| `make ci` | `check` + `verify-code`: exakt das, was GitHub Actions fährt |
 | `make smoke` | echter Live-Smoke-Test gegen den laufenden glm2api (dauert Minuten) |
 | `make check-all` | `check` + `verify` |
 | `make help` | alle Targets |
