@@ -138,11 +138,10 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 | xinjianya | gpt-5.6-sol | xinjianya.key |
 | **glm2api** | glm-5.3 | lokal, Port 8001, kein Key |
 | **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
-| downloaddoctor | ZeroKey (**16k** Context, 16k Output) | lokal, Port 7250, Platzhalter-Key `opencode`, Code im Repo |
-| cyberpradeep | ZeroKey (+ chatgpt-Variante) | lokal, Port 8088, Platzhalter-Key `local` |
+| downloaddoctor | ZeroKey (16k Context, **2k** Output — `.opencode/opencode.json` `limit.output=2000`) | lokal, Port 7250, Platzhalter-Key `opencode`, Code im Repo |
 
-- `downloaddoctor`/`cyberpradeep` sind in `opencode.json` konfiguriert (Loopback-only,
-  Platzhalter-Keys).
+- `downloaddoctor` ist in `opencode.json` konfiguriert (Loopback-only,
+  Platzhalter-Key `opencode`).
 - **`downloaddoctor` (ZeroKey) ist seit 2026-09-29 Teil der Setup-/Watchdog-Kette.**
   Vorher war er nur konfiguriert, aber in keiner Doku erwähnt und von keinem Skript
   gestartet (Befund aus dem Main-Analyse-Run 2026-09-28) — der Proxy lief nur, weil
@@ -150,7 +149,9 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
   jetzt um ihn, der Code liegt in `llm-proxies/zerokey/`. Details im Abschnitt
   [ZeroKey](#zerokey--der-chatgpt-web-proxy-port-7250).
 - `cyberpradeep` (ZeroKey-Variante, Port 8088) bleibt **außen vor**: kein Code im
-  Repo, keine Credentials, nicht Teil der Kette.
+  Repo, keine Credentials, nicht Teil der Kette — und **kein Provider-Eintrag in
+  `opencode.json`**. Die frühere Doku behauptete hier das Gegenteil (acht Zeilen
+  weiter oben), korrigiert 2026-10-01.
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
@@ -346,8 +347,9 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   websockify, sqlite3, dbus-x11, build-essential, python3-* etc.
 - **Commit-Signierung: SSH statt Codespaces-Token.** `setup.sh` setzt repo-lokal
   `gpg.format=ssh`, `user.signingkey=~/.ssh/codespaces.auto.pub`,
-  `gpg.ssh.allowedSignersFile=.runtime/git-allowed-signers` und
-  `commit.gpgsign=true`. **Warum nicht der Codespaces-Signierer:**
+  `gpg.ssh.allowedSignersFile=config/git-allowed-signers` (versioniert, Dedup pro
+  Fingerabdruck — der hier früher genannte Pfad `.runtime/git-allowed-signers` ist
+  der Stand vor 2026-09-30 und existiert nicht mehr) und `commit.gpgsign=true`. **Warum nicht der Codespaces-Signierer:**
   `/.codespaces/bin/gh-gpgsign` benutzt den Codespaces-`GITHUB_TOKEN`, ein
   App-/Integrationstoken, und lehnt jede Signatur ab: **`403 Author is
   invalid`**. In zwei Wegwerf-Repos reproduziert — **nicht** an Identität oder
@@ -443,7 +445,9 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   genau sie (`opencode.ai/install --version`); weicht die vorhandene Installation
   ab, aktualisiert setup.sh (Vergleich über `opencode-bin`, weil der
   Multi-Client-Wrapper `opencode` ersetzt). **Pin wechseln:**
-  `./infra/scripts/opencode-version.sh bump` (Alias `ocver`) — updated Pin **und**
+  **Aktueller Pin: `1.18.32`** (Stand 2026-10-01; Quelle `.opencode/package.json`,
+  Dep `@opencode-ai/plugin` + `package-lock.json`) — die einzige Versionszahl im
+  Repo. `./infra/scripts/opencode-version.sh bump` (Alias `ocver`) — updated Pin **und**
   Lock in einem Schritt, ein Commit. `ocver check` zeigt Repo-Pin / Lock /
   installiert / Latest und ein Urteil; `ocver latest` nur die neueste Release.
   Bewusst **kein** Auto-Tracking: ein automatisch nachgeführter Pin würde bei jedem
