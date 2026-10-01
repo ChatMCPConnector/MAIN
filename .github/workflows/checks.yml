@@ -86,6 +86,8 @@ jobs:
           # exist" (hat der erste Lauf gezeigt).
           go-version-file: llm-proxies/antigravity-proxy/go.mod
           cache-dependency-path: llm-proxies/antigravity-proxy/go.sum
+      - name: go mod verify (Lockfile-/go.sum-Drift)
+        run: go mod verify
       - name: go vet
         run: go vet ./...
       - name: gofmt (read-only)

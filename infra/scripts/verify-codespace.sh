@@ -330,6 +330,28 @@ check_layer code  "Root-Python-Umgebung verdrahtet" bash -c '
   grep -q "infra/(scripts|tests)/" "$REPO_ROOT/.githooks/pre-commit" || miss="$miss hook"
   [ -z "$miss" ] || { echo "nicht verdrahtet:$miss"; exit 1; }
   echo "pyproject + uv.lock + 4 Make-Targets + Hook-Zweig"'
+check_layer code  "Dependency-Waechter verdrahtet" bash -c '
+  # PLAN Stufe 6: Lockfile-Drift ist hart (kostet nichts, faengt echte Drift),
+  # CVE-Scan ist ein Report (ein CVE ohne erreichbare Codeposition soll den
+  # Agenten nicht blockieren — D-12). Beide Modi im selben Skript, damit die
+  # Strenge nicht auseinanderlaufen kann.
+  miss=""
+  for f in infra/scripts/deps-check.sh infra/scripts/osv-install.sh; do
+    [ -f "$REPO_ROOT/$f" ] || miss="$miss $f"
+  done
+  for t in deps deps-audit osv-install; do
+    grep -q "^$t:" "$REPO_ROOT/Makefile" || miss="$miss make:$t"
+  done
+  [ -f "$REPO_ROOT/.github/workflows/deps-audit.yml" ] || miss="$miss audit-workflow"
+  # osv-scanner MUSS gepinnt sein — ein "latest" waere eine zweite Wahrheit
+  # ausserhalb des Repos.
+  grep -qE "OSV_VERSION=\"v[0-9]+\.[0-9]+\.[0-9]+\"" "$REPO_ROOT/infra/scripts/osv-install.sh" \
+    || miss="$miss osv-ungepinnt"
+  # Und der Report darf den Job nicht rot machen.
+  grep -q "continue-on-error: true" "$REPO_ROOT/.github/workflows/deps-audit.yml" \
+    || miss="$miss audit-nicht-soft"
+  [ -z "$miss" ] || { echo "nicht verdrahtet:$miss"; exit 1; }
+  echo "deps/deps-audit/osv-install im Makefile, Audit-Workflow existiert, osv gepinnt"'
 check_layer code  "Go-Lint antigravity (vet+fmt)" bash -c '
   # Go hatte bis 2026-10-01 keinen einzigen automatischen Check. `mise` ist
   # nicht installiert, also direkt go vet + gofmt (das Binary liegt in

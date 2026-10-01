@@ -358,6 +358,14 @@ else
   echo "    WARN: corepack fehlt — pnpm nicht gepinnt installierbar (start-zerokey.sh braucht es)."
 fi
 
+# CVE-Wächter (PLAN Stufe 6). Gepinnt und pruefsummenverifiziert — siehe Skript.
+# Nur für `make deps-audit` nötig, nicht für den Betrieb; deshalb der Fehler
+# ist weich.
+echo "==> [landscape] osv-scanner (CVE-Wächter) installieren..."
+bash "$REPO_ROOT/infra/scripts/osv-install.sh" >/dev/null 2>&1 \
+  && echo "    osv-scanner bereit (make deps-audit)." \
+  || echo "    WARN: osv-scanner nicht installiert — manuell: sudo ./infra/scripts/osv-install.sh"
+
 echo "==> [landscape] LLM-Proxy zerokey wiederherstellen & starten..."
 # ZeroKey (ChatGPT-Web-Provider, Port 7250) liegt komplett im Repo unter
 # llm-proxies/zerokey/ — kein Klon. start-zerokey.sh macht pnpm install

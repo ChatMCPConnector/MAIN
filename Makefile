@@ -27,9 +27,14 @@ ZEROKEY     := llm-proxies/zerokey
 GO     := $(if $(wildcard /usr/local/go/bin/go),/usr/local/go/bin/go,go)
 GOFMT  := $(if $(wildcard /usr/local/go/bin/gofmt),/usr/local/go/bin/gofmt,gofmt)
 
+# Zielverzeichnis fuer osv-scanner. Leer lassen fuer /usr/local/bin ( braucht
+# sudo ); fuer eine installation ohne sudo z.B. OSV_DEST=$$HOME/.local/bin/osv-scanner
+OSV_DEST ?=
+
 .PHONY: help check check-fast verify verify-code smoke check-all ci \
         lint-py test-py lint-go test-go lint-js lint-zk test-zk syntax-sh \
-        lint-py-infra mypy-infra test-infra cov cov-floor shellcheck shellcheck-baseline
+        lint-py-infra mypy-infra test-infra cov cov-floor shellcheck shellcheck-baseline \
+        deps deps-audit osv-install
 
 ## help: alle Targets mit Kurzbeschreibung
 help:
@@ -63,7 +68,23 @@ check-all: check verify
 # ohne Secrets, ohne Netz — ein Runner kann das. Wenn das hier gruen ist und der
 # Workflow rot, ist einer von beiden kaputt (das ist der Zweck: zwei Wege, eine
 # Wahrheit).
-ci: check verify-code
+ci: check verify-code deps
+
+## deps: Lockfile-Drift ueber alle drei Oekosysteme (hart, kein Netz noetig).
+# `uv lock --check` (Root + glm2api), `go mod verify`, `pnpm install
+# --frozen-lockfile`. Faellt fehl, sobald jemand ohne Lockfile-Update pinnt.
+deps:
+	cd $(ROOT) && $(TIMEOUT) run 400 bash ./infra/scripts/deps-check.sh
+
+## deps-audit: CVE-Report (WEICH, endet immer mit 0). Ein CVE ohne erreichbare
+# Codeposition soll den Agenten nicht blockieren; Updates bleiben manuelle
+# Entscheidung (D-12). Benoetigt einmalig: sudo make osv-install
+deps-audit:
+	cd $(ROOT) && $(TIMEOUT) run 400 bash ./infra/scripts/deps-check.sh --audit
+
+## osv-install: CVE-Waechter gepinnt + pruefsummenverifiziert installieren
+osv-install:
+	cd $(ROOT) && bash ./infra/scripts/osv-install.sh $(OSV_DEST)
 
 ## lint-py: glm2api mit ruff + mypy (identisch zum Hook)
 lint-py:

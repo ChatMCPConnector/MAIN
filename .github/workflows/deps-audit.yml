@@ -1,0 +1,63 @@
+# deps-audit.yml — wöchentlicher CVE-Report (PLAN Stufe 5/6).
+#
+# Bewusst getrennt von `checks.yml` und mit zwei Entscheidungen, die man kennen
+# sollte:
+#
+#   * **Nur auf Zeitplan und manuell**, nicht bei jedem Push. Ein CVE-Scan
+#     braucht Netz und ist bei jedem Commit eine weitere Fehlerquelle; der
+#     eigentliche Drift-Bremse ist `checks.yml` (jeder Push, Sekunden, kein
+#     Netz).
+#   * **`continue-on-error: true`.** Ein Anbieter-Ausfall oder eine neu
+#     veröffentlichte CVE darf nicht wie ein Codefehler aussehen — genau an
+#     dieser Grenze werdenrot-Jobs zum Schalter, den man umlegt, und dann
+#     haben sie nichts mehr mehr wert.
+#
+# Updates werden NICHT automatisch gezogen (D-12 in glm2api/pyproject.toml:
+# Build-Abhängigkeiten exakt gepinnt). Der Job meldet, der Mensch entscheidet.
+
+name: deps-audit
+
+on:
+  schedule:
+    # Montag 06:17 UTC. Nicht auf :00 — dort laufen bei vielen Repos die
+    #Cron-Jobs aller Welt zusammen.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deps-audit
+  cancel-in-progress: false
+
+jobs:
+  cve-report:
+    name: CVE-Report (osv-scanner, alle drei Oekosysteme)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: osv-scanner installieren (gepinnt + Pruefsumme)
+        run: |
+          sudo bash ./infra/scripts/osv-install.sh /usr/local/bin/osv-scanner
+          osv-scanner --version
+      - name: Lockfile-Drift (hart — der Teil, der wirklich brechen darf)
+        run: ./infra/scripts/deps-check.sh
+      - name: CVE-Report (weich — beendet mit 0, siehe Skript)
+        run: ./infra/scripts/deps-check.sh --audit
+      # Für den Fall, dass jemand doch nachziehen will: der Report nennt Paket,
+      # installierte und gefixte Version sowie das betroffene Lockfile.
+      - name: Befunde als Job-Summary
+        if: always()
+        run: |
+          {
+            echo "## CVE-Report"
+            echo
+            echo '```'
+            ./infra/scripts/deps-check.sh --audit 2>&1 | tail -60
+            echo '```'
+            echo
+            echo "Updates bleiben manuelle Entscheidung (D-12)."
+          } >> "$GITHUB_STEP_SUMMARY"

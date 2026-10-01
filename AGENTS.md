@@ -79,7 +79,7 @@ Normale Code-, Doku- und Config-Edits sind keine Infrastruktur-Änderung: keine 
 | `make check-fast` | nur Lint/Syntax, ohne Tests (= Hook-Niveau) |
 | `make verify` | `verify-codespace.sh` (read-only, prüft die **laufende** Kette) |
 | `make verify-code` | nur der Quellcode-Teil — braucht keine Dienste, kein Bundle, kein Netz |
-| `make ci` | `check` + `verify-code`: exakt das, was GitHub Actions fährt |
+| `make ci` | `check` + `verify-code` + `deps`: exakt das, was GitHub Actions fährt |
 | `make smoke` | echter Live-Smoke-Test gegen den laufenden glm2api (dauert Minuten) |
 | `make check-all` | `check` + `verify` |
 | `make help` | alle Targets |
@@ -95,6 +95,7 @@ Nur ein Teil:
 | Shell | `make syntax-sh` (bash -n über alle getrackten Skripte) |
 | Shell (tiefer) | `make shellcheck` — nur **neue** Befunde sind rot, der Bestand ist in `infra/scripts/shellcheck-baseline.txt` eingefroren. Baseline bewusst erneuern: `make shellcheck-baseline` |
 | infra-Python | `make lint-py-infra` / `make mypy-infra` / `make test-infra` / `make cov-floor` |
+| Dependencies | `make deps` = Lockfile-Drift (hart, alle drei Ökosysteme) · `make deps-audit` = CVE-**Report**, endet immer mit 0 |
 
 Der Makefile dupliziert **keine** Check-Liste: jedes Target ruft exakt die
 Kommandos auf, die auch der pre-commit-Hook fährt. Der Verify-Check
