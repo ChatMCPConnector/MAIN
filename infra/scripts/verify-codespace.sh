@@ -297,6 +297,23 @@ check_layer code  "CI-Pins decken Repo-Pins" bash -c '
   grep -q "corepack enable" "$wf" || miss="$miss [kein corepack]"
   [ -z "$miss" ] || { echo "Workflow deckt nicht ab:$miss"; exit 1; }
   echo "Go aus go.mod, Python $pyver, pnpm-Pin aus package.json ($zk), Lockfile-Drift + verify-code abgedeckt"'
+check_layer code  "Shellcheck-Baseline verdrahtet" bash -c '
+  # PLAN Stufe 4: `bash -n` faengt Syntax, shellcheck faengt die echten Shell-
+  # Fehler. Damit das Gate benutzbar bleibt, ist der heutige Bestand als
+  # Baseline eingefroren — alles NEUE muss rot werden. Geprueft wird hier die
+  # Verdrahtung (Datei, Skript, Make-Target, Hook, CI), nicht die Befundmenge:
+  # die darf sich mit jedem shellcheck-Release aendern.
+  for f in infra/scripts/shellcheck-check.sh infra/scripts/shellcheck-baseline.txt; do
+    [ -f "$REPO_ROOT/$f" ] || { echo "FEHLT: $f"; exit 1; }
+  done
+  grep -q "^shellcheck:" "$REPO_ROOT/Makefile" || { echo "kein make-Target shellcheck"; exit 1; }
+  grep -q "shellcheck-check.sh" "$REPO_ROOT/.githooks/pre-commit" || { echo "Hook ruft shellcheck nicht"; exit 1; }
+  grep -q "shellcheck-check.sh" "$REPO_ROOT/.github/workflows/checks.yml" || { echo "CI ruft shellcheck nicht"; exit 1; }
+  # Die Baseline darf nicht leer sein — eine leere waere entweder nie erzeugt
+  # oder nach einem Fehler auf null gesetzt worden.
+  [ -s "$REPO_ROOT/infra/scripts/shellcheck-baseline.txt" ] || { echo "Baseline leer"; exit 1; }
+  n=$(grep -c . "$REPO_ROOT/infra/scripts/shellcheck-baseline.txt")
+  echo "Baseline mit $n Befunden, Skript + Makefile + Hook + CI verdrahtet"'
 check_layer code  "Root-Python-Umgebung verdrahtet" bash -c '
   # infra/scripts/*.py war bis 2026-10-02 die einzige Python-Flaeche ganz ohne
   # Werkzeug (kein ruff, kein mypy, kein Test). Damit das nicht still zurueck-

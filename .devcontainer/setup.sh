@@ -23,9 +23,18 @@ apt_install() {   # apt_install <paket...>
 }
 
 sudo apt-get update -qq > /dev/null || echo "    WARN: apt-get update fehlgeschlagen."
+# Paketgruppe 1+2 enden beide auf `|| true`: A5 hat dasgesetzt, damit EIN
+# fehlendes Paket nicht den ganzen Aufbau killt. Die Gruppen sind getrennt
+# geblieben, damit der Ausfallbericht sie unterscheiden kann.
+# (Hinweis fuer spaetere Bearbeitung: das Paket `shellcheck` gehoert dazu —
+# `bash -n` faengt nur Syntax, das Gate in infra/scripts/shellcheck-check.sh
+# faengt die echten Shell-Fehler. Fehlt es, ueberspringt das Skript mit WARN
+# statt zu brechen; der Verify-Check „Shellcheck-Baseline verdrahtet“ meldet
+# das Fehlen.)
 apt_install curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential \
-  python3 python3-pip python3-venv python-is-python3 ca-certificates gnupg \
-  nodejs npm xvfb x11vnc novnc websockify inotify-tools || true
+  python3 python3-pip python3-venv python-is-python3 ca-certificates gnupg || true
+apt_install nodejs npm xvfb x11vnc novnc websockify inotify-tools \
+  shellcheck || true
 # GUI-/Audio-Abhaengigkeiten: t64-Namen zuerst, sonst die klassischen Namen.
 apt_install libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 \
   || apt_install libgtk-3-0 libdbus-glib-1-2 libxt6 libasound2 || true

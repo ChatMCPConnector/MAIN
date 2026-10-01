@@ -93,6 +93,8 @@ Nur ein Teil:
 | antigravity-proxy (Go) | `make lint-go` / `make test-go` |
 | MAIN-eigenes JS | `make lint-js` |
 | Shell | `make syntax-sh` (bash -n über alle getrackten Skripte) |
+| Shell (tiefer) | `make shellcheck` — nur **neue** Befunde sind rot, der Bestand ist in `infra/scripts/shellcheck-baseline.txt` eingefroren. Baseline bewusst erneuern: `make shellcheck-baseline` |
+| infra-Python | `make lint-py-infra` / `make mypy-infra` / `make test-infra` / `make cov-floor` |
 
 Der Makefile dupliziert **keine** Check-Liste: jedes Target ruft exakt die
 Kommandos auf, die auch der pre-commit-Hook fährt. Der Verify-Check

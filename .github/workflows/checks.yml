@@ -169,11 +169,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # shellcheck aus dem Basissystem, damit die Befundmenge der des Codespaces
+      # entspricht (Debian 24.04 = 0.9.0, ubuntu-24.04 = 0.9.0). Weicht die
+      # Version ab, zeigt der Job neue Befunde — dann ist die Baseline zu
+      # erneuern, nicht der Job zu verkleben.
+      - name: shellcheck installieren
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck --version
       - name: bash -n ueber alle Shell-Skripte
         run: |
           files="$(git ls-files '*.sh')"
           echo "$files" | xargs -r -n1 bash -n
           echo "bash -n ok ($(echo "$files" | wc -l) Skripte)"
+      - name: shellcheck gegen Baseline (nur NEUE Befunde rot)
+        run: ./infra/scripts/shellcheck-check.sh
       - name: node --check ueber infra-JS
         run: |
           files="$(git ls-files | grep '^infra/' | grep '\.js$' || true)"

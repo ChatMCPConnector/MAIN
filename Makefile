@@ -29,7 +29,7 @@ GOFMT  := $(if $(wildcard /usr/local/go/bin/gofmt),/usr/local/go/bin/gofmt,gofmt
 
 .PHONY: help check check-fast verify verify-code smoke check-all ci \
         lint-py test-py lint-go test-go lint-js lint-zk test-zk syntax-sh \
-        lint-py-infra mypy-infra test-infra cov cov-floor
+        lint-py-infra mypy-infra test-infra cov cov-floor shellcheck shellcheck-baseline
 
 ## help: alle Targets mit Kurzbeschreibung
 help:
@@ -40,7 +40,7 @@ check: check-fast test-py test-go test-zk test-infra
 	@echo "make check: alles gruen."
 
 ## check-fast: nur Lint/Syntax, ohne Tests — das ist das Hook-Niveau
-check-fast: lint-py lint-py-infra mypy-infra lint-go lint-js syntax-sh
+check-fast: lint-py lint-py-infra mypy-infra lint-go lint-js syntax-sh shellcheck
 
 ## verify: verify-codespace.sh (read-only, prueft die LAUFENDE Kette)
 verify:
@@ -132,3 +132,15 @@ test-zk:
 syntax-sh:
 	@cd $(ROOT) && files=$$(git ls-files '*.sh'); \
 	 echo "$$files" | xargs -r -n1 bash -n && echo "bash -n ok ($$(echo "$$files" | wc -l) Skripte)"
+
+## shellcheck: Shellcheck gegen die eingefrorene Baseline — nur NEUE Befunde
+# sind rot. `bash -n` faengt Syntax, shellcheck faengt die echten Shell-Fehler
+# (unquoted, set -u, cd ohne ||, Subshell-Fallen). 30 Befunde sind eingefroren,
+# damit das Gate benutzbar bleibt (PLAN Stufe 4).
+shellcheck:
+	cd $(ROOT) && $(TIMEOUT) run 300 bash ./infra/scripts/shellcheck-check.sh
+
+## shellcheck-baseline: Baseline bewusst neu einfrieren — nur wenn ein Befund
+# bleiben soll. Mit Begruendung im Commit, sonst schrumpft sie still.
+shellcheck-baseline:
+	cd $(ROOT) && $(TIMEOUT) run 300 bash ./infra/scripts/shellcheck-check.sh --update

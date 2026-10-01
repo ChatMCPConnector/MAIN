@@ -1,0 +1,30 @@
+.devcontainer/setup.sh | note | Expressions don't expand in single quotes, use double quotes for that. | SC2016
+.devcontainer/setup.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
+infra/scripts/browser-start.sh | warning | Declare and assign separately to avoid masking return values. | SC2155
+infra/scripts/codespace-secret.sh | warning | This assignment is only seen by the forked process. | SC2097
+infra/scripts/codespace-secret.sh | warning | This expansion will not see the mentioned assignment. | SC2098
+infra/scripts/firefox-install.sh | warning | Declare and assign separately to avoid masking return values. | SC2155
+infra/scripts/freebuff-install.sh | warning | Declare and assign separately to avoid masking return values. | SC2155
+infra/scripts/gdrive-backup.sh | warning | Use 'cd ... || exit' or 'cd ... || return' in case cd fails. | SC2164
+infra/scripts/glm2api.sh | note | Double quote to prevent globbing and word splitting. | SC2086
+infra/scripts/glm2api.sh | warning | OUTPUT_LOG_GENERATIONS appears unused. Verify use (or export if used externally). | SC2034
+infra/scripts/opencode-server.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
+infra/scripts/ports.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
+infra/scripts/save.sh | warning | Use 'cd ... || exit' or 'cd ... || return' in case cd fails. | SC2164
+infra/scripts/secret-perms.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
+infra/scripts/secret-perms.sh | warning | Use 'cd ... || exit' or 'cd ... || return' in case cd fails. | SC2164
+infra/scripts/secrets.sh | warning | Use single quotes, otherwise this expands now rather than when signalled. | SC2064
+infra/scripts/timeout.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
+infra/scripts/verify-codespace.sh | note | Expressions don't expand in single quotes, use double quotes for that. | SC2016
+infra/scripts/verify-codespace.sh | warning | Use 'cd ... || exit' or 'cd ... || return' in case cd fails. | SC2164
+llm-proxies/antigravity-proxy/install-launchagent.sh | note | read without -r will mangle backslashes. | SC2162
+llm-proxies/antigravity-proxy/scripts/start.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
+llm-proxies/antigravity-proxy/scripts/start.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
+llm-proxies/rebuild.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
+llm-proxies/scripts/bundle/start.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
+llm-proxies/scripts/start-glm2api.sh | note | Useless cat. Consider 'cmd < file | ..' or 'cmd file | ..' instead. | SC2002
+llm-proxies/scripts/start-glm2api.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
+llm-proxies/scripts/start-zerokey.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
+llm-proxies/zerokey/start.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
+llm-proxies/zerokey/zerokey.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
+llm-proxies/zerokey/zerokey.sh | warning | TOOLS appears unused. Verify use (or export if used externally). | SC2034

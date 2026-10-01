@@ -7,6 +7,7 @@
 #   Makefile / .githooks/pre-commit  -> Kopplung Makefile <-> Hook pruefen
 #   llm-proxies/antigravity-proxy/** -> go vet + gofmt -l       (Go)
 #   infra/**.js                      -> node --check            (MAIN-eigenes JS)
+#   **.sh                            -> shellcheck gegen Baseline (PLAN Stufe 4)
 #
 # zerokeys `pnpm lint` laeuft hier bewusst NICHT: das braucht node_modules und
 # ist der eigene, handgestartete `pnpm precommit` (llm-proxies/zerokey/).
@@ -112,6 +113,17 @@ if [ -n "$js" ]; then
     run 30 node --check "$ROOT/$f" >/dev/null 2>&1 \
       || { echo "[pre-commit] Syntaxfehler: $f" >&2; fail=1; }
   done <<< "$js"
+fi
+
+# --- 4) Shell-Skripte: shellcheck gegen die eingefrorene Baseline ---------
+# Der Hook selbst ist ein .sh — eine Aenderung an ihm triggert diese Pruefung
+# mit. `shellcheck-check.sh` ist read-only; nur `--update` schreibt (das ist
+# bewusst NICHT im Hook, eine Baseline wird mit Begruendung committet).
+if grep -qE '\.sh$' <<< "$changed"; then
+  echo "[pre-commit] Shell-Skripte geaendert -> shellcheck (Baseline)..."
+  cd "$ROOT" || exit 0
+  run 300 bash infra/scripts/shellcheck-check.sh \
+    || { echo "[pre-commit] shellcheck hat NEUE Befunde — Commit abgebrochen (siehe oben)." >&2; fail=1; }
 fi
 
 [ "$fail" -eq 0 ] || { echo "[pre-commit] Abbruch — siehe oben." >&2; exit 1; }
