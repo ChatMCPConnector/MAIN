@@ -297,6 +297,22 @@ check_layer code  "CI-Pins decken Repo-Pins" bash -c '
   grep -q "corepack enable" "$wf" || miss="$miss [kein corepack]"
   [ -z "$miss" ] || { echo "Workflow deckt nicht ab:$miss"; exit 1; }
   echo "Go aus go.mod, Python $pyver, pnpm-Pin aus package.json ($zk), Lockfile-Drift + verify-code abgedeckt"'
+check_layer code  "Root-Python-Umgebung verdrahtet" bash -c '
+  # infra/scripts/*.py war bis 2026-10-02 die einzige Python-Flaeche ganz ohne
+  # Werkzeug (kein ruff, kein mypy, kein Test). Damit das nicht still zurueck-
+  # faellt, wird hier geprueft, dass die Umgebung samt Verdrahtung existiert:
+  # pyproject + Lock, Tests da, Makefile-Targets da, Hook erfasst infra-Python.
+  miss=""
+  [ -f "$REPO_ROOT/pyproject.toml" ] || miss="$miss pyproject"
+  [ -f "$REPO_ROOT/uv.lock" ]        || miss="$miss uv.lock"
+  [ -f "$REPO_ROOT/infra/coverage-floor.rc" ] || miss="$miss coverage-floor"
+  ls "$REPO_ROOT/infra/tests/test_"*.py >/dev/null 2>&1 || miss="$miss tests"
+  for t in lint-py-infra mypy-infra test-infra cov-floor; do
+    grep -q "^$t:" "$REPO_ROOT/Makefile" || miss="$miss make:$t"
+  done
+  grep -q "infra/(scripts|tests)/" "$REPO_ROOT/.githooks/pre-commit" || miss="$miss hook"
+  [ -z "$miss" ] || { echo "nicht verdrahtet:$miss"; exit 1; }
+  echo "pyproject + uv.lock + 4 Make-Targets + Hook-Zweig"'
 check_layer code  "Go-Lint antigravity (vet+fmt)" bash -c '
   # Go hatte bis 2026-10-01 keinen einzigen automatischen Check. `mise` ist
   # nicht installiert, also direkt go vet + gofmt (das Binary liegt in

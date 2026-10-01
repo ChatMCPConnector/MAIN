@@ -60,15 +60,17 @@ CHARS_PER_TOKEN = 4
 DEFAULT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def lade(root):
+def lade(root, cfg_p=None, zk_p=None):
     """Liest context/reserved aus opencode.json und promptLimit aus der
-    ZeroKey-Config. Gibt (ctx, reserved, prompt_limit) oder None bei Fehlern."""
-    cfg_p = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, ".opencode/opencode.json")
-    zk_p = (
-        sys.argv[2]
-        if len(sys.argv) > 2
-        else os.path.join(root, "llm-proxies/zerokey/providers/chatgpt/config.js")
-    )
+    ZeroKey-Config. Gibt (ctx, out, reserved, prompt_limit) oder None.
+
+    Die Pfade sind Parameter statt sys.argv-Leser (2026-10-01, PLAN Stufe 3):
+    dadurch ist die Funktion ohne Subprozess aufrufbar — der Test laedt sie
+    direkt. Der CLI-Aufruf verhaelt sich unveraendert (main() reicht argv
+    durch), die beiden Dateipfade sind optional.
+    """
+    cfg_p = cfg_p or os.path.join(root, ".opencode/opencode.json")
+    zk_p = zk_p or os.path.join(root, "llm-proxies/zerokey/providers/chatgpt/config.js")
     try:
         cfg = json.load(open(cfg_p, encoding="utf-8"))
         treffer = re.search(r"const promptLimit = ([\d_]+)", open(zk_p, encoding="utf-8").read())
@@ -85,21 +87,18 @@ def lade(root):
     return ctx, out, reserved, prompt_limit
 
 
-def main():
-    root = DEFAULT_ROOT
-    werte = lade(root)
-    if werte is None:
-        return 2
-    ctx, out, reserved, limit = werte
+def pruefe(ctx, out, reserved, limit):
+    """Die Kopplungslogik, ohne I/O und ohne Ausgabe — die eigentliche Regel.
 
+    Gibt (fenster, schwelle, chars, fehler, hinweise) zurueck. Bewusst frei von
+    `print`: das Skript liest sich sonst schlecht, und nur so ist die Logik
+    direkt testbar (infra/tests/test_check_proxy_budget.py, PLAN Stufe 3).
+    """
     fenster = ctx - reserved
     chars = fenster * CHARS_PER_TOKEN
     schwelle = ctx - out
     fehler = []
-
-    print(f"Client: context={ctx}, output={out} -> Kompaktierung ab {schwelle} Tokens")
-    print(f"        reserved={reserved} -> Fenster {fenster} Tokens (~{chars} Zeichen)")
-    print(f"Proxy:  promptLimit={limit} Zeichen")
+    hinweise = []
 
     # DER BUG VOM 2026-09-30: output > context macht die Schwelle negativ und die
     # Kompaktierung damit bedingungslos. Steht an erster Stelle, weil es die
@@ -142,11 +141,36 @@ def main():
             "mehr als die Haelfte des Gespraechs waere abgeschnitten."
         )
     elif chars > limit:
-        print(f"HINWEIS: Fenster ~{chars} Zeichen > promptLimit ({limit}) — middle-out-Kuerzung,")
-        print("         nur der Mittelteil faellt weg. Kopfbereich und Tail bleiben erhalten.")
+        hinweise.append(
+            f"Fenster ~{chars} Zeichen > promptLimit ({limit}) — middle-out-Kuerzung, "
+            "nur der Mittelteil faellt weg. Kopfbereich und Tail bleiben erhalten."
+        )
     elif chars < limit * 0.25:
-        print(f"HINWEIS: Fenster nutzt nur {100 * chars // limit}% des Budgets — Limit koennte hoeher.")
+        hinweise.append(f"Fenster nutzt nur {100 * chars // limit}% des Budgets — Limit koennte hoeher.")
 
+    return fenster, schwelle, chars, fehler, hinweise
+
+
+def main():
+    root = DEFAULT_ROOT
+    # CLI bleibt wie vorher: zwei optionale Positionsargumente.
+    werte = lade(
+        root,
+        sys.argv[1] if len(sys.argv) > 1 else None,
+        sys.argv[2] if len(sys.argv) > 2 else None,
+    )
+    if werte is None:
+        return 2
+    ctx, out, reserved, limit = werte
+
+    fenster, schwelle, chars, fehler, hinweise = pruefe(ctx, out, reserved, limit)
+
+    print(f"Client: context={ctx}, output={out} -> Kompaktierung ab {schwelle} Tokens")
+    print(f"        reserved={reserved} -> Fenster {fenster} Tokens (~{chars} Zeichen)")
+    print(f"Proxy:  promptLimit={limit} Zeichen")
+
+    for h in hinweise:
+        print(f"HINWEIS: {h}")
     for f in fehler:
         print(f"FEHLER: {f}")
     if fehler:

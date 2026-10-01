@@ -2,7 +2,9 @@
 # .githooks/pre-commit — MAIN-Repo: laesst die Checks der betroffenen Sprache
 # automatisch laufen, statt sie "von Hand" zu fahren.
 #
-#   llm-proxies/glm2api/**.py|toml  -> ruff check + mypy src   (Python)
+#   llm-proxies/glm2api/**.py|toml  -> ruff check + mypy src   (Python, Vendor)
+#   infra/**.py + Root-Python-Config -> ruff check + mypy       (MAIN-eigenes Python)
+#   Makefile / .githooks/pre-commit  -> Kopplung Makefile <-> Hook pruefen
 #   llm-proxies/antigravity-proxy/** -> go vet + gofmt -l       (Go)
 #   infra/**.js                      -> node --check            (MAIN-eigenes JS)
 #
@@ -41,6 +43,40 @@ if grep -qE '^llm-proxies/glm2api/.*\.(py|toml)$' <<< "$changed"; then
   cd "$ROOT/llm-proxies/glm2api" || exit 0
   run 120 uv run ruff check . || { echo "[pre-commit] ruff hat Befunde — Commit abgebrochen." >&2; fail=1; }
   run 180 uv run mypy src      || { echo "[pre-commit] mypy hat Befunde — Commit abgebrochen." >&2; fail=1; }
+fi
+
+# --- 1b) MAIN-eigenes Python (infra/ + Root-Umgebung): ruff + mypy -------
+# Ab 2026-10-02 (PLAN Stufe 3) hat infra/scripts/*.py eine eigene Umgebung
+# ueber die Root-pyproject.toml. Vorher war das die einzige Python-Flaeche ganz
+# ohne Werkzeug. Zweite Umgebung, kein Mix: llm-proxies/glm2api nimmt weiter
+# ihre eigene, weil uv immer die naechstgelegene pyproject.toml waehlt.
+if grep -qE '^infra/(scripts|tests)/.*\.py$|^pyproject\.toml$|^uv\.lock$' <<< "$changed"; then
+  echo "[pre-commit] MAIN-Python geaendert -> ruff + mypy (infra/)..."
+  cd "$ROOT" || exit 0
+  run 120 uv run ruff check . || { echo "[pre-commit] ruff (infra/) hat Befunde — Commit abgebrochen." >&2; fail=1; }
+  run 180 uv run mypy         || { echo "[pre-commit] mypy (infra/) hat Befunde — Commit abgebrochen." >&2; fail=1; }
+fi
+
+# --- 1c) Einstiegspunkt geaendert: Makefile <-> Hook-Kopplung pruefen ------
+# Befund vom 2026-10-02: ein reiner `Makefile`-Fehler kam durch diesen Hook
+# durch, weil er nur Quellsprachen triggert. Der CI-Negativtest hat es gezeigt
+# (PR #23). Der Check ist inhaltlich derselbe wie „Makefile deckt Hook ab“ in
+# verify-codespace.sh — der muss ihn hier trotzdem wiederholen, weil ein Hook
+# den noch nicht existierenden Commit nicht fragen kann. Die kanonische Fassung
+# bleibt der Verify-Check.
+if grep -qE '^(Makefile|\.githooks/pre-commit)$' <<< "$changed"; then
+  echo "[pre-commit] Einstiegspunkt geaendert -> Kopplung Makefile <-> Hook..."
+  cd "$ROOT" || exit 0
+  mmiss=""
+  for tool in "ruff check" "mypy src" "vet ./..." "gofmt -l" "node --check"; do
+    grep -qF "$tool" Makefile            || mmiss="$mmiss make:[$tool]"
+    grep -qF "$tool" .githooks/pre-commit || mmiss="$mmiss hook:[$tool]"
+  done
+  if [ -n "$mmiss" ]; then
+    echo "[pre-commit] Makefile und Hook nennen verschiedene Kommandos ->$mmiss" >&2
+    echo "              (kanonische Pruefung: verify-codespace.sh, Check 'Makefile deckt Hook ab')" >&2
+    fail=1
+  fi
 fi
 
 # --- 2) antigravity-proxy (Go): go vet + gofmt ----------------------------

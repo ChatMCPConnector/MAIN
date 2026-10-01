@@ -132,6 +132,34 @@ jobs:
       - name: test
         run: pnpm test
 
+  infra-python:
+    name: infra-Python (ruff + mypy + pytest + Coverage-Floor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # Hier gibt es eine echte Root-Umgebung (pyproject.toml + uv.lock),
+          # also ist der uv-Cache nuetzbar — anders als im repo-Job, wo er am
+          # fehlenden uv.lock scheiterte.
+          enable-cache: true
+          python-version: '3.14'
+      - name: Lockfile konsistent
+        run: uv lock --check
+      - name: ruff (infra/, Vendor-Baeume ausgeschlossen)
+        run: uv run ruff check .
+      - name: mypy (infra/scripts)
+        run: uv run mypy
+      # Der Floor gilt fuer check-proxy-budget.py — die Datei, die den echten
+      # Bug vom 2026-09-30 gefunden hat. `uv run pytest` allein laeuft darunter
+      # als eigene Zeile, damit ein roter Test und eine zu niedrige Coverage
+      # unterscheidbar bleiben.
+      - name: pytest
+        run: uv run pytest -q
+      - name: Coverage-Floor (>=90 % fuer check-proxy-budget.py)
+        run: uv run pytest -q --cov --cov-config=infra/coverage-floor.rc --cov-report=term-missing
+
   infra:
     name: infra (bash -n + node --check)
     runs-on: ubuntu-latest

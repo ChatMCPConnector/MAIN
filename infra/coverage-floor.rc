@@ -1,0 +1,17 @@
+# Floor-Konfiguration fuer `make cov-floor` (PLAN Stufe 3).
+#
+# Bewusst eine eigene Datei und nicht [tool.coverage.run] in pyproject.toml:
+# der Floor gilt fuer EINE Datei, waehrend `make cov` weiterhin alle drei
+# zeigt. Ohne diese Trennung waere die Gesamtzahl (heute 15 %) das Gate — und
+# eine Zahl, die man nur durch Weglassen von Dateien bekommt, ist keine.
+[run]
+source = infra/scripts
+# `source` akzeptiert keinen Dateipfad, deshalb wird gefiltert statt eingegrenzt.
+omit =
+    infra/scripts/freebuff-pty.py
+    infra/scripts/watch-subagent.py
+branch = True
+
+[report]
+fail_under = 90
+show_missing = True

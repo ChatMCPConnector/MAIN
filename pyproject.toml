@@ -1,0 +1,90 @@
+# Root-Projekt für MAIN-eigenes Python (PLAN Stufe 3).
+#
+# Wozu: `infra/scripts/*.py` war die einzige Python-Fläche ohne jedes Werkzeug
+# — kein ruff, kein mypy, kein Test. llm-proxies/glm2api hat alles davon, aber
+# das ist ein Vendor-Baum mit eigener Umgebung; ein Root-Projekt ist die
+# sauberere Grenze.
+#
+# Bewusst ein *Werkzeug*-Projekt: `package = false` heißt kein Build, kein
+# Packaging, kein Wheel. Es liefert nur eine aufgelöste Umgebung für
+# `uv run ruff|mypy|pytest`. Der Vendor-Baum bleibt unberührt — dort greift
+# weiterhin llm-proxies/glm2api/pyproject.toml, weil uv immer die nächstgelegene
+# pyproject.toml nimmt.
+#
+# Abgrenzung per exclude/extend-exclude: ohne das würde ein `ruff check` aus dem
+# Repo-Root den ganzen Vendor-Baum mitlinten (das war in Stufe 0 genau der
+# Grund, das Makefile pfad-scoped zu bauen).
+
+[project]
+name = "main-infra"
+version = "0.0.0"
+description = "Werkzeug-Umgebung fuer MAIN-eigenes Python (infra/), nicht fuer den Vendor-Baum"
+requires-python = ">=3.14"
+dependencies = []
+
+[tool.uv]
+package = false
+
+# Gepinnt, exakt — dieselbe Begründung wie D-12 in glm2api/pyproject.toml:
+# mit `>=` haengt der Build an der Laune des Tages. `uv.lock` ist die
+# aufgeloeste Wahrheit.
+[dependency-groups]
+dev = [
+  "mypy==1.18.2",
+  "pytest==9.1.1",
+  "pytest-cov==7.0.0",
+  "ruff==0.14.4",
+]
+
+[tool.ruff]
+target-version = "py314"
+# Nur MAIN-eigenes Python. Die Vendor-Baeume (glm2api, zerokey, antigravity)
+# haben ihre eigenen Konfigurationen und werden hier bewusst nicht angefasst.
+extend-exclude = [
+  "llm-proxies",
+  ".runtime",
+  ".venv",
+  "node_modules",
+  # infra/docs/reverse-engineering/*.py sind archivierte Reverse-Engineering-
+  # Skripte (CDP-Client, HAR-Capture) aus der ChatGLM-Recherche. Sie sind
+  # Dokumentation, nicht Teil der Codespace-Kette, und schreiben unter anderem
+  # noch auf einen Pfad, den es nicht mehr gibt
+  # (/workspaces/reverse-engeneer/screen.png). ruff meldete dort 27 E7xx-
+  # Befunde — ohne Nutzen, weil niemand diese Dateien beim Boot ausfuehrt.
+  "infra/docs",
+]
+# Default-Regelsatz E4/E7/E9/F wie in glm2api: findet toten Code, bestraft aber
+# die bewusst dynamischen Strukturen in freebuff-pty.py nicht.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.14"
+files = ["infra/scripts"]
+# freebuff-pty.py ist ein PTY-Wrapper ueber Subprozesse; watch-subagent.py liest
+# eine fremde Session-Struktur. Beides ist dynamischer als der Vendor-Baum,
+# mypy liefert dort Rauschen statt Befunde — deshalb starten wir mit `warn` und
+# schalten scharf, wenn die Liste kurz ist (PLAN Stufe 3: erst Bestandsaufnahme).
+ignore_missing_imports = true
+warn_unused_configs = true
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+# Nur infra-Tests. Ohne testpaths wuerde ein `pytest` aus dem Repo-Root die
+# 1750 glm2api-Tests mitschleppen und sie in der falschen Umgebung ausfuehren.
+testpaths = ["infra/tests"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["infra/scripts"]
+branch = true
+
+[tool.coverage.report]
+# Der Floor ist bewusst NICHT pauschal (PLAN Stufe 3: pro Datei, nicht global).
+# `freebuff-pty.py` ist PTY + Subprozesse und ueber eine Mock-Session nur
+# teilweise sinnvoll testbar; da waere eine hohe Zahl Pseudosicherheit. Der
+# Floor fuer check-proxy-budget.py steckt in pyproject unter
+# [tool.coverage.report] per --cov-fail-under im Makefile-Target.
+fail_under = 0
+skip_covered = false
+show_missing = true

@@ -47,3 +47,9 @@ llm-proxies/zerokey/node_modules/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# Coverage (Root-Umgebung fuer infra/, PLAN Stufe 3)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

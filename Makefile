@@ -28,18 +28,19 @@ GO     := $(if $(wildcard /usr/local/go/bin/go),/usr/local/go/bin/go,go)
 GOFMT  := $(if $(wildcard /usr/local/go/bin/gofmt),/usr/local/go/bin/gofmt,gofmt)
 
 .PHONY: help check check-fast verify verify-code smoke check-all ci \
-        lint-py test-py lint-go test-go lint-js lint-zk test-zk syntax-sh
+        lint-py test-py lint-go test-go lint-js lint-zk test-zk syntax-sh \
+        lint-py-infra mypy-infra test-infra cov cov-floor
 
 ## help: alle Targets mit Kurzbeschreibung
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /'
 
 ## check: alle Schnell-Checks inkl. Tests (der vollstaendige Gate-Lauf)
-check: check-fast test-py test-go test-zk
+check: check-fast test-py test-go test-zk test-infra
 	@echo "make check: alles gruen."
 
 ## check-fast: nur Lint/Syntax, ohne Tests — das ist das Hook-Niveau
-check-fast: lint-py lint-go lint-js syntax-sh
+check-fast: lint-py lint-py-infra mypy-infra lint-go lint-js syntax-sh
 
 ## verify: verify-codespace.sh (read-only, prueft die LAUFENDE Kette)
 verify:
@@ -72,6 +73,35 @@ lint-py:
 ## test-py: glm2api-Testsuite
 test-py:
 	cd $(GLMAPI) && $(TIMEOUT) run 900 uv run pytest -q
+
+# --- MAIN-eigenes Python (Root-pyproject.toml, PLAN Stufe 3) ---------------
+# Zweite, kleine Python-Umgebung: sie deckt infra/scripts + infra/tests ab und
+# fasst die Vendor-Baeume nicht an (extend-exclude). mypy lief hier zuerst nur
+# als Bestandsaufnahme und war sofort gruen — deshalb ist es jetzt ein Gate.
+
+## lint-py-infra: ruff ueber infra/ (Ausschluss der Vendor-Baeume in pyproject)
+lint-py-infra:
+	cd $(ROOT) && $(TIMEOUT) run 120 uv run ruff check .
+
+## mypy-infra: mypy ueber infra/scripts
+mypy-infra:
+	cd $(ROOT) && $(TIMEOUT) run 180 uv run mypy
+
+## test-infra: Tests der infra-Python-Skripte (Ebene 1 aus PLAN 6b)
+test-infra:
+	cd $(ROOT) && $(TIMEOUT) run 300 uv run pytest -q
+
+## cov: Coverage-Zahlen fuer infra/scripts (Bestandsaufnahme, kein Floor)
+cov:
+	cd $(ROOT) && $(TIMEOUT) run 300 uv run pytest -q --cov --cov-report=term-missing
+
+## cov-floor: Gate fuer die getestete Datei. Bewusst pro Datei, nicht global:
+# freebuff-pty.py (571 LOC, PTY + Subprozesse) und watch-subagent.py sind ohne
+# PTY-Mock nicht sinnvoll abzudecken — eine hohe Zahl waere Pseudosicherheit
+# (PLAN Stufe 3). Die Einengung passiert ueber infra/coverage-floor.rc, damit
+# `make cov` weiterhin alle drei Dateien zeigt.
+cov-floor:
+	cd $(ROOT) && $(TIMEOUT) run 300 uv run pytest -q --cov --cov-config=infra/coverage-floor.rc --cov-report=term-missing
 
 ## lint-go: antigravity-proxy mit go vet + gofmt -l (read-only, wie im Hook)
 lint-go:
