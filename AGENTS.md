@@ -69,15 +69,34 @@ Normale Code-, Doku- und Config-Edits sind keine Infrastruktur-Änderung: keine 
 
 ## 6. Verifikation (nie „fertig" ohne grünen Check)
 
-Ändere Code, dann laufe den Check des betroffenen Teils. Nicht behaupten —
-messen. Existiert für jede Sprache:
+Ändere Code, dann laufe den Check. Nicht behaupten — messen.
+
+**Ein Einstiegspunkt** (seit 2026-10-01, `Makefile` im Repo-Root):
+
+| Befehl | Wirkung |
+|---|---|
+| `make check` | alle Schnell-Checks inkl. Tests — der volle Gate-Lauf |
+| `make check-fast` | nur Lint/Syntax, ohne Tests (= Hook-Niveau) |
+| `make verify` | `verify-codespace.sh` (read-only, prüft die **laufende** Kette) |
+| `make smoke` | echter Live-Smoke-Test gegen den laufenden glm2api (dauert Minuten) |
+| `make check-all` | `check` + `verify` |
+| `make help` | alle Targets |
+
+Nur ein Teil:
 
 | Bereich | Befehl |
 |---|---|
-| glm2api (Python) | `cd llm-proxies/glm2api && uv run pytest -q && uv run ruff check . && uv run mypy src` |
-| zerokey (JS) | `cd llm-proxies/zerokey && pnpm lint && pnpm check && pnpm test` |
-| antigravity-proxy (Go) | `cd llm-proxies/antigravity-proxy && go vet ./... && go test ./...` (Format: `gofmt -w .`) |
-| Shell | `bash -n <skript>` (und, wo möglich, ein Trockenlauf) |
+| glm2api (Python) | `make lint-py` / `make test-py` |
+| zerokey (JS) | `make lint-zk` / `make test-zk` |
+| antigravity-proxy (Go) | `make lint-go` / `make test-go` |
+| MAIN-eigenes JS | `make lint-js` |
+| Shell | `make syntax-sh` (bash -n über alle getrackten Skripte) |
+
+Der Makefile dupliziert **keine** Check-Liste: jedes Target ruft exakt die
+Kommandos auf, die auch der pre-commit-Hook fährt. Der Verify-Check
+„Makefile deckt Hook ab" vergleicht beide Dateien und wird rot, sobald sie
+auseinanderlaufen. **Formatieren** bleibt Handarbeit (`gofmt -w .` in
+antigravity-proxy) — ein Verifier darf nichts schreiben.
 
 `mise` ist hier **nicht** installiert: die `mise.toml`-Tasks des vendorten
 antigravity-proxy (`mise run test`/`format`) sind der Upstream-Weg, laufen aber

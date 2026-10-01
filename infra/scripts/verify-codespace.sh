@@ -189,6 +189,21 @@ check "Lint-Hook verdrahtet" bash -c '
   [ "$hp" = ".githooks" ] || { echo "core.hooksPath=${hp:-<leer>} (erwartet .githooks) — setup.sh erneut laufen lassen"; exit 1; }
   [ -x "$REPO_ROOT/.githooks/pre-commit" ] || { echo ".githooks/pre-commit fehlt oder ist nicht ausfuehrbar"; exit 1; }
   echo "core.hooksPath=.githooks, pre-commit ausfuehrbar"'
+check "Makefile deckt Hook ab" bash -c '
+  # AGENTS.md §6 verweist jetzt auf `make check`, der Hook bleibt fuer den
+  # Commit. Beide duerfen nicht auseinanderlaufen — genau das war die Luecke
+  # vor dem Makefile: vier Stellen sagten je, was zu pruefen ist, und nichts
+  # pruefte, ob sie noch uebereinstimmen.
+  hook="$REPO_ROOT/.githooks/pre-commit"; mk="$REPO_ROOT/Makefile"
+  [ -f "$hook" ] || { echo "Hook fehlt"; exit 1; }
+  [ -f "$mk" ]   || { echo "Makefile fehlt — AGENTS.md §6 verweist darauf"; exit 1; }
+  miss=""
+  for tool in "ruff check" "mypy src" "vet ./..." "gofmt -l" "node --check"; do
+    grep -qF "$tool" "$hook" || miss="$miss hook:[$tool]"
+    grep -qF "$tool" "$mk"   || miss="$miss make:[$tool]"
+  done
+  [ -z "$miss" ] || { echo "Makefile und Hook nennen verschiedene Kommandos -> $miss"; exit 1; }
+  echo "5 Kommandos in beiden (ruff, mypy, go vet, gofmt, node --check)"'
 check "Go-Lint antigravity (vet+fmt)" bash -c '
   # Go hatte bis 2026-10-01 keinen einzigen automatischen Check. `mise` ist
   # nicht installiert, also direkt go vet + gofmt (das Binary liegt in
