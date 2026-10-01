@@ -247,11 +247,12 @@ start_server() {
     echo "✗ Keine PID erhalten (siehe $OUTPUT_LOG)"
     return 1
   fi
+  # 2026-10-01 (A12): hier stand diese Sequenz ZWEIMAL. Der zweite
+  # `start_log_guard` überlagerte beim Überschreiben der PID-Datei (Log-Rotation
+  # weiter unten) den ersten Guard und machte ihn orphan — der alte Guard
+  # blieb ohne zugehoerige PID-Datei zurueck. Einmal ist richtig: die PID steht
+  # bereits atomar geschrieben (rename aus $PID_FILE.tmp weiter oben).
   pid="$(cat "$PID_FILE")"
-  start_log_guard "$pid"
-  echo "✓ Server gestartet (PID: $pid)"
-  # PID atomar in Datei schreiben (gleiche Partition → rename ist atomar)
-  printf '%s\n' "$pid" > "$PID_FILE.tmp" && mv -f "$PID_FILE.tmp" "$PID_FILE"
   start_log_guard "$pid"
   echo "✓ Server gestartet (PID: $pid)"
 
