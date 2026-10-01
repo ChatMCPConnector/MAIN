@@ -1,6 +1,9 @@
-- Repo: dvcrn/antigravity-proxy
-
-# CLAUDE.md
+> **Vendored in `MAIN/llm-proxies/antigravity-proxy/` (upstream `dvcrn/antigravity-proxy`).**
+> This is the upstream agent file, kept for the Go proxy's architecture. Two things are
+> **MAIN-specific and differ from upstream**, do not "fix" them back:
+> it binds on port **9878** (started by `MAIN/llm-proxies/antigravity-proxy/scripts/start.sh`),
+> not upstream's 9877, and it binds **loopback only** (`HOST`, see `infrastructure.md`).
+> Build/format/test via the `mise.toml` tasks below; MAIN does not run them automatically.
 
 ## Required Steps
 

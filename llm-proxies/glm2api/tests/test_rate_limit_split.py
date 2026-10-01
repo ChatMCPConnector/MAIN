@@ -286,5 +286,4 @@ def test_rate_limit_gibt_keinen_zusatzlichen_stream_retry(monkeypatch):
 def test_anderer_429_code_bleibt_nicht_throttle():
     """Nur 10061 (und die rate-limit-textmarker) sind throttle. Ein 429 aus
     anderem grund darf den langen ratelimit-pfad nicht ziehen."""
-    client = GLMWebClient.__new__(GLMWebClient)
     assert GLMWebClient._classify_upstream_throttle({"status": 429, "message": "capacity"}) == ""

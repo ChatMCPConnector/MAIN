@@ -1117,7 +1117,6 @@ def test_error_body_read_is_bounded():
     import gzip
     import json as json_module
     import logging
-    import urllib.error
 
     from glm2api.services.glm_client import ERROR_BODY_MAX_BYTES, GLMWebClient
 
@@ -1248,7 +1247,6 @@ def test_truncated_stream_is_not_reported_as_success():
     Anthropic-Adapter uebersetzte das in `stop_reason: end_turn` +
     `message_stop`, also ein Erfolgssignal."""
     import json as json_module
-    import logging
     import re
     from types import SimpleNamespace
 
@@ -1622,7 +1620,7 @@ def test_extract_history_tool_results_pairs_calls_with_real_results():
 def test_repeated_call_with_result_becomes_cache_hit_notice():
     """C-01: der loop-guard unterdrueckt den wiederholten call weiterhin
     (keine doppelwirkung), meldet aber das vorhandene ergebnis."""
-    from glm2api.services.translator import GLMEventAccumulator, _cached_result_notice
+    from glm2api.services.translator import GLMEventAccumulator
 
     signature = 'read:{"filePath":"/workspaces/MAIN/README.md"}'
     accumulator = GLMEventAccumulator(

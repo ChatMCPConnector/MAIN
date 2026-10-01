@@ -21,10 +21,32 @@ glm2api = "glm2api.__main__:main"
 # spaeterer build eine inkompatible pytest-version aufloesen, obwohl
 # uv.lock eine festhaelt — der lock haelt nur das auf, was beim
 # aufloesen bereits gewaehlt war.
-dev = ["pytest==9.1.1"]
+dev = ["pytest==9.1.1", "ruff==0.14.4", "mypy==1.18.2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+target-version = "py314"
+# Default-Regelsatz E4/E7/E9/F reicht und ist Absicht: er findet genau den
+# toten Code (F401 unused-import, F841 unused-variable, F541 leere f-strings),
+# ohne die bewusst dynamischen JSON-Dicts zu bestrafen. Lauf: `uv run ruff check .`
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.14"
+ignore_missing_imports = true
+# Gezielt, nicht global: dieser Proxy arbeitet bewusst mit ungetypten
+# JSON-Dicts. Ungefiltert meldet mypy 62 Fehler, davon ~50 reines
+# `object`-Rauschen (`object has no attribute "get"`, `list(object)`) —
+# das wird ignoriert und nur die Codes aktiv gehalten, die echte Bugs
+# finden: no-redef (doppelt definierte Namen), possibly-undefined,
+# used-before-def, return-value. Lauf: `uv run mypy src`.
+disable_error_code = [
+  "attr-defined", "call-overload", "var-annotated", "assignment",
+  "index", "operator", "union-attr", "arg-type", "list-item",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -736,10 +736,7 @@ candidate: str) -> dict[str, object] | None:
         if not name:
             pos = j
             continue
-        # arguments-objekt: naechstes '{"' nach dem name-wert
-        args_start = candidate.find("{", j)
-        # naechstes '"arguments"' vorziehen, wenn es vor args_start+? liegt —
-        # einfach: arguments-schluessel suchen, danach brace-scan
+        # arguments-objekt: '"arguments"'-schluessel suchen, danach brace-scan
         args_key = candidate.find('"arguments"', j)
         if args_key == -1:
             break
@@ -2199,15 +2196,10 @@ class StreamingToolParser:
                 self.pending_text = ""
                 return ""
             self._awaiting_terminator = False
-        # T-06: merken, ob ein vollstaendiges call-protokoll im puffer lag.
-        # Wird es danach konsumiert, ohne dass ein ausfuehrbarer call
-        # entsteht (`read` ohne filePath, `bash` ohne command), hat das
-        # modell einen aufruf gewollt, den es nicht ausfuehren kann. Das
-        # muss der accumulator erfahren — sonst gilt der turn als leerer
-        # ERFOLG und der agent bleibt stehen.
-        calls_before = len(self.tool_calls)
-        protocol_before = find_tool_calls_protocol(self.pending_text)
-
+        # T-06: ein vollstaendiges call-protokoll im puffer, das konsumiert
+        # wird, ohne dass ein ausfuehrbarer call entsteht (`read` ohne
+        # filePath, `bash` ohne command), zaehlt als gewollter, aber nicht
+        # ausfuehrbarer aufruf und wird unten gemeldet.
         if self.buffering_dsml:
             # P-14: puffer darf nicht unbegrenzt wachsen — ein niemals
             # geschlossener markup-opfer wuerde sonst den speicher

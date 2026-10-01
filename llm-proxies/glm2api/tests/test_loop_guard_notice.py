@@ -670,7 +670,6 @@ def test_stream_notices_kommen_in_fester_reihenfolge_remap_blocked_loop():
 
 
 def test_non_stream_notice_stand_im_denkkanal_nicht_im_text():
-    from glm2api.services.glm_client import _native_remap_notice_text, _loop_guard_notice_text
     from glm2api.services.translator import GLMEventAccumulator
 
     acc = GLMEventAccumulator(model="m", allowed_tool_names={"read", "bash", "webfetch"})
@@ -759,7 +758,6 @@ def _sse_client(body: bytes):
     """Minimaler client gegen den ECHTEN sse-pfad (bytes, nicht dicts) —
     der dict-mock im testmodul umgeht die chunk-aufteilung des accumulators
     und taugt nicht fuer den stream-buffertest."""
-    import json as _json
     from types import SimpleNamespace
 
     from glm2api.services.glm_client import GLMWebClient, ConcurrentRequestQueue
@@ -840,7 +838,7 @@ def test_stream_unterdrueckt_echten_abandon_text():
     )
     body = _sse(abandon) + FINISH
     client, warnings = _sse_client(body)
-    text = "".join(
+    "".join(
         c.decode("utf-8")
         for c in client.stream_chat_completion({"model": "m", "messages": [{"role": "user", "content": "hi"}]})
     )

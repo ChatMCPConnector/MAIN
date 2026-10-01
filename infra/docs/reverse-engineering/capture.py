@@ -2,7 +2,10 @@
 Läuft als Dauerschleife; schreibt JSONL nach reasoning-capture.jsonl.
 Bedienung: einfach laufen lassen, im Browser (noVNC) die Stufen durchklicken.
 """
-import json, time, base64, urllib.request, sys, threading
+import json
+import time
+import base64
+import urllib.request
 
 WS_URL = None
 # 1) CDP-WebSocket-Endpoint der Chat-Seite holen
@@ -14,7 +17,9 @@ print(f"Ziel: {PAGE_URL}", flush=True)
 # 2) WebSocket per stdio-Proxy? Nein — direkter WS-Client mit stdlib reicht nicht.
 # Wir nutzen die HTTP-Endpoints: /json/... reicht nicht für Events.
 # => minimaler WS-Client über raw socket + HTTP-Upgrade (keine deps!):
-import socket, hashlib, os, struct
+import socket
+import os
+import struct
 
 def ws_connect(url):
     # url ws://127.0.0.1:9222/devtools/page/XXX

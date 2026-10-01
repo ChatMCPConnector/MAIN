@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sys
 
-from common import ALLOWED, NARRATION, native_event, stream
+from common import NARRATION, native_event, stream
 
 # S-14 soll fuer diese Narration bei jeder Chunkgroesse keinen sichtbaren
 # Text freigeben; jede Abweichung ist ein Leak.

@@ -20,6 +20,17 @@
 - Lies `infrastructure.md` einmal pro Session (Layout-Abschnitt reicht im Alltag).
 - Kein Re-Read vor jedem Edit. Nur erneut lesen, wenn der Task Infrastruktur berührt (Browser, Ports, Display, Profile, Installationen, Dependencies, Persistenzpfade).
 
+## 1a. Repo-Karte (Kurzfassung)
+
+`infrastructure.md` ist die volle Akte — die brauchst du selten ganz. Für den
+Alltag:
+
+- `llm-proxies/glm2api/` — Python-Haupt-Proxy (Port 8001), `src/` + `tests/`, uv.
+- `llm-proxies/antigravity-proxy/` — Go (Port 9878), `mise`-Tasks, Binary wird gebaut.
+- `llm-proxies/zerokey/` — Node/Express (Port 7250), `pnpm` (eslint + Tests).
+- `infra/scripts/` — Shell-Werkzeugkasten (`save.sh`, `secrets.sh`, `keys.sh`, …).
+- `.opencode/`, `.devcontainer/`, `config/` — Client-Config, Setup, Secrets.
+
 ## 2. Was als Infrastruktur-Änderung zählt
 
 Nur das ist eine Infrastruktur-Änderung:
@@ -55,3 +66,30 @@ Normale Code-, Doku- und Config-Edits sind keine Infrastruktur-Änderung: keine 
 - **Nur eigene Pfade committen.** `git commit` committet den **gesamten Index**, nicht die genannten Dateien — und `save.sh` macht vorher `git add -A`. Da das Repo für mehrere eigene Accounts shared ist, erwischt das fremde, gerade in Arbeit befindliche Änderungen (live passiert: eine 905-zeilige Löschung aus einer parallelen Refactor-Arbeit landete in einem fremden Commit). Deshalb: **vor dem Save `git status` ansehen.** Ist fremder Änderungsstand im Baum → nicht committen, melden, eigene Pfade mit `git commit -- <pfad>` separat sichern.
 - **Kein Autosave-Daemon.** Bewusst abgeschaltet (2026-09-27), weil er per `git add -A` den Agent-Index mutierte und Halb-Zustände laufender Arbeit als eigene Commits einfror. **Damit ist der `save.sh`-Aufruf oben der einzige Auslöser für Commit *und* Drive-Backup** — ohne ihn ist bis zu einer Stunde Agent-Arbeit nach einem Codespace-Verlust weg.
 - **Testläufe nicht committten.** Ein Test, der einen echten Commit erzeugt, gehört zurückgenommen (nicht gepusht), bevor weitergearbeitet wird — sonst landet er in `origin/main`.
+
+## 6. Verifikation (nie „fertig" ohne grünen Check)
+
+Ändere Code, dann laufe den Check des betroffenen Teils. Nicht behaupten —
+messen. Existiert für jede Sprache:
+
+| Bereich | Befehl |
+|---|---|
+| glm2api (Python) | `cd llm-proxies/glm2api && uv run pytest -q && uv run ruff check . && uv run mypy src` |
+| zerokey (JS) | `cd llm-proxies/zerokey && pnpm lint && pnpm check && pnpm test` |
+| antigravity-proxy (Go) | `cd llm-proxies/antigravity-proxy && mise run test` (formatiert mit `mise run format`) |
+| Shell | `bash -n <skript>` (und, wo möglich, ein Trockenlauf) |
+
+## 7. Anti-Drift (kein neues Rad)
+
+- **Erst suchen, dann bauen:** kein neues Skript/Tool/Doku-File, wenn ein
+  vorhandenes dasselbe tut. Ein zweites Start-Skript für denselben Dienst, eine
+  zweite Anleitung, eine zweite Versionsangabe ist der Fehlerfall, nicht die Lösung.
+- **Eine Quelle der Wahrheit:** Versionen gepinnt im Repo (§3), Regeln in *dieser*
+  Datei. Keine Kopie anlegen, die auseinanderlaufen kann.
+- **Nested `AGENTS.md`** (vendored Unterordner) sind erlaubt, müssen aber einen
+  MAIN-Hinweis mit den Abweichungen vom Upstream tragen und dürfen keinen
+  Upstream-Stand behaupten.
+- **Client-Kopien** (`GEMINI.md`, `CLAUDE.md`, `.cursorrules`, …) sind im
+  MAIN-Root verboten. In vendored Unterordnern ist genau **eine** Quelle erlaubt
+  — ein File oder ein Symlink-Verbund (siehe `llm-proxies/antigravity-proxy/`),
+  nie ein divergierender zweiter Regeltext. `verify-codespace.sh` prüft beides.

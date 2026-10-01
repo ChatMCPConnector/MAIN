@@ -4,7 +4,7 @@ import traceback
 
 from .app import StartupError, create_application
 from .config import ConfigError
-from .logging_utils import get_logger, setup_logging
+from .logging_utils import get_logger
 
 
 def main() -> int:

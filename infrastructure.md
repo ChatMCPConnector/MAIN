@@ -453,12 +453,13 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   nach `/usr/local/go` via setup.sh — das Proxy-Binary liegt nicht im Git und wird
   pro Codespace neu gebaut (`scripts/start.sh` baut automatisch nach, Fallback
   `/usr/local/go/bin/go`). PATH via `aliases.sh`.
-- **Getrackte Ausnahme:** `antigravity-proxy/auth` (ELF, ~9,8 MB) ist ein
-  versehentlich committetes Binary — kein Skript referenziert es, das eigentliche
-  Proxy-Binary `antigravity-oauth-proxy` liegt korrekt außerhalb des Git
-  (`.gitignore`) und wird pro Codespace gebaut. Nutzerentscheidung 2026-09-28:
-  bleibt getrackt (kein Historie-Rewrite für ein totes Artefakt), dokumentiert als
-  bewusste Ausnahme statt als Soll-Verstoß.
+- **Getrackte Ausnahme — am 2026-10-01 beendet:** `antigravity-proxy/auth`
+  (ELF, ~9,8 MB) war ein 2026-09-28 bewusst geduldetes, versehentlich
+  committetes Binary — kein Skript referenzierte es, das eigentliche Proxy-Binary
+  `antigravity-oauth-proxy` liegt korrekt außerhalb des Git (`.gitignore`) und
+  wird pro Codespace gebaut. Auf Nutzerwunsch entfernt (Blindlast raus, kein
+  Nutzen). Zusammen mit den vier toten `setup_oauth*.sh`-Varianten, siehe
+  Changelog 2026-10-01.
 - **Deprecated (gelöscht 2026-09-10):** kompletter Chromium-Stack entfernt
   (`infra/browser/` Playwright 1.48.2, `.runtime/ms-playwright/`,
   `.runtime/chromium-profile/`, `browser-install.sh`, CDP-Port 9222).
@@ -984,6 +985,8 @@ Proxy bei jedem Start automatisch hoch.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
 
+- 2026-10-01: **Blindlast raus, Python-Code bekommt `ruff` + `mypy`, und die Nested-`AGENTS.md` driften nicht mehr.** Anlass war der Nutzerwunsch, gegen Altlasten/Duplikate im Repo vorzugehen. **Gelöscht:** die vier toten `antigravity-proxy/setup_oauth*.sh` (`_final`/`_fixed`/`_full`/plain, zusammen 494 Zeilen, von keinem Skript referenziert — die plain-Version hardcodete `/workspaces/dvcrn-antigravity-oauth-proxy` und nutzte `pkill -f`, das AGENTS.md §4 verbietet) und das 9,8-MB-ELF `antigravity-proxy/auth` (siehe Infra-Soll). **`ruff` + `mypy` eingeführt:** beide exakt in `llm-proxies/glm2api/pyproject.toml` gepinnt (`ruff==0.14.4`, `mypy==1.18.2`, uv.lock nachgezogen; Lauf: `uv run ruff check .` / `uv run mypy src`). `ruff` (Default E4/E7/E9/F) fand 25 echte Leichen (unbenutzte Imports/Variablen), `src/` jetzt clean. `mypy` ist **gezielt** konfiguriert, nicht global: ungefiltert 62 Fehler, davon ~50 reines `object`-Rauschen (bewusst dynamische JSON-Dicts) — deshalb nur die aussagekräftigen Codes aktiv (`no-redef`, `possibly-undefined`, …). Es fand drei doppelte Definitionen in `translator.py`; `found` (harmlose Zweideutigkeit über zwei Branches) umbenannt, `text_parts`/`reasoning_parts` war echte **Redundanz** (Liste zweimal gesetzt) und wurde zusammengeführt. Verifiziert: **1750 Tests grün**, `ruff`/`mypy` je Exit 0. **Eine Falle, die `ruff --fix` selbst stellte:** `translator.py` re-exportierte `BLOCKED_NATIVE_TOOL_NAMES` nur für `glm_client`/`test_translator`; `ruff` wertete das als unbenutzten Import (F401) und entfernte es, die Testsammlung brach mit `ImportError`. Lehre: ein Re-Export ist für `ruff` ein toter Import, solange er nicht als solcher markiert ist — die zwei Konsumenten importieren jetzt direkt aus `glm2api.utils.tool_protocol`. **Nested-`AGENTS.md` ruhiggestellt:** `antigravity-proxy/AGENTS.md` war unverändert upstreams `CLAUDE.md` (Überschrift `# CLAUDE.md`, Port 9877 statt 9878), `zerokey/AGENTS.md` **widersprach sich selbst** (Kopf: `.githooks/pre-commit` entfernt; Fuß: listete es als vorhanden) — beide mit MAIN-Hinweis/Realität versehen. `verify-codespace.sh` verlangt für jedes Nested-`AGENTS.md` den MAIN-Hinweis und prüft Client-Kopien rekursiv — aber **symlink- und vendored-bewusst**: im Root sind `GEMINI.md`/`CLAUDE.md`/… verboten, in vendored Unterordnern ist genau eine Quelle erlaubt (ein File oder ein Symlink-Verbund, wie `antigravity-proxy/`: `CLAUDE.md` echt, `AGENTS.md`/`GEMINI.md` Symlinks darauf). **Nicht gelöscht, entgegen des ersten Eindrucks:** `glm2api/glm2api-revision.md` + `-anhang/` (bewusst als Proxy-Audit geduldet, Changelog 2026-09-27) und `structure.md` (wird von `build-bundle.sh:34` ins Bundle kopiert — Löschen hätte den Bundle-Bau gebrochen). `AGENTS.md` um Verifikationsbefehle, Repo-Karte und Anti-Drift-Regel ergänzt.
+
 - 2026-09-30: **opencodes Neben-Requests landen nicht mehr in der Arbeits-Konversation — die wahrscheinlichste Ursache für „Sessions sind kaputt".**
 
   **Symptom.** `ses_f0b8b5273ffepn1uTEI3d3pf7P` (Titel „Hey – kurzer Plausch"): User sagt `hey`, das Modell antwortet **`Quick check-in`** — 4 Output-Tokens. Kein Fehler, kein Absturz, nur ein wertloser Turn. Dasselbe Muster in älteren Läufen: `Repository-Analyse: Struktur, LLM-Proxies und Infrastruktur von /workspaces/MAIN` (12 Tokens) und `Komplette Repository-Analyse von /workspaces/MAIN` (12 Tokens). **Das sind Titel, keine Antworten.**
@@ -1122,9 +1125,8 @@ Proxy bei jedem Start automatisch hoch.
     `ResponsesStreamAccumulator` bekommt öffentliche Lese-Properties
     (`terminal_status`, `completed_output`), server.py nutzt sie — ein Refactor
     des Accumulators kann den Folgerunden-Pfad nicht mehr still brechen.
-  - **`antigravity-proxy/auth` bleibt getrackt** (Nutzerentscheidung): 9,8-MB-ELF,
-    von nichts referenziert, als bewusste Ausnahme im Infra-Soll dokumentiert —
-    kein Historie-Rewrite für ein totes Artefakt.
+  - **`antigravity-proxy/auth` entfernt (2026-10-01):** 9,8-MB-ELF, von nichts
+    referenziert; die 2026-09-28-Duldung ist beendet, siehe Changelog 2026-10-01.
   - **TokenRouter-Key bleibt als Literal** (Nutzerentscheidung 2026-09-27 gilt,
     heute bestätigt): Provider wird nicht genutzt, Key wird nicht angefasst.
   - **Doku nachgezogen:** Provider-Tabelle führt `downloaddoctor`/`cyberpradeep`

@@ -1,5 +1,10 @@
 """Mini-CDP-Steuerung: evaluate JS im Browser (keine deps)."""
-import json, base64, os, socket, struct, sys
+import json
+import base64
+import os
+import socket
+import struct
+import sys
 
 def connect():
     for p in json.loads(__import__('urllib.request', fromlist=['urlopen']).urlopen("http://127.0.0.1:9222/json").read()):

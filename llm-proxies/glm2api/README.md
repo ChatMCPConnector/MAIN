@@ -61,5 +61,20 @@ Alle weiteren Config-Variablen: `.env.example` (kommentiert).
 ## Tests
 
 ```bash
-uv run pytest tests/ -q
+uv run pytest tests/ -q          # 1750 Tests
+```
+
+## Lint & Typen
+
+Dev-Abhängigkeiten sind in `pyproject.toml` (Gruppe `dev`) gepinnt. Die
+Konfiguration ist bewusst eng statt maximal: `ruff` mit dem Default-Regelsatz
+(E4/E7/E9/F) findet den toten Code (unbenutzte Imports/Variablen) ohne die
+bewusst dynamischen JSON-Dicts zu bestrafen; `mypy` hält nur die aussagekräftigen
+Error-Codes aktiv (`no-redef`, `possibly-undefined`, …) — ungefiltert würde der
+Proxy ~50 reine `object`-Rauschmeldungen erzeugen, in denen die echten Befunde
+untergehen.
+
+```bash
+uv run ruff check .              # toter Code
+uv run mypy src                  # echte Bugs (doppelte Definitionen u.a.)
 ```

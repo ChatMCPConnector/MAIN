@@ -130,13 +130,38 @@ check "AGENTS.md (Referenz)" bash -c '
   [ -f "$REPO_ROOT/AGENTS.md" ] || { echo "FEHLT"; exit 1; }
   grep -q "save.sh" "$REPO_ROOT/AGENTS.md" || { echo "Save-Regel fehlt"; exit 1; }
   echo "hat die Save-Regel"'
-check "keine Client-Kopien mehr" bash -c '
-  found=""
+check "keine divergierenden Client-Kopien" bash -c '
+  # Root: die verbotenen Namen dürfen gar nicht existieren.
   for f in GEMINI.md CLAUDE.md .cursorrules AGENT.md .github/copilot-instructions.md; do
-    [ -e "$REPO_ROOT/$f" ] && found="$found $f"
+    [ -e "$REPO_ROOT/$f" ] && { echo "im Root: $f"; exit 1; }
   done
-  [ -z "$found" ] || { echo "wieder da:$found"; exit 1; }
-  echo "nur AGENTS.md"'
+  # Nested: erlaubt ist nur EINE Quelle pro Verzeichnis — entweder ein
+  # Symlink (kann nicht driften) oder ein vendored Unterordner mit eigenem
+  # AGENTS.md samt MAIN-Hinweis (dessen Upstream-Konvention gilt).
+  bad=""
+  while IFS= read -r f; do
+    [ -L "$f" ] && continue
+    grep -q "Vendored in" "$(dirname "$f")/AGENTS.md" 2>/dev/null && continue
+    bad="$bad ${f#$REPO_ROOT/}"
+  done < <(find "$REPO_ROOT" -mindepth 2 \
+    -not -path "*/node_modules/*" -not -path "*/.venv/*" -not -path "*/.git/*" \
+    \( -name GEMINI.md -o -name CLAUDE.md -o -name .cursorrules -o -name AGENT.md \) -print 2>/dev/null)
+  [ -z "$bad" ] || { echo "divergierend:$bad"; exit 1; }
+  echo "eine Quelle je Verzeichnis"'
+check "nested AGENTS.md tragen einen MAIN-Hinweis" bash -c '
+  # Vendored Unterordner haben ihr eigenes AGENTS.md. Das darf keinen
+  # Upstream-Stand behaupten (driftete schon: antigravity-Proxys Datei war
+  # upstreams CLAUDE.md mit falschem Port, zerokeys Datei widersprach sich
+  # zum entfernten pre-commit-Hook).
+  bad=""
+  while IFS= read -r f; do
+    rel="${f#$REPO_ROOT/}"
+    [ "$rel" = "AGENTS.md" ] && continue
+    grep -q "Vendored in" "$f" || bad="$bad $rel"
+  done < <(find "$REPO_ROOT" -mindepth 2 -name AGENTS.md \
+    -not -path "*/node_modules/*" -not -path "*/.venv/*" -not -path "*/.git/*" 2>/dev/null)
+  [ -z "$bad" ] || { echo "ohne MAIN-Hinweis:$bad"; exit 1; }
+  echo "nested AGENTS.md haben den Hinweis"'
 check "Gemini CLI liest AGENTS.md" bash -c '
   bash "$REPO_ROOT/infra/scripts/gemini-context.sh" status >/dev/null 2>&1 \
     || { echo "context.fileName != [AGENTS.md] - Gemini CLI haette leeren Kontext"; exit 1; }

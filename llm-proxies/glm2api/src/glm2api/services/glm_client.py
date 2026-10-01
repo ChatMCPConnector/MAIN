@@ -27,9 +27,8 @@ from typing import Callable, Iterator
 from ..config import AppConfig
 from ..logging_utils import debug_dump, redact_sensitive_text
 from .glm_auth import GLMAccessTokenManager, build_sign
-from ..utils.tool_protocol import TOOL_DISCIPLINE_RECAP
+from ..utils.tool_protocol import BLOCKED_NATIVE_TOOL_NAMES, TOOL_DISCIPLINE_RECAP
 from .translator import (
-    BLOCKED_NATIVE_TOOL_NAMES,
     GLMEventAccumulator,
     compress_history_messages,
     convert_messages,
@@ -570,7 +569,7 @@ def _native_remap_notice_text(remapped: object) -> str:
             for native, mapped_names in sorted(native_to_mapped.items())
         )
         + ". Those results are in this conversation and are real — you did see them. "
-        f"From now on call "
+        "From now on call "
         + ", ".join(
             f"`{m}`" for mapped_names in native_to_mapped.values() for m in mapped_names
         )

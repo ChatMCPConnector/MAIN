@@ -1,6 +1,5 @@
 import json
 from glm2api.services.translator import (
-    BLOCKED_NATIVE_TOOL_NAMES,
     GLMEventAccumulator,
     _PREAMBLE_NARRATION_RE,
     _preamble_narration_undecided,
@@ -14,6 +13,7 @@ from glm2api.services.translator import (
     strip_meta_chatter,
 )
 from glm2api.utils.tool_parser import strip_unparseable_call_fragments
+from glm2api.utils.tool_protocol import BLOCKED_NATIVE_TOOL_NAMES
 import pytest
 
 
@@ -1314,7 +1314,7 @@ def test_build_tool_call_instructions_includes_language_lock_and_no_preamble():
 
 
 def test_native_open_maps_to_read_when_target_is_path():
-    from glm2api.services.translator import map_native_open_tool_call, GLMEventAccumulator
+    from glm2api.services.translator import map_native_open_tool_call
 
     mapped = map_native_open_tool_call(
         '{"open":[{"ref_id": "/workspaces/benchmark", "lineno": 1}]}',
@@ -1485,7 +1485,7 @@ def test_native_open_path_mapping_emits_valid_read_call():
 
 
 def test_native_sandbox_maps_to_bash_when_bash_allowed():
-    from glm2api.services.translator import map_native_sandbox_tool_call, GLMEventAccumulator
+    from glm2api.services.translator import map_native_sandbox_tool_call
 
     mapped = map_native_sandbox_tool_call(
         '{"code": "import json\\ndata = json.dumps({\'a\': 1})\\nprint(data)"}',
@@ -1808,7 +1808,6 @@ def test_output_limit_caps_response_and_reports_length():
         chunks.extend(emitted)
 
     final = accumulator.finalize(status="finish")
-    payload = "".join(final)
     content = json.loads(final[-2][6:].strip())
 
     # 200 Token ~ 800 Zeichen; mehr wird nicht ausgeliefert

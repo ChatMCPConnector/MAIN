@@ -5,7 +5,6 @@ import json
 import logging
 import re
 import time
-from bisect import insort
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import Logger
@@ -29,9 +28,7 @@ from ..utils.tool_parser import (
 from ..utils.tool_protocol import (
     contains_tool_markup,
     strip_unterminated_tool_prefix,
-    BLOCKED_NATIVE_TOOL_NAMES,
     is_blocked_tool_name,
-    CANONICAL_TOOL_CALL_EXAMPLE,
     TOOL_DISCIPLINE_RECAP,
     TOOL_FORMAT_REMINDER,
     build_tool_call_instructions as _protocol_build_tool_call_instructions,
@@ -236,23 +233,23 @@ def _sanitize_value_control_chars(value: object) -> tuple[object, int, set[str]]
     if isinstance(value, list):
         cleaned_items: list[object] = []
         total = 0
-        found: set[str] = set()
+        found_list: set[str] = set()
         for item in value:
             cleaned_item, count, chars = _sanitize_value_control_chars(item)
             cleaned_items.append(cleaned_item)
             total += count
-            found |= chars
-        return cleaned_items, total, found
+            found_list |= chars
+        return cleaned_items, total, found_list
     if isinstance(value, dict):
         cleaned_dict: dict[str, object] = {}
         total = 0
-        found: set[str] = set()
+        found_dict: set[str] = set()
         for key, item in value.items():
             cleaned_item, count, chars = _sanitize_value_control_chars(item)
             cleaned_dict[key] = cleaned_item
             total += count
-            found |= chars
-        return cleaned_dict, total, found
+            found_dict |= chars
+        return cleaned_dict, total, found_dict
     return value, 0, set()
 
 
@@ -559,7 +556,6 @@ def repair_python_command_quotes(command: str) -> str:
     if not match:
         return command
     inner = match.group(2) if match.group(2) is not None else match.group(3)
-    quote = '"' if match.group(2) is not None else "'"
     if _python_compiles(inner):
         return command
     repaired_inner = _BROKEN_DICT_ACCESS.sub(r"\1['\2']", inner)
@@ -4683,7 +4679,6 @@ class GLMEventAccumulator:
         # S-07: der fruehwarn-carry muss noch an den parser, sonst geht
         # der text verloren (er war nie im parser und wird beim flush
         # nicht zurueckgegeben).
-        held_narration = bool(self._narration_carry)
         held_initial_tool_prefix = self._initial_tool_prefix_held
         if self._narration_carry:
             self.tool_parser.pending_text += self._narration_carry
@@ -6203,10 +6198,6 @@ class GLMEventAccumulator:
                 if logic_id not in self.parts_by_logic_id:
                     del self._cached_part_reasonings[logic_id]
             candidates = self.ordered_logic_ids
-            text_parts = []
-            reasoning_parts = []
-            self._rendered_text_parts = text_parts
-            self._rendered_reasoning_parts = reasoning_parts
         else:
             # nur die tatsaechlich geaenderten parts, in part-reihenfolge
             candidates = sorted(dirty, key=lambda item: self._logic_id_rank.get(item, 0))

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from glm2api.config import ConfigError, GUEST_REFRESH_TOKEN_MARKER, load_config
+from glm2api.config import ConfigError, load_config
 from glm2api.logging_utils import serialize_for_debug, setup_logging
 
 
@@ -50,7 +50,7 @@ def test_setup_logging_removes_load_config_bootstrap_handler(tmp_path):
     env_path = tmp_path / ".env"
     env_path.write_text("GLM_USE_GUEST_REFRESH_TOKEN=true\n", encoding="utf-8")
 
-    config = load_config(env_path)
+    load_config(env_path)
     assert glm_logger.handlers, "load_config sollte den bootstrap-handler setzen"
 
     setup_logging("INFO")

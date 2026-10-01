@@ -118,4 +118,6 @@ DEEPSEEK_TRANSPORT — 'browser' (default, Playwright automation) | 'api' (direc
 # CONFIG
 .prettierrc / `eslint.config.js` — single quotes, LF line endings (per project style)
 `pnpm-workspace.yaml` — pnpm workspace root (single package)
-.githooks/pre-commit — runs `pnpm precommit` (format + lint + check-modules) 
+.pre-commit hook: **removed** in this vendored copy (upstream's `.githooks/pre-commit`
+ran `pnpm precommit` over ALL changed files; in the shared MAIN repo that would freeze
+other accounts' work). Run `pnpm precommit` by hand when working here. 

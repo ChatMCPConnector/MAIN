@@ -184,8 +184,6 @@ def build_tool_call_instructions(
     mode = str(policy.get("mode", "auto"))
     specific_name = str(policy.get("tool_name", "") or "")
 
-    blocked_examples = ", ".join(f"`{n}`" for n in sorted(BLOCKED_NATIVE_TOOL_NAMES))
-
     lines = [
         "# TOOL USE PROTOCOL",
         "",
