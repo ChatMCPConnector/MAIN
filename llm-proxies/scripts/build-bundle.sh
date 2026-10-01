@@ -31,7 +31,7 @@ cp -r "$APP_DIR/src" "$APP_DIR/tests" "$STAGE/app/"
 find "$STAGE" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 find "$STAGE" -name '*.egg-info' -type d -exec rm -rf {} + 2>/dev/null || true
 find "$STAGE" -name '.pytest_cache' -type d -exec rm -rf {} + 2>/dev/null || true
-for f in main.py pyproject.toml uv.lock README.md structure.md LICENSE .env.example .python-version .gitignore; do
+for f in main.py pyproject.toml uv.lock README.md LICENSE .env.example .python-version .gitignore; do
   cp "$APP_DIR/$f" "$STAGE/app/"
 done
 cp "$ENV_SRC" "$STAGE/app/glm2api.env"

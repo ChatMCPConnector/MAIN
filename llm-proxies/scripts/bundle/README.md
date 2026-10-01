@@ -16,8 +16,7 @@ glm2api-bundle/
 │   ├── uv.lock             #   Lockfile (nur das Projekt selbst)
 │   ├── glm2api.env          #   Fertige Config: Port 8001, Guest-Mode (wird zu .env kopiert)
 │   ├── .env.example        #   Original-Beispielconfig
-│   ├── README.md           #   Original-README (chinesisch, API-Referenz)
-│   └── structure.md        #   Architektur-Übersicht (deutsch)
+│   └── README.md           #   Original-README (chinesisch, API-Referenz)
 ├── scripts/
 │   ├── install.sh          #   uv installieren + venv + .env (idempotent)
 │   └── start.sh             #   Proxy starten (portable Pfade, Health-Check)
@@ -71,7 +70,7 @@ cd app && uv run pytest
   eingearbeitet).
 - Guest-Mode: Upstream-Limit ~5 Nachrichten pro Guest-Token; der Pool (100 Slots)
   rotiert automatisch, bei Erschöpfung werden neue Tokens geholt.
-- Details Architektur: `app/structure.md` · Reasoning-Stufen: `docs/chatglm-reasoning-modes.md`
+- Reasoning-Stufen: `docs/chatglm-reasoning-modes.md`
 
 ## Herkunft
 

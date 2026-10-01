@@ -52,9 +52,8 @@ GLM_USE_GUEST_REFRESH_TOKEN=true
 
 Alle weiteren Config-Variablen: `.env.example` (kommentiert).
 
-## Architektur & Betrieb
+## Betrieb
 
-- Architektur/Komponenten: `structure.md` (dieses Verzeichnis).
 - Betrieb/Setup im Codespace (rebuild, Autostart, Watchdog, Bundle-Bau):
   Haupt-Doku des MAIN-Repos (`infrastructure.md`), Abschnitte „glm2api" und „Infrastruktur-Soll".
 
