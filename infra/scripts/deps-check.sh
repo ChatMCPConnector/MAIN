@@ -103,9 +103,64 @@ if [ "$audit" -eq 1 ]; then
     echo "  (Report-Modus: das ist kein Fehler, nur ein fehlender Befund)"
     exit "$fail"
   fi
-  osv_out="$(osv-scanner scan source -r . 2>&1)"
+  # `llm-proxies/antigravity-proxy/bun.lock` wird bewusst NICHT gescannt:
+  # es ist ein nie installiertes Lockfile (es gibt dort kein node_modules,
+  # kein Skript ruft bun auf, der Betrieb ist das Go-Binary) und liefert ~100
+  # Pakete Phantom-Befunde, die niemals behebbar sind. Sie auszuschliessen ist
+  # kein Verschweigen, sondern Ausschluss von Rauschen — getestet wird der
+  # builds, den es tatsaechlich gibt.
+  # Scan-Umfang: explizite Liste statt `-r .`. Zwei Gruende:
+  #   (a) nur die Lockfiles, die wir wirklich bauen — ein Verzeichnis-Scan
+  #       nimmt jede Datei mit, die jemand irgendwann mal erzeugt hat;
+  #   (b) `bun.lock` im antigravity-Verzeichnis wird NICHT gescannt: es gab dort
+  #       nie ein `node_modules`, kein Skript ruft bun auf, der Betrieb ist das
+  #       Go-Binary. Es liefert ~100 Pakete Phantom-Befunde, die niemand je
+  #       beheben kann — Rauschen, kein Signal.
+  # Damit das nicht still verrottet, prueft die Schleife darunter: JEDE
+  # committete Lockfile muss entweder in der Scan-Liste oder mit Grund in
+  # `IGNORIERT` stehen. Eine neue Lockfile, die jemand hinzufuegt, faellt
+  # sofort auf, statt unbemerkt ungeprueft zu bleiben.
+  SCAN_LIST=(
+    uv.lock
+    llm-proxies/glm2api/uv.lock
+    llm-proxies/zerokey/pnpm-lock.yaml
+    llm-proxies/antigravity-proxy/go.mod
+    llm-proxies/antigravity-proxy/package-lock.json
+    llm-proxies/antigravity-proxy/npm/package-lock.json
+    .opencode/package-lock.json
+  )
+  IGNORIERT=(
+    "llm-proxies/antigravity-proxy/bun.lock|nie installiert (kein node_modules), kein bun im Repo — Vendor-Rest"
+  )
+
+  args=()
+  for f in "${SCAN_LIST[@]}"; do
+    [ -f "$f" ] && args+=(--lockfile "$f")
+  done
+  if [ "${#args[@]}" -eq 0 ]; then
+    echo "  keine Lockfile zum Scannen gefunden"
+    exit "$fail"
+  fi
+  osv_out="$(osv-scanner scan source "${args[@]}" 2>&1)"
   osv_rc=$?
-  printf '%s\n' "$osv_out" | grep -vE '^Scanned |^Starting filesystem|^End status|^Scanning dir' | sed 's/^/  /' | tail -40
+
+  # Vollstaendigkeitspruefung: committete Lockfiles ohne Einordnung.
+  while IFS= read -r lf; do
+    listed=no
+    for s in "${SCAN_LIST[@]}"; do [ "$lf" = "$s" ] && listed=yes; done
+    if [ "$listed" = no ]; then
+      for ig in "${IGNORIERT[@]}"; do
+        [ "${lf}" = "${ig%%|*}" ] && listed=ignoriert
+      done
+    fi
+    if [ "$listed" = no ]; then
+      echo "  NEU: $lf ist weder in SCAN_LIST noch in IGNORIERT"
+      echo "       -> entweder in SCAN_LIST aufnehmen (wird mitgescannt) oder in"
+      echo "          IGNORIERT mit Grund begruenden. Sonst bleibt sie unbemerkt."
+      fail=1
+    fi
+  done < <(git ls-files | grep -E '(^|/)(uv\.lock|pnpm-lock\.yaml|package-lock\.json|bun\.lock|npm-shrinkwrap\.json)$')
+  printf '%s\n' "$osv_out" | grep -vE '^Starting filesystem|^End status|^Scanning dir' | sed 's/^/  /' | tail -40
   echo "  --- osv-scanner beendet mit $osv_rc (0 = keine Befunde) ---"
   if [ "$osv_rc" -ne 0 ] && [ "$fail" -eq 0 ]; then
     # Absichtlich KEIN fail: ein CVE ist ein Hinweis, kein Gate (PLAN 6a).
