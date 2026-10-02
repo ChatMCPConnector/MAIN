@@ -200,7 +200,10 @@ check_layer chain "freebuff-Patches sitzen"    bash -c '
   [ -f "$p" ] || { echo "FEHLT: $p"; exit 1; }
   out="$(python3 "$p" --check 2>&1)" && { echo "$out" | tail -1; exit 0; }
   printf "%s\n" "$out" | tail -3
-  echo "-> naechster Start patcht nach; haelt das an: bash ./infra/scripts/freebuff-install.sh" >&2
+  # Der Patcher gibt seinen eigenen Handweis mit (ein Ort, nicht drei). Hier nur
+  # der Zusatz, der wirklich hier steht: ein Neuinstallieren behebt Struktur-Drift
+  # nicht — der Muster-Fix ist es, und wo er steht, sagt der Patcher.
+  echo "-> Struktur-Drift: Runbook im Docstring von infra/scripts/freebuff_patch.py" >&2
   exit 1'
 check_layer chain "freebuff kein Update-Rest"  bash -c '
   d="$HOME/.config/manicode"

@@ -29,6 +29,21 @@ Alltag:
 - `llm-proxies/antigravity-proxy/` — Go (Port 9878), `mise`-Tasks, Binary wird gebaut.
 - `llm-proxies/zerokey/` — Node/Express (Port 7250), `pnpm` (eslint + Tests).
 - `infra/scripts/` — Shell-Werkzeugkasten (`save.sh`, `secrets.sh`, `keys.sh`, …).
+- `infra/scripts/freebuff_patch.py` — die **Byte-Patches** des freebuff-Binaries
+  (Mausrad-Scroll, `Entf` löscht eine Session in `/history`, Wortgrenzen,
+  halbe Scrollseite). Freebuffs Launcher ersetzt das native Binary bei jedem
+  Update ungefragt und löscht damit alle Patches; deshalb zieht der Wrapper sie
+  **bei jedem Start** nach (`--ensure`, Stamp-Vergleich: ~0,1 s im Normalfall).
+  **Kaputt? Das ist der eine Fall mit einer festen Reihenfolge:**
+  1. `python3 infra/scripts/freebuff_patch.py --check` — read-only, Exit 1 =
+     Drift; die Zeile nennt Patch **und** Grund.
+  2. Handweis + Runbook im Docstring der Datei (Abschnitt „Wenn ein Patch nicht
+     mehr passt"): erst den Byte-Kontext im Binary **belegen**, dann das Muster
+     namenunabhängig neu schreiben, `STAMP_FORMAT` hochzählen, Fixture in
+     `infra/tests/test_freebuff_patch.py` erweitern.
+  3. **Nicht** durch bloßes `freebuff-install.sh` „reparieren" — das meldet
+     dieselbe Drift erneut. Am Ende `make check` + `bash
+     ./infra/scripts/freebuff-install.sh` + einmal `freebuff` starten.
 - `.opencode/`, `.devcontainer/`, `config/` — Client-Config, Setup, Secrets.
 
 ## 2. Was als Infrastruktur-Änderung zählt

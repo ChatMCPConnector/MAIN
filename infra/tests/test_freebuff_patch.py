@@ -355,3 +355,32 @@ def test_ohne_verify_wird_nicht_gestartet(tmp_path):
     binp = _fake_binary(tmp_path, rc=1)
     results, ok = fp.patch_binary(binp, verify=False)
     assert ok and any(r.name == fp.START_CHECK and r.detail == "uebersprungen" for r in results)
+
+
+def test_drift_gibt_den_handweis_mit(tmp_path):
+    """Der Exit-Code allein sagt nichts — der Aufrufer (Wrapper, install.sh,
+    verify) muss den naechsten Schritt mitbekommen, ohne ihn selbst zu erfinden."""
+    native = tmp_path / "manicode"
+    native.mkdir()
+    binp = native / "freebuff"
+    binp.write_bytes(b"#!/bin/sh\nexit 0\nirgendwas ohne patch-stellen")
+    binp.chmod(0o755)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--native-dir", str(native), "--force"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    assert "unrecognized" in proc.stdout
+    assert "Runbook" in proc.stderr and "Docstring" in proc.stderr
+
+    # Auch --check muss den Handweis mitgeben: das ist der ERSTE Schritt, den ein
+    # Agent macht (AGENTS.md §1a), und es ist read-only — dort nachzusehen ist
+    # ausdruecklich erlaubt.
+    check = subprocess.run(
+        [sys.executable, str(SCRIPT), "--native-dir", str(native), "--check"],
+        capture_output=True,
+        text=True,
+    )
+    assert check.returncode == 1
+    assert "Runbook" in check.stderr

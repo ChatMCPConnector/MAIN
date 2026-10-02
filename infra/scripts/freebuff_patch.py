@@ -60,6 +60,29 @@ Nutzung:
     python3 infra/scripts/freebuff_patch.py --ensure   # beim Start (Wrapper)
     python3 infra/scripts/freebuff_patch.py --check    # read-only Diagnose
     python3 infra/scripts/freebuff_patch.py --force    # ohne Stamp-Vergleich
+
+Wenn ein Patch nicht mehr passt (Struktur-Drift) — die Runbook-Zeilen, die ein
+Agent braucht, stehen hier und nicht in vier anderen Dateien:
+  1. `--check` laufen lassen. Die Zeile nennt Patch **und Grund**
+     ("0 Treffer fuer word-backward", "2 Definitionsstellen (…)"): das ist die
+     Fehlermeldung, an der sich die Diagnose aufhaengt, nicht der Exit-Code.
+  2. **Nicht raten.** Erst belegen, was das neue Bundle wirklich schreibt: die
+     Muster-Variable bzw. den Handler im Binary suchen und den Byte-Kontext
+     ansehen (`grep -abo` auf `~/.config/manicode/freebuff` oder
+     `strings | grep`), **vorher** die Muster zu aendern.
+  3. Muster **namenunabhaengig** formulieren (Backreferences auf die selbst
+     gefundenen Bezeichner) und die Zahl der erwarteten Treffer pruefen: != 1
+     heisst "nicht eindeutig" -> unangetastet melden, nie raten. Neue
+     Bezeichner im generierten Code ueber `fresh_name` holen, nie hart
+     `k`/`s`/`s`.
+  4. `STAMP_FORMAT` hochzaehlen (der wird in die Stamp-Datei geschrieben) und
+     `infra/tests/test_freebuff_patch.py` erweitern: das Fixture traegt
+     **absichtlich andere Bezeichner** als das echte Bundle, genau damit fängt
+     der Test den nächsten Rename. Dann `make check` (ruff, mypy, pytest,
+     Coverage-Floor 90 %, syntax-sh, shellcheck).
+  5. `bash ./infra/scripts/freebuff-install.sh` — erzeugt den Wrapper neu und
+     patcht mit `--force`. Danach `freebuff --version` **einmal starten**: der
+     Starttest des Patchers ist der, der einen kaputten Bundle-Fang zurückholt.
 """
 from __future__ import annotations
 
@@ -552,6 +575,22 @@ def report(results: list[PatchResult], quiet: bool) -> None:
         print(line)
 
 
+def print_drift_hint() -> None:
+    """Der Handweis bei Struktur-Drift — einmal formuliert, fuer jeden Aufrufer.
+
+    `--check` ist die read-only Diagnose und damit der **erste** Schritt, den ein
+    Agent macht; der Hinweis muss dort stehen, nicht nur im schreibenden Lauf
+    (der folgt erst nach der Analyse). Ein Exit-Code allein sagt nichts.
+    """
+    print(
+        "freebuff: mindestens ein Byte-Patch passt nicht mehr (Upstream hat die "
+        "Bundle-Struktur geaendert). Das ist die Runbook-Zeile 'Wenn ein Patch nicht "
+        "mehr passt' im Docstring von infra/scripts/freebuff_patch.py — NICHT durch "
+        " blosses Neuinstallieren loesbar.",
+        file=sys.stderr,
+    )
+
+
 def drifted(results: list[PatchResult]) -> bool:
     """Mindestens ein Patch sitzt nicht — Struktur-Drift, ein Mensch muss ran.
 
@@ -593,7 +632,10 @@ def main(argv: list[str] | None = None) -> int:
             for r in results
         ]
         report(results, args.quiet)
-        return 0 if all(r.status == "already" for r in results) else 1
+        if not all(r.status == "already" for r in results):
+            print_drift_hint()
+            return 1
+        return 0
 
     if args.ensure and not args.force and stamp_matches(binary, stamp):
         if not args.quiet:
@@ -613,7 +655,10 @@ def main(argv: list[str] | None = None) -> int:
     if not ok:
         print("freebuff-Binary startet nach dem Patchen nicht — Backup zurueckgespielt", file=sys.stderr)
         return 2
-    return 1 if drifted(results) else 0
+    if drifted(results):
+        print_drift_hint()
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
