@@ -610,6 +610,50 @@ async function run(label, upstreamTurns, { expectRetry }) {
     delete session._lastToolRound
   }
 
+  // V) BEKANNT LUECKE, live gemessen am 2026-10-02 — hier bewusst als Test
+  //    festgehalten, obwohl das Verhalten falsch ist.
+  //
+  //    Zwei Laeufe derselben Unterhaltung, einmal mit der Proxy-Fehlermeldung
+  //    (`⚠ An unexpected error occurred with chatgpt…`) als vorherige Antwort,
+  //    einmal ohne. Beide lieferten einen verschenkten Turn ohne Tool-Call und
+  //    ohne Retry (`ASK-GUARD`-Treffer im Log: 0). Woertlich:
+  //
+  //      MIT_FEHLER = "Ich habe die drei Modulnamen nicht aus dem bisherigen Kontext."
+  //      KONTROLLE  = "Ich habe keinen Zugriff auf die Struktur von
+  //                    `llm-proxies/zerokey` in dieser Unterhaltung. Bitte gib mir
+  //                    die Dateiliste oder den Inhalt von `llm-proxies/zerokey`,
+  //                    dann nenne ich dir die drei Modulnamen."
+  //
+  //    Die KONTROLLE ist ein lehrbuchtauglicher no-access-Fall: ACCESS_DENY
+  //    trifft ("keinen Zugriff"), aber isNoAccessText verlangt eine Konjunktion
+  //    und beide Restbedingungen scheitern unabhaengig voneinander —
+  //    GENERAL_DENY sucht `dateien` MIT Wortgrenze und sieht "Dateiliste" nicht,
+  //    SUPPLY_OFFER verlangt einen Uebergabeweg aus einer festen Verbliste
+  //    ("kopier den Inhalt", "lade hoch") und das Modell sagte "gib mir".
+  //    MIT_FEHLER scheitert noch frueher: dort wird der Zugriff gar nicht
+  //    bestritten, also greift schon ACCESS_DENY nicht.
+  //
+  //    Diese Assertions beschreiben den IST-Zustand und muessen zusammen mit
+  //    einer Muster-Erweiterung umkippen. Sie sind kein Wunsch, sondern eine
+  //    Markierung: wer den Guard erweitert, sieht hier sofort, dass genau diese
+  //    beiden Texte betroffen waren — und dass die Erweiterung beide
+  //    Konjunktionsglieder treffen muss, nicht nur eines.
+  {
+    const { isNoAccessText } = require('../engine/ask-guard')
+    const MIT_FEHLER = 'Ich habe die drei Modulnamen nicht aus dem bisherigen Kontext.'
+    const KONTROLLE =
+      'Ich habe keinen Zugriff auf die Struktur von `llm-proxies/zerokey` in dieser ' +
+      'Unterhaltung. Bitte gib mir die Dateiliste oder den Inhalt von ' +
+      '`llm-proxies/zerokey`, dann nenne ich dir die drei Modulnamen.'
+
+    check(isNoAccessText(MIT_FEHLER) === false, 'V: MIT_FEHLER wird nicht erkannt (bekannte Luecke)')
+    check(isNoAccessText(KONTROLLE) === false, 'V: KONTROLLE wird nicht erkannt (bekannte Luecke)')
+    console.log(
+      '\nHinweis: V dokumentiert eine offene Luecke im no-access-Detektor, ' +
+        'kein erwartetes Verhalten.',
+    )
+  }
+
   if (failed) {
     console.error(`\n${failed} check(s) failed`)
     process.exit(1)
