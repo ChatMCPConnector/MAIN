@@ -80,11 +80,20 @@ source = ["infra/scripts"]
 branch = true
 
 [tool.coverage.report]
-# Der Floor ist bewusst NICHT pauschal (PLAN Stufe 3: pro Datei, nicht global).
-# `freebuff-pty.py` ist PTY + Subprozesse und ueber eine Mock-Session nur
-# teilweise sinnvoll testbar; da waere eine hohe Zahl Pseudosicherheit. Der
-# Floor fuer check-proxy-budget.py steckt in pyproject unter
-# [tool.coverage.report] per --cov-fail-under im Makefile-Target.
+# Hier KEIN Floor. Der Floor steckt in infra/coverage-floor.rc und gilt fuer
+# die Gesamtheit der eingeschlossenen Dateien (fail_under = 90 auf TOTAL).
+#
+# Ausgeschlossen (`omit` in coverage-floor.rc, nicht hier): freebuff-pty.py
+# (PTY + Subprozesse, ueber eine Mock-Session nur teilweise sinnvoll testbar —
+# eine hohe Zahl waere Pseudosicherheit) und watch-subagent.py.
+#
+# Aufgenommen sind check-proxy-budget.py, freebuff_patch.py und
+# port-drift-check.py — alle drei sind reine Text-/Zaehllogik und ehrlich
+# testbar. Der Floor ist damit eine Untergrenze fuer getestete Logik, nicht
+# eine Zahl, die man durch Weglassen von Dateien bekommt.
+#
+# `fail_under = 0` hier, damit `make cov` (Bestandsaufnahme ueber ALLE
+# infra-Skripte) nie an der Floor-Datei scheitert.
 fail_under = 0
 skip_covered = false
 show_missing = true

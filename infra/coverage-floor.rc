@@ -1,12 +1,20 @@
 # Floor-Konfiguration fuer `make cov-floor` (PLAN Stufe 3).
 #
 # Bewusst eine eigene Datei und nicht [tool.coverage.run] in pyproject.toml:
-# der Floor gilt fuer EINE Datei, waehrend `make cov` weiterhin alle drei
-# zeigt. Ohne diese Trennung waere die Gesamtzahl (heute 15 %) das Gate — und
-# eine Zahl, die man nur durch Weglassen von Dateien bekommt, ist keine.
+# `make cov` zeigt weiterhin ALLE infra-Skripte (Bestandsaufnahme), der Floor
+# gilt nur fuer die hier eingeschlossenen.
+#
+# Korrektur gegenueber der urspruenglichen Fassung: der Floor ist GLOBAL
+# (fail_under auf TOTAL), nicht pro Datei — der Kommentar hier behauptete das
+# Gegenteil, was beim ersten neuen Skript sofort auffiel (port-drift-check.py
+# mit 0 % zog die Summe von 95 % auf 77 %). Zwei Wege aus einer Senkung: den
+# Floor je Datei setzen oder die Datei weglassen. Beides waere die Zahl, die
+# man nicht durch Testen bekommt. Stattdessen: port-drift-check.py hat 22
+# Tests und liegt bei 88 %, die Summe bleibt ueber 90 %.
 [run]
 source = infra/scripts
 # `source` akzeptiert keinen Dateipfad, deshalb wird gefiltert statt eingegrenzt.
+# Nur echte Ausnahmen, beide mit Begruendung in pyproject.toml.
 omit =
     infra/scripts/freebuff-pty.py
     infra/scripts/watch-subagent.py

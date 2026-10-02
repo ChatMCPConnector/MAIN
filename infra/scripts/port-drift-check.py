@@ -78,9 +78,10 @@ def labelled_ports() -> dict[int, str]:
     return out
 
 
-def devcontainer_ports() -> set[int]:
+def devcontainer_ports(path: Path | None = None) -> set[int]:
+    """Ports aus devcontainer.json — beide erlaubten Formen."""
     try:
-        data = json.loads(DEVCONTAINER.read_text(encoding="utf-8"))
+        data = json.loads((path or DEVCONTAINER).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return set()
     ports: set[int] = set()
@@ -92,11 +93,12 @@ def devcontainer_ports() -> set[int]:
     return ports
 
 
-def bound_ports() -> dict[int, list[str]]:
+def bound_ports(root: Path | None = None, scripts: list[str] | None = None) -> dict[int, list[str]]:
     """Welche Ports werden von welchem Skript gebunden."""
+    base = root or REPO
     out: dict[int, list[str]] = {}
-    for rel in BINDING_SCRIPTS:
-        path = REPO / rel
+    for rel in scripts if scripts is not None else BINDING_SCRIPTS:
+        path = base / rel
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")
@@ -115,8 +117,9 @@ def bound_ports() -> dict[int, list[str]]:
     return out
 
 
-def main() -> int:
-    quiet = "--quiet" in sys.argv
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    quiet = "--quiet" in argv
     labels = labelled_ports()
     if not labels:
         print("FEHLER: keine Port-Labels in ports.sh gefunden — Parser oder Datei kaputt.")
@@ -133,10 +136,11 @@ def main() -> int:
                 f"hat aber kein Label in ports.sh"
             )
 
-    # 2. Devcontainer-Ports ohne Label. Ausgenommen: die, die VS-Code selbst
-    #    braucht (6082 noVNC, 5920 x11vnc — beide haben Labels, aber die
-    #    Absicht ist: jedes weitergeleitete Port soll benennbar sein).
-    for port in sorted(devcontainer_ports() - set(labels)):
+    # 2. Devcontainer-Ports ohne Label. Bewusst ohne Ausnahme: jedes
+    #    weitergeleitete Port soll benennbar sein, sonst steht in der
+    #    Port-Liste „sonstiger Prozess" fuer etwas, das jemand freigelegt hat.
+    dc = devcontainer_ports()
+    for port in sorted(dc - set(labels)):
         problems.append(f"Port {port} wird in devcontainer.json weitergeleitet, hat aber kein Label in ports.sh")
 
     if quiet:
@@ -144,7 +148,7 @@ def main() -> int:
 
     print(f"port-drift-check: {len(labels)} Labels in ports.sh")
     print(f"  gebunden:  {', '.join(str(p) for p in sorted(bound)) or '(keine)'}")
-    print(f"  Devcontainer: {', '.join(str(p) for p in sorted(devcontainer_ports())) or '(keine)'}")
+    print(f"  Devcontainer: {', '.join(str(p) for p in sorted(dc)) or '(keine)'}")
     if problems:
         print("")
         for p in problems:
