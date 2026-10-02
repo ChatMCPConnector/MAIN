@@ -15,14 +15,19 @@ damit im selben Zustand wie bei opencode mit `mouse: false`.
 **Pfeiltasten und Mausrad:**
 Das Mausrad kommt im Terminal (wenn Maus-Reporting aus ist) als Up/Down-Pfeile
 an (`ESC[A`/`ESC[B`). In freebuff wird dieser Tastenbefehl bei leerem Prompt
-durch den Patch in `freebuff-install.sh` (`patch_arrow_scroll`) direkt im Binary
-auf `onScrollUp` / `onScrollDown` umgeleitet (wie in opencode:
+durch den Patch `patch_arrow_scroll` in `infra/scripts/freebuff_patch.py`
+direkt im Binary auf `onScrollUp` / `onScrollDown` umgeleitet (wie in opencode:
 `messages_half_page_up: up`).
+
+Dieser Filter fasst Pfeiltasten deshalb per Default **gar nicht** an: sie gehen
+100% nativ mit 0 ms Latenz an das Kind durch, und der Wheel-Umhang sitzt im
+Binary-Patch. Genau dieser Patch wird bei **jedem Start** von freebuff
+verifiziert und notfalls neu gesetzt (`freebuff_patch.py --ensure` aus dem
+Wrapper) — weil der npm-Launcher das native Binary bei jedem Update ersetzt und
+es damit mitloescht. Details und Bedienung: `freebuff_patch.py`.
 
 Menues (`/history`, Slash-Menue `/...`, Model-Picker) fangen die Pfeiltasten
 vor dieser Aktion ab und bleiben damit **vollstaendig nativ bedienbar**.
-Der Filter muss Pfeile daher per Default **gar nicht mehr anfassen**:
-sie gehen 100% nativ mit 0 ms Latenz an das Kind durch.
 
 **Wort-Navigation und Wort-Loeschung:**
 Freebuff (opentui) unterstuetzt intern Alt/Option+Links/Rechts (word-backward/forward)

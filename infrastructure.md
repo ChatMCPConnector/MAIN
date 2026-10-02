@@ -370,22 +370,26 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   serverseitig unbestätigt.
 
 - **Freebuff CLI** (werbefinanzierter, kostenloser Coding-Agent von CodebuffAI),
-  Version **0.0.204 gepinnt** in `infra/scripts/freebuff-install.sh`, automatisch
-  via setup.sh — **nach** dem Secrets-Schritt, weil der Login aus dem Bundle
-  kommt. Modell **bewusst wie opencode**: das Repo *verwaltet* die Installation,
-  die Dateien liegen ephemer in `$HOME/.local/share/freebuff`, der Einstiegspunkt
-  ist der Wrapper `~/.local/bin/freebuff` (PATH via `aliases.sh`). **Nichts unter
-  `/workspaces`** — ein früherer Zwischenstand hatte das native Binary zwischen
-  `/workspaces/freebuff/bin/` und `$HOME` hin- und herkopiert; der ist verworfen.
-  - **Zwei Ebenen, die man unterscheiden muss:** die npm-Pin (Launcher, hier
-    gepinnt) und das **native Binary, das der Launcher selbst nachlädt** — es
-    zieht immer das *neueste* veröffentlichte Binary (live belegt: npm-Pin
-    0.0.203, Launcher zog 0.0.204 und schrieb `.freebuff-0.0.204-*.tar.gz.part`
-    nach `$HOME`). Die Pin ist damit für den Launcher belastbar, für das Binary
-    nicht — ein Upstream-Release kommt mit dem nächsten Codespace-Build durch.
-    Deshalb: `FREEBUFF_VERSION` im Skript an `npm view freebuff version`
-    angleichen, und die `.part`-/`.freebuff-download-temp-*`-Reste aufräumen
-    (fressen sonst bei jedem Start Platte).
+  **keine Versions-Pin** (Nutzerentscheidung 2026-09-27: `freebuff@latest`, weil
+  der Pin ohnehin nichts brachte — der Launcher lädt das native Binary selbst
+  nach), automatisch via setup.sh — **nach** dem Secrets-Schritt, weil der Login
+  aus dem Bundle kommt. Modell **bewusst wie opencode**: das Repo *verwaltet* die
+  Installation, die Dateien liegen ephemer in `$HOME/.local/share/freebuff`, der
+  Einstiegspunkt ist der Wrapper `~/.local/bin/freebuff` (PATH via `aliases.sh`).
+  **Nichts unter `/workspaces`** — ein früherer Zwischenstand hatte das native
+  Binary zwischen `/workspaces/freebuff/bin/` und `$HOME` hin- und herkopiert;
+  der ist verworfen.
+  - **Zwei Ebenen, die man unterscheiden muss:** die npm-Seite (Launcher, ohne
+    Pin) und das **native Binary, das der Launcher selbst nachlädt** — es zieht
+    immer das *neueste* veröffentlichte Binary (live belegt: npm-Pin 0.0.203,
+    Launcher zog 0.0.204 und schrieb `.freebuff-0.0.204-*.tar.gz.part` nach
+    `$HOME`). Das heißt: **jedes Update ersetzt ungefragt `~/.config/manicode/
+    freebuff`** — und die vier Byte-Patches (siehe „Byte-Patches") liegen als
+    Bytes in genau dieser Datei. Sie sind deshalb nicht mehr Sache des
+    Codespace-Builds allein, sondern werden **bei jedem Start** nachgezogen
+    (`freebuff_patch.py --ensure` aus dem Wrapper). Die `.part`-/
+    `.freebuff-download-temp-*`-Reste räumt dasselbe Skript auf (live am
+    2026-10-02: drei Reste mit je 133 MB).
   - **Binary-Pfad ist im Launcher hart verdrahtet:** `~/.config/manicode/freebuff`
     (`launcher.js`: `path.join(os.homedir(), '.config', 'manicode')`). Das native
     Binary kennt zusätzlich `FREEBUFF_CONFIG_DIR` — **nicht** setzen: der Launcher
@@ -709,32 +713,63 @@ Opencode besitzt eine eigene Keybinding-Konfiguration (`.opencode/tui.json`):
 Freebuff besitzt keine Keybinding-Konfigurationsdatei. Deshalb wird die Trennung
 über zwei abgestimmte Mechanismen erreicht:
 
-1. **Vendor-Binary-Patch (`patch_arrow_scroll` in `infra/scripts/freebuff-install.sh`):**
-   Im kompilierten Bundle von `~/.config/manicode/freebuff` leitet ein atomarer 90-Byte-Patch
+**Alle Byte-Patches liegen in `infra/scripts/freebuff_patch.py`** (nicht mehr in
+`freebuff-install.sh` — das Skript installiert nur noch und ruft den Patcher
+auf). Vier Patches, alle **längengleich** (das Bundle hängt an Fixed Offsets im
+ELF), alle mit **Mustersuche statt Namenssuche** und alle mit der Regel
+`!= 1 Treffer → unangetastet melden, nie raten`:
+
+1. **Scroll-Schrittweite (`patch_scroll_step`):** freebuff springt hartcodiert
+   80 % des Viewports pro `scroll-up` (`Math.floor(X*VAR)` mit `VAR=0.8` neben
+   `viewport.height`; der Variablenname ist von `fOA` über `$hA` bis `jzA`
+   umbenannt worden — deshalb Mustersuche). Gepatcht auf **0,5**, also eine halbe
+   Seite wie opencode (`messages_half_page_up: up`).
+
+2. **Mausrad = Scroll (`patch_arrow_scroll`):**
+   Im kompilierten Bundle von `~/.config/manicode/freebuff` leitet ein 90-Byte-Patch
    `case "history-up"` und `case "history-down"` im Action-Dispatcher direkt auf `onScrollUp()`
-   und `onScrollDown()` um.
+   und `onScrollDown()` um — ohne Maus-Reporting ist das Mausrad dasselbe Byte wie die
+   Pfeiltaste, also ist dieser Patch das, was das Rad überhaupt scrollen lässt.
    *Sicherheitsnetz:* Falls ein nativer Pfeil bei leerem Prompt durchrutscht, scrollt er
    die Unterhaltung statt die Prompt-Historie zu verändern.
 
-2. **Vendor-Binary-Patch für saubere Wort-/Zeilengrenzen (`patch_word_boundary` in `infra/scripts/freebuff-install.sh`):**
-   In Freebuffs Wortbewegungsfunktionen `LGA` (Word Backward) und `_GA` (Word Forward) fraß
-   die originale Schleife (`while($>0&&/\s/.test(H[$-1]))$--;while($>0&&!/\s/.test(H[$-1]))$--;`)
+3. **Saubere Wort-/Zeilengrenzen (`patch_word_boundary`):**
+   In Freebuffs Wortbewegungsfunktionen (0.0.204 hießen sie `LGA`/`_GA`, in 0.2.12
+   `iKA`/`yKA` — **der Minifier benennt um**, deshalb greift der Patch über die
+   gefundenen Bezeichner) fraß die originale Schleife
+   (`while($>0&&/\s/.test(H[$-1]))$--;while($>0&&!/\s/.test(H[$-1]))$--;`)
    Leerzeilen und das vorherige Wort in einem einzigen Schritt mit, sodass der Cursor über Zeilen hinweg
    immer sofort am Zeilenanfang landete und `Strg+Backspace` die Zeile darüber mitlöschte.
-   Der atomare 276-Byte-Patch trennt Whitespace- und Wortschritte sauber (`s = $>0 && /\s/.test(...)`):
+   Der Patch trennt Whitespace- und Wortschritte sauber (`s = $>0 && /\s/.test(...)`):
    Steht der Cursor nach Zeilenumbrüchen am Zeilenanfang (`|Hey`), springt `Strg+Links` bzw. löscht
    `Strg+Backspace` präzise bis zum Zeilenende der vorigen Zeile (`Hey|`), statt das Wort mitzureißen.
 
-3. **Vendor-Binary-Patch für Session-Löschung in `/history` (`patch_history_delete` in `infra/scripts/freebuff-install.sh`):**
+4. **Session-Löschung in `/history` (`patch_history_delete`):**
    Freebuff implementiert das Löschen von Chats in `/history` ausschließlich per Mausklick auf `[×]` (`onClick: () => f(X, v)`),
    bietet jedoch kein Tastaturkürzel im UI an (`onKeyIntercept` leitete nur Up/Down/Right/Enter/Esc/Ctrl+C ab).
    Weil das Mouse-Reporting für das benutzerdefinierte Setup (Mausrad-Scrollen, native Terminal-Auswahl, Copy/Paste)
    im PTY-Filter bewusst deaktiviert ist, empfing die App keine Mausklicks und Sessions waren unlöschbar.
    Der atomare Patch erweitert `onKeyIntercept` um `Delete` (`Entf`), `Ctrl+D` und `Ctrl+X` auf der fokussierten Session
    (`s = F[R]`), ruft die native Löschaktion `l(s)` auf und aktualisiert die Statuszeile längengleich
-   (`Click [×] to remove` -> `Del / Ctrl+D to remove`).
+   (`Click [×] to remove` -> `Del / Ctrl+D to remove`; **optional** — der Text fehlt in
+   0.2.12, der Patch selbst sitzt trotzdem).
 
-4. **PTY-Filter (`infra/scripts/freebuff-pty.py`):**
+5. **Update-Festigkeit (`--ensure` aus dem Wrapper, Stamp-Datei):**
+   Weil der Launcher das Binary jederzeit ersetzt, prüft der Wrapper **bei jedem
+   Start** `freebuff_patch.py --ensure`: eine Stamp-Datei (Größe + mtime +
+   Formatversion) gegen das Binary, patchen nur bei Änderung. Normalfall **ein
+   `stat()` (~0,09 s)**, nach einem Update einmalig ein Durchlauf über 136 MB
+   (**2,4 s** live gemessen, inkl. Schreiben und Starttest `freebuff --version`).
+   Passt ein Muster nicht mehr (Struktur-Drift), startet freebuff trotzdem und
+   meldet es: Exit 1, Zustand in `~/.config/manicode/freebuff-patch.status`.
+   **`--check` schreibt nichts** und ist der read-only Verifier in
+   `verify-codespace.sh` („freebuff-Patches sitzen").** Tests:
+   `infra/tests/test_freebuff_patch.py` (21 Fälle) pinnen die Update-Festigkeit —
+   das Fixture trägt **absichtlich andere Bezeichner** als das echte Bundle, ein
+   Test prüft die Idempotenz (das hätte den Footer-Text-Bug gefangen) und einer,
+   dass generierte Bezeichner keine belegten Namen kollidieren.
+
+6. **PTY-Filter (`infra/scripts/freebuff-pty.py`):**
    * **Im Chat-Fenster (1:1 Replikation von PageUp/PageDown):**
      Egal ob der Prompt leer ist oder Text darin getippt wird: Auf-/Ab-Pfeile werden
      **immer und sofort zu `PageUp` (`\x1b[5~`) und `PageDown` (`\x1b[6~`)**.
@@ -1027,6 +1062,8 @@ Proxy bei jedem Start automatisch hoch.
     * **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):** Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2 springt). Der Fragenmodus schließt erst, wenn Freebuff `Your answer:` / `Your answers:` ausgibt oder der Nutzer Esc / Strg+C drückt.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
+
+- 2026-10-02 (22): **Freebuff war zurueckgesetzt — und die Ursache war kein Fehler, sondern ein Auto-Update. Jetzt ist die Reparatur update-fest, nicht nur einmalig.** Nutzerbefund: „sind die einstellungen fuer freebuff zurueckgesetzt worden?mausrad scrollen, pfeiltasten, mit entf eine session aus history schliessen". **Befund am laufenden Binary (`~/.config/manicode/freebuff`, v0.2.11 vom1.10.):** alle vier Byte-Patches **weg** — `scroll_step` wieder `jzA=0.8` statt 0.5, `history-up/down` wieder `onHistoryUp/Down` statt `onScrollUp/Down`, kein `k==="delete"` und kein `Del / Ctrl+D to remove`. Der pty-Filter lief tadellos (2 Sessions, Key-Log aktiv); er leitet Pfeile aber per Design **100% nativ** durch — das Wheel-Mapping stand ausschliesslich im Binary-Patch. **Ursache:** der npm-Launcher zieht das native Binary selbst nach (`deferUpdatesUntilExit`) und legt es ungefragt ueber das gepatchte; **jedes Update loescht alle vier Patches.** Bisher half nur der naechste Codespace-Build (`setup.sh` -> `freebuff-install.sh`), also Wartezeit bis zum naechsten Morgen. Nebenbefund: **drei `.freebuff-download-temp-*` mit je 133 MB** vom selben Tag — der dokumentierte Update-Abbruch, unaufgeraeumt. **(a) Sofort wiederhergestellt:** `freebuff-install.sh` gepatcht (Schrittweite, Pfeil-Scroll, Entf in `/history`), danach beim Installationslauf zog der Launcher **0.2.12** nach. **`patch_word_boundary` war dabei schon tot** — „0 Treffer fuer Muster": der Minifier hatte `LGA`/`_GA` in **`iKA`/`yKA`** umbenannt, der Patch hing an festen Namen. **(b) Neu `infra/scripts/freebuff_patch.py`** — die 250 Zeilen Python-Heredocs aus `freebuff-install.sh` raus, **an einer Stelle** (Anti-Drift), mit vier Dingen, die es vorher nicht gab: **Muster statt Namen** (alle vier Patches finden ihre Bezeichner per Backreference selbst; der Wortgrenzen-Patch greift auf 0.2.12 wieder), **strukturelle Eigen-Erkennung** statt Nebentext, **freie Bezeichner** fuer generierten Code (kein `let k=` gegen einen belegten `k`), und **`fresh_name`-Test** dazu. **(c) Der eigentliche Auftrag — „updates sollen die aenderungen nicht brechen":** der Patcher laeuft jetzt **bei jedem Start** aus dem Wrapper (`--ensure`), nicht nur beim Build. Stamp-Datei (Groesse + mtime + Formatversion) gegen das Binary: Normalfall **ein `stat()`, live 0,09 s**; nach einem Update einmalig ein Durchlauf ueber 136 MB, **live 2,4 s** inkl. Schreiben und Starttest. Update-Festigkeit ist damit **gemessen, nicht behauptet**: an einer Kopie des echten 0.2.12-Binaries den Pfeil-Patch zurueckgedreht (so sieht ein Auto-Update aus) -> `--check` meldet `arrow_scroll=missing` (Exit 1) -> `--ensure` setzt ihn -> `--check` gruen. Passt ein Muster kuenftig nicht mehr (Struktur-Drift), startet freebuff **trotzdem** und meldet es (Exit 1 + `~/.config/manicode/freebuff-patch.status`). **(d) Nebenbei mitgenommen:** Cleanup der Download-Reste **mit Altersschutz** (nur aelter als 30 min — ein laufender Download einer zweiten Session darf nicht weggeraeumt werden), read-only `--check` als Verifier, `bash -n` auf dem erzeugten Wrapper (fing sofort einen echten Fehler: ein Backtick-Kommentar im unquotierten Heredoc wurde als Command-Substitution ausgefuehrt, `--ensure: command not found`, und die Kommentarzeile leise zerstört), zwei Checks in `verify-codespace.sh` (Abschnitt 4b), 21 Tests in `infra/tests/test_freebuff_patch.py` mit einem Fixture, dessen Bezeichner **absichtlich andere** sind als im echten Bundle — ein Test mit echten Namen wuerde den naechsten Rename nicht fangen. Coverage der neuen Datei **96 %** (Floor 90 %). **Verifiziert:** `--check` gegen das echte 0.2.12 **4/4 already (Exit 0)**, Update-Simulation wie oben, `make check` gruen, `verify-codespace.sh` frei (Abschnitt 4b PASS/PASS). **Zurueck:** `python3 infra/scripts/freebuff_patch.py --check` (read-only Diagnose), `cp ~/.config/manicode/freebuff.orig ~/.config/manicode/freebuff` (Backup einspielen; Achtung: das Backup ist ein **altes** 0.0.x-Stand).
 
 - 2026-10-02 (21): **Der Watchdog aus (16) saß eine Ebene zu tief — der Hänger von heute war die Wartezeit auf die Response-Header, nicht der Stream.** Live-Befund: Session `ses_f065ef3a0ffeS6UDefk6Wpvh7n` (Slug `brave-nebula`, Titel „Analyse kompletter MAIN-Pfad-Struktur“, 00:41:16) hatte **eine** User- und **eine** Assistant-Message, `tokens_in=0 tokens_out=0`, und produzierte seit 21 Minuten kein einziges Token. Die Stream-Retry-Kette lief 22:41:16 → 22:46:40 (**323 s**) → 22:51:56 (**316 s**) → 22:57:21 (**324 s**): ~300-s-Timer plus Overhead, in Schleife. **Messung am lebenden Prozess statt Vermutung:** `grep -ac stalled` im Proxy-Log = **0**, die TCP-Verbindung zu ChatGPT stand `ESTAB` mit `bytes_sent: 131225` — der komplette Request-Body war raus —, `bytes_received` blieb über Sekunden **unverändert**, `rtt 2.8 ms`. opencode registriert das nicht als Fehler und macht blind weiter. **Die Schlussfolgerung, die sich daraus zwingend ergibt:** der Hänger sitzt **vor** `readSSE`. `nodeFetch` in `_fetch` wartet auf die **Response-Header**, und bis die kommen, gibt es keinen Stream, keinen Chunk und damit nichts, was der (16)-Watchdog sehen könnte. Betroffen sind die drei `_fetch`-Kopien: `providers/chatgpt/api.js:569`, `providers/base/BaseAPI.js:54`, `providers/qwen/api.js:385` (alle mit `timeoutMs = 300_000`, dazu `https.Agent timeout: 300000`).
   **Behoben mit derselben Logik, eine Ebene tiefer:** neu `utils/fetch-guard.js` (`fetchWithHeaderWatchdog({start,url,label,hardTimeoutMs,stallTimeoutMs,jsonError})`) plus `CONFIG.HEADER_IDLE_TIMEOUT_MS` (Default `90000`, Env `ZEROKEY_HEADER_TIMEOUT_MS`, `0` = aus). Der Stall-Timer bricht den Request ab und wirft `upstream_stall` (504) — **mit Log-Zeile**, weil `grep -ac stalled = 0` genau das war, was die Diagnose hier teuer gemacht hat. Da `_fetch` dreimal existierte, liegt die Logik jetzt **einmal** in der Util; die Provider liefern nur noch `start(signal)`, Fehlerformat und JSON-Parse bleiben, wo sie waren.

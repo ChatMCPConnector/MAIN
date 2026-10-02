@@ -181,6 +181,26 @@ else
   info "Quoten" "$(bash "$REPO_ROOT/infra/scripts/quota.sh" 2>/dev/null | grep -E 'Gemini|Claude' | tr -s ' ' | tr '\n' '|' | cut -c1-90)"
 fi
 
+echo "== 4b. freebuff =="
+# Das native Binary liegt ephemer in $HOME und wird vom npm-Launcher bei jedem
+# Update ungefragt ersetzt — die vier Byte-Patches (Mausrad, Pfeil-Scroll,
+# Wortgrenzen, Entf in /history) liegen darin. Ein Update loescht sie alle, und
+# der Nutzer merkt es an der Bedienung, nicht an einer Meldung. Deshalb patcht
+# der Wrapper bei jedem Start nach; dieser Check sagt, ob das gerade noetig
+# waere. `--check` schreibt nichts (kein Verify darf schreiben).
+check_layer chain "freebuff-Patches sitzen"    bash -c '
+  p="$REPO_ROOT/infra/scripts/freebuff_patch.py"
+  [ -f "$p" ] || { echo "FEHLT: $p"; exit 1; }
+  out="$(python3 "$p" --check 2>&1)" && { echo "$out" | tail -1; exit 0; }
+  printf "%s\n" "$out" | tail -3
+  echo "-> naechster Start patcht nach; haelt das an: bash ./infra/scripts/freebuff-install.sh" >&2
+  exit 1'
+check_layer chain "freebuff kein Update-Rest"  bash -c '
+  d="$HOME/.config/manicode"
+  n="$(find "$d" -maxdepth 1 \( -name ".freebuff-download-temp-*" -o -name ".freebuff-*.tar.gz.part" \) 2>/dev/null | wc -l | tr -d " ")"
+  [ "$n" = "0" ] && { echo "keine Download-Reste"; exit 0; }
+  echo "$n Reste (Start raeumt alte auf)"; exit 1'
+
 echo "== 5. Daemons =="
 # Kein autosave-daemon-Check mehr (Nutzerentscheidung 2026-09-27)
 check_layer chain "config-watchdog"          bash -c 'pgrep -f "config-watchdog.sh" >/dev/null && echo "laeuft"'
