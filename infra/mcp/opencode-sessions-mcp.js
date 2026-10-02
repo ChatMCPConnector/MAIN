@@ -20,7 +20,17 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
+
+/**
+ * Diagnose nach stderr. Ein MCP-Server hat keinen Log-Kanal: was auf stdout
+ * geht, ist JSON-RPC. Fehler gingen bisher nur als `error.message` an den
+ * Aufrufer — im opencode-Log landete davon nichts, also war ein Fehler hier
+ * nicht von einem Fehler im aufrufenden Tool zu unterscheiden.
+ */
+function logErr(msg) {
+  try { process.stderr.write(`[opencode-sessions-mcp] ${msg}\n`); } catch { /* ignore */ }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,14 +63,21 @@ function bind(sqlText, params) {
 function sql(sqlText, ...params) {
   const flat = params.flat(Infinity);
   const query = bind(sqlText, [...flat]);
+  // -bail: ohne das laeuft die sqlite3-CLI nach dem ersten SQL-Fehler weiter und
+  // fuehrt den Rest des Batches trotzdem aus — bei einer Transaktion also
+  // COMMIT nach einem fehlgeschlagenen DELETE. Gemessen (2026-10-02): alle
+  // DELETEs liefen durch, Exit war 1. Das Ergebnis war vollstaendig, aber der
+  // Aufrufer bekam einen Fehler fuer eine Aktion, die stattgefunden hat.
   const res = spawnSync(
     "sqlite3",
-    ["-json", "-batch", DB],
+    ["-json", "-batch", "-bail", DB],
     { input: query, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 120000 },
   );
   if (res.error) throw new Error(`sqlite3 nicht aufrufbar: ${res.error.message}`);
   if (res.status !== 0) {
-    throw new Error(`sqlite3 Fehler: ${(res.stderr || "").trim() || "unbekannt"}`);
+    const detail = (res.stderr || "").trim() || "unbekannt";
+    logErr(`sql (${sqlText.slice(0, 120).replace(/\s+/g, " ")}…) -> ${detail}`);
+    throw new Error(`sqlite3 Fehler: ${detail}`);
   }
   const out = (res.stdout || "").trim();
   if (!out) return [];
@@ -75,11 +92,17 @@ function sql(sqlText, ...params) {
 }
 
 function sqlRun(sqlText) {
-  const res = spawnSync("sqlite3", ["-batch", DB], {
+  // -bail aus demselben Grund wie in sql(): die Loesch-Kaskade ist eine
+  // Transaktion, die entweder ganz oder gar nicht stattfinden soll.
+  const res = spawnSync("sqlite3", ["-batch", "-bail", DB], {
     input: sqlText, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 120000,
   });
   if (res.error) throw new Error(`sqlite3 nicht aufrufbar: ${res.error.message}`);
-  if (res.status !== 0) throw new Error(`sqlite3 Fehler: ${(res.stderr || "").trim()}`);
+  if (res.status !== 0) {
+    const detail = (res.stderr || "").trim() || `unbekannt (exit ${res.status})`;
+    logErr(`sqlRun (${sqlText.slice(0, 120).replace(/\s+/g, " ")}…) -> ${detail}`);
+    throw new Error(`sqlite3 Fehler: ${detail}`);
+  }
   return (res.stdout || "").trim();
 }
 
@@ -95,14 +118,36 @@ function ensureDb() {
 // --- Kill-Schutz: welche Sessions gehören zu laufenden opencode-Prozessen? ---
 
 function activeOpencodePids() {
-  // Läuft unter Linux via /proc — kein ps-parsing
+  // Läuft unter Linux via /proc — kein ps-parsing.
+  //
+  // Der Filter darf NICHT `cmdline.includes("opencode")` sein. Gemessen am
+  // 2026-10-02 traf das sieben Prozesse, von denen nur zwei opencode waren:
+  //   - diesen MCP-Server selbst (cmdline enthält den Pfad …/opencode-sessions-mcp.js)
+  //   - pyright und bash-language-server (unter ~/.cache/opencode/packages/…)
+  //   - die eigene bash-Zeile, in der der Suchbefehl stand
+  // Jeder Falschtreffer Schutzbereich-Mitglied, also Dauer-Skip bei
+  // delete_sessions und eine falsche Zahl in db_stats. Stattdessen: das
+  // ausführbare Argument muss auf `opencode` enden (die echten Pfade sind
+  // …/opencode/bin/opencode-bin serve|attach), Selbst und Vorfahren fallen weg.
   const pids = [];
+  const selfPid = process.pid;
   try {
     for (const entry of fs.readdirSync("/proc")) {
       if (!/^\d+$/.test(entry)) continue;
+      const pid = Number(entry);
+      if (pid === selfPid) continue;
       let cmdline = "";
       try { cmdline = fs.readFileSync(`/proc/${entry}/cmdline`, "utf8"); } catch { continue; }
-      if (cmdline.includes("opencode")) pids.push(Number(entry));
+      // NUL-getrennte argv: [0] ist das Executable, der Rest die Argumente.
+      const argv = cmdline.split("\0").filter(Boolean);
+      if (argv.length === 0) continue;
+      const exe = path.basename(argv[0]);
+      // auch das Argument-Feld pruefen (opencode wird als `opencode-bin` gerufen)
+      const isOpencode = /^opencode(-bin)?$/.test(exe) || argv.slice(1).some((a) => /^opencode(-bin)?$/.test(path.basename(a)));
+      if (!isOpencode) continue;
+      // Vorfahren aus: ein Wrapper, der opencode startet, ist nicht die Session
+      if (ancestorOfSelf(pid)) continue;
+      pids.push(pid);
     }
   } catch {
     /* non-linux: ignore */
@@ -110,7 +155,30 @@ function activeOpencodePids() {
   if (process.env.OPENCODE_PID && /^\d+$/.test(process.env.OPENCODE_PID)) {
     pids.push(Number(process.env.OPENCODE_PID));
   }
-  return pids;
+  return [...new Set(pids)];
+}
+
+/** true, wenn `pid` in der /proc-Kette von diesem Prozess auftaucht. */
+function ancestorOfSelf(pid) {
+  let cur = selfPid();
+  for (let i = 0; i < 20 && cur > 1; i++) {
+    if (cur === pid) return true;
+    let ppid = null;
+    try {
+      const status = fs.readFileSync(`/proc/${cur}/status`, "utf8");
+      const m = status.match(/^PPid:\s+(\d+)/m);
+      if (m) ppid = Number(m[1]);
+    } catch { return false; }
+    if (!ppid || ppid === cur) return false;
+    cur = ppid;
+  }
+  return false;
+}
+
+let _selfPid = null;
+function selfPid() {
+  if (_selfPid === null) _selfPid = process.pid;
+  return _selfPid;
 }
 
 /** Map: pid -> { sessionId, cwd, startedAt } für laufende opencode-Prozesse. */
@@ -555,10 +623,12 @@ function handleLine(line) {
     const result = handler(params || {});
     if (id !== undefined) send({ jsonrpc: "2.0", id, result });
   } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    logErr(`${method}${id !== undefined ? `#${id}` : ""}: ${msg}`);
     if (id !== undefined) {
       send({
         jsonrpc: "2.0", id,
-        error: { code: -32000, message: err.message || String(err) },
+        error: { code: -32000, message: msg },
       });
     }
   }

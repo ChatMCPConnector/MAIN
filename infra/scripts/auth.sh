@@ -29,8 +29,14 @@ repo_slug() {
 # noreply ist der Default, weil MAIN öffentlich ist und eine echte Mailadresse sonst
 # in der Historie landet. Ohne Netz/API bleibt die bestehende Konfiguration unberührt.
 gh_user_json() {
-  curl -fsS --max-time 15 -H "Authorization: Bearer $1" \
-    -H "Accept: application/vnd.github+json" https://api.github.com/user 2>/dev/null || true
+  # `-H @-` laesst curl die Header von stdin lesen statt sie ins argv zu
+  # schreiben. Sonst steht der PAT sekundenlang in `ps aux` — sichtbar fuer
+  # jeden Prozess im Codespace und fuer jede Remote, die den Prozess sieht.
+  curl -fsS --max-time 15 -H @- \
+    https://api.github.com/user 2>/dev/null <<EOF || true
+Authorization: Bearer $1
+Accept: application/vnd.github+json
+EOF
 }
 
 token_resolves() {

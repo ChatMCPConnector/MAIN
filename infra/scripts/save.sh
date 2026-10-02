@@ -29,10 +29,21 @@ fi
 slug="$(git remote get-url origin 2>/dev/null | sed -E 's#.*github\.com[:/]([^/]+/[^/]+)(\.git)?#\1#; s/\.git$//')"
 push_cmd() {
   if GIT_TERMINAL_PROMPT=0 git push origin main 2>/dev/null; then return 0; fi
-  # Fallback: direkter Push per Token-URL (wenn Codespaces-Helper keinen Token hat)
+  # Fallback: direkter Push mit dem PAT (wenn der Codespaces-Helper keinen Token
+  # hat). Der Token kommt per http.extraHeader in die *Umgebung*, nicht in die
+  # URL: eine URL mit `x-access-token:<PAT>@` steht für jeden Prozess im
+  # Codespace in `ps aux`. Die Umgebung sieht nur der Owner ueber /proc.
+  # basic-auth statt Bearer, weil GitHub extraHeader nicht als Bearer akzeptiert
+  # (gemessen: Bearer -> "invalid credentials", Basic -> 403 wie die Token-URL).
   if [ -f "$TOKEN_FILE" ]; then
-    local tok; tok="$(cat "$TOKEN_FILE")"
-    GIT_TERMINAL_PROMPT=0 git push "https://x-access-token:${tok}@github.com/${slug}.git" main 2>/dev/null
+    local tok b64
+    tok="$(cat "$TOKEN_FILE")"
+    b64="$(printf 'x-access-token:%s' "$tok" | base64 -w0)"
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="http.https://github.com/.extraHeader" \
+    GIT_CONFIG_VALUE_0="Authorization: Basic $b64" \
+      git push "https://github.com/${slug}.git" main 2>/dev/null
     return $?
   fi
   return 1

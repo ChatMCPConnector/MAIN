@@ -13,19 +13,25 @@ TOKEN="$(jq -r .access_token "$CREDS_FILE")"
 UA="antigravity/cli/1.1.13 (aidev_client; os_type=linux; arch=amd64; cl=964361259; auth_method=consumer)"
 
 # Primär: retrieveUserQuotaSummary (liefert 5h-Sprint UND Wochen-Limit getrennt)
+# `-H @-`: Header kommen von stdin, nicht aus dem argv — sonst steht der
+# Google-Token im `ps aux` jedes Codespaces (siehe auth.sh:gh_user_json).
 RESPONSE="$(curl -s -X POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -H "User-Agent: $UA" \
-  -d '{"project": "aicode-consumers"}' 2>/dev/null || true)"
+  -d '{"project": "aicode-consumers"}' -H @- 2>/dev/null <<EOF || true
+Authorization: Bearer $TOKEN
+Content-Type: application/json
+User-Agent: $UA
+EOF
+)"
 
 # Fallback auf fetchAvailableModels falls retrieveUserQuotaSummary nicht antwortet
 if ! echo "$RESPONSE" | jq -e '.groups' >/dev/null 2>&1; then
   RESPONSE="$(curl -s -X POST https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "Content-Type: application/json" \
-    -H "User-Agent: $UA" \
-    -d '{"project": "aicode-consumers"}' 2>/dev/null || true)"
+    -d '{"project": "aicode-consumers"}' -H @- 2>/dev/null <<EOF || true
+Authorization: Bearer $TOKEN
+Content-Type: application/json
+User-Agent: $UA
+EOF
+)"
 fi
 
 if ! echo "$RESPONSE" | jq -e '(.groups // .models)' >/dev/null 2>&1; then

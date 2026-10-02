@@ -94,8 +94,13 @@ info "Arbeitsbaum" "$(if [ -z "$(git status --porcelain)" ]; then echo sauber; e
 check_layer chain "Push moeglich (dry-run)"  bash -c 'GIT_TERMINAL_PROMPT=0 git push --dry-run origin $(git rev-parse --abbrev-ref HEAD) >/dev/null 2>&1 || echo "nur pull noetig"'
 check_layer chain "Identitaet == Token-Account" bash -c '
   cfg_name=$(git config --local user.name); cfg_mail=$(git config --local user.email)
-  tok_login=$(curl -fsS -m 15 -H "Authorization: Bearer $(cat "$HOME/.config/landscape/pat")" \
-              -H "Accept: application/vnd.github+json" https://api.github.com/user \
+  # `-H @-`: Header von stdin statt argv, sonst steht der PAT im `ps aux`.
+  # Doppelte Anfuehrungszeichen, nicht einfache: dieser ganze Check laeuft in
+  # einem bash -c "..."-Block, einfache wuerden ihn vorzeitig schliessen.
+  printf -v gh_headers "%s\n%s\n" \
+    "Authorization: Bearer $(cat "$HOME/.config/landscape/pat")" \
+    "Accept: application/vnd.github+json"
+  tok_login=$(curl -fsS -m 15 -H @- https://api.github.com/user <<<"$gh_headers" \
               | sed -nE "s/.*\"login\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\1/p" | head -1)
   [ -n "$tok_login" ] || { echo "Token nicht aufloesbar"; exit 1; }
   [ "$cfg_mail" = "${tok_login}@users.noreply.github.com" ] || [ "$cfg_name" = "$tok_login" ] \
@@ -153,8 +158,10 @@ check_layer chain "glm2api antwortet"        bash -c '
 check_layer chain "antigravity Health"       bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:9878/v1/models && echo "GET /v1/models ok"'
 check_layer chain "antigravity antwortet"    bash -c '
   key=$(python3 -c "import json;print(json.load(open(\".opencode/opencode.json\"))[\"provider\"][\"antigravity\"][\"options\"][\"apiKey\"])" 2>/dev/null)
-  r=$(curl -fsS -m 120 http://127.0.0.1:9878/v1/chat/completions -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $key" -d "{\"model\":\"gemini-3.8-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"say OK\"}],\"max_tokens\":8}")
+  printf -v ag_headers "%s\n%s\n" "Content-Type: application/json" "Authorization: Bearer $key"
+  r=$(curl -fsS -m 120 http://127.0.0.1:9878/v1/chat/completions -H @- \
+      -d "{\"model\":\"gemini-3.8-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"say OK\"}],\"max_tokens\":8}" \
+      <<<"$ag_headers")
   printf "%s" "$r" | grep -q "\"content\"" || { echo "keine content-Antwort"; exit 1; }
   echo "gemini-3.8-flash liefert Antwort"'
 check_layer chain "zerokey Health"           bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:7250/v1/models && echo "GET /v1/models ok"'
@@ -420,6 +427,13 @@ check_layer code  "MAIN-JS Syntax (node --check)" bash -c '
   done < <(git -C "$REPO_ROOT" ls-files infra | grep -E "\.js$")
   [ -z "$bad" ] || { echo "Syntaxfehler:$bad"; exit 1; }
   echo "infra-JS syntaktisch ok"'
+check_layer code  "Port-Labels decken gebundene Ports" bash -c '
+  # ports.sh ist die einzige Quelle fuer Port-Labels. Ohne diesen Check driftet
+  # die Zuordnung still: ein neu gebundener Port zeigt in `ports.sh` einfach als
+  # "sonstiger Prozess" und niemand merkt es.
+  # Direkt aufrufen, nicht `bash <datei>.py` — dann wuerde der Shell-Interpreter
+  # das Python-Skript parsen und eine Syntaxfehlermeldung als Zeile ausgeben.
+  "$REPO_ROOT/infra/scripts/port-drift-check.py" 2>&1 | tail -1'
 echo "== 9. Provider live =="
 # Voller Live-Smoke-Test des glm2api-Proxys (drei API-Formate + Tool-Call-
 # Roundtrip ueber 2 Turns). Gehoert bewusst hierher und nicht in die schnelle

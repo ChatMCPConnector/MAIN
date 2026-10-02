@@ -193,6 +193,10 @@ jobs:
           if [ -z "$files" ]; then echo "keine infra-JS-Dateien"; exit 0; fi
           echo "$files" | xargs -r -n1 node --check
           echo "infra-JS ok"
+      # ports.sh ist die einzige Quelle fuer Port-Labels; ein Port ohne Label
+      # zeigt in `ports.sh` als "sonstiger Prozess". Reines Lesen, kein Code.
+      - name: Port-Labels (ports.sh deckt gebundene + weitergeleitete Ports)
+        run: python3 infra/scripts/port-drift-check.py
 
   repo:
     name: repo (verify-codespace.sh --code)

@@ -102,6 +102,18 @@ if grep -qE '^llm-proxies/antigravity-proxy/.*\.go$|^llm-proxies/antigravity-pro
   fi
 fi
 
+# --- 2b) Port-Labels: ports.sh ist die einzige Quelle ---------------------
+# Ein neuer gebundener oder weitergeleiteter Port ohne Label laeuft und zeigt
+# in `ports.sh` als "sonstiger Prozess". Der Check liest ports.sh und die
+# Deklarationen in den Start-Skripten plus devcontainer.json.
+if grep -qE '^infra/scripts/(ports|port-drift-check)\.(sh|py)$|^\.devcontainer/(devcontainer\.json|.*\.sh)$|^llm-proxies/(scripts|zerokey|antigravity-proxy)/' <<< "$changed"; then
+  echo "[pre-commit] Ports betroffen -> Label-Drift pruefen..."
+  # Direkt aufrufen, nicht `bash <datei>.py` — der Shell-Interpreter wuerde das
+  # Python-Skript parsen (live gesehen: „syntax error near unexpected token").
+  run 60 infra/scripts/port-drift-check.py --quiet \
+    || { echo "[pre-commit] Port ohne Label in ports.sh — Commit abgebrochen." >&2; fail=1; }
+fi
+
 # --- 3) MAIN-eigenes JS (infra/): node --check ----------------------------
 # Nur MAINs eigener JS-Code. Vendorte Proxies (zerokey) haben eigene Checks.
 js="$(printf '%s\n' "$changed" | grep -E '^infra/.*\.js$' || true)"

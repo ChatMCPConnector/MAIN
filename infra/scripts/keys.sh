@@ -134,11 +134,17 @@ probe() {
   local endpoint="$1" key="$2" model="$3" out code body
   out="$(mktemp)"
   if [ -z "$key" ]; then rm -f "$out"; echo "NO-KEY"; return; fi
+  # `-H @-`: Header von stdin statt aus dem argv, damit der Key nicht im
+  # `ps aux` steht (gleiche Begruendung wie auth.sh / quota.sh).
   code="$(curl -s -o "$out" -w '%{http_code}' -m "$PROBE_TIMEOUT_SECONDS" \
-    -H "Authorization: Bearer $key" -H "Content-Type: application/json" \
-    -H "User-Agent: $UA_BROWSER" \
     -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":256}" \
-    "$endpoint/chat/completions" 2>/dev/null)"
+    -H @- \
+    "$endpoint/chat/completions" 2>/dev/null <<EOF
+Authorization: Bearer $key
+Content-Type: application/json
+User-Agent: $UA_BROWSER
+EOF
+)"
   [ -n "$code" ] || code="000"
   body="$(head -c 400 "$out" 2>/dev/null | tr -d '\n\r')"
   rm -f "$out"
