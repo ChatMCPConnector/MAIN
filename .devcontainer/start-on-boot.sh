@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # start-on-boot.sh: läuft bei JEDEM Codespace-Start (postStartCommand, auch Resume).
-# Leichtgewichtig: stellt sicher, dass alle lokalen LLM-Proxies (glm2api,
-# antigravity-proxy) laufen und der Watchdog aktiv ist.
+# Leichtgewichtig: stellt sicher, dass die lokalen Dienste laufen und die
+# Watchdogs aktiv sind — glm2api (8001), antigravity-proxy (9878), zerokey (7250),
+# opencode-server (4096) plus proxy- und config-watchdog.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
