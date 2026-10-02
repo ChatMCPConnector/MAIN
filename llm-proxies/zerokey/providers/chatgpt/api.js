@@ -5,6 +5,7 @@ const nodeFetch = require('node-fetch')
 
 const { ChatGPTProofOfWork } = require('./pow')
 const { CookieJar } = require('../../utils/cookie-jar')
+const { fetchWithHeaderWatchdog } = require('../../utils/fetch-guard')
 const { humanDelay } = require('../../utils/human-delay')
 
 /**
@@ -567,34 +568,21 @@ class ChatGPTAPI {
   }
 
   async _fetch(url, options = {}, parseJSON = false, timeoutMs = 300_000) {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-    let res
-    try {
-      res = await nodeFetch(url, {
-        ...options,
-        redirect: 'follow',
-        signal: controller.signal,
-        agent: this._httpAgent,
-      })
-    } catch (err) {
-      clearTimeout(timer)
-      if (err.name === 'AbortError') {
-        const errorObj = {
-          error: {
-            type: 'request_timeout',
-            message: `Request timed out after ${timeoutMs / 1000}s`,
-          },
-        }
-        const te = new Error(JSON.stringify(errorObj))
-        te.status = 504
-        te.statusCode = 504
-        throw te
-      }
-      throw err
-    }
-    clearTimeout(timer)
+    // The header phase is guarded: node-fetch resolves on response headers, so
+    // without the stall timer a dead upstream is only noticed by `timeoutMs`.
+    const res = await fetchWithHeaderWatchdog({
+      url,
+      label: this.constructor.name,
+      hardTimeoutMs: timeoutMs,
+      jsonError: true,
+      start: (signal) =>
+        nodeFetch(url, {
+          ...options,
+          redirect: 'follow',
+          signal,
+          agent: this._httpAgent,
+        }),
+    })
 
     if (parseJSON && res.ok) {
       this._captureResponseHeaders(res)

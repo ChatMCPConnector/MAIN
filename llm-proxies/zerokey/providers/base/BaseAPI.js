@@ -1,6 +1,7 @@
 const https = require('https')
 const nodeFetch = require('node-fetch')
 const { CookieJar } = require('../../utils/cookie-jar')
+const { fetchWithHeaderWatchdog } = require('../../utils/fetch-guard')
 
 /**
  * Base API client with common HTTP, cookie, and error handling logic.
@@ -52,28 +53,20 @@ class BaseAPI {
   }
 
   async _fetch(url, options = {}, parseJSON = false, timeoutMs = 300000) {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-    let res
-    try {
-      res = await nodeFetch(url, {
-        ...options,
-        redirect: 'follow',
-        signal: controller.signal,
-        agent: this._httpAgent,
-      })
-    } catch (err) {
-      clearTimeout(timer)
-      if (err.name === 'AbortError') {
-        const error = new Error(`Request timed out after ${timeoutMs / 1000}s`)
-        error.status = 504
-        error.statusCode = 504
-        throw error
-      }
-      throw err
-    }
-    clearTimeout(timer)
+    // The header phase is guarded: node-fetch resolves on response headers, so
+    // without the stall timer a dead upstream is only noticed by `timeoutMs`.
+    const res = await fetchWithHeaderWatchdog({
+      url,
+      label: this.constructor.name,
+      hardTimeoutMs: timeoutMs,
+      start: (signal) =>
+        nodeFetch(url, {
+          ...options,
+          redirect: 'follow',
+          signal,
+          agent: this._httpAgent,
+        }),
+    })
 
     if (parseJSON && res.ok) {
       this._captureResponseHeaders(res)

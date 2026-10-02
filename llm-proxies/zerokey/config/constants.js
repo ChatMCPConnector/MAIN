@@ -17,9 +17,23 @@ const STREAM_IDLE_TIMEOUT_MS =
     ? Number(process.env.ZEROKEY_STREAM_IDLE_TIMEOUT_MS)
     : 90_000
 
+// The same idea for the phase *before* the first response byte. node-fetch
+// resolves when the response headers arrive, so a dead upstream that never
+// sends them is only ended by the hard cap in the provider `_fetch` (300_000
+// ms) — and the stream watchdog above never sees it, because no stream exists
+// yet. Measured live on 2026-10-02 (session brave-nebula): socket ESTABLISHED,
+// 131 kB request body sent, `bytes_received` frozen, zero stall log lines.
+// Measured against the same upstream on 2026-10-02: first byte after 8–12 s
+// (worst observed 70 s), so 90 s stays above a slow-but-working request.
+const HEADER_IDLE_TIMEOUT_MS =
+  Number(process.env.ZEROKEY_HEADER_TIMEOUT_MS) > 0
+    ? Number(process.env.ZEROKEY_HEADER_TIMEOUT_MS)
+    : 90_000
+
 const CONFIG = {
   PORT: process.env.PORT || 7250,
   STREAM_IDLE_TIMEOUT_MS,
+  HEADER_IDLE_TIMEOUT_MS,
 }
 
 module.exports = { CONFIG }
