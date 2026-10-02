@@ -365,9 +365,41 @@ check(
       isNoAccessText(
         "I don't have access to your local machine or this repository in this chat. " +
           'Upload the relevant files and I can analyse the structure.',
-      ),
-      'no-access: englische Form wird erkannt',
-    )
+      ),'no-access: englische Form wird erkannt',
+      )
+
+      // Live gemessen am 2026-10-02: das Angebot kommt als "gib mir …" statt
+      // "kopiere den Inhalt". Die Verleugnung war echt, nur das Angebot neu
+      // formuliert — dadurch blieb der Turn unerkannt und unaufgefangen.
+      check(
+        isNoAccessText(
+          'Ich habe keinen Zugriff auf die Struktur von `llm-proxies/zerokey` in dieser ' +
+            'Unterhaltung. Bitte gib mir die Dateiliste oder den Inhalt von ' +
+            '`llm-proxies/zerokey`, dann nenne ich dir die drei Modulnamen.',
+        ),
+        'no-access: Angebot als "gib mir" wird erkannt (live gemessener Turn)',
+      )
+      // Wichtig: die Verleugnung nennt hier bewusst ein KONKRETES Artefakt
+      // ("die Datei config/app.js"), nicht "dein Repository". Sonst traegt
+      // GENERAL_DENY die Entscheidung und die neuen Verben werden gar nicht
+      // geprueft — die Faelle wuerden auch ohne die Erweiterung bestehen.
+      for (const [satz, label] of [
+        ['Schick mir die Ausgabe von `ls`, dann mache ich weiter.', 'schick mir'],
+        ['Teile mir bitte den Inhalt der Datei mit.', 'teile mir mit'],
+        ['Send me the file contents and I will continue.', 'send me'],
+        ['Share the directory listing with me.', 'share the'],
+      ]) {
+        check(
+          isNoAccessText(`Ich habe keinen Zugriff auf die Datei config/app.js. ${satz}`),
+          `no-access: Angebot als "${label}" wird erkannt`,
+        )
+      }
+      // Gegenprobe: das Angebot allein darf nichts ausloesen. Ohne eine
+      // Verleugnung daneben ist es eine ganz normale Arbeitsaufforderung.
+      check(
+        !isNoAccessText('Ich fasse zusammen: gib mir noch den Auftrag, dann arbeite ich weiter.'),
+        'ein Angebot ohne Zugriffsverleugnung ist kein no-access',
+      )
 
     // Ein echter Blocker ueber ein konkretes Artefakt bleibt unangetastet.
     check(

@@ -633,11 +633,12 @@ async function run(label, upstreamTurns, { expectRetry }) {
   //    MIT_FEHLER scheitert noch frueher: dort wird der Zugriff gar nicht
   //    bestritten, also greift schon ACCESS_DENY nicht.
   //
-  //    Diese Assertions beschreiben den IST-Zustand und muessen zusammen mit
-  //    einer Muster-Erweiterung umkippen. Sie sind kein Wunsch, sondern eine
-  //    Markierung: wer den Guard erweitert, sieht hier sofort, dass genau diese
-  //    beiden Texte betroffen waren — und dass die Erweiterung beide
-  //    Konjunktionsglieder treffen muss, nicht nur eines.
+  //    Diese Assertions waren der Ausloeser fuer die Erweiterung von
+  //    `SUPPLY_OFFER` (2026-10-02, Nutzerentscheidung). Die KONTROLLE ist in
+  //   zwischen ERKANNT und das ist jetzt Soll — sie schlaegt um, wenn jemand
+  //    die Angebots-Verben wieder entfernt. MIT_FEHLER bleibt die dokumentierte
+  //    Restluecke: das ist eine andere Form (der Kontext ist verloren, der
+  //    Zugriff wird gar nicht bestritten) und braeuchte einen neuen Detektor.
   {
     const { isNoAccessText } = require('../engine/ask-guard')
     const MIT_FEHLER = 'Ich habe die drei Modulnamen nicht aus dem bisherigen Kontext.'
@@ -646,12 +647,9 @@ async function run(label, upstreamTurns, { expectRetry }) {
       'Unterhaltung. Bitte gib mir die Dateiliste oder den Inhalt von ' +
       '`llm-proxies/zerokey`, dann nenne ich dir die drei Modulnamen.'
 
-    check(isNoAccessText(MIT_FEHLER) === false, 'V: MIT_FEHLER wird nicht erkannt (bekannte Luecke)')
-    check(isNoAccessText(KONTROLLE) === false, 'V: KONTROLLE wird nicht erkannt (bekannte Luecke)')
-    console.log(
-      '\nHinweis: V dokumentiert eine offene Luecke im no-access-Detektor, ' +
-        'kein erwartetes Verhalten.',
-    )
+    check(isNoAccessText(KONTROLLE) === true, 'V: KONTROLLE wird jetzt erkannt (SUPPLY_OFFER erweitert)')
+    check(isNoAccessText(MIT_FEHLER) === false, 'V: MIT_FEHLER bleibt die bekannte Restluecke')
+    console.log('\nHinweis: MIT_FEHLER ist weiterhin eine dokumentierte Luecke.')
   }
 
   if (failed) {

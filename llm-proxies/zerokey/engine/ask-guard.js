@@ -162,8 +162,19 @@ const GENERAL_DENY_EN =
   /\b(?:your|the|this)\s+(?:local\s+)?(machine|filesystem|file\s+system|workspace|working\s+directory|repository|repo|files|folders)\b/i
 
 // "laden Sie die Dateien hoch", "fügen Sie die Inhalte ein", "paste the contents"
+// Die Aufforderungs-Verben kamen am 2026-10-02 dazu, live gemessen: das Modell
+// sagt "gib mir die Dateiliste" und nicht "kopiere den Inhalt". Ohne sie blieb
+// der Turn unerkannt — die Verleugnung war echt, nur das Angebot war anders
+// formuliert. Bewusst eng gehalten: `gib mir` allein loest nichts aus, es muss
+// weiterhin eine Zugriffsverleugnung danebenstehen (ACCESS_DENY), sonst greift
+// der Detector gar nicht erst.
+//
+// "teile\s+mir" statt "teile\s+mir\s+mit": im echten Satz steht zwischen den
+// Woertern noch beliebiger Text ("teile mir bitte den Inhalt der Datei mit").
+// Das Verb traegt die Aussage, "mit" ist Beiwerk — mit der strengeren Fassung
+// blieb der Fall ungesehen.
 const SUPPLY_OFFER =
-  /(hoch\s*laden|hochgeladen|hier\s+einf(?:ü|ue)g|hier\s+hoch|stelle\s+die\s+\w+\s+(?:bereit|zur\s+verfügung)|einf(?:ü|ue)gen\s+sie\s+die|kopier(?:e|en)\s+sie\s+den\s+(?:inhalt|code)|upload\s+(?:the|your)|paste\s+(?:the|your|its)\s+(?:contents?|files?|output))/i
+  /(hoch\s*laden|hochgeladen|hier\s+einf(?:ü|ue)g|hier\s+hoch|stelle\s+die\s+\w+\s+(?:bereit|zur\s+verfügung)|einf(?:ü|ue)gen\s+sie\s+die|kopier(?:e|en)\s+sie\s+den\s+(?:inhalt|code)|upload\s+(?:the|your)|paste\s+(?:the|your|its)\s+(?:contents?|files?|output)|gib\s+mir|schick\s+mir|teile\s+mir|send\s+me|share\s+(?:the|your))/i
 
 /**
  * True when a tool-less turn claims the agent cannot reach the user's machine
