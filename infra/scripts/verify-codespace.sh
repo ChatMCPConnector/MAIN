@@ -307,6 +307,22 @@ check_layer code  "Makefile deckt Hook ab" bash -c '
   done
   [ -z "$miss" ] || { echo "Makefile und Hook nennen verschiedene Kommandos -> $miss"; exit 1; }
   echo "5 Kommandos in beiden (ruff, mypy, go vet, gofmt, node --check)"'
+check_layer code  "AGENTS.md-Befehle existieren" bash -c '
+  # AGENTS.md §6 listet 26 `make`-Befehle, die es als Einstiegspunkt gibt. Das ist
+  # eine Dublette des Makefiles — fuer Makefile <-> Hook gibt es den Check
+  # darueber, fuer AGENTS.md <-> Makefile gab es keinen, also konnten die
+  # still auseinanderlaufen (renamtes Target = Befehl, den kein Agent mehr hat).
+  # Geprueft wird die Richtung, die schadet: ein genanntes Befehl ohne Target.
+  # Die andere Richtung (Target ohne Doku) ist Absicht — `make help` deckt sie ab.
+  mk="$REPO_ROOT/Makefile"; ag="$REPO_ROOT/AGENTS.md"
+  [ -f "$mk" ] && [ -f "$ag" ] || { echo "Makefile oder AGENTS.md fehlt"; exit 1; }
+  miss=""
+  for t in $(grep -oE "make [a-z][a-z0-9-]+" "$ag" | awk "{print \$2}" | sort -u); do
+    grep -qE "^${t}:" "$mk" || miss="$miss $t"
+  done
+  [ -z "$miss" ] || { echo "in AGENTS.md genannt, im Makefile nicht vorhanden:$miss"; exit 1; }
+  n=$(grep -oE "make [a-z][a-z0-9-]+" "$ag" | awk "{print \$2}" | sort -u | wc -l | tr -d " ")
+  echo "$n eindeutige make-Befehle in AGENTS.md, alle im Makefile"'
 check_layer code  "CI-Pins decken Repo-Pins" bash -c '
   # Stufe 2: der Workflow muss dieselben Werkzeuge fahren wie der Codespace,
   # sonst schlaegt der Job an der Toolchain statt am Code fehl. Deshalb liest
