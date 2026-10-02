@@ -16,7 +16,7 @@
 #  * Jeder neue Codespace lädt das Binary neu (~30 s, sichtbarer Progress-Output).
 #    Das ist derselbe Preis wie bei opencode und wird in Kauf genommen.
 #  * Der Launcher zieht IMMER das neueste veroeffentlichte Binary selbst nach,
-#    unabhaengig von der npm-Pin (live belegt: npm-Pin 0.0.203 -> Launcher holte
+#    unabhaengig von der npm-Version (live belegt: npm-Pin 0.0.203 -> Launcher holte
 #    0.0.204) und legt dabei `.freebuff-<version>-*.tar.gz.part` +
 #    `.freebuff-download-temp-*` in $HOME/.config/manicode ab. Die Reste raeumt
 #    freebuff_patch.py auf (beim Patchen und bei jedem Start), sonst fressen sie
