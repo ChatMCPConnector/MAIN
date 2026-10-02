@@ -248,9 +248,9 @@ Liefert eine Statusübersicht über die SQLite-Datenbank: Dateigröße, Anzahl d
   "messages": 1420,
   "parts": 3890,
   "events": 28410,
-  "active_opencode_processes": 1,
+  "active_opencode_processes": 2,
   "current_session_id": "ses_4a71bc9ef201d4a8",
-  "version": "1.0.0"
+  "version": "1.1.0"
 }
 ```
 
