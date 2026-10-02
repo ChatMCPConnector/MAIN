@@ -283,7 +283,10 @@ function isDuplicateToolRound(payloads, previousPayloads) {
  * @returns {boolean}
  */
 function isStalledReadRound(payloads, seenReads, mutated) {
-  if (!seenReads || seenReads.size === 0 || mutated) return false
+  // `instanceof`, not a truthiness check: a Set that made a round trip through
+  // users.json comes back as `{}`, which is truthy and has no `.has`. Measured
+  // 2026-10-02 — 9 dead turns, all `seenReads.has is not a function`.
+  if (!(seenReads instanceof Set) || seenReads.size === 0 || mutated) return false
   if (!Array.isArray(payloads) || payloads.length < 2) return false
   const sigs = payloads.map(toolSignature)
   // Anything but pure reads means real work.
@@ -308,7 +311,9 @@ function isStalledReadRound(payloads, seenReads, mutated) {
  */
 function updateReadMemory(payloads, memory) {
   if (!memory) return true
-  const reads = memory.reads || (memory.reads = new Set())
+  // Same JSON round trip as in isStalledReadRound: `{}` is truthy, so a plain
+  // `memory.reads || …` guard lets it through and dies on the first `.has`.
+  const reads = memory.reads instanceof Set ? memory.reads : (memory.reads = new Set())
   const sigs = (payloads || []).map(toolSignature)
   const sawNewRead = sigs.some((s) => s !== null && !reads.has(s))
   for (const s of sigs) if (s !== null) reads.add(s)

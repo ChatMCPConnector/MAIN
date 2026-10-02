@@ -170,6 +170,16 @@ class StreamPipeline {
       reads: new Set(),
       mutated: false,
     }
+    // `reads` is a Set, and this object outlives the request on the session —
+    // which is persisted as JSON in users.json. JSON.stringify(new Set(['a']))
+    // is `{}`, so every reloaded session returned an empty plain object where a
+    // Set belongs, and the next tool round died on `reads.has is not a
+    // function` inside finishOrRetry. Measured 2026-10-02: 18 dead turns across
+    // two days, all of them silent hangs (see onError). Rebuilt on every request
+    // rather than only when absent, because the serialized form is
+    // unrecoverable — a Set's contents do not survive JSON at all, so "nothing
+    // remembered yet" is the only correct state to recover to.
+    if (!(this._readMemory.reads instanceof Set)) this._readMemory.reads = new Set()
     this.toolIndex = this.compiler.tools
     this.lastChar = ''
     this._maxToolLen = Math.max(...Object.keys(this.compiler.tools).map((k) => k.length)) + 3
@@ -426,7 +436,16 @@ class StreamPipeline {
    */
   onError(error, ctx = {}) {
     const source = ctx.source || 'route'
-    const responseClosed = this._finished
+    // `writableEnded` is the only authoritative "is the response actually
+    // closed" signal, and the only one that may gate this method. `_finished`
+    // is set at the TOP of finishOrRetry as a re-entrancy guard, long before
+    // `res.end()` runs, so every throw between those two points used to look
+    // like a finished response: this method returned without closing anything,
+    // and the client sat on an open SSE stream until it gave up. Same for
+    // `ctx.finished`, which only says the *upstream* finished — not that our
+    // response was written. Measured 2026-10-02, 18 turns: `TypeError: reads.has
+    // is not a function` right after `[TOOL] EMIT`, no `[DONE]`, nothing logged.
+    const responseClosed = this.res.writableEnded === true
     const contentComplete = !!ctx.finished
     const detail = ctx.detail || error?.message || String(error)
 
@@ -452,7 +471,7 @@ class StreamPipeline {
       error: serializeError(error),
     })
 
-    if (responseClosed || contentComplete) return
+    if (responseClosed) return
 
     this._finished = true
     console.error(`[${this.provider}] ${source} error:\n`, error.message)
@@ -571,6 +590,11 @@ class StreamPipeline {
       this.emit,
       this._askGuardEnabled ? this.suppressedAsks : null,
     )
+    // Flushing is final: the payloads are handed over and the buffer is empty.
+    // Without this reset a second flush — an error path closing the response
+    // after finishOrRetry already flushed it — emits the same tool calls again,
+    // and the client runs them twice.
+    this.toolBuffers = []
 
     if (!this.toolStartFound || !this.buffer) return
 

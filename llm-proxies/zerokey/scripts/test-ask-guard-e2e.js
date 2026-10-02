@@ -105,13 +105,18 @@ async function runText(label, upstreamTurns, { expectRetry, expectReason }) {
 }
 
 // Collect everything the pipeline writes to the fake response.
-function fakeRes() {
-  const out = { chunks: [], ended: false }
-  out.setHeader = () => {}
-  out.write = (s) => out.chunks.push(s)
-  out.end = () => {
-    out.ended = true
-  }
+  function fakeRes() {
+    // `writableEnded` mirrors the ServerResponse property the pipeline now uses
+    // to decide whether the response is really closed. Without it onError sees
+    // `undefined`, which is the safe direction but would not exercise the branch
+    // that actually distinguishes a finished response from a half-written one.
+    const out = { chunks: [], ended: false, writableEnded: false }
+    out.setHeader = () => {}
+    out.write = (s) => out.chunks.push(s)
+    out.end = () => {
+      out.ended = true
+      out.writableEnded = true
+    }
   out.body = () => out.chunks.join('')
   out.toolNames = () => {
     const names = []
@@ -503,8 +508,106 @@ async function run(label, upstreamTurns, { expectRetry }) {
     const answer =
       'Die Proxy-Kette laeuft in dieser Reihenfolge: Antigravity (9878), ' +
       'glm2api (8001), ZeroKey (7250). Jede Stufe spricht OpenAI-kompatibel.'
-    const { attempts } = await runText('Q echte Antwort', [answer], { expectRetry: false })
-    check(attempts === 0, 'Q: eine Antwort ohne Tool-Call ist kein Stillstand')
+      const { attempts } = await runText('Q echte Antwort', [answer], { expectRetry: false })
+      check(attempts === 0, 'Q: eine Antwort ohne Tool-Call ist kein Stillstand')
+    }
+
+  // R) Die Regression, gemessen am 2026-10-02: das Read-Gedaechtnis haengt am
+  //    Session-Objekt, das als JSON in users.json liegt. `JSON.stringify(new
+  //    Set(['a']))` ist `{}` — der Set kommt als leeres Objekt zurueck. Genau so
+  //    stand es im Live-Log von 13:02:13:
+  //        _readMemory = {"reads": {}, "mutated": false}
+  //    Der naechste Tool-Turn warf dann `reads.has is not a function` mitten in
+  //    finishOrRetry. 18 solche Turns an zwei Tagen, alle stumm haengend.
+  {
+    session._readMemory = { reads: {}, mutated: false }
+    session._lastToolRound = undefined
+    const { names, res } = await run('R JSON-verformtes Gedaechtnis', [[...reads]], {
+      expectRetry: false,
+    })
+    check(names.length === 2, 'R: die Tool-Calls kommen trotz verformtem Gedaechtnis an')
+    check(res.ended === true, 'R: die Antwort wird beendet — kein haengender Stream')
+    check(
+      session._readMemory.reads instanceof Set,
+      'R: das Gedaechtnis wird auf einen echten Set zurueckgesetzt (selbstheilend)',
+    )
+    delete session._readMemory
+    delete session._lastToolRound
+  }
+
+  // S) Dieselbe Form direkt an den beiden Aufrufern, unabhaengig davon, ob der
+  //    Konstruktor sie schon repariert hat. Beide nutzten `x || …`, und `{}` ist
+  //    truthy — die Reparatur muss an der Nutzungsstelle selbst sitzen.
+  {
+    const { updateReadMemory, isStalledReadRound } = require('../engine/ask-guard')
+    const payloads = [`glob${SEP}path=/workspaces${SEP}pattern=*`, `ls${SEP}path=/workspaces/MAIN`]
+
+    const memory = { reads: {}, mutated: false }
+    let threw = null
+    try {
+      updateReadMemory(payloads, memory)
+    } catch (err) {
+      threw = err
+    }
+    check(threw === null, 'S: updateReadMemory ueberlebt ein `{}` statt eines Sets')
+    check(memory.reads instanceof Set, 'S: updateReadMemory repariert das Gedaechtnis')
+
+    let stalled = null
+    try {
+      stalled = isStalledReadRound(payloads, {}, false)
+    } catch (err) {
+      stalled = `throw: ${err.message}`
+    }
+    check(stalled === false, 'S: isStalledReadRound behandelt `{}` als "nichts gemerkt"')
+  }
+
+  // T) Der Verstaerker: onError ist der einzige Weg, auf dem ein Turn nach einem
+  //    Wurf ueberhaupt noch endet. Es hat mit `this._finished` geprueft — und
+  //    dieses Flag setzt finishOrRetry ganz am Anfang, lange vor `res.end()`.
+  //    Jeder Wurf dazwischen sah daher wie eine fertige Antwort aus: Rueckkehr
+  //    ohne `res.end()`, ohne `[DONE]`, ohne Fehler. Genau der 150-s-Haenger.
+  {
+    const res = fakeRes()
+    const pipeline = new StreamPipeline(res, session, 'chatgpt', 'opencode', messages)
+    pipeline.ephemeralMode = false
+    pipeline.rawMode = false
+    // Genau der Zustand am Ende von finishOrRetry, noch vor dem Schreiben.
+    pipeline._finished = true
+
+    // onError schreibt in die rotierende Diagnose-Logdatei — fuer den Test
+    // sichern und danach unveraendert zurueckspielen.
+    const logFile = require('path').join(__dirname, '..', 'temp', 'errors.log')
+    const fs = require('fs')
+    const before = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : null
+
+    pipeline.onError(new Error('simulierter Finalisierungs-Absturz'))
+
+    if (before === null) fs.rmSync(logFile, { force: true })
+    else fs.writeFileSync(logFile, before)
+
+    check(res.writableEnded === true, 'T: onError beendet die Antwort auch bei gesetztem _finished')
+    check(res.body().includes('[DONE]'), 'T: der Client bekommt ein [DONE] statt Stille')
+  }
+
+  // U) flush() ist final. Der Fehlerpfad schliesst die Antwort ueber emitAndEnd,
+  //    das erneut flush() aufruft — ohne Reset lieferte das dieselben
+  //    Tool-Calls ein zweites Mal, und die IDE haette sie doppelt ausgefuehrt.
+  {
+    session._readMemory = undefined
+    session._lastToolRound = undefined
+    const res = fakeRes()
+    const pipeline = new StreamPipeline(res, session, 'chatgpt', 'opencode', messages)
+    pipeline.ephemeralMode = false
+    pipeline.rawMode = false
+    const { chatgptStreamHandler } = require('../providers/chatgpt/stream-handler')
+    await chatgptStreamHandler(fakeStream([[...reads]]), session, pipeline, null)
+
+    const once = res.toolNames().length
+    pipeline.flush()
+    check(once === 2, 'U: der Turn liefert genau zwei Calls')
+    check(res.toolNames().length === once, 'U: ein zweites flush() emittiert nichts erneut')
+    delete session._readMemory
+    delete session._lastToolRound
   }
 
   if (failed) {
