@@ -9,8 +9,8 @@
 #
 # Warum eine Baseline und nicht "alles gruen" (PLAN Stufe 4): `bash -n` fängt
 # nur Syntax. Shellcheck findet echte Shell-Fehler — unquoted $var,
-# set -u-Verstöße, fehlende cd-Prüfung, Subshell-Fallen. In 41 Skripten liegen
-# aber Hunderte Befunde, und ein Gate, das man nicht in einem Durchgang
+# set -u-Verstöße, fehlende cd-Prüfung, Subshell-Fallen. In den Shell-Skripten
+# liegen aber Hunderte Befunde, und ein Gate, das man nicht in einem Durchgang
 # beheben kann, wird mit `|| true` entschärft und ist dann wertlos. Die
 # Baseline ist der Weg dazwischen: **heute eingefroren, alles neue rot.**
 #

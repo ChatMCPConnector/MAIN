@@ -133,11 +133,13 @@ test-infra:
 cov:
 	cd $(ROOT) && $(TIMEOUT) run 300 uv run pytest -q --cov --cov-report=term-missing
 
-## cov-floor: Gate fuer die getestete Datei. Bewusst pro Datei, nicht global:
-# freebuff-pty.py (571 LOC, PTY + Subprozesse) und watch-subagent.py sind ohne
-# PTY-Mock nicht sinnvoll abzudecken — eine hohe Zahl waere Pseudosicherheit
-# (PLAN Stufe 3). Die Einengung passiert ueber infra/coverage-floor.rc, damit
-# `make cov` weiterhin alle drei Dateien zeigt.
+## cov-floor: Gate fuer die getesteten infra-Skripte. Der Floor ist GLOBAL
+# (fail_under auf TOTAL ueber alle in coverage-floor.rc eingeschlossenen
+# Dateien), NICHT pro Datei — eine fruehere Fassung dieses Kommentars behauptete
+# das Gegenteil. freebuff-pty.py (576 LOC, PTY + Subprozesse) und
+# watch-subagent.py sind per `omit` in infra/coverage-floor.rc ausgenommen
+# (ohne PTY-Mock waere eine hohe Zahl Pseudosicherheit, PLAN Stufe 3).
+# `make cov` bleibt OHNE Floor und zeigt alle infra-Skripte.
 cov-floor:
 	cd $(ROOT) && $(TIMEOUT) run 300 uv run pytest -q --cov --cov-config=infra/coverage-floor.rc --cov-report=term-missing
 
@@ -173,7 +175,7 @@ syntax-sh:
 
 ## shellcheck: Shellcheck gegen die eingefrorene Baseline — nur NEUE Befunde
 # sind rot. `bash -n` faengt Syntax, shellcheck faengt die echten Shell-Fehler
-# (unquoted, set -u, cd ohne ||, Subshell-Fallen). 30 Befunde sind eingefroren,
+# (unquoted, set -u, cd ohne ||, Subshell-Fallen). Der Bestand ist eingefroren,
 # damit das Gate benutzbar bleibt (PLAN Stufe 4).
 shellcheck:
 	cd $(ROOT) && $(TIMEOUT) run 300 bash ./infra/scripts/shellcheck-check.sh

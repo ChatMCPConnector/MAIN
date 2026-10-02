@@ -6,7 +6,7 @@ Warum überhaupt: die Ports 8001/9878/7250/4096 stehen in `ports.sh`, in
 Start-Skripten. Das ist keine Dokumentationsfrage, sondern ein Check-Problem
 (PLAN §11) — Umschreiben der Doku hält nichts dauerhaft, ein Gate schon.
 
-Was geprüft wird — genau drei Stellen, die Ports *aufzählen*, nicht die 40
+Was geprüft wird — genau drei Stellen, die Ports *aufzählen*, nicht die vielen
 Stellen, die sie nur *erwähnen* (Changelog, Fehlerberichte, Prose). Erwähnen
 ist frei, Aufzählen muss stimmen:
 
