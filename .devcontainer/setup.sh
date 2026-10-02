@@ -34,7 +34,7 @@ sudo apt-get update -qq > /dev/null || echo "    WARN: apt-get update fehlgeschl
 apt_install curl wget git jq unzip zip nano vim htop tree sqlite3 build-essential \
   python3 python3-pip python3-venv python-is-python3 ca-certificates gnupg || true
 apt_install nodejs npm xvfb x11vnc novnc websockify inotify-tools \
-  shellcheck cron || true
+  shellcheck || true
 # GUI-/Audio-Abhaengigkeiten: t64-Namen zuerst, sonst die klassischen Namen.
 apt_install libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 \
   || apt_install libgtk-3-0 libdbus-glib-1-2 libxt6 libasound2 || true
@@ -366,20 +366,6 @@ echo "==> [landscape] osv-scanner (CVE-Wächter) installieren..."
 bash "$REPO_ROOT/infra/scripts/osv-install.sh" >/dev/null 2>&1 \
   && echo "    osv-scanner bereit (make deps-audit)." \
   || echo "    WARN: osv-scanner nicht installiert — manuell: sudo ./infra/scripts/osv-install.sh"
-
-# Wochenbericht (PLAN Stufe 5, Weg C): der einzige Ort, an dem echte Provider-
-# Calls ohne CI-Secrets passieren. Idempotent — ohne vorhandenen Eintrag wird
-# nichts getan. Cron laeuft nur solange dieser Codespace laeuft; deshalb geht
-# der Bericht nach Drive (status/<ISO-Woche>.md) und nicht nur lokal.
-# Abschalten: ./infra/scripts/weekly-report.sh remove-cron
-if [ -x "$(command -v crontab 2>/dev/null)" ]; then
-  if command -v crontab >/dev/null 2>&1 && ! pgrep -x cron >/dev/null 2>&1; then
-    sudo cron >/dev/null 2>&1 || true
-  fi
-  bash "$REPO_ROOT/infra/scripts/weekly-report.sh" install-cron 2>&1 | sed 's/^/    /' || true
-else
-  echo "    WARN: kein crontab — Wochenbericht manuell: make report"
-fi
 
 echo "==> [landscape] LLM-Proxy zerokey wiederherstellen & starten..."
 # ZeroKey (ChatGPT-Web-Provider, Port 7250) liegt komplett im Repo unter

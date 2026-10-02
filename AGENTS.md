@@ -112,7 +112,7 @@ Nur ein Teil:
 | infra-Python | `make lint-py-infra` / `make mypy-infra` / `make test-infra` / `make cov-floor` |
 | Gate-Kommentare | `make claims` — Aussagen über die Gate-Config (Coverage-Floor-Scope) gegen `infra/coverage-floor.rc`. Der Floor ist **global**, nicht pro Datei |
 | Dependencies | `make deps` = Lockfile-Drift (hart, alle drei Ökosysteme) · `make deps-audit` = CVE-**Report**, endet immer mit 0 |
-| Wochenbericht | `make report` — Kette + **echte Provider-Calls** + Dependencies + Drive-Backup, geht nach Drive (`status/<ISO-Woche>.md`). Cron: `make report-cron` / `CRON_ACTION=remove-cron` |
+
 
 Der Makefile dupliziert **keine** Check-Liste: jedes Target ruft exakt die
 Kommandos auf, die auch der pre-commit-Hook fährt. Der Verify-Check
