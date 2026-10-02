@@ -52,6 +52,16 @@ GLM_USE_GUEST_REFRESH_TOKEN=true
 
 Alle weiteren Config-Variablen: `.env.example` (kommentiert).
 
+**`.env.example` ist nicht nur Doku, sondern ein zweiter Saat-Pfad.** Es gibt
+zwei Stellen, die eine `.env` erzeugen, wenn sie fehlt: `rebuild.sh:29` kopiert
+`.env.dist`, und `config.py:ensure_env_file()` kopiert `.env.example`.
+`secrets.sh` stellt nur die **Wurzel**-`.env` aus dem Bundle wieder her, nicht
+die hier. Deshalb müssen beide Dateien **denselben Wert** für jeden Key tragen —
+`tests/test_config.py::test_shipped_env_files_agree_on_every_value` prüft das.
+Am 2026-10-02 standen hier 300k Zeichen History-Budget, in `.env.dist` noch 1M:
+Der laufende Betrieb merkte nichts, ein frischer Codespace hätte die alte
+Konfiguration bekommen.
+
 ## Betrieb
 
 - Betrieb/Setup im Codespace (rebuild, Autostart, Watchdog, Bundle-Bau):

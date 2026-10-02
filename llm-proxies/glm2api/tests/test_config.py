@@ -663,3 +663,45 @@ def test_shipped_env_files_have_no_duplicate_keys(file_name):
     assert not duplicates, f"{path.name}: doppelte keys -> {duplicates}"
     # parse_dotenv bleibt trotzdem aufrufbar (sanity, der pfad wird genutzt)
     assert isinstance(parse_dotenv(path), dict)
+
+
+def test_shipped_env_seeds_agree_on_every_value():
+    """`.env.example` und `.env.dist` sind **zwei Saat-Pfade**, nicht Doku.
+
+    Am 2026-10-02 war das der Fund: U1 (`14bae8f`) senkte
+    `GLM_HISTORY_MAX_CHARS` von 1M auf 300k und `GLM_BLOCKED_TOOL_FOLLOW_UPS`
+    von 2 auf 5 — in `.env.example`, aber nicht in `.env.dist`. Die drei
+    obigen Tests pruefen *Schluessel* (vorhanden, kein Tippfehler, kein
+    Duplikat); **Werte** fielen durch, und die Folgen waren ungleich verteilt:
+
+      * `rebuild.sh:29` saet `glm2api/.env` aus `.env.dist`, wenn sie fehlt,
+      * `config.py:ensure_env_file()` kopiert `.env.example` nach `.env`,
+      * `secrets.sh` stellt nur die **Wurzel**-`.env` aus dem Bundle wieder her.
+
+    Ein frischer Codespace haette also 1M Zeichen History-Budget bekommen,
+    dieser Codespace (mit bereits vorhandener `.env`) faellt unter der
+    Aenderung nicht durch. Das ist die ungute Richtung: der Fehler ist nur
+    beim Neuaufbau sichtbar.
+
+    Wer eine der beiden Dateien anfasst, muss die andere mitziehen — dieser
+    Test ist die Billigste Stelle, an der das auffaellt.
+    """
+    import pathlib
+
+    from glm2api.config import parse_dotenv
+
+    base = pathlib.Path(__file__).resolve().parents[1]
+    example, dist = base / ".env.example", base / ".env.dist"
+    if not example.exists() or not dist.exists():
+        pytest.skip("eine der beiden Saat-Dateien nicht im Repo")
+
+    a, b = parse_dotenv(example), parse_dotenv(dist)
+    assert set(a) == set(b), (
+        f"Schluessel unterscheiden sich: nur .env.example={sorted(set(a) - set(b))} "
+        f"nur .env.dist={sorted(set(b) - set(a))}"
+    )
+    differing = {k: (a[k], b[k]) for k in a if a[k] != b[k]}
+    assert not differing, (
+        "Werte unterscheiden sich zwischen .env.example und .env.dist — einer "
+        f"der beiden Saat-Pfade liefert die falsche Konfiguration: {differing}"
+    )
