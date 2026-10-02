@@ -21,7 +21,7 @@ if curl -sf -m 2 http://127.0.0.1:8001/health >/dev/null 2>&1; then
   echo "[boot] glm2api läuft bereits."
 else
   if [ -d "$REPO_ROOT/llm-proxies/glm2api/src" ] && [ -x "$REPO_ROOT/llm-proxies/glm2api/.venv/bin/python3" ] && [ -f "$REPO_ROOT/llm-proxies/glm2api/.env" ]; then
-    bash "$REPO_ROOT/llm-proxies/scripts/start-glm2api.sh" >/dev/null 2>&1 \
+    bash "$REPO_ROOT/infra/scripts/glm2api.sh" start >/dev/null 2>&1 \
       && echo "[boot] glm2api gestartet." \
       || echo "[boot] WARN: glm2api Start fehlgeschlagen."
   else

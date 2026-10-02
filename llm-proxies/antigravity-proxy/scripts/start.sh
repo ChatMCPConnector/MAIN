@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# start.sh: Startet antigravity-oauth-proxy (Port 9878) analog zu start-glm2api.sh.
+# start.sh: Startet antigravity-oauth-proxy (Port 9878) analog zum glm2api-Startweg
+# (früher start-glm2api.sh, seit 2026-10-02 infra/scripts/glm2api.sh).
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

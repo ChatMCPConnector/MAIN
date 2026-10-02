@@ -48,7 +48,6 @@ DEVCONTAINER = REPO / ".devcontainer" / "devcontainer.json"
 BINDING_SCRIPTS = [
     "infra/scripts/glm2api.sh",
     "infra/scripts/opencode-server.sh",
-    "llm-proxies/scripts/start-glm2api.sh",
     "llm-proxies/scripts/start-zerokey.sh",
     "llm-proxies/antigravity-proxy/scripts/start.sh",
     "llm-proxies/zerokey/config/constants.js",

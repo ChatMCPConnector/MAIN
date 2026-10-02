@@ -299,11 +299,12 @@ echo "==> [landscape] LLM-Proxy glm2api (HAUPT-Proxy) wiederherstellen..."
 # vollautomatisch zurück sein (Patch + .env + start.sh kommen alle aus diesem Repo).
 # Klon+uv-Sync dauern ~1-2 Min; der Proxy wird danach direkt gestartet.
 # Der Proxy-Code liegt direkt im Repo (llm-proxies/glm2api/) — kein Klon mehr.
-# rebuild.sh macht .env + venv (Sekunden), start-glm2api.sh startet.
+# rebuild.sh macht .env + venv (Sekunden), glm2api.sh start startet (seit
+# 2026-10-02 der einzige Startweg — der frühere start-glm2api.sh ist entfallen).
 if ss -tln | grep -q ":8001 "; then
   echo "    Port 8001 belegt — Proxy läuft bereits."
 else
-  bash "$REPO_ROOT/llm-proxies/rebuild.sh" && bash "$REPO_ROOT/llm-proxies/scripts/start-glm2api.sh" \
+  bash "$REPO_ROOT/llm-proxies/rebuild.sh" && bash "$REPO_ROOT/infra/scripts/glm2api.sh" start \
     && echo "    glm2api läuft." \
     || echo "    WARN: Autostart fehlgeschlagen — manuell: ./llm-proxies/rebuild.sh --start"
 fi

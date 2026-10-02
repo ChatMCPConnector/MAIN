@@ -1,10 +1,17 @@
 #!/bin/bash
-# infra/scripts/glm2api.sh: Betriebsskript für den glm2api-Proxy (status/restart).
+# infra/scripts/glm2api.sh: Betriebsskript für den glm2api-Proxy (start/status/restart).
+# Einziger Startweg seit 2026-10-02: das frühere, getrennte
+# llm-proxies/scripts/start-glm2api.sh ist entfallen, seine .env- und
+# Refresh-Token-Vorbereitung lebt jetzt in prepare_env() hier.
 # Gehärtet: PID-Datei-basiertes Stoppen (kein globales pkill -f), Start-Health-
 # Check, Fallback-Stop nur mit Pfad-Anker über /proc/<pid>/cwd.
 set -uo pipefail
+# glm2api/.env trägt den echten GLM_REFRESH_TOKEN (per sed injiziert) — nicht
+# world-readable anlegen. umask 077 hält `cp`/`sed` bei 600.
+umask 077
 
 GLM2API_DIR="/workspaces/MAIN/llm-proxies/glm2api"
+ENV_SRC="$GLM2API_DIR/.env.dist"
 PID_FILE="$GLM2API_DIR/glm2api.pid"
 LOG_DIR="$GLM2API_DIR/log"
 OUTPUT_LOG="$LOG_DIR/glm2api_output.log"
@@ -19,11 +26,33 @@ PORT=8001
 HEALTH_URL="http://$HOST:$PORT/health"
 
 usage() {
-  echo "Verwendung: $0 {status|restart}"
+  echo "Verwendung: $0 {start|status|restart}"
   echo ""
+  echo "  start    - glm2api starten (idempotent, adoptiert einen laufenden Server)"
   echo "  status   - Status des glm2api-Servers prüfen"
   echo "  restart  - glm2api-Server neu starten"
   exit 1
+}
+
+# .env bereitstellen und den Refresh-Token aus den Secrets injizieren.
+# Zusammengelegt aus dem entfallenen llm-proxies/scripts/start-glm2api.sh;
+# läuft bei jedem start/restart, ist idempotent und secret-frei (nur der
+# Token-Wert selbst steht danach 600 in der gitignorierten .env).
+prepare_env() {
+  if [ ! -f "$GLM2API_DIR/.env" ] && [ -f "$ENV_SRC" ]; then
+    cp "$ENV_SRC" "$GLM2API_DIR/.env"
+  fi
+  local secret_token token
+  secret_token="${HOME}/.config/landscape/chatglm-refresh-token"
+  [ ! -f "$secret_token" ] && [ -f "/workspaces/MAIN/.secrets/chatglm-refresh-token" ] \
+    && secret_token="/workspaces/MAIN/.secrets/chatglm-refresh-token"
+  if [ -f "$secret_token" ] && [ -f "$GLM2API_DIR/.env" ]; then
+    token="$(tr -d '\n\r ' < "$secret_token")"
+    if [ -n "$token" ] && ! grep -q "^GLM_REFRESH_TOKEN=${token}" "$GLM2API_DIR/.env"; then
+      sed -i "s|^GLM_REFRESH_TOKEN=.*|GLM_REFRESH_TOKEN=${token}|" "$GLM2API_DIR/.env"
+    fi
+  fi
+  mkdir -p "$LOG_DIR"
 }
 
 # Liefert die PIDs aller Prozesse, die main.py ausführen UND deren
@@ -197,7 +226,7 @@ stop_log_guard() {
 }
 
 start_server() {
-  mkdir -p "$LOG_DIR"
+  prepare_env
   cd "$GLM2API_DIR" || exit 1
   stop_log_guard
   rotate_output_log
@@ -223,9 +252,9 @@ start_server() {
   # Live am 2026-09-26 zweimal gemessen (17:47:15 und 19:25:19): SIGTERM
   # mitten im stream, session abgerissen, und die upstream-conversation
   # dieser runde blieb auf chatglm.cn liegen, weil der delete im `finally`
-  # des request-handlers nicht mehr ausgefuehrt wurde. `start-glm2api.sh`
-  # macht es seit jeher richtig — diese zwei startwege waren nicht
-  # gleichwertig.
+  # des request-handlers nicht mehr ausgefuehrt wurde. Der frueher getrennte
+  # Boot-Pfad `start-glm2api.sh` machte es seit jeher richtig — diese zwei
+  # startwege waren nicht gleichwertig und sind seit 2026-10-02 zusammengelegt.
   #
   # Das `bash -c` schreibt seine EIGENE pid: `setsid` liefert kein $!, das
   # waere die pid des subshells. Durch `exec` wird genau diese pid der
@@ -327,6 +356,9 @@ restart_server() {
 
 # Main
 case "${1:-}" in
+  start)
+    start_server
+    ;;
   status)
     check_status
     ;;

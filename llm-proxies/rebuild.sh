@@ -59,9 +59,9 @@ else
   echo "    FEHLER: .venv/bin/python fehlt oder defekt"; exit 1
 fi
 
-echo "Fertig. Starten mit: $REPO_ROOT/llm-proxies/scripts/start-glm2api.sh"
+echo "Fertig. Starten mit: $REPO_ROOT/infra/scripts/glm2api.sh start"
 
 # 4) Optional direkt starten
 if [ "${1:-}" = "--start" ]; then
-  bash "$REPO_ROOT/llm-proxies/scripts/start-glm2api.sh"
+  bash "$REPO_ROOT/infra/scripts/glm2api.sh" start
 fi

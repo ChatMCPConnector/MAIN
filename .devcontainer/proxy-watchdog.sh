@@ -20,7 +20,7 @@ while true; do
   # 1. glm2api (Port 8001)
   if ! curl -sf -m 3 http://127.0.0.1:8001/health >/dev/null 2>&1; then
     echo "$(date '+%H:%M:%S') [watchdog] glm2api (Port 8001) weg — starte neu..." >> /tmp/opencode/watchdog.log
-    bash "$REPO_ROOT/llm-proxies/scripts/start-glm2api.sh" >> /tmp/opencode/watchdog.log 2>&1 || true
+    bash "$REPO_ROOT/infra/scripts/glm2api.sh" start >> /tmp/opencode/watchdog.log 2>&1 || true
   fi
 
   # 2. antigravity-proxy (Port 9878)

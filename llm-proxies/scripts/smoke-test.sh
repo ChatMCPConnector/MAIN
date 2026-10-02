@@ -3,7 +3,7 @@
 # Verifiziert ohne externen Aufwand: alle drei API-Formate + Tool-Call-Roundtrip
 # (2 Turns). Laeuft mit in `verify-codespace.sh --live` — dort der langsamste
 # Schritt (echte Upstream-Calls), deshalb nur unter --live.
-# Voraussetzung: Proxy laeuft (start-glm2api.sh / watchdog).
+# Voraussetzung: Proxy laeuft (infra/scripts/glm2api.sh start / watchdog).
 # Verwendung: ./llm-proxies/scripts/smoke-test.sh
 set -u
 BASE="http://127.0.0.1:8001"
