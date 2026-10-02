@@ -330,6 +330,25 @@ check_layer code  "Root-Python-Umgebung verdrahtet" bash -c '
   grep -q "infra/(scripts|tests)/" "$REPO_ROOT/.githooks/pre-commit" || miss="$miss hook"
   [ -z "$miss" ] || { echo "nicht verdrahtet:$miss"; exit 1; }
   echo "pyproject + uv.lock + 4 Make-Targets + Hook-Zweig"'
+check_layer chain "Wochenbericht verdrahtet" bash -c '
+  # PLAN Stufe 5 Weg C (NUTZERENTSCHEIDUNG 2026-10-02): kein Live-CI, weil
+  # echte Secrets in Repository-Secrets liegen wuerden — bei einem shared Repo
+  # genau einem Account gehoerend. Ersatzweise ein Wochenbericht aus dem
+  # Codespace. chain, nicht code: Cron und crontab sind Zustand dieser
+  # Instanz, nicht des Repos.
+  for t in report report-cron; do
+    grep -q "^$t:" "$REPO_ROOT/Makefile" || { echo "kein make-Target $t"; exit 1; }
+  done
+  [ -f "$REPO_ROOT/infra/scripts/weekly-report.sh" ] || { echo "weekly-report.sh fehlt"; exit 1; }
+  # Der Cron muss wirklich stehen, sonst faellt der Report still aus — genau
+  # die Art Ausfall, die A8 bei gdrive-backup.sh behoben hat.
+  if command -v crontab >/dev/null 2>&1; then
+    crontab -l 2>/dev/null | grep -q "weekly-report.sh" \
+      || { echo "Cron-Eintrag fehlt — make report-cron (Codespaces sind fluechtig, das ist der Grund fuer diese Pruefung)"; exit 1; }
+    echo "Skript + Makefile + Cron-Eintrag"
+  else
+    echo "Skript + Makefile (kein crontab -> WARN)"
+  fi'
 check_layer code  "Dependency-Waechter verdrahtet" bash -c '
   # PLAN Stufe 6: Lockfile-Drift ist hart (kostet nichts, faengt echte Drift),
   # CVE-Scan ist ein Report (ein CVE ohne erreichbare Codeposition soll den

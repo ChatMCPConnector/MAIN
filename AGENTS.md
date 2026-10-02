@@ -96,6 +96,7 @@ Nur ein Teil:
 | Shell (tiefer) | `make shellcheck` — nur **neue** Befunde sind rot, der Bestand ist in `infra/scripts/shellcheck-baseline.txt` eingefroren. Baseline bewusst erneuern: `make shellcheck-baseline` |
 | infra-Python | `make lint-py-infra` / `make mypy-infra` / `make test-infra` / `make cov-floor` |
 | Dependencies | `make deps` = Lockfile-Drift (hart, alle drei Ökosysteme) · `make deps-audit` = CVE-**Report**, endet immer mit 0 |
+| Wochenbericht | `make report` — Kette + **echte Provider-Calls** + Dependencies + Drive-Backup, geht nach Drive (`status/<ISO-Woche>.md`). Cron: `make report-cron` / `CRON_ACTION=remove-cron` |
 
 Der Makefile dupliziert **keine** Check-Liste: jedes Target ruft exakt die
 Kommandos auf, die auch der pre-commit-Hook fährt. Der Verify-Check

@@ -31,10 +31,13 @@ GOFMT  := $(if $(wildcard /usr/local/go/bin/gofmt),/usr/local/go/bin/gofmt,gofmt
 # sudo ); fuer eine installation ohne sudo z.B. OSV_DEST=$$HOME/.local/bin/osv-scanner
 OSV_DEST ?=
 
+# install-cron | remove-cron | cron-status  (siehe Target report-cron)
+CRON_ACTION ?= install-cron
+
 .PHONY: help check check-fast verify verify-code smoke check-all ci \
         lint-py test-py lint-go test-go lint-js lint-zk test-zk syntax-sh \
         lint-py-infra mypy-infra test-infra cov cov-floor shellcheck shellcheck-baseline \
-        deps deps-audit osv-install
+        deps deps-audit osv-install report report-cron
 
 ## help: alle Targets mit Kurzbeschreibung
 help:
@@ -69,6 +72,20 @@ check-all: check verify
 # Workflow rot, ist einer von beiden kaputt (das ist der Zweck: zwei Wege, eine
 # Wahrheit).
 ci: check verify-code deps
+
+## report: Wochenbericht aus dem Codespace (PLAN Stufe 5, Weg C). Sammelt
+# Kette + echte Provider-Calls + Dependencies + Drive-Backup, legt ihn unter
+# .runtime/reports/ ab und laedt ihn nach Drive (status/<ISO-Woche>.md).
+# Das ist der Ersatz fuer Live-CI: dort wuerden echte Secrets in
+# Repository-Secrets liegen — bei einem shared Repo genau einem Account gehoerend.
+report:
+	cd $(ROOT) && $(TIMEOUT) run 900 bash ./infra/scripts/weekly-report.sh
+
+## report-cron: Wochenbericht woechentlich (Mo 07:05 UTC) einrichten/entfernen.
+# ACHTUNG: der Cron laeuft nur, solange dieser Codespace lebt — Codespaces sind
+# fluechtig. Genau deshalb geht der Bericht nach Drive und nicht nur lokal.
+report-cron:
+	cd $(ROOT) && bash ./infra/scripts/weekly-report.sh $(CRON_ACTION)
 
 ## deps: Lockfile-Drift ueber alle drei Oekosysteme (hart, kein Netz noetig).
 # `uv lock --check` (Root + glm2api), `go mod verify`, `pnpm install
