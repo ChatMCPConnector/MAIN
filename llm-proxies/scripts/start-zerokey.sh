@@ -3,6 +3,7 @@
 # Code liegt in llm-proxies/zerokey/ — kanonisch, siehe infrastructure.md.
 #
 # Aufruf: node server.js <provider> <username> <session-name>
+# Optional: --restart beendet einen laufenden Proxy und startet ihn neu.
 # Der ChatGPT-Login (Cookies + Sentinel-Token) liegt in temp/users.json und ist
 # GITIGNORIERT: Runtime, kein Quelltext. Fehlt die Datei, startet der Proxy
 # nicht sinnvoll — siehe infrastructure.md, Abschnitt "ZeroKey".
@@ -73,14 +74,54 @@ stop_pid() {
     return 1
 }
 
-# Läuft er schon? Dann nur prüfen, nicht doppelt starten.
-if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
-    if curl -sf -m 3 "$MODELS_URL" >/dev/null 2>&1; then
-        echo "ZeroKey läuft bereits (PID $(cat "$PIDFILE"), Port ${PORT})."
+# --restart: beende den laufenden Proxy und starte ihn neu.
+RESTART=0
+case "${1:-}" in
+    --restart) RESTART=1 ;;
+    "") ;;
+    *)
+        echo "Aufruf: start-zerokey.sh [--restart]" >&2
+        exit 2
+        ;;
+esac
+
+# Läuft er schon? Dann nur prüfen, nicht doppelt starten — die Sperre ist
+# Absicht. Sie verweigerte aber auch den Neustart eines *gesunden* Prozesses,
+# der genau dann neu geladen werden musste (2026-10-02: Code-Fix im Speicher,
+# Betrieb musste angeschrieben werden). Deshalb der zweite Weg, statt die
+# Sperre aufzuweichen: ohne Flag ist das Verhalten unverändert.
+#
+# Unter --restart wird nicht die PID-Datei geglaubt, sondern das Prozessmuster:
+# nach einem Codespace-Neustart kann die Datei verwaist sein, während der Proxy
+# läuft. Und es werden ALLE passenden Instanzen beendet, nicht nur eine — sonst
+# bleibt eine alte stehen und bindet nach dem Start den Port, während die
+# PID-Datei auf einen Prozess zeigt, der nichts tut. (Live belegt 2026-10-02:
+# nach einem Neustart liefen zwei Instanzen, die PID-Datei zeigte auf die
+# verwaiste, der Port gehörte der anderen. Ursache im Absatz weiter unten.)
+if [ "$RESTART" -eq 1 ]; then
+    for pid in $(pgrep -f "node server.js chatgpt main MAIN" || true); do
+        echo "Neustart angefordert — beende PID ${pid} (Port ${PORT} wird neu gebunden)."
+        stop_pid "$pid" || exit 1
+    done
+    rm -f "$PIDFILE"
+    RUNNING=""
+elif [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+    RUNNING="$(cat "$PIDFILE")"
+else
+    RUNNING=""
+fi
+
+if [ -n "$RUNNING" ]; then
+    if [ "$RESTART" -eq 0 ] && curl -sf -m 3 "$MODELS_URL" >/dev/null 2>&1; then
+        echo "ZeroKey läuft bereits (PID ${RUNNING}, Port ${PORT})."
         exit 0
     fi
-    echo "WARN: PID $(cat "$PIDFILE") lebt, antwortet aber nicht — beende ihn."
-    stop_pid "$(cat "$PIDFILE")" || exit 1
+    if [ "$RESTART" -eq 1 ]; then
+        echo "Neustart angefordert — beende PID ${RUNNING} (Port ${PORT} wird neu gebunden)."
+    else
+        echo "WARN: PID ${RUNNING} lebt, antwortet aber nicht — beende ihn."
+    fi
+    stop_pid "$RUNNING" || exit 1
     rm -f "$PIDFILE"
 fi
 
@@ -107,7 +148,11 @@ echo "Starte ZeroKey (aus $APP_DIR)..."
 ) >/dev/null 2>&1
 disown -a 2>/dev/null || true
 sleep 1
-PID="$(pgrep -f "node server.js chatgpt main MAIN" | head -1 || true)"
+# `tail -1`, nicht `head -1`: pgrep sortiert aufsteigend, und der gerade
+# gestartete Prozess hat die höchste PID. Mit `head -1` landete im PID-File der
+# älteste Prozess im System — beim ersten Start (nur einer) zufällig richtig,
+# sobald eine alte Instanz zurückblieb zuverlässig falsch.
+PID="$(pgrep -f "node server.js chatgpt main MAIN" | tail -1 || true)"
 [ -n "$PID" ] && echo "$PID" > "$PIDFILE"
 
 for i in $(seq 1 30); do
