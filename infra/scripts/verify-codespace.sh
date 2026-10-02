@@ -453,6 +453,11 @@ check_layer code  "Port-Labels decken gebundene Ports" bash -c '
   # Direkt aufrufen, nicht `bash <datei>.py` — dann wuerde der Shell-Interpreter
   # das Python-Skript parsen und eine Syntaxfehlermeldung als Zeile ausgeben.
   "$REPO_ROOT/infra/scripts/port-drift-check.py" 2>&1 | tail -1'
+check_layer code  "Gate-Kommentare stimmen mit der Config" bash -c '
+  # Der Coverage-Floor ist global (fail_under auf TOTAL); Kommentare in den
+  # Gate-Dateien behaupteten das Gegenteil. Reine Textpruefung gegen
+  # infra/coverage-floor.rc. Direkt aufrufen, nicht `bash <datei>.py`.
+  "$REPO_ROOT/infra/scripts/gate-claims-check.py" 2>&1 | tail -1'
 echo "== 9. Provider live =="
 # Voller Live-Smoke-Test des glm2api-Proxys (drei API-Formate + Tool-Call-
 # Roundtrip ueber 2 Turns). Gehoert bewusst hierher und nicht in die schnelle

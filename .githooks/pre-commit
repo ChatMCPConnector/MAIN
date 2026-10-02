@@ -7,6 +7,7 @@
 #   Makefile / .githooks/pre-commit  -> Kopplung Makefile <-> Hook pruefen
 #   llm-proxies/antigravity-proxy/** -> go vet + gofmt -l       (Go)
 #   infra/**.js                      -> node --check            (MAIN-eigenes JS)
+#   Makefile/pyproject/coverage-floor/checks.yml -> Gate-Claims vs. Config
 #   **.sh                            -> shellcheck gegen Baseline (PLAN Stufe 4)
 #
 # zerokeys `pnpm lint` laeuft hier bewusst NICHT: das braucht node_modules und
@@ -136,6 +137,18 @@ if grep -qE '\.sh$' <<< "$changed"; then
   cd "$ROOT" || exit 0
   run 300 bash infra/scripts/shellcheck-check.sh \
     || { echo "[pre-commit] shellcheck hat NEUE Befunde — Commit abgebrochen (siehe oben)." >&2; fail=1; }
+fi
+
+# --- 5) Gate-Kommentare: Aussage gegen Config ----------------------------
+# Der Coverage-Floor-Scope stand in vier Gate-Dateien falsch (global vs. pro
+# Datei) und nichts hielt die Aussagen gegen `infra/coverage-floor.rc`. Reine
+# Textpruefung, kein Netz — laeuft nur, wenn eine Gate-Datei oder der Pruefer
+# selbst angefasst wurde. Kanonisch ist derselbe Check in verify-codespace.sh.
+if grep -qE '^(Makefile|pyproject\.toml|infra/coverage-floor\.rc|\.github/workflows/checks\.yml|infra/scripts/gate-claims-check\.py)$' <<< "$changed"; then
+  echo "[pre-commit] Gate-Datei geaendert -> Gate-Claims pruefen..."
+  cd "$ROOT" || exit 0
+  run 60 infra/scripts/gate-claims-check.py --quiet \
+    || { echo "[pre-commit] Kommentar widerspricht der Config (Gate-Claims) — Commit abgebrochen." >&2; fail=1; }
 fi
 
 [ "$fail" -eq 0 ] || { echo "[pre-commit] Abbruch — siehe oben." >&2; exit 1; }

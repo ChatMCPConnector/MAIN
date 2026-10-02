@@ -153,13 +153,13 @@ jobs:
         run: uv run ruff check .
       - name: mypy (infra/scripts)
         run: uv run mypy
-      # Der Floor gilt fuer check-proxy-budget.py — die Datei, die den echten
-      # Bug vom 2026-09-30 gefunden hat. `uv run pytest` allein laeuft darunter
-      # als eigene Zeile, damit ein roter Test und eine zu niedrige Coverage
-      # unterscheidbar bleiben.
+      # Der Floor ist GLOBAL: `fail_under` auf TOTAL ueber alle in
+      # coverage-floor.rc eingeschlossenen Dateien, nicht fuer eine einzelne
+      # Datei. `uv run pytest` allein laeuft darunter als eigene Zeile, damit
+      # ein roter Test und eine zu niedrige Coverage unterscheidbar bleiben.
       - name: pytest
         run: uv run pytest -q
-      - name: Coverage-Floor (>=90 % fuer check-proxy-budget.py)
+      - name: Coverage-Floor (global, >=90 % Summe)
         run: uv run pytest -q --cov --cov-config=infra/coverage-floor.rc --cov-report=term-missing
 
   infra:
@@ -197,6 +197,11 @@ jobs:
       # zeigt in `ports.sh` als "sonstiger Prozess". Reines Lesen, kein Code.
       - name: Port-Labels (ports.sh deckt gebundene + weitergeleitete Ports)
         run: python3 infra/scripts/port-drift-check.py
+      # Kommentare in den Gate-Dateien muessen die tatsaechliche Config
+      # beschreiben — der Coverage-Floor ist global, nicht pro Datei. Reines
+      # Lesen, kein Netz, keine Toolchain.
+      - name: Gate-Kommentare gegen Config (Coverage-Floor-Scope)
+        run: python3 infra/scripts/gate-claims-check.py
 
   repo:
     name: repo (verify-codespace.sh --code)

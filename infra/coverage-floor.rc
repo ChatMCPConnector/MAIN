@@ -7,8 +7,8 @@
 # Korrektur gegenueber der urspruenglichen Fassung: der Floor ist GLOBAL
 # (fail_under auf TOTAL), nicht pro Datei — der Kommentar hier behauptete das
 # Gegenteil, was beim ersten neuen Skript sofort auffiel (port-drift-check.py
-# mit 0 % zog die Summe von 95 % auf 77 %). Zwei Wege aus einer Senkung: den
-# Floor je Datei setzen oder die Datei weglassen. Beides waere die Zahl, die
+# mit 0 % zog die Summe von 95 % auf 77 %). Zwei Wege aus einer Senkung: einen
+# dateiweisen Floor setzen oder die Datei weglassen. Beides waere die Zahl, die
 # man nicht durch Testen bekommt. Stattdessen: port-drift-check.py hat 22
 # Tests und liegt bei 88 %, die Summe bleibt ueber 90 %.
 [run]

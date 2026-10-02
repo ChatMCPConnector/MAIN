@@ -36,7 +36,7 @@ CRON_ACTION ?= install-cron
 
 .PHONY: help check check-fast verify verify-code smoke check-all ci \
         lint-py test-py lint-go test-go lint-js lint-zk test-zk syntax-sh \
-        lint-py-infra mypy-infra test-infra cov cov-floor shellcheck shellcheck-baseline \
+        lint-py-infra mypy-infra test-infra cov cov-floor claims shellcheck shellcheck-baseline \
         deps deps-audit osv-install report report-cron
 
 ## help: alle Targets mit Kurzbeschreibung
@@ -48,7 +48,7 @@ check: check-fast test-py test-go test-zk test-infra
 	@echo "make check: alles gruen."
 
 ## check-fast: nur Lint/Syntax, ohne Tests — das ist das Hook-Niveau
-check-fast: lint-py lint-py-infra mypy-infra lint-go lint-js syntax-sh shellcheck
+check-fast: lint-py lint-py-infra mypy-infra lint-go lint-js syntax-sh claims shellcheck
 
 ## verify: verify-codespace.sh (read-only, prueft die LAUFENDE Kette)
 verify:
@@ -172,6 +172,13 @@ test-zk:
 syntax-sh:
 	@cd $(ROOT) && files=$$(git ls-files '*.sh'); \
 	 echo "$$files" | xargs -r -n1 bash -n && echo "bash -n ok ($$(echo "$$files" | wc -l) Skripte)"
+
+## claims: Gate-Kommentare gegen die Config pruefen (Coverage-Floor-Scope)
+# Der Floor ist GLOBAL, nicht pro Datei. Falsche Aussagen darueber standen
+# dreimal in den Gate-Dateien, ohne dass etwas sie gegen die Config hielt.
+# Reine Textpruefung, ohne Netz, ohne Toolchain.
+claims:
+	cd $(ROOT) && $(TIMEOUT) run 60 ./infra/scripts/gate-claims-check.py
 
 ## shellcheck: Shellcheck gegen die eingefrorene Baseline — nur NEUE Befunde
 # sind rot. `bash -n` faengt Syntax, shellcheck faengt die echten Shell-Fehler
