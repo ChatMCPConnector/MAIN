@@ -87,6 +87,20 @@ async function buildDeepSeekRouter(parsedFetch, session, userData) {
     const { prompt, handled } = await pipeline.setup(messages, tools, req)
     if (handled) return
 
+    // MAIN (2026-10-03): Parität zu providers/chatgpt/router.js:34. Upstream
+    // räumt hier nichts auf, wodurch jeder Wegwerf-Call als eigene
+    // Conversation in der Web-Übersicht von chat.deepseek.com liegen blieb und
+    // die Liste zuwachsen ließ. Gespiegelt wird nur der ephemere Zweig — die
+    // benannte Session (chatSessionId aus users.json) muss weiterleben, sonst
+    // wäre der Proxy nach einem Turn ohne Konversation.
+    if (pipeline.ephemeralMode) {
+      pipeline.onFinalChunk = () => {
+        if (activeSession.chatSessionId) {
+          deepseekApi.deleteSession(activeSession.chatSessionId).catch(() => {})
+        }
+      }
+    }
+
     try {
       await acquireSlot('DeepSeek')
       const deepseekStream = await deepseekApi.chatCompletion(

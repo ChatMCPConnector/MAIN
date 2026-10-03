@@ -278,6 +278,7 @@ zweitem Port**, nicht ein zweites Startskript (Anti-Drift, AGENTS.md §7).
 | **Port** | 7300, loopback-only, Provider `deepseek`, User `main`, Session `MAIN` |
 | **opencode** | Provider `deepseek`, Modell `default`, Key `opencode` |
 | **Modell** | `providers/deepseek/config.js` kennt genau **ein** Modell: `default` = „DeepSeek V4.1", 1M Context, 384k Output, `vision: true`. **Es lässt sich per API nicht umschalten** — siehe unten. |
+| **Sessions** | Jeder Wegwerf-Call (Titelgenerierung u. Ä.) erzeugt eine eigene Conversation und wird nach der Antwort **wieder gelöscht** — MAIN-Änderung, siehe unten. Die benannte Session aus `users.json` überlebt. **Ohne das wuchs die Web-Übersicht ungebremst** (13 Altlasten gefunden). |
 | **Reasoning** | vier Labels, `think`/`search` sind **zwei unabhängige Flags**: `Off` = ✗/✗ · `Search` = ✗/✓ · `DeepThink` = ✓/✗ · `DeepThink Search` = ✓/✓. **Default ist `DeepThink`** (MAIN-Änderung, siehe unten). Effort kommt als `reasoning_effort` aus dem Request-Body; **unbekannte Werte fallen auf den Default**, nicht auf „kein Denken". |
 | **Gemessen** | über die laufende Instanz, Aufgabe „wie viele r in *Erdbeermarmelade*": `kein effort` → 311 Denk-Deltas / 834 Zeichen / **Antwort 3** ✓ · `Off` → 0 / 0 / 7 ✗ · `Search` → 0 / 0 / 6 ✗ · `unsinn` → 305 / 731 / **3** ✓. **Kostet:** ohne Denken 8 SSE-Events, mit ~300–1200. |
 | **Transport** | `DEEPSEEK_TRANSPORT` — **`browser` (Default)**: Playwright-Chromium, *headed*, Profil `temp/profiles/deepseek/main/`, der Bearer aus dem Capture wird als `localStorage.userToken` in das Profil gesät. `api`: direkter Fetch + PoW-Löser (`providers/deepseek/wasm/`), ohne Browser |
@@ -321,6 +322,29 @@ die VS-Code-Config; opencode/hermes erreicht es so nicht. **Die
 Semantikänderung wird mitprotokolliert:** ein *unbekannter* `reasoning_effort`
 bekommt jetzt ebenfalls DeepThink statt „kein Denken". Ein explizites `Off`
 schaltet weiterhin ab.
+
+**`DeepThink` ist die höchste erreichbare Reasoning-Stufe — es gibt keine
+darüber.** Das ist am UI selbst abgelesen, nicht aus Doku abgeleitet: die
+Conversation-Seite von chat.deepseek.com bietet genau **zwei** Regler,
+`DeepThink` und `Search`. Beide sind boolesche Schalter, kein Stufenregler. Eine
+Recherche von dritter Seite sprach von drei Denkstufen (Non-Think / Think High /
+Think Max) — **das ist an DeepSeks eigenem UI nicht vorhanden** und war eine
+unbelegte Behauptung, die ich übernommen hatte. Praktisch heißt das: `DeepThink`
+an ist die volle Denkstufe, mehr ist über diesen Weg nicht bestellbar.
+
+**Sessions: DeepSeek hat die Aufräumlogik nicht, ChatGPT schon** — der
+Unterschied war die Ursache des Wachstums. `providers/chatgpt/router.js:34`
+ruft bei ephemeralen Calls `deleteSession` auf; im DeepSeek-Router stand
+**kein einziger** solcher Aufruf, obwohl `browser-transport.js:481` die Methode
+fertig implementiert. Jeder Wegwerf-Call blieb als eigene Conversation in der
+Web-Übersicht liegen. **13 Altlasten gefunden und gelöscht** — sämtlich
+Messreste desselben Tages (Titel wie „Buchstaben r zählen", „PING", „OK"),
+keine eigene Unterhaltung; die Web-Übersicht zeigt danach „No chat history".
+Gespiegelt ist **nur** der ephemere Zweig: die benannte Session muss weiterleben,
+sonst hätte der Proxy nach einem Turn keine Conversation. Der Listen-Endpoint
+ist `GET /api/v0/chat_session/fetch_page?lte_cursor.pinned=false` (nicht
+`/chat_session/list` — der liefert die SPA-HTML zurück), und er verlangt den
+Bearer-Token **im Header**; mit Cookies allein antwortet er `Missing Token`.
 
 **Warum Web und nicht die offizielle API:** DeepSeek-V4.1-Flash kostet
 off-peak $0,15/$0,60 je 1M Token, V4-Pro $0,66/$1,98 — 2-9× **billiger** als
@@ -1149,6 +1173,10 @@ Proxy bei jedem Start automatisch hoch.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
 
+- 2026-10-03: **DeepSeek füllte die Web-Übersicht auf, weil ZeroKey beim Aufräumen asymmetrisch ist — ChatGPT löscht seine Wegwerf-Conversations, DeepSeek nicht.** Nutzerbefund: die Conversation-Liste auf chat.deepseek.com wächst. **Die Ursache ist eine-Asymmetrie mit Namen:** `providers/chatgpt/router.js:34` hängt an `pipeline.onFinalChunk` ein `deleteSession` für den ephemeren Zweig, im **DeepSeek-Router stand kein einziger solcher Aufruf** — obwohl `browser-transport.js:481` `deleteSession` fertig implementiert. Jeder Wegwerf-Call (Titelgenerierung, `ephemeralMode` = nicht-`isRealChatSession`) blieb als eigene Conversation liegen. **13 Altlasten gefunden, alle vom selben Tag und alle Messreste** (Titel „Buchstaben r zählen" ×3, „PING", „OK" ×4, „3 r", „8 r in Erdbeermarmelade") — **gelöscht, Web-Übersicht zeigt jetzt „No chat history"**, danach genau 1 Session (die echte `MAIN`) ohne Wachstum. **Gespiegelt ist nur der ephemere Zweig:** die benannte Session aus `users.json` zu löschen hieße, dem Proxy nach einem Turn die Conversation zu nehmen.
+  **Zwei Fehler beim Finden des Lösungswegs, die beide als „geht nicht" auftraten und keiner davon ein DeepSeek-Problem war.** (1) `GET /chat_session/list` — der naheliegende Name — **liefert die SPA-HTML zurück** (200, `text/html`, 9823 Bytes), bei jedem Kandidatenpfad identisch; das sah wie „die API kennt keine Liste" aus. Der echte Endpoint heißt `chat_session/fetch_page?lte_cursor.pinned=false` und wurde gefunden, indem **der Netzwerk-Trace der echten UI** ausgewertet wurde, statt weiter Pfade zu raten. (2) Der Aufruf mit `credentials: 'include'` **ohne** Authorization-Header antwortet `Missing Token` — DeepSeek will den Bearer **im Header**, den die UI aus `localStorage.userToken` injiziert; Cookies allein reichen nicht. Beide Fehler zeigen dasselbe Muster wie gestern: **ein Antwortcode, der aussieht wie eine Aussage über das System, aber nur über das eigene Werkzeug.**
+  **Nebenbefund mit Korrektur an mir selbst, aus derselben Investigation:** Die Nutzerfrage „höchste Reasoning-Stufe" lässt sich **am UI beantworten, nicht aus der Doku** — und die Antwort ist unbequem für den Wunsch nach einer noch höheren Stufe: chat.deepseek.com bietet **genau zwei** Regler, `DeepThink` und `Search`, beide boolesch. **Es gibt keine Stufe darüber.** Eine Drittanbieter-Seite behauptete drei Denkstufen (Non-Think / Think High / Think Max); **das ist an DeepSeks eigenem UI nicht vorhanden**, und ich hatte die Behauptung ungeprüft wiedergegeben. `thinking_enabled: true` **ist** die volle Denkstufe.
+  **Verifiziert:** `node --check`, `check-modules.js` (37 Module), Neustart der Instanz, danach ein Turn **ohne** jedes Feld → **64 `reasoning_content`-Deltas** (der Default greift also weiter), Session-Zählung via `fetch_page` **1** und stabil. **Zurück:** `git revert` des Commits.
 - 2026-10-03: **ZeroKeys DeepSeek-Provider hat jetzt `DeepThink` als Default — vorher wurde im Stillen gar nicht gedacht, und das fiel nur auf, weil jemand nachgemessen hat.** Anlass war die Frage nach den Modellen und Reasoning-Stufen von DeepSeek. Das Suchen nach einer Antwort auf „welche Stufe ist die richtige" endete in der Feststellung, dass **ohne `reasoning_effort` überhaupt keine Stufe gemeint ist**: `router.js` löste `REASONING_MAP[reasoning_effort] ?? {think:false, search:false}` auf, und opencode/hermes senden keinen Effort. **Ein Default, der sich „ausschalten" nennt, ist die höfliche Form von „kaputt"** — der Proxy lief, antwortete, und lieferte kognitiv das Billigste, ohne dass irgendwo eine Fehlermeldung entstanden wäre. **(a) `config.js` bekommt `reasoning.default: 'DeepThink'`, `router.js` löst den Fallback darüber auf.** Kein Magic-Env, keine zweite Wahrheit: das Default steht dort, wo die Stufen stehen. **(b) Der Modell-Hebel wäre nicht der richtige gewesen — und der fast naheliegende Fehlgriff:** `defaultReasoning` am Modell *gibt* es bereits und steht jetzt auf `DeepThink`, aber **das liest nur `utils/sync-ide-config.js`, und nur für die VS-Code-Konfiguration.** Wer es als Proxy-Default missversteht, ändert eine Zeile und wundert sich, dass sich nichts bewegt. Genau deshalb steht der Unterschied jetzt in beiden Dateien.
   **Die Begründung des Nutzers war richtig, sein Grund war es nicht** („Search brauche ich nicht, DeepThink hat mehr Denk-Zeichen"): `think` und `search` sind **zwei unabhängige Flags, keine Stufenleiter** — `DeepThink Search` ist nicht „mehr von DeepThink", sondern DeepThink **plus** Websuche. Richtig ist nur die Hälfte: **`Search` allein erzeugt nachweislich kein Denken** und ist als Default die schlechteste Wahl. Das Label bleibt deshalb erhalten, nur der Default wandert.
   **Zwei eigene Messfehler, beide erst durch Nacharbeiten aufgefallen, weil sie dasselbe falsche Grün erzeugten wie der ursprüngliche Befund.** (1) `model_type` untersuchen: **eine** Sitzung für alle sieben Kandidatenwerte — genau die Konfundierung, die ich der Behauptung „vermutlich wird das Modell beim `create` gebunden" vorwarf. Mit frischer Sitzung je Wert wiederholt: weiterhin alles akzeptiert, auch `quatschmodell`. **(2) Der Verifikations-Request** für den neuen Default meldete 0 Denk-Deltas — weil das Meßskript kaputt war, nicht weil die Änderung wirkungslos war; die Ursache war JSON-Bau in Bash plus `grep -c` über eine Shell-Variable. **Beide Fälle haben denselben Fehler in derselben Richtung: ein Messgerät, das „nein" sagt, wenn es nichts gemessen hat.** Genau das ist an anderer Stelle schon einmal teuer geworden (`gdrive-backup.sh`), und die Einsicht gehört deshalb in den Changelog, nicht nur das Resultat.

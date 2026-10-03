@@ -37,7 +37,15 @@
 > same knob — only `utils/sync-ide-config.js` reads it, and only for the VS Code
 > config, so it does not reach opencode/hermes. Note the semantic change: an
 > *unknown* `reasoning_effort` now also gets DeepThink instead of no thinking.
-> Explicit `Off` still opts out.
+> Explicit `Off` still opts out. **Second MAIN deviation (2026-10-03):**
+> `router.js` now mirrors `providers/chatgpt/router.js:34` — after an
+> ephemeral call it calls `deleteSession(activeSession.chatSessionId)`. Upstream
+> deleted nothing on the DeepSeek side even though
+> `browser-transport.js:481` implements it, so every throwaway conversation
+> stayed in the chat.deepseek.com web overview and the list grew without bound
+> (13 leftovers found on this account, all from measurement runs). Only the
+> ephemeral branch is mirrored: the named session from `users.json` must survive
+> or the proxy would have no conversation after one turn.
 
 # PROJECT
 ZeroKey — OpenAI-compatible AI proxy. Drives real browser/session-based chat accounts (DeepSeek, Claude, ChatGPT, Qwen — no API keys) and exposes them as an OpenAI `/v1/chat/completions` endpoint for IDE agents (VS Code, Terax, OpenCode). Node.js, CommonJS, single-process, Express 5.
