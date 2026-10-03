@@ -40,7 +40,19 @@ const reasoning = {
   },
 }
 
-const promptLimit = 128_000
+// MAIN (2026-10-03): Upstream stand hier 128_000. Das ist KEINE Modellgrenze —
+// DeepSeek V4.1 hat 1M Token Context — sondern ein konservativer Wert, der den
+// Proxy ~8x unter der Moeglichkeit deckelt. Durchgemessen ueber den Browser-
+// Transport (der im Betrieb default ist), jeweils ungekuerzt, Antwort FERTIG:
+//   150 000 Zeichen  (~37k Tokens)   OK   8,8 s
+//   1 000 000 Zeichen (~250k Tokens)  OK  23,7 s
+//   2 000 000 Zeichen (~500k Tokens)  OK  20,2 s
+//   3 000 000 Zeichen (~750k Tokens)  FEHLER: "unexpected error occurred with
+//                                     deepseek" (HTTP 200, Fehler im Stream)
+// Also: 2M Zeichen ist der gemessene sichere Wert, ~500k Tokens. Die vollen
+// 1M Tokens sind ueber den Web-Pfad nicht erreichbar, egal was die Modellkarte
+// sagt. `check-proxy-budget.py` prueft die Kopplung gegen DIE Zahl.
+const promptLimit = 2_000_000
 
 const setupSteps = {
   url: 'https://chat.deepseek.com',

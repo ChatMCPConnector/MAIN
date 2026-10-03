@@ -59,7 +59,7 @@
           "name": "DeepSeek V4.1",
           "reasoning": true,
           "limit": {
-            "context": 40000,
+            "context": 512000,
             "output": 4000
           }
         }

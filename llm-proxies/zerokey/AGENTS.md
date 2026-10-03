@@ -41,7 +41,17 @@
 > same knob — only `utils/sync-ide-config.js` reads it, and only for the VS Code
 > config, so it does not reach opencode/hermes. Note the semantic change: an
 > *unknown* `reasoning_effort` now also gets DeepThink instead of no thinking.
-> Explicit `Off` still opts out. **Third MAIN deviation (2026-10-03),
+> Explicit `Off` still opts out. **Fourth MAIN deviation (2026-10-03):
+> `providers/deepseek/config.js` — `promptLimit` raised from upstream's 128 000
+> to 2 000 000 characters (~500k tokens).** The upstream value was not a model
+> limit but a conservative cap roughly 8x below what the provider actually
+> serves. Measured **through the browser transport, which is the runtime
+> default**: 150k chars OK 8.8 s · 1M OK 23.7 s · 2M OK 20.2 s · 3M **fails**
+> with `unexpected error occurred with deepseek`. So the ceiling is between
+> 500k and 750k tokens and the full 1M is not reachable over the web path
+> whatever the model card says. `check-proxy-budget.py` pairs against this
+> number. Don't raise it to 4M on the strength of the model card — 3M was
+> measured failing. **Third MAIN deviation (2026-10-03),
 > `stream-handler.js`:** upstream set `parser.tokenUsage.prompt_tokens = 0`
 > and passed DeepSeek's `accumulated_token_usage` straight through as
 > `completion_tokens` — that value is cumulative over the *conversation*, so

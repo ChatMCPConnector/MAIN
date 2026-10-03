@@ -316,9 +316,25 @@ def test_deepseek_mit_modellkarten_context_wird_rot():
 
 
 def test_deepseek_korrigierte_werte_sind_gruen():
-    """Die Werte, die jetzt im Repo stehen, muessen gruen bleiben."""
-    _f, _s, _c, fehler, _h = cpb.pruefe(40_000, 4_000, 2000, 128_000)
+    """Die Werte, die jetzt im Repo stehen, muessen gruen bleiben.
+
+    `limit.context = 512000` und `promptLimit = 2_000_000` Zeichen sind beide
+    **gemessen**, nicht aus der Modellkarte: 2M Zeichen laufen in ~20 s durch den
+    Browser-Transport, 3M scheitern mit "unexpected error". Vorher stand hier
+    40_000/128_000.
+    """
+    _f, _s, _c, fehler, _h = cpb.pruefe(512_000, 4_000, 2000, 2_000_000)
     assert fehler == []
+
+
+def test_gemessener_promptlimit_stuetzt_keinen_alten_wert():
+    """Gegenprobe: dieselben Client-Zahlen am alten Proxy-Limit muessen rot sein.
+
+    Ohne diese Gegenprobe koennte `promptLimit` still auf 128 000 zurueckgebaut
+    werden und der Check bliebe gruen, waehrend der Proxy 4x zu frueh kappt.
+    """
+    _f, _s, _c, fehler, _h = cpb.pruefe(512_000, 4_000, 2000, 128_000)
+    assert fehler, "512k context bei 128k-Zeichen-Limit muss rot werden"
 
 
 def test_output_gleich_context_bleibt_rot():
