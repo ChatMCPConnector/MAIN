@@ -68,7 +68,19 @@
 > and passed as the 5th argument to `streamHandler`), never in `users.json` and
 > never in a module singleton. First turn of a session honestly reports 0 —
 > there is nothing to compare against. Regression test:
-> `node scripts/test-token-usage.js` (wired into `pnpm test`). **Do NOT mirror `providers/chatgpt/router.js:34`
+> `node scripts/test-token-usage.js` (wired into `pnpm test`). **Fifth MAIN
+> deviation (2026-10-03): the default `DEEPSEEK_TRANSPORT` is `api`, not
+> `browser`.** `browser-transport.js` receives `parentMessageId` and ignores it
+> (`chatCompletion(chatSessionId, prompt, _parentMessageId, …)`) — it navigates to
+> the thread and types into the composer, so DeepSeek's React state decides the
+> `parent_message_id`. Measured: across three requests always
+> `message_id: 2, parent_id: 1`, i.e. DeepSeek opens a NEW branch per turn and
+> every branch shows up in the web overview as its own chat. A/B with the same
+> credentials: `api` -> 1 conversation, accumulator 867->2534; `browser` -> 3
+> conversations. Force it back with `ZK_BROWSER_TRANSPORT=1`. Two measured
+> caveats: the first request after a session reset can return a stray answer, and
+> a conversation created by the browser transport **cannot** be continued via
+> direct fetch — reset `chatSessionId` when switching. **Do NOT mirror `providers/chatgpt/router.js:34`
 > into this provider — I tried it on 2026-10-03 and it is dead code here.**
 > ChatGPT runs `pipeline.setup()` first and its `chatCompletion` creates a
 > backend conversation, so ephemeral calls really do leave a session and the

@@ -180,10 +180,17 @@ check_layer chain "zerokey DeepSeek-Credentials" bash -c '
 # 2026-10-03. Geprueft wird deshalb der X-Socket, den start-zerokey.sh per
 # ensure_x_display erzeugt, nicht der laufende Browser: der ist nach einem
 # Codespace-Neustart weg, der Socket auch, und beide muessen zusammenpassen.
+# Der Display-Check gilt nur im Browser-Transport. Seit 2026-10-03 laeuft
+# DeepSeek im Default auf 'api' (Direkt-Fetch + PoW), der keinen Browser und
+# keinen X-Server braucht — und der Browser-Transport hat den Fehler, dass er
+# parentMessageId verwirft und pro Turn eine eigene Conversation anlegt. Wer
+# auf 'browser' umstellt, braucht den Socket wieder.
 check_layer chain "zerokey DeepSeek-Display" bash -c '
+  t="${DEEPSEEK_TRANSPORT:-api}"
+  if [ "$t" = "api" ]; then echo "api-Transport: kein X-Server noetig (Transport=$t)"; exit 0; fi
   d="${ZK_DISPLAY:-:120}"
-  [ -S "/tmp/.X11-unix/X${d#:}" ] && echo "X-Socket /tmp/.X11-unix/X${d#:} da" \
-    || { echo "kein X-Socket fuer $d — start-zerokey.sh --provider deepseek startet Xvfb selbst"; exit 1; }'
+  [ -S "/tmp/.X11-unix/X${d#:}" ] && echo "X-Socket /tmp/.X11-unix/X${d#:} da (Transport=$t)" \
+    || { echo "kein X-Socket fuer $d bei Transport=$t — start-zerokey.sh --provider deepseek startet Xvfb selbst"; exit 1; }'
 
 # Kopplung Client-Budget <-> Proxy-Budget. Am 2026-09-30 lief eine Session
 # 20 Requests lang in eine Schleife, weil opencode limit.context=16000 TOKENS

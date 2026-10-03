@@ -88,11 +88,40 @@ ensure_x_display() {
     echo "Xvfb auf $ZK_DISPLAY gestartet (DISPLAY für Provider '$PROVIDER')."
 }
 
-# Nur Browser-Provider brauchen das. 'api'-Transport (direkter Fetch + PoW)
-# kommt ohne Display aus.
+# MAIN (2026-10-03): DeepSeek laeuft im Default auf dem DIRECT-FETCH-Transport
+# ('api'), nicht mehr im Browser-Transport. Grund ist ein Fehlverhalten, das
+# live gemessen wurde: `browser-transport.js` bekommt `parentMessageId`, tut
+# ihn aber nichts an (`chatCompletion(chatSessionId, prompt, _parentMessageId,
+# …)` — der Parameter heisst absichtlich unbenutzt). Die Seite sendet deshalb
+# ihren veralteten Parent, DeepSeek legt pro Turn einen neuen Zweig an, und in
+# der Web-Uebersicht erscheint **ein eigener Chat pro Turn**. A/B-Beleg:
+#   api-Transport      3 Turns -> 1 Conversation, Akkumulator 867 -> 2534
+#   browser-Transport  3 Turns -> 3 Conversations (D1, D2, D3), message_id
+#                      immer 2, parentMessageId klemmt bei 2
+# Der api-Transport erhaelt den Faden (message_id 2 -> 4 -> 6, bei gesetzter
+# parent_message_id) und braucht **keinen Browser**: kein Xvfb, kein headed
+# Chromium, kein 16-MB-Profil.
+#
+# 'browser' bleibt erzwingbar (ZK_BROWSER_TRANSPORT=1 oder
+# DEEPSEEK_TRANSPORT=browser in der Umgebung) — dann greift ensure_x_display
+# wie bisher. Der Default ist hier gesetzt, weil ZeroKeys eigener Default
+# 'browser' ist; die Abweichung ist in infrastructure.md dokumentiert.
+deepseek_transport() {
+    if [ -n "${DEEPSEEK_TRANSPORT:-}" ]; then
+        printf '%s' "${DEEPSEEK_TRANSPORT}" | tr '[:upper:]' '[:lower:]'
+    elif [ "${ZK_BROWSER_TRANSPORT:-0}" = "1" ]; then
+        printf 'browser'
+    else
+        printf 'api'
+    fi
+}
+
+export DEEPSEEK_TRANSPORT
 case "$PROVIDER" in
     deepseek)
-        if [ "$(printf '%s' "${DEEPSEEK_TRANSPORT:-browser}" | tr '[:upper:]' '[:lower:]')" = "browser" ]; then
+        DEEPSEEK_TRANSPORT="$(deepseek_transport)"
+        export DEEPSEEK_TRANSPORT
+        if [ "$DEEPSEEK_TRANSPORT" != "api" ]; then
             ensure_x_display || exit 1
         fi
         ;;
