@@ -59,9 +59,16 @@
 > compacted. `prompt_tokens` is now set by the router (`router.js`, the only
 > place that knows the real prompt length) as `prompt.length / 4`;
 > `completion_tokens` is a delta against the last value seen in this turn.
-> Measured after: `input` 617-2468 instead of 0. The delta is per request, not
-> per conversation, so the first BATCH of a turn still carries the running
-> conversation total — known, documented in `infrastructure.md`, not fixed. **Do NOT mirror `providers/chatgpt/router.js:34`
+> Measured after: `input` 617-2468 instead of 0. **`completion_tokens` needs
+> state that survives the request** — the accumulator is per *conversation*, so a
+> request-local delta was not enough: the first BATCH of a turn already carries
+> the running total. Symptom of that intermediate state: 4 messages reporting
+> **804 724 output tokens in 22 seconds**. The state therefore lives in the
+> router's per-session closure (`usageState`, created in `buildDeepSeekRouter`
+> and passed as the 5th argument to `streamHandler`), never in `users.json` and
+> never in a module singleton. First turn of a session honestly reports 0 —
+> there is nothing to compare against. Regression test:
+> `node scripts/test-token-usage.js` (wired into `pnpm test`). **Do NOT mirror `providers/chatgpt/router.js:34`
 > into this provider — I tried it on 2026-10-03 and it is dead code here.**
 > ChatGPT runs `pipeline.setup()` first and its `chatCompletion` creates a
 > backend conversation, so ephemeral calls really do leave a session and the

@@ -34,6 +34,16 @@ const CHARS_PER_TOKEN = 4
 
 async function buildDeepSeekRouter(parsedFetch, session, userData) {
   const username = userData?.username
+  // MAIN (2026-10-03): DeepSeks `accumulated_token_usage` ist kumuliert ueber die
+  // CONVERSATION, nicht pro Turn. Ein Delta nur innerhalb eines Requests (was der
+  // Stream-Handler zuerst tat) half nicht: der ERSTE BATCH eines Turn traegt
+  // bereits die Gesamtsumme, also meldete jeder Turn die Summe der ganzen
+  // Unterhaltung als seinen Output — live belegt: 4 Nachrichten, 804 724
+  // "Output"-Tokens in 22 Sekunden. Der Stand muss deshalb ueber Turn-Grenzen
+  // gehalten werden. Diese Closure laeuft einmal pro Session (der Router wird
+  // beim Start mit der Session gebaut), haelt den Zustand also weder in
+  // users.json noch in einem Modul-Singleton.
+  const usageState = { lastAccumulated: null }
   if (TRANSPORT !== 'api' && !username) {
     throw new Error('[Deepseek] userData.username (local key) is required for browser transport')
   }
@@ -132,7 +142,7 @@ async function buildDeepSeekRouter(parsedFetch, session, userData) {
       // Antwort waere ein Schritt weiter, laesst sich aber nicht erahnen.
       pipeline.tokenUsage.prompt_tokens = Math.ceil(prompt.length / CHARS_PER_TOKEN)
 
-      streamHandler(deepseekStream, activeSession, pipeline, retry)
+      streamHandler(deepseekStream, activeSession, pipeline, retry, usageState)
     } catch (error) {
       if (error.code === 'account_suspended' && error.muteUntil && userData) {
         userData.waitUntil = Math.ceil(error.muteUntil * 1000)

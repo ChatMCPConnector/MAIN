@@ -37,7 +37,7 @@ const RETRY_REASONS = {
  *   data: {"o":"SET","v":"FINISHED"}         → stream complete (legacy path)
  *   data: {"o":"BATCH","v":[...]}            → token usage
  */
-function streamHandler(stream, session, parser, retry) {
+function streamHandler(stream, session, parser, retry, usageState) {
   let cancelled = false
   let finished = false
 
@@ -46,8 +46,12 @@ function streamHandler(stream, session, parser, retry) {
   let producedOutput = false
   let lastEventType = null
   let lastError = null
-  // MAIN (2026-10-03): letzter kumulierter Token-Stand, fuer das Delta oben.
-  let lastAccumulated = null
+  // MAIN (2026-10-03): letzter kumulierter Token-Stand. Bewusst NICHT hier im
+  // Closure, sondern im Router-Session-Objekt uebergeben: DeepSeks Wert ist
+  // kumuliert ueber die Conversation, das Delta muss also Turn-Grenzen
+  // ueberschreiten. Mit einem reinen Request-closure wurde jeder Turn die
+  // Gesamtsumme der Unterhaltung gemeldet (live: 804 724 statt ~2 000).
+  const st = usageState || { lastAccumulated: null }
 
   // Current fragment type: 'THINK' | 'RESPONSE' | null
   let currentFragmentType = null
@@ -150,9 +154,12 @@ function streamHandler(stream, session, parser, retry) {
         //     echten Prompts; hier nur noch nicht mehr zerstoeren.
         //   - completion_tokens als Delta gegen den letzten Wert, pro Turn.
         const accumulated = Number(usageEntry.v) || 0
-        const delta =
-          lastAccumulated === null ? accumulated : Math.max(0, accumulated - lastAccumulated)
-        lastAccumulated = accumulated
+        const prev = st.lastAccumulated
+        // Erster BATCH einer Session: es gibt keinen Vergleichswert, also wird
+        // ehrlich 0 gemeldet statt die Gesamtsumme als Turn-Output zu
+        // behaupten. Ab dem zweiten Turn ist es das echte Delta.
+        const delta = prev === null || prev === undefined ? 0 : Math.max(0, accumulated - prev)
+        st.lastAccumulated = accumulated
         parser.tokenUsage.completion_tokens = delta
         parser.tokenUsage.total_tokens = (parser.tokenUsage.prompt_tokens || 0) + delta
         console.debug(
