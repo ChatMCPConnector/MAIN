@@ -143,8 +143,17 @@ def filter_tools(tools: list[dict[str, object]] | None, blocked_tool_names: set[
     return filtered_tools or None
 
 
-def serialize_tool_call_block(name: str, arguments: object) -> str:
+def serialize_tool_call_block(
+    name: str, arguments: object, *, include_terminator: bool = True
+) -> str:
     """Serialisiert einen Tool-Call im JSON-Protokoll (mit []-Terminator).
+
+    `include_terminator=False` (R-04): in der gerenderten History wird der
+    `[]`-Terminator weggelassen. Er ist eine AUSGABE-anweisung, kein
+    History-inhalt — als History-rest las das Modell das `]` als eigene
+    Nutzereingabe (`].`) und antwortete auf einen Input, den es nie gab
+    (live 2026-10-03, `ses_efdcfe5a…`). Der Parser toleriert einen
+    fehlenden Terminator, die Format-anweisung steht weiter am Prompt-ende.
 
     A-14: bei kaputtem argument-json wurde `{"raw": arguments}` erfunden. Beim
     History-Roundtrip sieht das Modell daraus einen Call mit einem *echten*
@@ -165,7 +174,8 @@ def serialize_tool_call_block(name: str, arguments: object) -> str:
             parsed_arguments = {"$invalid_arguments": arguments}
     if not isinstance(parsed_arguments, dict):
         parsed_arguments = {"$invalid_arguments_value": parsed_arguments}
-    return safe_json_dumps({"tool_calls": [{"name": name, "arguments": parsed_arguments}]}) + "[]"
+    block = safe_json_dumps({"tool_calls": [{"name": name, "arguments": parsed_arguments}]})
+    return block + "[]" if include_terminator else block
 
 
 def serialize_tool_result_block(tool_call_id: object, tool_name: str, content: str) -> str:

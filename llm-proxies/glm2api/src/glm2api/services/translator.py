@@ -96,20 +96,56 @@ def _call_is_executable(tool_call: dict[str, object]) -> bool:
     return name in {"todowrite", "task", "done", "stop", "list"}
 
 
+def _canonicalize_arguments_for_signature(arguments: object) -> str:
+    """R-03: argumente fuer die guard-signatur kanonisieren.
+
+    Zwei dinge muessen VOR dem zaehler passieren, sonst umgeht eine
+    schreibvariante den guard:
+      * argument-schluessel sortieren (R-02 — der native pfad tat das
+        schon, `_tool_call_signature` nicht), und
+      * `filePath` normalisieren (`normalize_file_path`). Der native pfad
+        baute die signatur aus den ROHEN argumenten; `/x/f` und `//x/f`
+        waren damit zwei VERSCHIEDENE signaturen, der zaehler startete je
+        call bei null und dieselbe datei wurde zweimal ausgeliefert. Live
+        2026-10-03 (session `ses_efdcfe5a1ffe3CFJuk1jxNF7W9`): zweimal
+        `read` auf `README.md`, einmal als `/workspaces/...`, einmal als
+        `//workspaces/...` — beide ausgefuehrt und ausgeliefert, obwohl es
+        derselbe zielpfad ist. Die pfad-normalisierung lief bis dahin erst
+        spaeter in `sanitize_tool_calls`, also NACH dem guard.
+    """
+    if isinstance(arguments, str):
+        try:
+            parsed: object = json.loads(arguments)
+        except (json.JSONDecodeError, TypeError):
+            return arguments
+    else:
+        parsed = arguments
+    if not isinstance(parsed, dict):
+        try:
+            return safe_json_dumps(parsed)
+        except (TypeError, ValueError):
+            return str(parsed)
+    normalized = dict(parsed)
+    file_path = normalized.get("filePath")
+    if isinstance(file_path, str):
+        normalized["filePath"] = normalize_file_path(file_path)
+    try:
+        return json.dumps(
+            normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    except (TypeError, ValueError):
+        return safe_json_dumps(parsed)
+
+
 def _tool_call_signature(tool_call: dict[str, object]) -> str:
     """Name + normalisierte argumente — unabhaengig von der call-id (T-03)."""
     function = tool_call.get("function")
     name = ""
-    arguments = "{}"
+    arguments: object = "{}"
     if isinstance(function, dict):
         name = str(function.get("name", "")).strip()
-        arguments = str(function.get("arguments", "{}"))
-    try:
-        parsed = json.loads(arguments)
-    except (json.JSONDecodeError, TypeError):
-        parsed = arguments
-    rendered = arguments if isinstance(parsed, str) else safe_json_dumps(parsed)
-    return f"{name}:{rendered}"
+        arguments = function.get("arguments", "{}")
+    return f"{name}:{_canonicalize_arguments_for_signature(arguments)}"
 
 
 def _dedupe_tool_call_list(tool_calls: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -2777,10 +2813,22 @@ def convert_messages(
                     continue
                 if tool_name not in available_tool_names:
                     continue
+                # R-04: der `[]`-protokoll-terminator gehoert in die
+                # AUSGABE-anweisung, nicht in die gerenderte History. Live
+                # 2026-10-03 (`ses_efdcfe5a…`): die assistant-history endete
+                # als `{"tool_calls":…}[]`; im naechsten Step las das Modell
+                # genau dieses `]` als eigene Nutzereingabe (`].`) und
+                # antwortete auf einen Input, den es nie gab ("Das sieht
+                # nach einem versehentlichen Input aus"). Der Parser
+                # toleriert einen fehlenden Terminator (siehe
+                # `test_missing_terminator_alone_still_yields_the_call`),
+                # die Format-anweisung bleibt am Prompt-ende erhalten — aus
+                # der History ist der Terminator damit reine Fehlerquelle.
                 tool_blocks.append(
                     serialize_tool_call_block(
                         name=tool_name,
                         arguments=function.get("arguments", "{}"),
+                        include_terminator=False,
                     )
                 )
                 tool_call_id = _coerce_call_id(tool_call.get("id"))
@@ -2928,16 +2976,12 @@ def extract_history_tool_call_signatures(messages: list[dict[str, object]]) -> s
             name = str(function.get("name", "")).strip()
             if not name:
                 continue
-            arguments = function.get("arguments", "{}")
-            if isinstance(arguments, str):
-                args_str = arguments
-            else:
-                args_str = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
-            try:
-                normalized = json.dumps(json.loads(args_str), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            except json.JSONDecodeError:
-                normalized = args_str
-            signatures.add(f"{name}:{normalized}")
+            # R-03: dieselbe kanonische signatur wie der guard — schluessel
+            # sortiert UND `filePath` normalisiert. Sonst findet der
+            # echo-filter eine historische schreibvariante nicht wieder.
+            signatures.add(
+                f"{name}:{_canonicalize_arguments_for_signature(function.get('arguments', '{}'))}"
+            )
     return signatures
 
 
@@ -3545,20 +3589,11 @@ class GLMEventAccumulator:
                                 # der `tool_calls` als Liste sendet, den Loop-Guard
                                 # vollstaendig und kann identische Calls beliebig
                                 # oft an den Client weiterreichen.
-                                if isinstance(entry_arguments, str):
-                                    args_str = entry_arguments
-                                else:
-                                    args_str = safe_json_dumps(entry_arguments)
-                                try:
-                                    normalized = json.dumps(
-                                        json.loads(args_str),
-                                        ensure_ascii=False,
-                                        sort_keys=True,
-                                        separators=(",", ":"),
-                                    )
-                                except json.JSONDecodeError:
-                                    normalized = args_str
-                                signature = f"{entry_name}:{normalized}"
+                                # R-03: kanonisch (schluessel sortiert +
+                                # `filePath` normalisiert), damit eine
+                                # pfad-schreibvariante den zaehler nicht
+                                # umgeht.
+                                signature = f"{entry_name}:{_canonicalize_arguments_for_signature(entry_arguments)}"
                                 if signature in self.history_tool_call_signatures:
                                     # C-01: das ist der haeufigste cache-hit-
                                     # fall — der call ist ein echtes echo eines
@@ -3771,15 +3806,9 @@ class GLMEventAccumulator:
                                 # der Request-Historie entspricht, ist ein Echo —
                                 # nie ein neuer Call. Zusaetzlich Signatur-Dedup:
                                 # mehrfach identische Parts kollabieren auf einen.
-                                if isinstance(arguments, str):
-                                    args_str = arguments
-                                else:
-                                    args_str = safe_json_dumps(arguments)
-                                try:
-                                    normalized = json.dumps(json.loads(args_str), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                                except json.JSONDecodeError:
-                                    normalized = args_str
-                                signature = f"{tool_name}:{normalized}"
+                                # R-03: kanonisch — schluessel sortiert und
+                                # `filePath` normalisiert (siehe helper).
+                                signature = f"{tool_name}:{_canonicalize_arguments_for_signature(arguments)}"
                                 if signature in self.history_tool_call_signatures:
                                     self._note_cached_result(signature)
                                     self._note_turn_drop(signature, tool_name)
@@ -3871,7 +3900,9 @@ class GLMEventAccumulator:
                                 arguments_text = (
                                     arguments if isinstance(arguments, str) else safe_json_dumps(arguments)
                                 )
-                                local_signature = f"{tool_name}:{arguments_text}"
+                                # R-03: kanonisch — schluessel sortiert und
+                                # `filePath` normalisiert (siehe helper).
+                                local_signature = f"{tool_name}:{_canonicalize_arguments_for_signature(arguments)}"
                                 if local_signature in self.history_tool_call_signatures:
                                     if self.logger:
                                         self.logger.info(

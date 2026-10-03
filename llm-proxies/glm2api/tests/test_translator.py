@@ -57,7 +57,11 @@ def test_convert_messages_injects_json_tool_prompt_and_history():
 
     prompt = converted[0]["content"][0]["text"]
 
-    assert 'Assistant: {"tool_calls":[{"name":"get_weather","arguments":{"city":"上海"}}]}[]' in prompt
+    # R-04: der `[]`-terminator steht NICHT mehr in der gerenderten history
+    # (das modell las ihn als eigenen user-turn `].`). Der call bleibt, die
+    # ausgabe-anweisung bleibt am prompt-ende.
+    assert 'Assistant: {"tool_calls":[{"name":"get_weather","arguments":{"city":"上海"}}]}' in prompt
+    assert 'Assistant: {"tool_calls":[{"name":"get_weather","arguments":{"city":"上海"}}]}[]' not in prompt
     assert '[{"call_id":"call_1","name":"get_weather","content":"晴"}]' in prompt
     assert "<ml_tool_calls>" not in prompt
     assert "# TOOL USE PROTOCOL" in prompt
@@ -682,9 +686,15 @@ def test_convert_messages_repairs_cherry_fetch_url_and_keeps_its_tool_result():
 
     prompt = converted[0]["content"][0]["text"]
 
+    # R-04: der `[]`-terminator gehoert nicht mehr in die gerenderte history
+    # (das modell las ihn als eigenen user-turn). Der call selbst bleibt.
+    assert (
+        '{"tool_calls":[{"name":"mcp__CherryFetch__fetchJson","arguments":{"url":"https://opendata.baidu.com/api.php?query=1.1.1.1&co=&resource_id=6006&oe=utf8"}}]}'
+        in prompt
+    )
     assert (
         '{"tool_calls":[{"name":"mcp__CherryFetch__fetchJson","arguments":{"url":"https://opendata.baidu.com/api.php?query=1.1.1.1&co=&resource_id=6006&oe=utf8"}}]}[]'
-        in prompt
+        not in prompt
     )
     # T-15: das fehler-ergebnis des reparierten calls wird mitgeliefert
     # (call-id passt) — das Modell sieht den Fehler und kann korrigieren.
