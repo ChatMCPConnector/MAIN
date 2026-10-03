@@ -13,7 +13,7 @@ abzufangen.
 
 > **Ehrliche Reichweite:** opencode kann Instruktionen **nicht pro Modell**
 > bedingen. Diese Datei wird daher auch in Sessions mit antigravity,
-> tokenrouter, nvidia oder downloaddoctor geladen — live gegengeprüft
+> antigravity, nvidia oder downloaddoctor geladen — live gegengeprüft
 > (Marker-Test, 2026-09-28). Deshalb ist sie strikt getrennt aufgebaut:
 > **Abschnitt A ist für jedes Modell wahr**, die Abschnitte B–C sind als
 > „nur bei `glm-5.3`" markiert. Wenn du ein Modell ohne glm2api-Proxy

@@ -4,22 +4,6 @@
     ".opencode/INSTRUCTIONS-glm2api.md"
   ],
   "provider": {
-    "tokenrouter": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "TokenRouter",
-      "whitelist": [
-        "stealth/union-alpha"
-      ],
-      "options": {
-        "baseURL": "https://api.tokenrouter.com/v1",
-        "apiKey": "sk-zaza5l2AkaQiVsJ3x97hvos9KLldUkybave96omfHQNmDVuL"
-      },
-      "models": {
-        "stealth/union-alpha": {
-          "name": "Stealth Union Alpha"
-        }
-      }
-    },
     "xinjianya": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "XinJianYa (newapi)",
