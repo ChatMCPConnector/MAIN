@@ -130,6 +130,27 @@ def test_verschiedene_remappte_ziele_kollabieren_nicht():
     assert acc.loop_guard_dropped_count == 0
 
 
+def test_echter_retry_nach_fehler_mit_korrigiertem_ziel_laeuft_durch():
+    """Der eigentliche Retry-Fall bleibt intakt: die grenze 1 greift pro
+    SIGNATUR. Ein korrigierter pfad ist eine neue signatur und passiert den
+    guard — nur die blinde identische wiederholung wird gebremst.
+
+    Das ist der real beobachtete verlauf: `open` auf einen falschen pfad,
+    negative rueckmeldung, dann `open` auf den korrigierten pfad."""
+    from glm2api.services.glm_client import _seed_loop_guard_counts
+
+    first = _acc()
+    first.consume_event(_open_event("o1", "/workspaces/MAIN/gibtsnicht.md"))
+    scope = dict(first._server_side_signature_counts)
+
+    corrected = _acc()
+    _seed_loop_guard_counts(corrected, scope)
+    corrected.consume_event(_open_event("o2", "/workspaces/MAIN/existiert.md"))
+
+    assert len(corrected._server_side_tool_calls) == 1, "korrigiertes ziel muss durch"
+    assert corrected.loop_guard_dropped_count == 0
+
+
 def test_textprotokoll_mit_variierender_schluesselreihenfolge_teilt_den_zaehler():
     """R-02: der text-pfad baute seine signatur ohne `sort_keys`, der native
     pfad mit. Zwei identische argumente in anderer schluesselreihenfolge
