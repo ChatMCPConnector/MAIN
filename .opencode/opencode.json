@@ -180,6 +180,82 @@
       }
     },
     "opencode": {
+      "models": {
+        "fledge-alpha-free": {
+          "name": "Fledge Alpha Free",
+          "reasoning": true,
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "max": {
+              "reasoningEffort": "max"
+            }
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        },
+        "ling-3.1-flash-free": {
+          "name": "Ling 3.1 Flash Free",
+          "reasoning": true,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cache_read": 0
+          },
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "none": {
+              "reasoningEffort": "none"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            }
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          }
+        },
+        "longcat-2.5-preview-free": {
+          "name": "LongCat 2.5 Preview Free",
+          "reasoning": true,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cache_read": 0
+          },
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "none": {
+              "reasoningEffort": "none"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            }
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        }
+      },
       "blacklist": [
         "big-pickle",
         "claude-3-5-haiku",
