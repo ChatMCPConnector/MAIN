@@ -117,4 +117,15 @@ lieferte 50 KB, der Turn hing danach 302 s und endete abgebrochen.
 - **Nie eine Datei im Ganzen in den Kontext ziehen, nur um zu behaupten, sie
   gelesen zu haben.** Der Nutzer will das Ergebnis der Analyse, nicht die
   Datei.
+- **Repository-Analysen & Erkundung (NIE das ganze Repo in den Kontext dumpen):**
+  - Bei Anfragen wie „analysiere das komplette Repo / alle Ordner und Dateien“:
+    **Niemals Dateien der Reihe nach vollständig mit `read` in den Chat ziehen.**
+    Das sprengt jedes Kontextbudget und erzeugt hunderttausende Tokens
+    serverseitigen Ballast.
+  - Vorgehen bei Repos:
+    1. Verzeichnisbaum und Struktur über `glob` erfassen (oder `AGENTS.md §1a` Repo-Karte lesen).
+    2. Konfigurationen & Manifeste gezielt prüfen (`package.json`, `pyproject.toml`, `Makefile` etc.).
+    3. Inhalte mit `grep` nach konkreten Begriffen/Mustern durchsuchen.
+    4. Nur gezielte Abschnitte mit `limit=100-200` lesen, niemals ganze 50-KB-Dateien am Stück.
+    5. Dokumentations-Monolithen (`infrastructure.md` >300 KB) **niemals** überlappend von vorne bis hinten durchlesen. Inhaltsverzeichnis / Überschriften per `grep` ermitteln und nur das gesuchte Thema lesen.
 

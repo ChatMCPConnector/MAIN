@@ -125,6 +125,20 @@ function turn(usageState, accumulatedLines, promptChars = 0) {
   check(klein.prompt_tokens === 31000, 'kleiner Nachschub schrumpft den Kontext nicht (31000, nicht ~200)', klein.prompt_tokens)
   check(klein.completion_tokens === 1000, 'der Winz-Nachschub kostet 1000, nicht die ganze Conversation', klein.completion_tokens)
 
+  // 8) Wenn echte Fragmente gestreamt werden, misst completion_tokens die
+  //    tatsaechliche Modellausgabe, selbst wenn die Conversation durch grosse
+  //    Dateien im Akkumulator stark gewachsen ist.
+  const s5 = { lastAccumulated: null, promptChars: 0 }
+  const realLines = [
+    JSON.stringify({ o: 'BATCH', v: [{ p: 'accumulated_token_usage', v: 40000 }] }),
+    JSON.stringify({ p: 'response/fragments', o: 'APPEND', v: [{ type: 'RESPONSE', content: 'Kurze Antwort' }] }),
+    JSON.stringify({ o: 'SET', v: 'FINISHED' }),
+  ]
+  const tReal = await turn(s5, realLines, 1000)
+  check(tReal.completion_tokens === 3, 'echte Ausgabe von 13 Zeichen wird als ~3 Tokens completion gemessen', tReal.completion_tokens)
+  check(tReal.prompt_tokens === 40000 - 3, 'prompt_tokens reflektiert den Kontext vor der Ausgabe (40000 - 3 = 39997)', tReal.prompt_tokens)
+  check(tReal.total_tokens === 40000, 'total_tokens entspricht dem Akkumulator 40000', tReal.total_tokens)
+
   if (failed) {
     console.error(`\n${failed} FAIL`)
     process.exit(1)

@@ -57,6 +57,9 @@ function streamHandler(stream, session, parser, retry, usageState) {
   let currentFragmentType = null
   // OpenAI-compatible clients open the reasoning channel.
   let hasSentReasoningRole = false
+  let outputChars = 0
+  let lastBatchAccumulated = null
+  let lastStatus = null
 
   const emitReasoning = (delta) => {
     if (!delta) return
@@ -71,8 +74,41 @@ function streamHandler(stream, session, parser, retry, usageState) {
   const routeDelta = (text) => {
     if (!text) return
     producedOutput = true
+    outputChars += text.length
     if (currentFragmentType === 'THINK') emitReasoning(text)
     else parser.scan(text)
+  }
+
+  const applyUsage = (accumulated) => {
+    const prev = st.lastAccumulated
+    st.lastAccumulated = accumulated
+    const zunahme = prev === null || prev === undefined ? accumulated : Math.max(0, accumulated - prev)
+    st.lastZunahme = zunahme
+
+    // MAIN (2026-10-03):
+    // DeepSeek liefert `accumulated_token_usage` kumuliert ueber die gesamte
+    // Conversation. In Multi-Turn-Sessions enthaelt das Delta (`zunahme`) sowohl
+    // den Input-Nachschub (z.B. gelesene Dateien) als auch die Modellausgabe.
+    // Wuerde zunahme als completion_tokens deklariert, wuerde jede 50-KB-Datei
+    // als Modellausgabe gezaehlt (live belegt: 201 210 Output-Tokens in 11 Schritten,
+    // Turn 4 meldete 27 693 Output-Tokens fuer das Lesen von infrastructure.md).
+    //
+    // Wenn Modellausgabe gestreamt wurde (outputChars > 0), schaetzen wir
+    // completion_tokens aus der tatsaechlichen Ausgabelaenge (~4 Zeichen/Token).
+    // prompt_tokens spiegelt den Kontextstand vor der Antwort wider.
+    // Fehlt outputChars (synthetische Tests ohne Textfragmente), faellt es
+    // sicher auf das Delta zunahme zurueck.
+    const completionTokens = outputChars > 0
+      ? Math.max(1, Math.round(outputChars / 4))
+      : zunahme
+    const promptTokens = Math.max(0, accumulated - (outputChars > 0 ? completionTokens : 0))
+
+    parser.tokenUsage.prompt_tokens = promptTokens
+    parser.tokenUsage.completion_tokens = completionTokens
+    parser.tokenUsage.total_tokens = promptTokens + completionTokens
+    console.debug(
+      `[DeepSeek] Tokens: akkumuliert=${accumulated}, prompt=${promptTokens}, completion=${completionTokens} (chars=${outputChars}), delta=${zunahme}, status: ${lastStatus || '-'}`,
+    )
   }
 
   const doRetry = (reason) => {
@@ -142,55 +178,10 @@ function streamHandler(stream, session, parser, retry, usageState) {
     if (data.o === 'BATCH') {
       const usageEntry = data.v?.find((e) => e.p === 'accumulated_token_usage')
       const statusEntry = data.v?.find((e) => e.p === 'quasi_status')
+      if (statusEntry) lastStatus = statusEntry.v
       if (usageEntry) {
-        // MAIN (2026-10-03): DeepSeek liefert hier NUR `accumulated_token_usage`
-        // — kumuliert ueber die Conversation, nicht pro Turn. Upstream wurde der
-        // Wert unveraendert als completion_tokens durchgereicht (opencode sah
-        // dadurch eine monoton steigende Treppe 2555 -> 3394 -> 4260), und
-        // prompt_tokens wurde hart auf 0 gesetzt. Beides zusammen hiess: opencode
-        // sieht den Kontext nicht wachsen und kompaktiert nie, waehrend der
-        // Proxy ab 128 000 Zeichen selbst die Mitte der Unterhaltung wirft.
-        //   - prompt_tokens setzt der Router (router.js) aus der Laenge des
-        //     echten Prompts; hier nur noch nicht mehr zerstoeren.
-        //   - completion_tokens als Delta gegen den letzten Wert, pro Turn.
-        // MAIN (2026-10-03, zweite Fassung — die erste war falsch).
-        //
-        // DeepSeek liefert EINE Zahl fuer die ganze Conversation
-        // (`accumulated_token_usage`), ohne Input/Output-Trennung; gemessen
-        // 49 -> 97 -> 189 ueber drei Turns. Es gibt schlicht keine Quelle fuer
-        // eine ehrliche Aufteilung, also wird **nichts erfunden**:
-        //
-        //   prompt_tokens     = akkumulierter Stand  -> waechst monoton, das
-        //                       ist die Groesse, die opencodes Kompaktierung
-        //                       braucht (oberhalb einer Obergrenze des echten
-        //                       Kontexts, weil Output mit enthalten ist)
-        //   completion_tokens = Zunahme dieses Turns -> echtes Delta, das ist
-        //                       die Kostenzahl
-        //   total_tokens      = prompt + completion
-        //
-        // Die beiden ueberlappen, und das ist dokumentiert, nicht kaschiert.
-        // Der erste Entwurf setzte prompt_tokens = Stand VOR dem Turn; damit
-        // fraess der Output den Kontext-Zuwachs (9000 - 1000 = 8000 Completion
-        // fuer einen Turn, dessen Delta die ganze Unterhaltung war) und
-        // prompt_tokens stagnierte. Genau die Stoerung, die wir vermeiden
-        // wollten.
-        //
-        // Warum nicht die Prompt-Laenge: opencode pruned die Historie
-        // (`compaction.prune`) und DeepSeek haelt den Faden serverseitig, also
-        // senden wir pro Turn nur den Nachschub — gemessen prompts von 2532
-        // ueber 58141 runter auf 3418 Zeichen, waehrend die Conversation auf
-        // 54 900 Token wuchs. Mit der Prompt-Laenge allein sah opencode 855
-        // Tokens Kontext und haette nie kompaktiert.
-        const accumulated = Number(usageEntry.v) || 0
-        const prev = st.lastAccumulated
-        st.lastAccumulated = accumulated
-        const zunahme = prev === null || prev === undefined ? accumulated : Math.max(0, accumulated - prev)
-        parser.tokenUsage.prompt_tokens = accumulated
-        parser.tokenUsage.completion_tokens = zunahme
-        parser.tokenUsage.total_tokens = accumulated + zunahme
-        console.debug(
-          `[DeepSeek] Tokens: akkumuliert=${accumulated} (prompt) +${zunahme} (dieser Turn), gesendet ~${st.promptTokens || 0}, status: ${statusEntry?.v ?? '-'}`,
-        )
+        lastBatchAccumulated = Number(usageEntry.v) || 0
+        applyUsage(lastBatchAccumulated)
       }
       return
     }
@@ -233,6 +224,9 @@ function streamHandler(stream, session, parser, retry, usageState) {
   const onDone = () => {
     if (cancelled) return
     if (finished) {
+      if (lastBatchAccumulated != null) {
+        applyUsage(lastBatchAccumulated)
+      }
       parser.sendFinalChunk()
       return
     }

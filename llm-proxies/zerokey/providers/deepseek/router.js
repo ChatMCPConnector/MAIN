@@ -85,6 +85,25 @@ async function buildDeepSeekRouter(parsedFetch, session, userData) {
     }
 
     const activeSession = pipeline.session
+
+    // MAIN (2026-10-03): Erkennung einer neuen opencode-Session.
+    // Wenn in messages[] KEINE einzige Assistant-Nachricht vorkommt, ist dies der
+    // erste Turn einer neuen Konversation. Haengt die DeepSeek-Session noch an
+    // einem alten Faden (parentMessageId != null), setzen wir chatSessionId,
+    // parentMessageId und den Token-Akkumulator zurueck. Dadurch startet jede neue
+    // opencode-Session mit einem sauberen DeepSeek-Chat bei 0 Tokens statt alten
+    // Kontext (Kontext-Bleed) weiterzuschleppen.
+    const hasAssistant = Array.isArray(messages) && messages.some((m) => m && m.role === 'assistant')
+    if (!hasAssistant && activeSession.parentMessageId != null) {
+      console.debug(
+        `[DeepSeek] Neue Session erkannt (keine Assistant-Nachrichten im Prompt, alter Parent: ${activeSession.parentMessageId}) — Konversation wird zurueckgesetzt`,
+      )
+      activeSession.chatSessionId = null
+      activeSession.parentMessageId = null
+      usageState.lastAccumulated = null
+      pipeline.isNewSession = true
+    }
+
     if (!activeSession.chatSessionId) {
       try {
         activeSession.chatSessionId = await deepseekApi.createChatSession()
@@ -108,15 +127,38 @@ async function buildDeepSeekRouter(parsedFetch, session, userData) {
 
     try {
       await acquireSlot('DeepSeek')
-      const deepseekStream = await deepseekApi.chatCompletion(
-        activeSession.chatSessionId,
-        prompt,
-        activeSession.parentMessageId,
-        thinkingEnabled,
-        searchEnabled,
-        modelType,
-        fileIds,
-      )
+      let deepseekStream
+      try {
+        deepseekStream = await deepseekApi.chatCompletion(
+          activeSession.chatSessionId,
+          prompt,
+          activeSession.parentMessageId,
+          thinkingEnabled,
+          searchEnabled,
+          modelType,
+          fileIds,
+        )
+      } catch (err) {
+        if (err.message && (err.message.includes('invalid chat session id') || err.message.includes('404'))) {
+          console.warn('[DeepSeek] Chat-Session abgelaufen oder ungueltig — Wiederholung mit neuer Konversation...')
+          activeSession.chatSessionId = await deepseekApi.createChatSession()
+          await deepseekApi.warmupSession(activeSession.chatSessionId)
+          activeSession.parentMessageId = null
+          usageState.lastAccumulated = null
+          pipeline.isNewSession = true
+          deepseekStream = await deepseekApi.chatCompletion(
+            activeSession.chatSessionId,
+            prompt,
+            null,
+            thinkingEnabled,
+            searchEnabled,
+            modelType,
+            fileIds,
+          )
+        } else {
+          throw err
+        }
+      }
 
       const retry = async () => {
         await acquireSlot('DeepSeek', true)
