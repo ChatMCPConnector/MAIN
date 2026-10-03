@@ -140,6 +140,7 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 | Provider | Modelle | Auth |
 |---|---|---|
 | xinjianya | gpt-5.6-sol | xinjianya.key |
+| **deepseek** | `default` = DeepSeek V4.1 (ZeroKey-Instanz auf 7300, `thinking_enabled`+`search_enabled` per Default) | lokal, Port 7300, Platzhalter-Key `opencode`, Web-Konto in `temp/users.json` |
 | **glm2api** | glm-5.3 | lokal, Port 8001, kein Key |
 | **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
 | downloaddoctor | ZeroKey (16k Context, **2k** Output — `.opencode/opencode.json` `limit.output=2000`) | lokal, Port 7250, Platzhalter-Key `opencode`, Code im Repo |
@@ -249,7 +250,7 @@ Cookies und Sentinel-Token aus einem Capture und streamt die Conversation.
 | | |
 |---|---|
 | **Code** | `llm-proxies/zerokey/` — **liegt im Repo, kein Klon** (vendored 2026-09-29 aus `/workspaces/downloaddoctor-zerokey`) |
-| **Start** | `./llm-proxies/scripts/start-zerokey.sh` (`node server.js chatgpt main MAIN`), **`--restart`** beendet einen laufenden Proxy und startet ihn neu (ohne Flag gilt weiter die Doppelstart-Sperre) |
+| **Start** | `./llm-proxies/scripts/start-zerokey.sh` (`node server.js chatgpt main MAIN`), **`--restart`** beendet einen laufenden Proxy und startet ihn neu (ohne Flag gilt weiter die Doppelstart-Sperre). Skript ist **parametrisiert**: `--provider/--user/--session/--port`, Defaults unverändert ChatGPT/7250. Log und PID-Datei sind **pro Provider** (`/tmp/opencode/zerokey-<provider>.log`), sonst hätte ein `--restart` die falsche Instanz beendet. |
 | **Port** | 7250, loopback-only |
 | **opencode** | Provider `downloaddoctor`, Modell `zerokey`, Platzhalter-Key `opencode` |
 | **Log** | `/tmp/opencode/zerokey.log`, PID `/tmp/opencode/zerokey.pid` |
@@ -260,12 +261,58 @@ Cookies und Sentinel-Token aus einem Capture und streamt die Conversation.
 | **Quelle** | upstream `downloaddoctor/zerokey`, Stand `11ea0bf` (Version 0.3.0) — vollständig, `origin/main` endet bei `4d635ab` und ist Vorfahr davon |
 | **Historie** | `llm-proxies/zerokey/upstream-history.bundle` (198 Commits, alle Branches/Tags). Die beiden alten Checkouts unter `/workspaces` sind gelöscht; Wiederherstellung: `git clone llm-proxies/zerokey/upstream-history.bundle <ziel>` |
 
-### Credentials — der Teil, der nicht im Git stehen kann
+### ZeroKey auf DeepSeek — zweite Instanz, Port 7300
+
+ZeroKey kann **mehr**, als hier betrieben wird: der vendored Baum bringt **vier**
+Provider mit (`providers/{chatgpt,deepseek,claude,qwen}`). Sie sind **Wahlalternativen,
+keine Liste** — `server.js:50` liest den Provider aus `argv[2]`, ein Prozess
+bedient genau einen. „DeepSeek hinzufügen" heißt deshalb: **zweite Instanz auf
+zweitem Port**, nicht ein zweites Startskript (Anti-Drift, AGENTS.md §7).
+
+```bash
+./llm-proxies/scripts/start-zerokey.sh --provider deepseek --port 7300 [--restart]
+```
+
+| | |
+|---|---|
+| **Port** | 7300, loopback-only, Provider `deepseek`, User `main`, Session `MAIN` |
+| **opencode** | Provider `deepseek`, Modell `default`, Key `opencode` |
+| **Modell** | `providers/deepseek/config.js` kennt genau **ein** Modell: `default` = „DeepSeek V4.1", 1M Context, 384k Output, `vision: true`. Reasoning-Labels: `Off` / `Search` / `DeepThink` / `DeepThink Search` |
+| **Transport** | `DEEPSEEK_TRANSPORT` — **`browser` (Default)**: Playwright-Chromium, *headed*, Profil `temp/profiles/deepseek/main/`, der Bearer aus dem Capture wird als `localStorage.userToken` in das Profil gesät. `api`: direkter Fetch + PoW-Löser (`providers/deepseek/wasm/`), ohne Browser |
+| **X-Server** | **Pflicht im Browser-Modus.** `browser-transport.js:102` startet Chromium *headed*; ohne X stirbt die Instanz mit `Missing X server or $DISPLAY … The platform failed to initialize.` (live belegt 2026-10-03). `start-zerokey.sh` startet für Provider `deepseek` darum selbst ein `Xvfb` auf `$ZK_DISPLAY` (Default `:120`, MAIN-Konvention wie `browser-start.sh`). **Bewusst im Startskript und nicht im Watchdog:** sonst gäbe es zwei Orte, an denen das Display entsteht, und der Watchdog müsste es auch noch kennen. |
+| **Prompt-Limit** | 128 000 Zeichen (Zerokey `promptLimit`) — `compiler.limitPrompt` wirft die **Mitte** eines Over-Budget-Prompts weg, nicht den Schwanz |
+| **Credentials** | Web-Konto = ein `fetch()`-Call von `chat.deepseek.com` auf `/api/v0/chat/completion`. `validateFetch` (in `providers/deepseek/index.js`) verlangt `cookie` **und** `authorization` und die exakte URL. Das Ergebnis liegt in `temp/users.json` unter `deepseek/main` und damit im Secret-Bundle. |
+| **Health** | `curl -s 127.0.0.1:7300/health` → `{"provider":"deepseek",…}` |
+
+**Achtung beim `validateCredentials`:** es prüft im Browser-Modus **nichts
+gegen DeepSeek.** `browser-transport.js:80` ist `this._seedToken = token` — ein
+No-Op, der in 0 s „success" meldet. Der Wizard-Text „Session verified" ist damit
+irreführend; **einzig `POST /v1/chat/completions` beweist, dass das Konto
+funktioniert.** (Live 2026-10-03: genau so eingerichtet.)
+
+**Bekannter Upstream-Bug, nicht behoben:** `GET /v1/models` merged *alle*
+Provider (`registry.getModels()` filtert nicht nach der laufenden Instanz), also
+bewirbt 7300 auch `claude-sonnet-4-6` & Co., die DeepSeek nicht bedienen kann.
+**Der Bug ist älter als die zweite Instanz** — 7250 bewirbt seit jeher 11 Modelle,
+von denen ChatGPT nur `auto` besitzt. Nicht angefasst, weil die Korrektur die
+dokumentierte Modelliste des bestehenden `downloaddoctor`-Providers verändern
+würde. Der opencode-Provider `deepseek` ist deshalb **explizit auf `default`
+gepinnt**, damit die falschen Namen gar nicht erst wählbar sind.
+
+**Warum Web und nicht die offizielle API:** DeepSeek-V4.1-Flash kostet
+off-peak $0,15/$0,60 je 1M Token, V4-Pro $0,66/$1,98 — 2-9× **billiger** als
+z.ai für GLM-5.3 ($1,40/$4,40). Der Web-Weg ist hier also **nicht** der
+Preis-Hack wie bei chatglm.cn; er lohnt sich, weil das Konto ohnehin existiert
+und V4-Pro im Web-Chat **vollständig und unbegrenzt** enthalten ist. Wer lieber
+zahlt, trägt `deepseek` mit `DEEPSEEK_API_KEY` direkt in `opencode.json` ein
+(opencode hat den Provider nativ im Katalog) und braucht dann weder Port noch
+Browser.
 
 `llm-proxies/zerokey/temp/users.json` enthält die **ChatGPT-Cookies, das
-Sentinel-Token und die Session-IDs**. Das ist ein Secret mit Auslaufdatum, kein
-Quelltext — deshalb ist `temp/` per `.gitignore` ausgeschlossen und die Datei
-wandert über das Secret-Bundle:
+Sentinel-Token und die Session-IDs** — und seit 2026-10-03 zusätzlich das
+**DeepSeek-Konto** (`authorization`-Bearer + `cookie` inkl. `aws-waf-token`).
+Das ist ein Secret mit Auslaufdatum, kein Quelltext — deshalb ist `temp/` per
+`.gitignore` ausgeschlossen und die Datei wandert über das Secret-Bundle:
 
 ```
 config/secrets.enc  --(secrets.sh unlock)-->  ~/.config/landscape/zerokey-users.json
@@ -1078,6 +1125,16 @@ Proxy bei jedem Start automatisch hoch.
     * **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):** Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2 springt). Der Fragenmodus schließt erst, wenn Freebuff `Your answer:` / `Your answers:` ausgibt oder der Nutzer Esc / Strg+C drückt.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
+
+- 2026-10-03: **DeepSeek als vierter Provider im Betrieb — zweite ZeroKey-Instanz auf Port 7300, und der Weg dorthin hat zwei echte Fehler gefunden, die beide erst am Lebendobjekt sichtbar waren.** Anlass war die Frage nach Copilot-Modellen für hermes; danach nach DeepSeek. **Die Grundannahme war falsch und musste vor der Implementierung korrigiert werden:** „DeepSeek zu ZeroKey hinzufügen" klingt nach einer Liste, aber ZeroKey ist **ein Provider pro Prozess** (`server.js:50` liest `argv[2]`), die vier Provider `providers/{chatgpt,deepseek,claude,qwen}` sind Wahlalternativen. Also: zweite Instanz, und zwar mit **einem** parametrisierten Startskript statt einem zweiten daneben (Anti-Drift, AGENTS.md §7).
+  **(a) `start-zerokey.sh` parametrisiert:** `--provider/--user/--session/--port`, Defaults unverändert `chatgpt/main/MAIN/7250`. Log und PID-Datei sind jetzt **pro Provider** (`/tmp/opencode/zerokey-<provider>.…`) — vorher hätten beide Instanzen dieselbe PID-Datei überschrieben und ein `--restart` die falsche getötet. Das `pgrep`-Muster kommt aus den Flags statt aus einer vollverdrahteten Zeile.
+  **(b) Fehler 1 — `PORT` kam nicht an:** `--port 7300` setzte eine Shell-Variable, `config/constants.js` liest `process.env.PORT`. ZeroKey startete deshalb auf **7251**, während das Skript 30 s auf 7300 pollte. `export PORT` ergänzt, mit Kommentar.
+  **(c) Fehler 2 — der Browser-Transport braucht einen X-Server:** `browser-transport.js:102` startet Chromium **headed**; im Codespace gibt es keinen X-Server, die Instanz starb mit `Missing X server or $DISPLAY … The platform failed to initialize.` Der Codespace hat sehr wohl `Xvfb` (MAIN-Firefox-Stack, `:120`), es war nur nicht gestartet. `ensure_x_display()` sitzt jetzt **im Startskript**, nicht im Watchdog — damit haben setup.sh und Watchdog denselben Weg und es gibt nur eine Stelle, an der das Display entsteht. `DEEPSEEK_TRANSPORT=api` (direkter Fetch + PoW-Löser aus `wasm/`) kommt ohne Display aus.
+  **(d) Eine falsche Verifikation eingeredet und zurückgenommen:** der Wizard meldet nach dem Capture „Session verified" — das ist im Browser-Modus **gelogen**. `validateCredentials` → `initializeFromJSON` (`browser-transport.js:80`) macht nur `this._seedToken = token` und **fragt DeepSeek nie**; es meldet in 0 s „success". Beide Stellen (dieser Changelog, ZeroKey-AGENTS.md-Hinweis) sagen das jetzt ausdrücklich. **Der Beweis läuft ausschließlich über `POST /v1/chat/completions`** — und der ist grün: Antwort `DEEPSEEK_OK` durch Port 7300, `/health` meldet `provider: deepseek`.
+  **(e) Gefunden und bewusst nicht behoben:** `GET /v1/models` merged alle Provider, statt auf die laufende Instanz zu filtern (`registry.getModels()`, `routes/models.js:14`) — 7300 bewirbt damit auch `claude-sonnet-4-6`, das DeepSeek nicht bedient. **Der Bug ist älter als die zweite Instanz:** die ChatGPT-Instanz bewirbt seit jeher 11 Modelle und besitzt selbst nur `auto` (`providers/chatgpt/config.js` — genau eine Modell-ID). Angefasst wird er hier nicht, weil die Korrektur die dokumentierte Modelliste des bestehenden `downloaddoctor`-Providers verändern würde und das eine eigene Entscheidung ist. Der neue opencode-Provider ist deshalb **explizit auf `default` gepinnt**, damit die falschen Namen nicht wählbar sind.
+  **(f) Betriebskette verdrahtet:** opencode-Provider `deepseek` (7300), Port-Label `ports.sh`, Watchdog-Zweig 3b, `setup.sh`-Boot-Block, **vier neue `verify-codespace.sh`-Checks** (Health, Credentials, **X-Socket**), Bundle `~/.config/landscape/zerokey-users.json` jetzt mit beiden Konten. **`Xvfb`-Geek bei den Checks:** der geprüft wird der Socket `/tmp/.X11-unix/X<n>`, nicht der laufende Browser — beide überleben einen Codespace-Neustart nicht, aber nur der Socket sagt, ob der *nächste* Start einen Browser bekommt.
+  **Verifiziert:** `bash scripts/start-zerokey.sh --provider deepseek --port 7300` → OK; echte Completion → `DEEPSEEK_OK`; `verify-codespace.sh` **47 PASS / 0 FAIL / 2 SKIP** (vorher 43/0/2); `bash -n` auf allen vier geänderten Skripten; `make check-fast` + `make verify-code` grün. **Zurück:** `git revert` des Commits — die Credentials bleiben dann in `~/.config/landscape/zerokey-users.json` und `temp/users.json` (die sind gitignored und werden nicht revertiert).
+- 2026-10-03: **TokenRouter-Provider samt getracktem `sk-…`-Key aus `opencode.json` entfernt — die offene Entscheidung vom 27.09. ist damit zugunsten von „Provider raus" geschlossen.** Ausgangspunkt war die Frage nach Copilot-Modellen für hermes; beim Durchsehen der opencode-Provider fiel der Block wieder auf, den der Changelog vom 2026-09-27 ausdrücklich als *„bewusst so (Nutzerentscheidung)"* markiert hatte: Provider ungenutzt, Key als Literal getrackt statt im Bundle, Whitelist mit genau einem `stealth/union-alpha`. **Die damalige Begründung trägt nicht mehr:** sie war „der Provider wird nicht genutzt, also ist der Key unkritisch" — das stimmt für die *Nutzung*, nicht für die *Oberfläche*. Ein ungenutzter Provider mit echtem Key in einer Config, die jeder `opencode`-Start neu einliest, ist genau der Zustand, den der Changelog 14 Tage später als offene Frage stehen ließ („Provider raus **oder** Key ins Bundle wie bei allen anderen"). **Nutzerentscheidung 2026-10-03: raus** — damit ist es keine getrackte Ausnahme mehr, sondern die Regel „keine echten Secrets im Repo" ohne Sonderfall; die XinJianYa-Keys bleiben die einzige `{file:…}`-Referenz, Antigravity der einzige verbliebene Literalwert (lokaler Admin-Key auf `127.0.0.1:9878`). **(a) Provider-Block ersatzlos entfernt**, JSON validiert, verbleibende Provider: `xinjianya`, `glm2api`, `downloaddoctor`, `antigravity`, `opencode`. **(b) Die zwei Doku-Stellen, die den Key als gegeben beschrieben, sind nachgezogen** (Secrets-Bullet in „Enthalten", Altlast-Liste im 28.09.-Block): sie behaupteten einen Zustand, der nicht mehr existiert. **(c) Bewusst nicht angetastet:** der Changelog-Eintrag 2026-09-27 selbst — er protokolliert, was damals gegolten hat, und Umschreiben von Historie ist hier derselbe Fehler wie bei den Agenten-Dateien (siehe Anti-Drift); der Widerspruch ist nicht kaschiert, sondern hier aufgelöst. **(d) Die eine Prosa-Nennung in `.opencode/INSTRUCTIONS-glm2api.md`** (Beispiel-Liste der Clients, für die die Datei geladen wird) nannte TokenRouter als Beispiel — auf `antigravity` umgestellt, weil ein Beispiel für einen nicht mehr existierenden Provider das Argument verwässert. **Verifiziert:** JSON parst, `grep -ri tokenrouter .opencode/` findet nichts mehr, Key kommt in **keiner** getrackten Datei mehr vor. **Server-Restart war nötig, nicht kosmetisch:** die Provider-Liste wird beim Start in den Modul-Zustand eingelesen, ein Neustart ist der einzige Weg, den Provider aus der Modellauswahl zu bekommen. **Zurück:** `git revert` des Commits — der Key steht im Git-Verlauf, ist aber dort wertlos (siehe oben).
 
 - 2026-10-03: **TokenRouter-Provider samt getracktem `sk-…`-Key aus `opencode.json` entfernt — die offene Entscheidung vom 27.09. ist damit zugunsten von „Provider raus" geschlossen.** Ausgangspunkt war die Frage nach Copilot-Modellen für hermes; beim Durchsehen der opencode-Provider fiel der Block wieder auf, den der Changelog vom 2026-09-27 ausdrücklich als *„bewusst so (Nutzerentscheidung)"* markiert hatte: Provider ungenutzt, Key als Literal getrackt statt im Bundle, Whitelist mit genau einem `stealth/union-alpha`. **Die damalige Begründung trägt nicht mehr:** sie war „der Provider wird nicht genutzt, also ist der Key unkritisch" — das stimmt für die *Nutzung*, nicht für die *Oberfläche*. Ein ungenutzter Provider mit echtem Key in einer Config, die jeder `opencode`-Start neu einliest, ist genau der Zustand, den der Changelog 14 Tage später als offene Frage stehen ließ („Provider raus **oder** Key ins Bundle wie bei allen anderen"). **Nutzerentscheidung 2026-10-03: raus** — damit ist es keine getrackte Ausnahme mehr, sondern die Regel „keine echten Secrets im Repo" ohne Sonderfall; die XinJianYa-Keys bleiben die einzige `{file:…}`-Referenz, Antigravity der einzige verbliebene Literalwert (lokaler Admin-Key auf `127.0.0.1:9878`). **(a) Provider-Block ersatzlos entfernt**, JSON validiert, verbleibende Provider: `xinjianya`, `glm2api`, `downloaddoctor`, `antigravity`, `opencode`. **(b) Die zwei Doku-Stellen, die den Key als gegeben beschrieben, sind nachgezogen** (Secrets-Bullet in „Enthalten", Altlast-Liste im 28.09.-Block): sie behaupteten einen Zustand, der nicht mehr existiert. **(c) Bewusst nicht angetastet:** der Changelog-Eintrag 2026-09-27 selbst — er protokolliert, was damals gegolten hat, und Umschreiben von Historie ist hier derselbe Fehler wie bei den Agenten-Dateien (siehe Anti-Drift); der Widerspruch ist nicht kaschiert, sondern hier aufgelöst. **(d) Die eine Prosa-Nennung in `.opencode/INSTRUCTIONS-glm2api.md`** (Beispiel-Liste der Clients, für die die Datei geladen wird) nannte TokenRouter als Beispiel — auf `antigravity` umgestellt, weil ein Beispiel für einen nicht mehr existierenden Provider das Argument verwässert. **Verifiziert:** JSON parst, `grep -ri tokenrouter .opencode/` findet nichts mehr, Key kommt in **keiner** getrackten Datei mehr vor. **Server-Restart war nötig, nicht kosmetisch:** die Provider-Liste wird beim Start in den Modul-Zustand eingelesen, ein Neustart ist der einzige Weg, den Provider aus der Modellauswahl zu bekommen. **Zurück:** `git revert` des Commits — der Key steht im Git-Verlauf, ist aber dort wertlos (siehe oben).
 

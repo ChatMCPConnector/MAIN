@@ -47,6 +47,24 @@
         }
       }
     },
+    "deepseek": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ZeroKey DeepSeek (Web)",
+      "options": {
+        "baseURL": "http://127.0.0.1:7300/v1",
+        "apiKey": "opencode"
+      },
+      "models": {
+        "default": {
+          "name": "DeepSeek V4.1",
+          "reasoning": true,
+          "limit": {
+            "context": 1000000,
+            "output": 384000
+          }
+        }
+      }
+    },
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "glm2api",

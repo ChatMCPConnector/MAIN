@@ -165,11 +165,25 @@ check_layer chain "antigravity antwortet"    bash -c '
   printf "%s" "$r" | grep -q "\"content\"" || { echo "keine content-Antwort"; exit 1; }
   echo "gemini-3.8-flash liefert Antwort"'
 check_layer chain "zerokey Health"           bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:7250/v1/models && echo "GET /v1/models ok"'
+check_layer chain "zerokey DeepSeek Health" bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:7300/v1/models && echo "GET /v1/models ok"'
 check_layer chain "zerokey-Credentials"      bash -c '
   f="$REPO_ROOT/llm-proxies/zerokey/temp/users.json"
-  [ -s "$f" ] || { echo "FEHLT: $f (ChatGPT-Cookies) — secrets.sh unlock ODERHAR aus ~/.config/landscape/"; exit 1; }
+  [ -s "$f" ] || { echo "FEHLT: $f (Session-Cookies) — secrets.sh unlock ODER HAR aus ~/.config/landscape/"; exit 1; }
   python3 -c "import json,sys;d=json.load(open(sys.argv[1]));u=d.get(\"chatgpt\",{}).get(\"main\",{});h=u.get(\"parsedFetch\",{}).get(\"headers\",{});sys.exit(0 if any(\"cookie\" in k.lower() for k in h) else 1)" "$f" \
     && echo "ChatGPT-Cookies vorhanden" || { echo "kein Cookie-Header in users.json"; exit 1; }'
+check_layer chain "zerokey DeepSeek-Credentials" bash -c '
+  f="$REPO_ROOT/llm-proxies/zerokey/temp/users.json"
+  python3 -c "import json,sys;d=json.load(open(sys.argv[1]));u=d.get(\"deepseek\",{}).get(\"main\",{});h=u.get(\"parsedFetch\",{}).get(\"headers\",{});ok=any(\"cookie\" in k.lower() for k in h) and any(\"authorization\" in k.lower() for k in h);sys.exit(0 if ok else 1)" "$f" \
+    && echo "DeepSeek-Credentials vorhanden" || { echo "kein Cookie-/Authorization-Header fuer deepseek/main"; exit 1; }'
+# Der DeepSeek-Provider faehrt einen headed Chromium (browser-transport.js:102).
+# Ohne X-Server stirbt er mit "Missing X server or $DISPLAY" — live belegt am
+# 2026-10-03. Geprueft wird deshalb der X-Socket, den start-zerokey.sh per
+# ensure_x_display erzeugt, nicht der laufende Browser: der ist nach einem
+# Codespace-Neustart weg, der Socket auch, und beide muessen zusammenpassen.
+check_layer chain "zerokey DeepSeek-Display" bash -c '
+  d="${ZK_DISPLAY:-:120}"
+  [ -S "/tmp/.X11-unix/X${d#:}" ] && echo "X-Socket /tmp/.X11-unix/X${d#:} da" \
+    || { echo "kein X-Socket fuer $d — start-zerokey.sh --provider deepseek startet Xvfb selbst"; exit 1; }'
 
 # Kopplung Client-Budget <-> Proxy-Budget. Am 2026-09-30 lief eine Session
 # 20 Requests lang in eine Schleife, weil opencode limit.context=16000 TOKENS

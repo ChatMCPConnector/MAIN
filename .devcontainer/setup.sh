@@ -381,6 +381,19 @@ else
     || echo "    WARN: zerokey-Start fehlgeschlagen — manuell: ./llm-proxies/scripts/start-zerokey.sh"
 fi
 
+echo "==> [landscape] LLM-Proxy zerokey (DeepSeek, Port 7300) starten..."
+# Zweite ZeroKey-Instanz: ZeroKey bedient EINEN Provider pro Prozess
+# (server.js:50), DeepSeek braucht also ein eigenes. start-zerokey.sh startet
+# für Provider deepseek auch den Xvfb, den der headed Chromium braucht
+# (browser-transport.js:102) — hier und im Watchdog derselbe Weg.
+if ss -tln | grep -q ":7300 "; then
+  echo "    Port 7300 belegt — zerokey/deepseek läuft bereits."
+else
+  bash "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" --provider deepseek --port 7300 \
+    && echo "    zerokey/deepseek läuft." \
+    || echo "    WARN: DeepSeek-Start fehlgeschlagen — manuell: ./llm-proxies/scripts/start-zerokey.sh --provider deepseek --port 7300"
+fi
+
 echo "==> [landscape] Zentralen opencode-Server starten..."
 if ss -tln | grep -q ":4096 "; then
   echo "    Port 4096 belegt — opencode-server läuft bereits."

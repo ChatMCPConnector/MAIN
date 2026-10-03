@@ -8,7 +8,7 @@ label() {
   # weitergeleitet oder von einem Start-Skript gebunden wird, aber hier fehlt.
   case "$1" in
     3000) echo "Web App";; 4000) echo "Dev Server";; 4096) echo "opencode-Server (Multi-Client)";; 5000) echo "Flask";; 5173) echo "Vite";;
-    7250) echo "zerokey (ChatGPT-Web)";;
+    7250) echo "zerokey (ChatGPT-Web)";; 7300) echo "zerokey (DeepSeek-Web)";;
     8000) echo "Python/FastAPI";; 8001) echo "glm2api-Proxy";; 9878) echo "antigravity-proxy";;
     6082) echo "noVNC (Browser)";; 5920) echo "x11vnc (localhost-only)";;
     *) echo "sonstiger Prozess";;

@@ -15,6 +15,20 @@
 > changed files, which would freeze other people's work in a shared repo), and
 > `.vscode/settings.json` is gone (parent-repo editor config). `temp/` is
 > gitignored: it holds the ChatGPT cookies, see `infrastructure.md`.
+>
+> **Two upstream behaviours that are wrong and must not be trusted** (found
+> 2026-10-03 while wiring the DeepSeek provider, both live-verified here):
+> **(1) `validateCredentials` in `browser-transport` mode checks nothing.**
+> `initializeFromJSON` (`providers/deepseek/browser-transport.js:80`) is only
+> `this._seedToken = token` — it never contacts DeepSeek and reports `success`
+> in 0 s. The wizard's "Session verified" is therefore meaningless. The only
+> real proof is `POST /v1/chat/completions`. **(2) `GET /v1/models` is not
+> filtered by the running provider** (`registry.getModels()` merges every
+> provider), so the ChatGPT instance has always advertised 11 models while
+> owning exactly one (`providers/chatgpt/config.js`). MAIN works around it by
+> pinning the model list per provider in `.opencode/opencode.json` instead of
+> patching upstream. Do not "fix" either one by trusting the wizard output or
+> the models endpoint.
 
 # PROJECT
 ZeroKey — OpenAI-compatible AI proxy. Drives real browser/session-based chat accounts (DeepSeek, Claude, ChatGPT, Qwen — no API keys) and exposes them as an OpenAI `/v1/chat/completions` endpoint for IDE agents (VS Code, Terax, OpenCode). Node.js, CommonJS, single-process, Express 5.
