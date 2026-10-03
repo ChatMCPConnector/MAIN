@@ -46,6 +46,8 @@ function streamHandler(stream, session, parser, retry) {
   let producedOutput = false
   let lastEventType = null
   let lastError = null
+  // MAIN (2026-10-03): letzter kumulierter Token-Stand, fuer das Delta oben.
+  let lastAccumulated = null
 
   // Current fragment type: 'THINK' | 'RESPONSE' | null
   let currentFragmentType = null
@@ -137,11 +139,25 @@ function streamHandler(stream, session, parser, retry) {
       const usageEntry = data.v?.find((e) => e.p === 'accumulated_token_usage')
       const statusEntry = data.v?.find((e) => e.p === 'quasi_status')
       if (usageEntry) {
-        parser.tokenUsage.prompt_tokens = 0
-        parser.tokenUsage.completion_tokens = usageEntry.v
-        parser.tokenUsage.total_tokens =
-          parser.tokenUsage.completion_tokens + parser.tokenUsage.prompt_tokens
-        console.debug(`[DeepSeek] Tokens: ${usageEntry.v} (status: ${statusEntry?.v ?? '-'})`)
+        // MAIN (2026-10-03): DeepSeek liefert hier NUR `accumulated_token_usage`
+        // — kumuliert ueber die Conversation, nicht pro Turn. Upstream wurde der
+        // Wert unveraendert als completion_tokens durchgereicht (opencode sah
+        // dadurch eine monoton steigende Treppe 2555 -> 3394 -> 4260), und
+        // prompt_tokens wurde hart auf 0 gesetzt. Beides zusammen hiess: opencode
+        // sieht den Kontext nicht wachsen und kompaktiert nie, waehrend der
+        // Proxy ab 128 000 Zeichen selbst die Mitte der Unterhaltung wirft.
+        //   - prompt_tokens setzt der Router (router.js) aus der Laenge des
+        //     echten Prompts; hier nur noch nicht mehr zerstoeren.
+        //   - completion_tokens als Delta gegen den letzten Wert, pro Turn.
+        const accumulated = Number(usageEntry.v) || 0
+        const delta =
+          lastAccumulated === null ? accumulated : Math.max(0, accumulated - lastAccumulated)
+        lastAccumulated = accumulated
+        parser.tokenUsage.completion_tokens = delta
+        parser.tokenUsage.total_tokens = (parser.tokenUsage.prompt_tokens || 0) + delta
+        console.debug(
+          `[DeepSeek] Tokens: +${delta} (akkumuliert ${accumulated}, prompt ~${parser.tokenUsage.prompt_tokens || 0}, status: ${statusEntry?.v ?? '-'})`,
+        )
       }
       return
     }

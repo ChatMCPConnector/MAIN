@@ -26,6 +26,12 @@ const REASONING_MAP = reasoning.map
 const REASONING_FALLBACK =
   REASONING_MAP[reasoning.default] || REASONING_MAP.Off || { think: false, search: false }
 
+// Zeichen pro Token fuer die prompt_tokens-Schaetzung. 4 ist die gaengige
+// Naeherung fuer Deutsch/Codemarken; bewusst pessimistisch gerundet, weil ein
+// zu kleiner Wert opencode zu frueh kompaktieren laesst (Last wegwerfen) und
+// ein zu grosser erst zu spaet (der Proxy kappt dann selbst).
+const CHARS_PER_TOKEN = 4
+
 async function buildDeepSeekRouter(parsedFetch, session, userData) {
   const username = userData?.username
   if (TRANSPORT !== 'api' && !username) {
@@ -111,6 +117,20 @@ async function buildDeepSeekRouter(parsedFetch, session, userData) {
           fileIds,
         )
       }
+
+      // MAIN (2026-10-03): DeepSeek meldet im SSE nur `accumulated_token_usage`
+      // (kumuliert über die Conversation) und **gar keine** Prompt-Token. Der
+      // Stream-Handler gab deshalb `prompt_tokens = 0` weiter — opencode hielt
+      // damit den GESAMTEN Kontext fuer Ausgabe und kompaktierte nie, waehrend
+      // `compiler.limitPrompt` ab 128 000 Zeichen still die Mitte der
+      // Unterhaltung wirft (live belegt: opencode meldete in 5 Schritten
+      // input=0 / output=2555..9257 und war bei 86 963 von 127 936 Zeichen).
+      // Also hier, wo `prompt` vorliegt, eine Schaetzung setzen: ~4 Zeichen pro
+      // Token. Das ist eine Naeherung, aber sie ist um eine Groessenordnung
+      // besser als 0 — und sie ist die Groesse, die opencode fuer die
+      // Kompaktionsentscheidung braucht. Die Hartzahl aus DeepSeks
+      // Antwort waere ein Schritt weiter, laesst sich aber nicht erahnen.
+      pipeline.tokenUsage.prompt_tokens = Math.ceil(prompt.length / CHARS_PER_TOKEN)
 
       streamHandler(deepseekStream, activeSession, pipeline, retry)
     } catch (error) {

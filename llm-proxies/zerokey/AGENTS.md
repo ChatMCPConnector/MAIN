@@ -41,7 +41,17 @@
 > same knob — only `utils/sync-ide-config.js` reads it, and only for the VS Code
 > config, so it does not reach opencode/hermes. Note the semantic change: an
 > *unknown* `reasoning_effort` now also gets DeepThink instead of no thinking.
-> Explicit `Off` still opts out. **Do NOT mirror `providers/chatgpt/router.js:34`
+> Explicit `Off` still opts out. **Third MAIN deviation (2026-10-03),
+> `stream-handler.js`:** upstream set `parser.tokenUsage.prompt_tokens = 0`
+> and passed DeepSeek's `accumulated_token_usage` straight through as
+> `completion_tokens` — that value is cumulative over the *conversation*, so
+> opencode saw `input: 0` plus a monotonic output staircase and never
+> compacted. `prompt_tokens` is now set by the router (`router.js`, the only
+> place that knows the real prompt length) as `prompt.length / 4`;
+> `completion_tokens` is a delta against the last value seen in this turn.
+> Measured after: `input` 617-2468 instead of 0. The delta is per request, not
+> per conversation, so the first BATCH of a turn still carries the running
+> conversation total — known, documented in `infrastructure.md`, not fixed. **Do NOT mirror `providers/chatgpt/router.js:34`
 > into this provider — I tried it on 2026-10-03 and it is dead code here.**
 > ChatGPT runs `pipeline.setup()` first and its `chatCompletion` creates a
 > backend conversation, so ephemeral calls really do leave a session and the

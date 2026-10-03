@@ -262,3 +262,66 @@ def test_cli_exit_2_bei_unlesbarer_datei(tmp_path):
         timeout=30,
     )
     assert r.returncode == 2
+
+# --- MAIN 2026-10-03: die Paar-Pruefung ------------------------------------
+#
+# `lade()` war auf das ChatGPT-Paar festverdrahtet. Deshalb blieb dieser Check
+# gruen, als `deepseek-web` mit `limit.context: 1000000` in opencode.json stand —
+# die Regel, die das gefangen haette, wurde nie auf dieses Paar angewandt. Die
+# folgenden Tests sichern genau das ab.
+
+
+def test_paare_findet_beide_zerokey_provider():
+    """Beide ZeroKey-Provider im echten Repo werden gefunden, mit promptLimit."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    ps, reserved = cpb.paare(str(root))
+    gefunden = {(pid, mid, name) for pid, mid, _c, _o, _l, name in ps}
+    assert ("deepseek-web", "default", "deepseek") in gefunden
+    assert ("downloaddoctor", "zerokey", "chatgpt") in gefunden
+    assert reserved == 2000
+
+
+def test_paare_ueberspringt_nicht_zerokey_provider():
+    """glm2api (Port 8001) hat kein promptLimit — darf kein Paar werden."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    ps, _reserved = cpb.paare(str(root))
+    ids = {pid for pid, *_rest in ps}
+    assert "glm2api" not in ids
+    assert "antigravity" not in ids
+    assert "xinjianya" not in ids
+
+
+def test_paare_ignoriert_provider_ohne_limit():
+    """Ein Provider ohne limit.context zaehlt nicht als Paar."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    ps, _reserved = cpb.paare(str(root))
+    for _pid, _mid, ctx, _out, _limit, _name in ps:
+        assert ctx > 0
+
+
+def test_deepseek_mit_modellkarten_context_wird_rot():
+    """DER BUG VOM 2026-10-03, festgeschrieben.
+
+    `limit.context` war aus DeepSeks Modellkarte (1 000 000 Tokens) uebernommen,
+    obwohl ZeroKeys `promptLimit` von 128 000 Zeichen die bindende Grenze ist.
+    opencode haette deshalb nie kompaktiert, waehrend der Proxy ab 127 936
+    Zeichen still die Mitte des Gespraechs wegwirft. Die bestehende Regel
+    `Arbeitsfenster > 2x Proxy-Budget` faengt das — vorausgesetzt, sie laeuft
+    ueberhaupt fuer dieses Paar.
+    """
+    _f, _s, chars, fehler, _h = cpb.pruefe(1_000_000, 384_000, 2000, 128_000)
+    assert fehler, "1M context bei 128k-Zeichen-Limit muss rot werden"
+    assert any("Haelfte" in f or "half" in f or "2x" in f for f in fehler), fehler
+    assert chars > 128_000 * 2
+
+
+def test_deepseek_korrigierte_werte_sind_gruen():
+    """Die Werte, die jetzt im Repo stehen, muessen gruen bleiben."""
+    _f, _s, _c, fehler, _h = cpb.pruefe(40_000, 4_000, 2000, 128_000)
+    assert fehler == []
+
+
+def test_output_gleich_context_bleibt_rot():
+    """output >= context ist die uralte Regel und muss auch bei DeepSeek gelten."""
+    _f, _s, _c, fehler, _h = cpb.pruefe(32_000, 32_000, 2000, 128_000)
+    assert fehler, "output == context muss rot sein (Kompaktierungsschwelle 0)"

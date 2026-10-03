@@ -57,6 +57,11 @@ import sys
 # JSON sind dichter (~3). Es geht hier um Groessenordnungen, nicht um Genauigkeit.
 CHARS_PER_TOKEN = 4
 
+# ZeroKey-Port -> providers/<name>. Gilt fuer ZeroKey-getriebene opencode-
+# Provider; andere Ports (8001 glm2api, 9878 antigravity, 4096 Server) haben
+# kein promptLimit und werden uebersprungen.
+ZK_PORT_PROVIDER = {"7250": "chatgpt", "7300": "deepseek"}
+
 DEFAULT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -151,6 +156,52 @@ def pruefe(ctx, out, reserved, limit):
     return fenster, schwelle, chars, fehler, hinweise
 
 
+def paare(root):
+    """Alle ZeroKey-getriebenen opencode-Provider finden und mit promptLimit paaren.
+
+    MAIN (2026-10-03): `lade()` war auf das ChatGPT-Paar festverdrahtet
+    (`provider.downloaddoctor` + `providers/chatgpt/config.js`). Deshalb blieb
+    dieser Check gruen, als `deepseek-web` mit `limit.context: 1000000` drin
+    stand — die Regel, die das gefangen haette, wurde nie auf dieses Paar
+    angewandt. Ermittelt wird die Zuordnung jetzt aus der baseURL
+    (`http://127.0.0.1:<port>/v1` -> `providers/<port-label>/config.js`), nicht
+    aus einer Liste im Skript: eine Liste waere die zweite Wahrheit und genau
+    die Art Kopplung, die dieser Check verhindern soll.
+
+    Liefert (paare, reserved) mit paare = [(provider_id, model_id, ctx, out,
+    prompt_limit, providers_verzeichnis)]. reserved ist opencodes globale
+    `compaction.reserved` — dieselbe Zahl, die `lade()` fuer das ChatGPT-Paar
+    liest, denn sie gilt pro Model, nicht pro Provider.
+    """
+    erg = []
+    try:
+        cfg = json.load(open(os.path.join(root, ".opencode/opencode.json"), encoding="utf-8"))
+    except (OSError, ValueError):
+        return erg, 0
+    zk_root = os.path.join(root, "llm-proxies/zerokey/providers")
+    for pid, prov in (cfg.get("provider") or {}).items():
+        base = str((prov.get("options") or {}).get("baseURL") or "")
+        m = re.search(r"127\.0\.0\.1:(\d+)", base)
+        if not m:
+            continue
+        name = ZK_PORT_PROVIDER.get(m.group(1))
+        if not name:
+            continue
+        datei = os.path.join(zk_root, name, "config.js")
+        if not os.path.exists(datei):
+            continue
+        treffer = re.search(r"const promptLimit = ([\d_]+)", open(datei, encoding="utf-8").read())
+        if treffer is None:
+            continue
+        limit = int(treffer.group(1).replace("_", ""))
+        for mid, mod in (prov.get("models") or {}).items():
+            lim = (mod or {}).get("limit") or {}
+            if "context" not in lim:
+                continue
+            erg.append((pid, mid, int(lim["context"]), int(lim.get("output") or 0), limit, name))
+    return erg, int((cfg.get("compaction") or {}).get("reserved") or 0)
+
+
 def main():
     root = DEFAULT_ROOT
     # CLI bleibt wie vorher: zwei optionale Positionsargumente.
@@ -176,6 +227,32 @@ def main():
     if fehler:
         return 1
     print(f"ok: Kopplung stimmt (Fenster {fenster} von {ctx} Tokens)")
+
+    # MAIN (2026-10-03): zweite, paarweise Pruefung ueber ALLE ZeroKey-Provider
+    print()
+    gefaelle = []
+    ps, reserved = paare(root)
+    if not ps:
+        print("kein ZeroKey-Provider in opencode.json gefunden — Paar-Pruefung entfaellt")
+        return 0
+    for pid, mid, pctx, pout, plimit, name in ps:
+        f2, schw2, chars2, ef, hn = pruefe(pctx, pout, reserved, plimit)
+        marke = "FEHLER" if ef else "ok    "
+        print(
+            f"{marke} {pid}/{mid} (zerokey/providers/{name}): context={pctx}, "
+            f"output={pout}, promptLimit={plimit} Zeichen -> Kompaktierung ab "
+            f"{schw2} Tokens, Fenster {f2} (~{chars2} Zeichen)"
+        )
+        for h in hn:
+            print(f"         HINWEIS: {h}")
+        gefaelle.extend(f"{pid}/{mid}: {x}" for x in ef)
+    if gefaelle:
+        print()
+        for f in gefaelle:
+            print(f"FEHLER: {f}")
+        return 1
+    print()
+    print(f"ok: alle {len(ps)} ZeroKey-Paare geprueft")
     return 0
 
 
