@@ -28,7 +28,11 @@
 > owning exactly one (`providers/chatgpt/config.js`). MAIN works around it by
 > pinning the model list per provider in `.opencode/opencode.json` instead of
 > patching upstream. Do not "fix" either one by trusting the wizard output or
-> the models endpoint. **MAIN deviation in `providers/deepseek/` (2026-10-03),
+> the models endpoint. Note `model_type` is not merely ignored: the server
+> **rewrites it back**. Sending `model_type: "expert"` comes back in the SSE as
+> `model_type: "default"`, and `client/settings?scope=model` reports
+> `expert`/`vision` as `enabled:false, switchable:false` — so V4-Pro is a
+> server-side entitlement the client cannot talk its way into. **MAIN deviation in `providers/deepseek/` (2026-10-03),
 > two files:** `config.js` gained `reasoning.default: 'DeepThink'` and
 > `router.js` resolves `REASONING_MAP[reasoning_effort] ?? reasoning.default`
 > instead of upstream's hard `{think:false, search:false}`. Reason, measured
