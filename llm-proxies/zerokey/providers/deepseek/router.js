@@ -26,10 +26,13 @@ const REASONING_MAP = reasoning.map
 const REASONING_FALLBACK =
   REASONING_MAP[reasoning.default] || REASONING_MAP.Off || { think: false, search: false }
 
-// Zeichen pro Token fuer die prompt_tokens-Schaetzung. 4 ist die gaengige
-// Naeherung fuer Deutsch/Codemarken; bewusst pessimistisch gerundet, weil ein
-// zu kleiner Wert opencode zu frueh kompaktieren laesst (Last wegwerfen) und
-// ein zu grosser erst zu spaet (der Proxy kappt dann selbst).
+// Zeichen pro Token fuer die Groessenordnung des gesendeten Nachschubs. Der
+// Wert geht als usageState.promptTokens an den Stream-Handler und dient dort
+// als Protokollzeile und als untere Schranke, wenn kein Vorwert existiert. Er
+// ist ausdruecklich NICHT die Kontextzahl: ZeroKey sendet den Nachschub, nicht
+// die Unterhaltung (siehe stream-handler.js und infrastructure.md). Er steht
+// hier und nicht im Handler, weil die Naeherung eine Einstellung ist und der
+// Handler sie nur konsumiert.
 const CHARS_PER_TOKEN = 4
 
 async function buildDeepSeekRouter(parsedFetch, session, userData) {
@@ -43,7 +46,7 @@ async function buildDeepSeekRouter(parsedFetch, session, userData) {
   // gehalten werden. Diese Closure laeuft einmal pro Session (der Router wird
   // beim Start mit der Session gebaut), haelt den Zustand also weder in
   // users.json noch in einem Modul-Singleton.
-  const usageState = { lastAccumulated: null }
+  const usageState = { lastAccumulated: null, promptTokens: 0 }
   if (TRANSPORT !== 'api' && !username) {
     throw new Error('[Deepseek] userData.username (local key) is required for browser transport')
   }
@@ -140,7 +143,12 @@ async function buildDeepSeekRouter(parsedFetch, session, userData) {
       // besser als 0 — und sie ist die Groesse, die opencode fuer die
       // Kompaktionsentscheidung braucht. Die Hartzahl aus DeepSeks
       // Antwort waere ein Schritt weiter, laesst sich aber nicht erahnen.
-      pipeline.tokenUsage.prompt_tokens = Math.ceil(prompt.length / CHARS_PER_TOKEN)
+      // Weitergereicht an den Stream-Handler als untere Schranke fuer
+      // prompt_tokens: das ist die Groesse, die WIR wirklich senden. Weil
+      // opencode die Historie pruned und DeepSeek den Faden serverseitig haelt,
+      // ist das fuer den Turn viel kleiner als die echte Unterhaltung — der
+      // Handler rechnet deshalb mit dem akkumulierten Stand (siehe dort).
+      usageState.promptTokens = Math.ceil(prompt.length / CHARS_PER_TOKEN)
 
       streamHandler(deepseekStream, activeSession, pipeline, retry, usageState)
     } catch (error) {

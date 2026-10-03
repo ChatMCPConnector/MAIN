@@ -51,9 +51,10 @@ function sseOf(lines) {
 const batch = (accumulated) =>
   JSON.stringify({ o: 'BATCH', v: [{ p: 'accumulated_token_usage', v: accumulated }] })
 
-function turn(usageState, accumulatedLines) {
+function turn(usageState, accumulatedLines, promptChars = 0) {
   const parser = parserStub()
   const session = { parentMessageId: null }
+  if (usageState) usageState.promptChars = promptChars
   return new Promise((resolve) => {
     streamHandler(sseOf(accumulatedLines), session, parser, () => {}, usageState)
     // Der Handler schreibt asynchron ueber den Stream; nach dem Ende auflösen.
@@ -64,14 +65,15 @@ function turn(usageState, accumulatedLines) {
 ;(async () => {
   // 1) Erster Turn einer Session: ehrlich 0, KEINE Gesamtsumme als Output.
   const state = { lastAccumulated: null }
-  const t1 = await turn(state, [batch(897)])
-  check(t1.prompt_tokens === undefined || t1.prompt_tokens === 0, 'erster Turn meldet keinen Prompt von sich aus', t1.prompt_tokens)
-  check(t1.completion_tokens === 0, 'erster Turn meldet completion_tokens=0 statt der Gesamtsumme', t1.completion_tokens)
+  const t1 = await turn(state, [batch(897)], 2457)
+  check(t1.prompt_tokens === 897, 'erster Turn meldet den akkumulierten Stand als Kontext', t1.prompt_tokens)
+  check(t1.completion_tokens === 897, 'erster Turn meldet den vollen Stand als Zunahme (kein Vorwert vorhanden)', t1.completion_tokens)
 
   // 2) Zweiter Turn: echtes Delta gegen den Stand aus Turn 1.
-  const t2 = await turn(state, [batch(1726)])
+  const t2 = await turn(state, [batch(1726)], 10687)
+  check(t2.prompt_tokens === 1726, 'prompt_tokens waechst monoton mit der Conversation', t2.prompt_tokens)
   check(t2.completion_tokens === 829, 'zweiter Turn meldet das Delta 1726-897=829', t2.completion_tokens)
-  check(t2.total_tokens === 829 + (t2.prompt_tokens || 0), 'total = completion + prompt', t2.total_tokens)
+  check(t2.total_tokens === t2.prompt_tokens + t2.completion_tokens, 'total = prompt + completion', t2.total_tokens)
 
   // 3) Ruecklaufender Akkumulator darf nicht negativ werden.
   const t3 = await turn(state, [batch(10)])
@@ -79,15 +81,49 @@ function turn(usageState, accumulatedLines) {
 
   // 4) Ohne usageState (Aufrufer, der den 5. Parameter nicht setzt) darf es
   //    keinen Zustand geben, das Script also nicht werfen.
-  const t4 = await turn(undefined, [batch(500)])
-  check(t4.completion_tokens === 0, 'fehlender usageState wird toleriert', t4.completion_tokens)
+  let threw = false
+  try { await turn(undefined, [batch(500)]) } catch { threw = true }
+  check(!threw, 'fehlender usageState wird toleriert (kein Wurf)')
 
   // 5) Der Kern des Fehlers von 2026-10-03: derselbe Stand in zwei aufeinander
   //    folgenden Requests darf NICHT zweimal als Output gemeldet werden.
-  const s2 = { lastAccumulated: null }
-  const a = await turn(s2, [batch(900)])
-  const b = await turn(s2, [batch(900)])
-  check(a.completion_tokens === 0 && b.completion_tokens === 0, 'unveraenderter Stand meldet zweimal 0, nicht 2x den Stand', `${a.completion_tokens}/${b.completion_tokens}`)
+  const s2 = { lastAccumulated: null, promptChars: 0 }
+  const a = await turn(s2, [batch(900)], 3000)
+  const b = await turn(s2, [batch(900)], 3000)
+  check(a.completion_tokens === 900 && b.completion_tokens === 0, 'unveraenderter Stand: erster Turn 900, zweiter 0 statt 2x 900', `${a.completion_tokens}/${b.completion_tokens}`)
+
+  // 6) opencode pruned die Historie, DeepSeek haelt den Faden: der Prompt, den
+  //    WIR senden, ist viel kleiner als die echte Conversation. Deshalb muss
+  //    prompt_tokens dem akkumulierten Stand folgen und waechst.
+  const s3 = { lastAccumulated: null, promptChars: 0 }
+  const t = []
+  for (const acc of [1000, 9000, 40000]) t.push(await turn(s3, [batch(acc)], 4000))
+  check(
+    t[0].prompt_tokens === 1000 && t[1].prompt_tokens === 9000 && t[2].prompt_tokens === 40000,
+    'prompt_tokens folgt dem Conversation-Stand (1000/9000/40000), nicht der Prompt-Laenge',
+    t.map((x) => x.prompt_tokens).join('/'),
+  )
+  check(
+    t[0].completion_tokens === 1000 && t[1].completion_tokens === 8000 && t[2].completion_tokens === 31000,
+    'completion_tokens ist je Turn das echte Delta (1000/8000/31000)',
+    t.map((x) => x.completion_tokens).join('/'),
+  )
+  check(
+    t.every((x) => x.prompt_tokens + x.completion_tokens === x.total_tokens),
+    'prompt + completion = total in jedem Turn',
+  )
+  check(
+    t[0].prompt_tokens < t[1].prompt_tokens && t[1].prompt_tokens < t[2].prompt_tokens,
+    'prompt_tokens waechst monoton — opencode sieht die Kontextgroesse',
+  )
+  // 7) Ein winziger Nachschub (800 Zeichen) darf den gemeldeten Kontext nicht
+  //    auf ~200 Tokens schrumpfen lassen — genau der Fehler, an dem opencode
+  //    855 Tokens sah, wo 30 000 standen.
+  const s4 = { lastAccumulated: null, promptChars: 0 }
+  await turn(s4, [batch(30000)], 200000)      // erster Turn, gross gesendet
+  const klein = await turn(s4, [batch(31000)], 800)  // zweiter Turn, winziger Nachschub
+  check(klein.prompt_tokens === 31000, 'kleiner Nachschub schrumpft den Kontext nicht (31000, nicht ~200)', klein.prompt_tokens)
+  check(klein.completion_tokens === 1000, 'der Winz-Nachschub kostet 1000, nicht die ganze Conversation', klein.completion_tokens)
 
   if (failed) {
     console.error(`\n${failed} FAIL`)

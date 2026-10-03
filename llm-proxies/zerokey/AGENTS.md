@@ -51,24 +51,39 @@
 > 500k and 750k tokens and the full 1M is not reachable over the web path
 > whatever the model card says. `check-proxy-budget.py` pairs against this
 > number. Don't raise it to 4M on the strength of the model card — 3M was
-> measured failing. **Third MAIN deviation (2026-10-03),
-> `stream-handler.js`:** upstream set `parser.tokenUsage.prompt_tokens = 0`
-> and passed DeepSeek's `accumulated_token_usage` straight through as
-> `completion_tokens` — that value is cumulative over the *conversation*, so
-> opencode saw `input: 0` plus a monotonic output staircase and never
-> compacted. `prompt_tokens` is now set by the router (`router.js`, the only
-> place that knows the real prompt length) as `prompt.length / 4`;
-> `completion_tokens` is a delta against the last value seen in this turn.
-> Measured after: `input` 617-2468 instead of 0. **`completion_tokens` needs
-> state that survives the request** — the accumulator is per *conversation*, so a
-> request-local delta was not enough: the first BATCH of a turn already carries
-> the running total. Symptom of that intermediate state: 4 messages reporting
-> **804 724 output tokens in 22 seconds**. The state therefore lives in the
-> router's per-session closure (`usageState`, created in `buildDeepSeekRouter`
-> and passed as the 5th argument to `streamHandler`), never in `users.json` and
-> never in a module singleton. First turn of a session honestly reports 0 —
-> there is nothing to compare against. Regression test:
-> `node scripts/test-token-usage.js` (wired into `pnpm test`). **Fifth MAIN
+> **Third MAIN deviation (2026-10-03), `stream-handler.js`.** Upstream set
+> `parser.tokenUsage.prompt_tokens = 0` and passed DeepSeek's
+> `accumulated_token_usage` straight through as `completion_tokens`. That value
+> is cumulative over the *conversation*, so opencode saw `input: 0` plus a
+> monotonic output staircase and never compacted.
+>
+> The accumulator is per conversation, so reporting it needs state that survives
+> the request: it lives in the router's per-session closure (`usageState`,
+> created in `buildDeepSeekRouter`, passed as the 5th argument to
+> `streamHandler`), never in `users.json`, never in a module singleton.
+>
+> **Final shape, after two wrong drafts.** DeepSeek returns ONE number for the
+> whole conversation with no input/output split (measured 49 -> 97 -> 189 over
+> three turns), so any split would be invented. We report what we actually have:
+> `prompt_tokens` = the accumulated conversation size (grows monotonically — this
+> is what opencode's compaction needs, and an UPPER bound of the real context
+> because output is included), `completion_tokens` = the increase of the current
+> turn (a real delta, the cost number), `total` = the sum. **The two overlap on
+> purpose; documented, not smoothed over.** Draft 1 set `prompt_tokens` to the
+> value *before* the turn — output then ate the context growth and
+> `prompt_tokens` stagnated. Draft 2 tried to extrapolate a split and was
+> discarded for the reason above.
+>
+> **Do not use `prompt.length / 4` as the context number.** ZeroKey sends the
+> *increment*, not the history: opencode prunes (`compaction.prune`) and DeepSeek
+> holds the thread via `parent_message_id`. Measured prompts 2532 -> 58141 ->
+> 3418 chars while the conversation grew to 54 900 tokens — opencode saw 855 and
+> would never have compacted.
+>
+> Symptoms this replaced: `input: 0` with an output staircase (2555..9257), then
+> **804 724 output tokens in 22 seconds**, then `input: 855` for a conversation of
+> 58 241. Measured after: `in=58241, out=833`. Regression test
+> `node scripts/test-token-usage.js` (11 checks) is wired into `pnpm test`.
 > deviation (2026-10-03): the default `DEEPSEEK_TRANSPORT` is `api`, not
 > `browser`.** `browser-transport.js` receives `parentMessageId` and ignores it
 > (`chatCompletion(chatSessionId, prompt, _parentMessageId, …)`) — it navigates to

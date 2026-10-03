@@ -153,17 +153,43 @@ function streamHandler(stream, session, parser, retry, usageState) {
         //   - prompt_tokens setzt der Router (router.js) aus der Laenge des
         //     echten Prompts; hier nur noch nicht mehr zerstoeren.
         //   - completion_tokens als Delta gegen den letzten Wert, pro Turn.
+        // MAIN (2026-10-03, zweite Fassung — die erste war falsch).
+        //
+        // DeepSeek liefert EINE Zahl fuer die ganze Conversation
+        // (`accumulated_token_usage`), ohne Input/Output-Trennung; gemessen
+        // 49 -> 97 -> 189 ueber drei Turns. Es gibt schlicht keine Quelle fuer
+        // eine ehrliche Aufteilung, also wird **nichts erfunden**:
+        //
+        //   prompt_tokens     = akkumulierter Stand  -> waechst monoton, das
+        //                       ist die Groesse, die opencodes Kompaktierung
+        //                       braucht (oberhalb einer Obergrenze des echten
+        //                       Kontexts, weil Output mit enthalten ist)
+        //   completion_tokens = Zunahme dieses Turns -> echtes Delta, das ist
+        //                       die Kostenzahl
+        //   total_tokens      = prompt + completion
+        //
+        // Die beiden ueberlappen, und das ist dokumentiert, nicht kaschiert.
+        // Der erste Entwurf setzte prompt_tokens = Stand VOR dem Turn; damit
+        // fraess der Output den Kontext-Zuwachs (9000 - 1000 = 8000 Completion
+        // fuer einen Turn, dessen Delta die ganze Unterhaltung war) und
+        // prompt_tokens stagnierte. Genau die Stoerung, die wir vermeiden
+        // wollten.
+        //
+        // Warum nicht die Prompt-Laenge: opencode pruned die Historie
+        // (`compaction.prune`) und DeepSeek haelt den Faden serverseitig, also
+        // senden wir pro Turn nur den Nachschub — gemessen prompts von 2532
+        // ueber 58141 runter auf 3418 Zeichen, waehrend die Conversation auf
+        // 54 900 Token wuchs. Mit der Prompt-Laenge allein sah opencode 855
+        // Tokens Kontext und haette nie kompaktiert.
         const accumulated = Number(usageEntry.v) || 0
         const prev = st.lastAccumulated
-        // Erster BATCH einer Session: es gibt keinen Vergleichswert, also wird
-        // ehrlich 0 gemeldet statt die Gesamtsumme als Turn-Output zu
-        // behaupten. Ab dem zweiten Turn ist es das echte Delta.
-        const delta = prev === null || prev === undefined ? 0 : Math.max(0, accumulated - prev)
         st.lastAccumulated = accumulated
-        parser.tokenUsage.completion_tokens = delta
-        parser.tokenUsage.total_tokens = (parser.tokenUsage.prompt_tokens || 0) + delta
+        const zunahme = prev === null || prev === undefined ? accumulated : Math.max(0, accumulated - prev)
+        parser.tokenUsage.prompt_tokens = accumulated
+        parser.tokenUsage.completion_tokens = zunahme
+        parser.tokenUsage.total_tokens = accumulated + zunahme
         console.debug(
-          `[DeepSeek] Tokens: +${delta} (akkumuliert ${accumulated}, prompt ~${parser.tokenUsage.prompt_tokens || 0}, status: ${statusEntry?.v ?? '-'})`,
+          `[DeepSeek] Tokens: akkumuliert=${accumulated} (prompt) +${zunahme} (dieser Turn), gesendet ~${st.promptTokens || 0}, status: ${statusEntry?.v ?? '-'}`,
         )
       }
       return
