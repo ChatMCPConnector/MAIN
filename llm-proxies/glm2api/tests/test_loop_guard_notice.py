@@ -88,22 +88,27 @@ def _acc():
 # --- Guard-Verhalten (unveraendert) ---------------------------------------
 
 
-def test_loop_guard_liefert_nur_zwei_und_zaehlt_die_drops():
+def test_loop_guard_liefert_nur_einen_remappten_call_und_zaehlt_die_drops():
+    # R-01 (2026-10-03): fuer einen REMAPPTEN call (`open` -> `read`) gilt
+    # die grenze 1, nicht 2. Ein remap ist ein kompatibilitaets-shim, kein
+    # bewusster aufruf — der erste lief bereits als `read`, jede identische
+    # kopie ist ein doppel-exec. (Der historische Live-Fall hatte 10x `open`
+    # auf dasselbe ziel: frueher kamen 2 durch, jetzt 1.)
     acc = _acc()
     _feed(acc, 10)
 
-    assert len(acc._server_side_tool_calls) == 2, "zwei identische calls sind erlaubt"
-    assert acc.loop_guard_dropped_count == 8
+    assert len(acc._server_side_tool_calls) == 1, "nur eine remappte ausfuehrung"
+    assert acc.loop_guard_dropped_count == 9
     assert acc.blocked_tool_attempt_names == [], "der guard ist KEIN blocked-tool-fall"
 
 
-def test_loop_guard_haelt_auch_native_tool_calls_listenform_auf_zwei():
+def test_loop_guard_haelt_auch_native_tool_calls_listenform_auf_einen():
     acc = _acc()
     for index in range(10):
         acc.consume_event(_native_open_list_event(f"call_list{index}"))
 
-    assert len(acc._server_side_tool_calls) == 2
-    assert acc.loop_guard_dropped_count == 8
+    assert len(acc._server_side_tool_calls) == 1
+    assert acc.loop_guard_dropped_count == 9
     assert acc.loop_guard_dropped_tools == ["open"]
 
 
@@ -113,8 +118,8 @@ def test_loop_guard_gilt_ueber_dict_und_listenform_gemeinsam():
     for index in range(9):
         acc.consume_event(_native_open_list_event(f"call_list{index}"))
 
-    assert len(acc._server_side_tool_calls) == 2
-    assert acc.loop_guard_dropped_count == 8
+    assert len(acc._server_side_tool_calls) == 1
+    assert acc.loop_guard_dropped_count == 9
 
 
 def test_loop_guard_begrenzt_identische_textprotokoll_calls():
@@ -150,13 +155,14 @@ def test_unterschiedliche_ziele_werfen_den_guard_nicht_aus():
     _feed(acc, 3, target="/workspaces/MAIN/a.md", tag="a")
     _feed(acc, 3, target="/workspaces/MAIN/b.md", tag="b")
 
-    assert len(acc._server_side_tool_calls) == 4
-    assert acc.loop_guard_dropped_count == 2
+    # je ziel eine remappte ausfuehrung, der rest faellt
+    assert len(acc._server_side_tool_calls) == 2
+    assert acc.loop_guard_dropped_count == 4
 
 
 def test_ohne_drops_bleibt_der_zaehler_null():
     acc = _acc()
-    _feed(acc, 2)
+    _feed(acc, 1)
     assert acc.loop_guard_dropped_count == 0
 
 
@@ -295,15 +301,16 @@ def test_stream_antwort_enthaelt_die_loop_guard_notice():
     chunks = [c.decode("utf-8") for c in client.stream_chat_completion(_payload())]
     text = "".join(chunks)
     assert "[loop_guard_notice]" in text
-    assert "4 identical open call" in text
+    # R-01: 6 identische remappte `open` -> 1 ausfuehrung, 5 verworfen.
+    assert "5 identical open call" in text
     assert "NO tool limit" in text
 
 
-def test_stream_liefert_genau_zwei_calls_und_keine_mehr():
+def test_stream_liefert_genau_einen_remappten_call_und_keinen_mehr():
     client = _make_client()
     text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
     # die argument-string stehen im SSE-chunk escaped
-    assert text.count("filePath") == 2, "der guard darf nicht auf 6 durchlassen"
+    assert text.count("filePath") == 1, "der guard darf nicht auf 6 durchlassen"
 
 
 def test_non_stream_antwort_enthaelt_die_loop_guard_notice():
@@ -317,7 +324,7 @@ def test_non_stream_antwort_enthaelt_die_loop_guard_notice():
     assert "[loop_guard_notice]" in content
     assert "NO tool limit" in content
     assert "[loop_guard_notice]" not in (message.get("content") or "")
-    assert len(message.get("tool_calls") or []) == 2
+    assert len(message.get("tool_calls") or []) == 1
 
 
 def test_stream_guard_notice_gilt_auch_fuer_textprotokoll_calls():
@@ -423,7 +430,8 @@ def test_stream_loop_guard_notice_survives_alongside_valid_native_calls():
     text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
 
     assert "[loop_guard_notice]" in text
-    assert "4 identical open call" in text
+    # R-01: 6 remappte `open` + 1 echter `read` -> 5 `open`-kopien verworfen.
+    assert "5 identical open call" in text
     assert "NO tool limit" in text
     assert '"name":"read"' in text
     assert '"name":"open"' not in text

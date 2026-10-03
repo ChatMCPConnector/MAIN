@@ -658,6 +658,21 @@ def repair_raw_tool_args(tool_name: str, raw_str: str) -> dict[str, object] | No
 # T-04: maximale anzahl identischer nativer calls pro turn
 _MAX_IDENTICAL_NATIVE_CALLS = 2
 
+# R-01: fuer einen REMAPPTEN call (`open` -> `read`) gilt eine strengere
+# grenze. Ein remap ist ein kompatibilitaets-shim, kein bewusster aufruf:
+# das modell feuert seinen nativen namen, bekommt innerhalb des turns kein
+# ergebnis (opencode liefert die tool-results erst im folge-request) und
+# wiederholt ihn. `_MAX_IDENTICAL_NATIVE_CALLS = 2` ist fuer ECHTE
+# wiederholungen gedacht (ein retry nach einem fehler) — bei einem remap
+# gibt es diesen fall nicht: der erste call lief bereits als `read`, jede
+# identische kopie ist per konstruktion ein doppel-exec.
+#
+# Live 2026-10-03 (session `ses_efe6cd83bffeb3mKDe1pJ7qDBj`): das modell
+# feuerte dreimal denselben `open` auf `test_translator.py` (offset 2440);
+# die grenze 2 liess zwei davon durch, der client sah zwei identische
+# `read`-calls mit eigenen ids. Beide wurden ausgefuehrt.
+_MAX_IDENTICAL_REMAPPED_CALLS = 1
+
 def _canonical_signature(signature: str) -> str:
     """B-01: eine Signatur auf EINE Schreibweise bringen.
 
@@ -3282,7 +3297,20 @@ class GLMEventAccumulator:
                 guarded.append(tool_call)
                 continue
 
-            signature = _tool_call_signature(tool_call)
+            # R-02: die signatur MUSS kanonisch sein (argument-schluessel
+            # sortiert). Der native pfad baut seine signatur mit
+            # `sort_keys=True`; `_tool_call_signature` sortiert NICHT. Zwei
+            # text-calls mit identischen argumenten in anderer
+            # schluesselreihenfolge galten damit als VERSCHIEDEN, der
+            # zaehler startete fuer jeden bei null und beide gingen an den
+            # client. Live 2026-10-03 (`ses_efe6cd83…`): zweimal `read`
+            # auf `test_translator.py` (offset 2440), einmal als
+            # `{filePath,offset,limit}`, einmal als `{limit,offset,filePath}`
+            # — `tool_calls=2`, null drops. Kanonisch ist beides dieselbe
+            # signatur, und der zaehler teilt sich mit dem nativen pfad.
+            # Ohne das umgeht eine variierende schluesselreihenfolge den
+            # zaehler beliebig oft.
+            signature = _canonical_signature(_tool_call_signature(tool_call))
             # B-01-FIX: der echo-filter fehlte hier. Er prueft nur den
             # NATIVEN pfad (Z. ~3500), das modell schickt seine calls aber
             # als text-protokoll (`{"tool_calls":…}[]`). Folge live
@@ -3464,6 +3492,7 @@ class GLMEventAccumulator:
                                 }:
                                     continue
                                 entry_arguments = entry.get("arguments", "{}")
+                                entry_is_remapped = False
                                 if entry_name == "open":
                                     mapped = map_native_open_tool_call(
                                         entry_arguments,
@@ -3484,6 +3513,7 @@ class GLMEventAccumulator:
                                     # muss fuer die notice getrennt bleiben.
                                     self.native_remapped_calls.append((entry_name, mapped[0]))
                                     entry_name, entry_arguments = mapped
+                                    entry_is_remapped = True
                                 elif entry_name == "execute_sandbox_code":
                                     mapped = map_native_sandbox_tool_call(
                                         entry_arguments, self.allowed_tool_names
@@ -3493,6 +3523,7 @@ class GLMEventAccumulator:
                                         continue
                                     self.native_remapped_calls.append((entry_name, mapped[0]))
                                     entry_name, entry_arguments = mapped
+                                    entry_is_remapped = True
                                 if is_blocked_tool_name(entry_name, None):
                                     self.blocked_tool_attempt_names.append(entry_name)
                                     if blocked_native_seen is not None:
@@ -3541,12 +3572,20 @@ class GLMEventAccumulator:
                                         )
                                     continue
                                 repeat = self._server_side_signature_counts.get(signature, 0)
-                                if repeat >= _MAX_IDENTICAL_NATIVE_CALLS:
+                                # R-01: ein remappter call wird bereits nach der
+                                # ERSTEN kopie gebremst (siehe konstanten-kommentar).
+                                _identical_limit = (
+                                    _MAX_IDENTICAL_REMAPPED_CALLS
+                                    if entry_is_remapped
+                                    else _MAX_IDENTICAL_NATIVE_CALLS
+                                )
+                                if repeat >= _identical_limit:
                                     if self.logger:
                                         self.logger.info(
-                                            "Dropped identical native tool_call (loop guard) tool=%s repeats=%s",
+                                            "Dropped identical native tool_call (loop guard) tool=%s repeats=%s remapped=%s",
                                             entry_name,
                                             repeat,
+                                            entry_is_remapped,
                                         )
                                     self.loop_guard_dropped_count += 1
                                     self._note_turn_drop(signature, entry_name)
@@ -3577,6 +3616,7 @@ class GLMEventAccumulator:
                             arguments = tool_calls_data.get("arguments", "{}")
                             if tool_name.lower() in {"finish", "intervene", "cancel", "none"}:
                                 continue
+                            tool_is_remapped = False
                             if tool_name == "open":
                                 mapped = map_native_open_tool_call(
                                     arguments,
@@ -3629,6 +3669,7 @@ class GLMEventAccumulator:
                                     self.native_remapped_calls.append((tool_name, mapped_name))
                                     tool_name = mapped_name
                                     arguments = mapped_args
+                                    tool_is_remapped = True
                                     if self.logger:
                                         self.logger.info(
                                             "Mapped native open tool call to %s args=%s",
@@ -3668,6 +3709,7 @@ class GLMEventAccumulator:
                                     self.native_remapped_calls.append((tool_name, mapped_name))
                                     tool_name = mapped_name
                                     arguments = mapped_args
+                                    tool_is_remapped = True
                                     self._mapped_sandbox_calls += 1
                                     if self.logger:
                                         self.logger.info(
@@ -3769,12 +3811,20 @@ class GLMEventAccumulator:
                                 # plausiblen wiederholungsversuch ab und
                                 # bricht die schleife.
                                 repeat = self._server_side_signature_counts.get(signature, 0)
-                                if repeat >= _MAX_IDENTICAL_NATIVE_CALLS:
+                                # R-01: siehe listen-zweig — ein remappter call
+                                # wird nach der ersten kopie gebremst.
+                                _identical_limit = (
+                                    _MAX_IDENTICAL_REMAPPED_CALLS
+                                    if tool_is_remapped
+                                    else _MAX_IDENTICAL_NATIVE_CALLS
+                                )
+                                if repeat >= _identical_limit:
                                     if self.logger:
                                         self.logger.info(
-                                            "Dropped identical native tool_call (loop guard) tool=%s repeats=%s",
+                                            "Dropped identical native tool_call (loop guard) tool=%s repeats=%s remapped=%s",
                                             tool_name,
                                             repeat,
+                                            tool_is_remapped,
                                         )
                                     # T-25: der verworfene call muss fuer das
                                     # modell sichtbar sein, sonst zaehlt es
