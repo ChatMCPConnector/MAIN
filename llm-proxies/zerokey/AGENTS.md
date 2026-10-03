@@ -28,7 +28,16 @@
 > owning exactly one (`providers/chatgpt/config.js`). MAIN works around it by
 > pinning the model list per provider in `.opencode/opencode.json` instead of
 > patching upstream. Do not "fix" either one by trusting the wizard output or
-> the models endpoint.
+> the models endpoint. **MAIN deviation in `providers/deepseek/` (2026-10-03),
+> two files:** `config.js` gained `reasoning.default: 'DeepThink'` and
+> `router.js` resolves `REASONING_MAP[reasoning_effort] ?? reasoning.default`
+> instead of upstream's hard `{think:false, search:false}`. Reason, measured
+> through the running proxy: without `reasoning_effort` upstream **never
+> thought** (0 reasoning deltas). `defaultReasoning` on the model is *not* the
+> same knob — only `utils/sync-ide-config.js` reads it, and only for the VS Code
+> config, so it does not reach opencode/hermes. Note the semantic change: an
+> *unknown* `reasoning_effort` now also gets DeepThink instead of no thinking.
+> Explicit `Off` still opts out.
 
 # PROJECT
 ZeroKey — OpenAI-compatible AI proxy. Drives real browser/session-based chat accounts (DeepSeek, Claude, ChatGPT, Qwen — no API keys) and exposes them as an OpenAI `/v1/chat/completions` endpoint for IDE agents (VS Code, Terax, OpenCode). Node.js, CommonJS, single-process, Express 5.

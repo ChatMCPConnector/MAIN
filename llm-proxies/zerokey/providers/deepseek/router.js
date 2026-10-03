@@ -18,8 +18,13 @@ const TRANSPORT = (process.env.DEEPSEEK_TRANSPORT || 'browser').toLowerCase()
 
 // O(1) reasoning_effort → { think, search } lookup.
 // Keys are the exact labels VS Code advertises (utils/sync-ide-config.js).
-// Anything not mapped disables both thinking and search.
+// MAIN (2026-10-03): unbekannte/fehlende Werte fallen auf reasoning.default
+// ('DeepThink') zurueck — upstream fielen sie auf "kein Denken" zurueck, und
+// das war messbar der falsche Default (0 Denk-Zeichen). Reihenfolge:
+// expliziter Wert → default aus config.js → harte Notfallstufe.
 const REASONING_MAP = reasoning.map
+const REASONING_FALLBACK =
+  REASONING_MAP[reasoning.default] || REASONING_MAP.Off || { think: false, search: false }
 
 async function buildDeepSeekRouter(parsedFetch, session, userData) {
   const username = userData?.username
@@ -74,10 +79,7 @@ async function buildDeepSeekRouter(parsedFetch, session, userData) {
       }
     }
     const modelType = pipeline.isNewSession ? activeSession.model || 'default' : null
-    const { think: thinkingEnabled, search: searchEnabled } = REASONING_MAP[reasoningEffort] ?? {
-      think: false,
-      search: false,
-    }
+    const { think: thinkingEnabled, search: searchEnabled } = REASONING_MAP[reasoningEffort] ?? REASONING_FALLBACK
 
     const fileIds = []
     pipeline.bindUploader(deepseekApi, fileIds)

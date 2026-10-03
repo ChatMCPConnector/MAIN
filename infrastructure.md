@@ -277,7 +277,9 @@ zweitem Port**, nicht ein zweites Startskript (Anti-Drift, AGENTS.md §7).
 |---|---|
 | **Port** | 7300, loopback-only, Provider `deepseek`, User `main`, Session `MAIN` |
 | **opencode** | Provider `deepseek`, Modell `default`, Key `opencode` |
-| **Modell** | `providers/deepseek/config.js` kennt genau **ein** Modell: `default` = „DeepSeek V4.1", 1M Context, 384k Output, `vision: true`. Reasoning-Labels: `Off` / `Search` / `DeepThink` / `DeepThink Search` |
+| **Modell** | `providers/deepseek/config.js` kennt genau **ein** Modell: `default` = „DeepSeek V4.1", 1M Context, 384k Output, `vision: true`. **Es lässt sich per API nicht umschalten** — siehe unten. |
+| **Reasoning** | vier Labels, `think`/`search` sind **zwei unabhängige Flags**: `Off` = ✗/✗ · `Search` = ✗/✓ · `DeepThink` = ✓/✗ · `DeepThink Search` = ✓/✓. **Default ist `DeepThink`** (MAIN-Änderung, siehe unten). Effort kommt als `reasoning_effort` aus dem Request-Body; **unbekannte Werte fallen auf den Default**, nicht auf „kein Denken". |
+| **Gemessen** | über die laufende Instanz, Aufgabe „wie viele r in *Erdbeermarmelade*": `kein effort` → 311 Denk-Deltas / 834 Zeichen / **Antwort 3** ✓ · `Off` → 0 / 0 / 7 ✗ · `Search` → 0 / 0 / 6 ✗ · `unsinn` → 305 / 731 / **3** ✓. **Kostet:** ohne Denken 8 SSE-Events, mit ~300–1200. |
 | **Transport** | `DEEPSEEK_TRANSPORT` — **`browser` (Default)**: Playwright-Chromium, *headed*, Profil `temp/profiles/deepseek/main/`, der Bearer aus dem Capture wird als `localStorage.userToken` in das Profil gesät. `api`: direkter Fetch + PoW-Löser (`providers/deepseek/wasm/`), ohne Browser |
 | **X-Server** | **Pflicht im Browser-Modus.** `browser-transport.js:102` startet Chromium *headed*; ohne X stirbt die Instanz mit `Missing X server or $DISPLAY … The platform failed to initialize.` (live belegt 2026-10-03). `start-zerokey.sh` startet für Provider `deepseek` darum selbst ein `Xvfb` auf `$ZK_DISPLAY` (Default `:120`, MAIN-Konvention wie `browser-start.sh`). **Bewusst im Startskript und nicht im Watchdog:** sonst gäbe es zwei Orte, an denen das Display entsteht, und der Watchdog müsste es auch noch kennen. |
 | **Prompt-Limit** | 128 000 Zeichen (Zerokey `promptLimit`) — `compiler.limitPrompt` wirft die **Mitte** eines Over-Budget-Prompts weg, nicht den Schwanz |
@@ -298,6 +300,27 @@ von denen ChatGPT nur `auto` besitzt. Nicht angefasst, weil die Korrektur die
 dokumentierte Modelliste des bestehenden `downloaddoctor`-Providers verändern
 würde. Der opencode-Provider `deepseek` ist deshalb **explizit auf `default`
 gepinnt**, damit die falschen Namen gar nicht erst wählbar sind.
+
+**`model_type` wird vom Web-Endpoint ignoriert — es gibt keine Modellwahl.**
+Über die Instanz geprüft, mit **frischer Sitzung je Wert**, weil eine
+gemeinsame Sitzung das Ergebnis verfälscht hätte (DeepSeek könnte das Modell beim
+`chat_session/create` binden): `null`, `default`, `V4`, `deepseek-v4-pro`,
+`V4Pro`, `Pro` und sogar `quatschmodell` werden **alle ohne Fehler akzeptiert**,
+immer nur `RESPONSE`-Fragmente, identische Antwort. Die UI kennt Instant/Expert,
+die REST-Schnittstelle lässt sich davon nicht steuern. **V4-Pro ist über diesen
+Weg nicht erreichbar** — wer es braucht, muss die offizielle API nehmen
+(`deepseek-v4-pro`), und dann ist der API-Weg auch preislich sinnvoll.
+
+**Warum Default `DeepThink` (MAIN-Änderung, 2026-10-03):** upstream fiel bei
+fehlendem `reasoning_effort` auf `{think:false, search:false}` zurück — es wurde
+also **gar nicht gedacht**, was erst auffiel, als man es nachmessen wollte.
+`config.js` hat jetzt `reasoning.default`, `router.js` löst
+`REASONING_MAP[effort] ?? reasoning.default`. **`defaultReasoning` am Modell ist
+nicht derselbe Hebel** — das liest nur `utils/sync-ide-config.js`, und nur für
+die VS-Code-Config; opencode/hermes erreicht es so nicht. **Die
+Semantikänderung wird mitprotokolliert:** ein *unbekannter* `reasoning_effort`
+bekommt jetzt ebenfalls DeepThink statt „kein Denken". Ein explizites `Off`
+schaltet weiterhin ab.
 
 **Warum Web und nicht die offizielle API:** DeepSeek-V4.1-Flash kostet
 off-peak $0,15/$0,60 je 1M Token, V4-Pro $0,66/$1,98 — 2-9× **billiger** als
@@ -1126,6 +1149,11 @@ Proxy bei jedem Start automatisch hoch.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
 
+- 2026-10-03: **ZeroKeys DeepSeek-Provider hat jetzt `DeepThink` als Default — vorher wurde im Stillen gar nicht gedacht, und das fiel nur auf, weil jemand nachgemessen hat.** Anlass war die Frage nach den Modellen und Reasoning-Stufen von DeepSeek. Das Suchen nach einer Antwort auf „welche Stufe ist die richtige" endete in der Feststellung, dass **ohne `reasoning_effort` überhaupt keine Stufe gemeint ist**: `router.js` löste `REASONING_MAP[reasoning_effort] ?? {think:false, search:false}` auf, und opencode/hermes senden keinen Effort. **Ein Default, der sich „ausschalten" nennt, ist die höfliche Form von „kaputt"** — der Proxy lief, antwortete, und lieferte kognitiv das Billigste, ohne dass irgendwo eine Fehlermeldung entstanden wäre. **(a) `config.js` bekommt `reasoning.default: 'DeepThink'`, `router.js` löst den Fallback darüber auf.** Kein Magic-Env, keine zweite Wahrheit: das Default steht dort, wo die Stufen stehen. **(b) Der Modell-Hebel wäre nicht der richtige gewesen — und der fast naheliegende Fehlgriff:** `defaultReasoning` am Modell *gibt* es bereits und steht jetzt auf `DeepThink`, aber **das liest nur `utils/sync-ide-config.js`, und nur für die VS-Code-Konfiguration.** Wer es als Proxy-Default missversteht, ändert eine Zeile und wundert sich, dass sich nichts bewegt. Genau deshalb steht der Unterschied jetzt in beiden Dateien.
+  **Die Begründung des Nutzers war richtig, sein Grund war es nicht** („Search brauche ich nicht, DeepThink hat mehr Denk-Zeichen"): `think` und `search` sind **zwei unabhängige Flags, keine Stufenleiter** — `DeepThink Search` ist nicht „mehr von DeepThink", sondern DeepThink **plus** Websuche. Richtig ist nur die Hälfte: **`Search` allein erzeugt nachweislich kein Denken** und ist als Default die schlechteste Wahl. Das Label bleibt deshalb erhalten, nur der Default wandert.
+  **Zwei eigene Messfehler, beide erst durch Nacharbeiten aufgefallen, weil sie dasselbe falsche Grün erzeugten wie der ursprüngliche Befund.** (1) `model_type` untersuchen: **eine** Sitzung für alle sieben Kandidatenwerte — genau die Konfundierung, die ich der Behauptung „vermutlich wird das Modell beim `create` gebunden" vorwarf. Mit frischer Sitzung je Wert wiederholt: weiterhin alles akzeptiert, auch `quatschmodell`. **(2) Der Verifikations-Request** für den neuen Default meldete 0 Denk-Deltas — weil das Meßskript kaputt war, nicht weil die Änderung wirkungslos war; die Ursache war JSON-Bau in Bash plus `grep -c` über eine Shell-Variable. **Beide Fälle haben denselben Fehler in derselben Richtung: ein Messgerät, das „nein" sagt, wenn es nichts gemessen hat.** Genau das ist an anderer Stelle schon einmal teuer geworden (`gdrive-backup.sh`), und die Einsicht gehört deshalb in den Changelog, nicht nur das Resultat.
+  **Verifiziert** (nach dem Neustart, Anfrage ohne jedes Feld, rohes SSE): `kein reasoning_effort` → **311 Denk-Deltas, 834 Zeichen, Antwort 3** ✓ · `Off` → 0 / 0 / **7** ✗ · `Search` → 0 / 0 / **6** ✗ · `unsinn` → 305 / 731 / **3** ✓. Damit sind alle vier Behauptungen einzeln belegt: der Default greift, **`Off` bleibt als Ausstieg intakt**, unbekannte Werte nehmen den Default, und die Nicht-Denk-Antworten **failen dieselbe Aufgabe, an der das Denken sie löst** (r sind 3). **Kosten gegenrechnen, nicht verschweigen:** ohne Denken 8 SSE-Events, mit 300–1200. **Jeder** Turn in einer Agent-Loop zahnt das künftig, und bei 4 s Median-Unterschied ist das bei langen Läufen spürbar — deshalb ist `Off` als Wert nicht nur Formsache. `node --check` auf beiden Dateien, `verify-codespace.sh` **47 PASS / 0 FAIL**, Rest der Kette unverändert grün.
+  **Semantikänderung ausdrücklich benannt:** ein *unbekannter* `reasoning_effort` (OpenAI-übliche Werte wie `low`/`medium`/`high` sind hier nicht gemappt) bekommt jetzt DeepThink statt „kein Denken". Das ist Absicht, aber es ist eine Verhaltensänderung und keine reine Konfiguration — wer `high` schickt, bekommt jetzt mehr Denken als vorher. **Zurück:** `git revert` des Commits.
 - 2026-10-03: **DeepSeek als vierter Provider im Betrieb — zweite ZeroKey-Instanz auf Port 7300, und der Weg dorthin hat zwei echte Fehler gefunden, die beide erst am Lebendobjekt sichtbar waren.** Anlass war die Frage nach Copilot-Modellen für hermes; danach nach DeepSeek. **Die Grundannahme war falsch und musste vor der Implementierung korrigiert werden:** „DeepSeek zu ZeroKey hinzufügen" klingt nach einer Liste, aber ZeroKey ist **ein Provider pro Prozess** (`server.js:50` liest `argv[2]`), die vier Provider `providers/{chatgpt,deepseek,claude,qwen}` sind Wahlalternativen. Also: zweite Instanz, und zwar mit **einem** parametrisierten Startskript statt einem zweiten daneben (Anti-Drift, AGENTS.md §7).
   **(a) `start-zerokey.sh` parametrisiert:** `--provider/--user/--session/--port`, Defaults unverändert `chatgpt/main/MAIN/7250`. Log und PID-Datei sind jetzt **pro Provider** (`/tmp/opencode/zerokey-<provider>.…`) — vorher hätten beide Instanzen dieselbe PID-Datei überschrieben und ein `--restart` die falsche getötet. Das `pgrep`-Muster kommt aus den Flags statt aus einer vollverdrahteten Zeile.
   **(b) Fehler 1 — `PORT` kam nicht an:** `--port 7300` setzte eine Shell-Variable, `config/constants.js` liest `process.env.PORT`. ZeroKey startete deshalb auf **7251**, während das Skript 30 s auf 7300 pollte. `export PORT` ergänzt, mit Kommentar.
