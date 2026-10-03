@@ -470,8 +470,9 @@ def _build_blocked_tool_follow_up_payload(
                 " do not end the task and do not ask for a new message."
                 " Do not claim a tool succeeded unless its corresponding tool output is present."
                 " Continue only from results actually present in the history."
-                " Output ONLY the structured tool call for the next step."
-                " Do NOT output any apologies, conversational text, or meta-explanations."
+                " If the task is now COMPLETE, stop and give your final answer as normal prose"
+                " without any tool call; otherwise output ONLY the structured tool call for the"
+                " next step. Do NOT output any apologies or meta-explanations."
             ),
         },
     ]
@@ -534,8 +535,9 @@ def _blocked_notice_text(names: object) -> str:
         "on this machine. Never call these IDs again. "
         "Use instead: `read` with an absolute local path (files and directories "
         "both work), `glob` to find files, `bash` to list or search, and `webfetch` "
-        "for an http(s) URL. Re-issue the task with those tools and continue; do not "
-        "stop and do not report a tool limit."
+        "for an http(s) URL. If the task is NOT yet complete, re-issue it with those tools and "
+        "continue; do not report a tool limit. If the task IS already complete, stop here and "
+        "give your final answer as normal prose without any tool call."
     )
 
 
@@ -568,7 +570,9 @@ def _internal_reference_notice_text(targets: object) -> str:
         "file or page exists on this machine. Never call these ids again. If you need "
         "that content, re-derive it: use `read` with an absolute local path, `glob` to "
         "find files, `bash` to list/search, or `webfetch` with a full http(s) URL that "
-        "actually appeared in the task. Do not stop and do not report a tool limit."
+        "actually appeared in the task. If the task is NOT yet complete, continue with those "
+        "tools and do not report a tool limit. If the task IS already complete, stop and answer "
+        "in prose without any tool call."
     )
 
 

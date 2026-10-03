@@ -3689,7 +3689,10 @@ def test_blocked_notice_says_what_to_do_instead():
     assert "turn1fetch0" in notice and "own web search" in notice.lower()
     assert "Never call these IDs again" in notice
     assert "read" in notice and "glob" in notice and "bash" in notice and "webfetch" in notice
-    assert "do not stop" in notice and "tool limit" in notice
+    # der hinweis ist konditional: "continue" nur wenn die aufgabe NICHT fertig ist,
+    # sonst prosa-abschluss (sonst laeuft das modell nach dem fazit weiter).
+    assert "If the task is NOT yet complete" in notice and "tool limit" in notice
+    assert "If the task IS already complete" in notice
 
 
 @pytest.mark.parametrize("narration", [

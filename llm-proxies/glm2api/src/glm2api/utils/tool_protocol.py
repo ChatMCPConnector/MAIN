@@ -201,6 +201,8 @@ def build_tool_call_instructions(
         f"Available tools: {available_names}. No other tools exist — no browser, no open_url, no web.search, no execute_sandbox_code.",
         "Only the tools listed above exist in this environment. Do not attempt to call any other tools.",
         "Before emitting any tool call, verify the tool name appears in the allowed list above. When a task requires tools (e.g. inspecting directories, creating files, running commands), you MUST call the appropriate allowed tool (e.g. bash, write). Never describe actions in prose instead of calling the tool.",
+        "## Finishing (read carefully)",
+        "When the task is fully done and no further tool is needed, you MUST stop and deliver your final answer as normal prose and WITHOUT any tool call. A finished answer with prose alone is allowed and expected. Never append a tool call to an answer you consider complete, and never re-run tools just to look busy. Do NOT write a summary and then continue with more calls.",
         "",
         "## Filesystem, Code Execution & Web Rules",
         "- For filesystem operations (inspecting, listing, or creating directories like `/workspaces`, reading/writing files), you MUST use `bash` (e.g. `ls`, `mkdir`) or `read`/`write`. NEVER attempt to call `open` on directory paths or files — `open` is NOT a filesystem tool and will fail.",
@@ -253,8 +255,9 @@ TOOL_FORMAT_REMINDER = (
     "For filesystem operations (like inspecting/creating /workspaces), use `bash` or `read`/`write` — NEVER call `open`. "
     "Call the exact declared tool directly with its schema arguments; do not wrap a tool in `open` or encode commands/paths as `ref_id`. After each result, choose a new task-relevant action and never repeat a completed identical call. "
     "For running Python scripts or pytest, use `bash` — NEVER call `execute_sandbox_code`. "
-    "Do NOT output plans, summaries, or descriptions in prose instead of calling the tool. "
-    "Prose, XML, or fenced blocks will NOT be executed. "
+    "Do NOT output plans, summaries, or descriptions in prose INSTEAD OF a tool call the task still needs. "
+    "But if the task is fully complete and no further tool is needed, STOP and give your final answer as normal prose with NO tool call — that is allowed and expected. Never append a tool call to a finished answer and never summarize and then continue. "
+    "Prose, XML, or fenced blocks will NOT be executed as tool calls. "
     "NEVER call tools that are not in the allowed list (such as execute_sandbox_code, open, open_url, web_search). "
     "If you need information from a URL, use an allowed tool or tell the user — do NOT invent a tool. "
     "Do not output any preamble, commentary, or thoughts in Chinese or any other language before the tool call. "
@@ -278,8 +281,10 @@ TOOL_DISCIPLINE_RECAP = (
     "(absolute filePath) for files, `webfetch` (full https URL) for web pages, `bash` for commands. "
     "Never invent tool names, URLs, or `ref_id`/`turn0search*` references; never repeat an "
     "identical call after you have seen its result. If proxy notices like `[native_remap_notice]`, "
-    "`[blocked_tool_notice]` or `[loop_guard_notice]` appear in a tool result, obey them immediately "
-    "and switch to the named tool. "
+    "`[blocked_tool_notice]`, `[internal_reference_notice]` or `[loop_guard_notice]` appear in a "
+    "tool result, obey them immediately and switch to the named tool. "
+    "FINISHING: once the task is genuinely complete, end with a normal prose answer and NO tool "
+    "call — never append a tool call to a finished answer and never summarize and then continue. "
     # D-02/F-01: VERBOTE werden bei glm-5.3 zuverlässig überstimmt (live: `open`
     # trotz explizitem "DO NOT exist", 5× `example.com` trotz Verbot). Formate
     # werden dagegen zuverlässig IMITIERT. Deshalb zwei echte Beispiele der

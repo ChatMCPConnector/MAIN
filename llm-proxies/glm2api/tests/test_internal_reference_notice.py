@@ -141,3 +141,64 @@ def test_accumulator_merkt_keine_echte_fehlform_als_referenz():
     assert acc.internal_reference_targets == []
     # der echte fehlaufruf bleibt trotzdem blockiert.
     assert "open" in acc.blocked_tool_attempt_names
+
+
+# --- F-01 (live 2026-10-03, `ses_efd637390…`): "nach dem fazit einfach weiter" ---
+#
+# Die noticen sagten bis dahin UNBEDINGT "continue; do not stop". Live schrieb
+# das modell bei 16:37:17 ein komplettes fazit ("Die Analyse ist
+# abgeschlossen — hier die vollstaendige Auswertung") und rief um 16:38:59 IM
+# SELBEN turn weitere tools. Die anweisung war also selbst der ausloeser.
+
+
+def test_blocked_notice_ist_konditional_und_erlaubt_prosa_abschluss():
+    from glm2api.services.glm_client import _blocked_notice_text
+
+    notice = _blocked_notice_text(["open"])
+    assert "If the task is NOT yet complete" in notice
+    assert "If the task IS already complete" in notice
+    assert "final answer as normal prose" in notice
+    # das alte, unbedingte "do not stop" darf es nicht mehr geben.
+    assert "do not stop" not in notice
+
+
+def test_internal_reference_notice_erlaubt_prosa_abschluss():
+    notice = _internal_reference_notice_text(["turn0bash1"])
+    assert "If the task IS already complete" in notice
+    assert "stop and answer in prose" in notice
+    assert "Do not stop" not in notice
+
+
+def test_finishing_regel_steht_in_beiden_prompt_bausteinen():
+    from glm2api.utils.tool_protocol import TOOL_DISCIPLINE_RECAP, TOOL_FORMAT_REMINDER
+
+    for block in (TOOL_DISCIPLINE_RECAP, TOOL_FORMAT_REMINDER):
+        assert "NO tool call" in block, block[:60]
+        assert "summarize and then continue" in block, block[:60]
+
+
+def test_build_tool_call_instructions_hat_finishing_abschnitt():
+    from glm2api.utils.tool_protocol import build_tool_call_instructions
+
+    text = build_tool_call_instructions(["read", "bash"])
+    assert "## Finishing" in text
+    assert "WITHOUT any tool call" in text
+    assert "never re-run tools just to look busy" in text
+
+
+# --- R-03 gegenprobe am konkreten live-pfad --------------------------------
+
+
+def test_pfad_schreibvarianten_teilen_die_signatur():
+    """Live 16:38:12/16:38:14: `read /workspaces/MAIN/README.md` und
+    `read //workspaces/MAIN/README.md` wurden beide ausgefuehrt. Die
+    kanonische signatur muss identisch sein, damit der guard greift."""
+    from glm2api.services.translator import _canonicalize_arguments_for_signature
+
+    a = _canonicalize_arguments_for_signature({"filePath": "/workspaces/MAIN/README.md"})
+    b = _canonicalize_arguments_for_signature({"filePath": "//workspaces/MAIN/README.md"})
+    c = _canonicalize_arguments_for_signature({"filePath": "workspaces/MAIN/README.md"})
+    assert a == b == c
+    # gegenprobe: ein wirklich anderer pfad bleibt verschieden.
+    d = _canonicalize_arguments_for_signature({"filePath": "/workspaces/MAIN/Makefile"})
+    assert d != a
