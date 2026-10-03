@@ -1161,6 +1161,47 @@ def sanitize_tool_call_payload(
     return cleaned
 
 
+# B-02 (live 2026-10-03, `ses_efd86ec2…`): glm-5.3 nennt als `open`-ziel
+# massenhaft seine EIGENEN scratchpad-/web-search-referenzen
+# (`turn0bash1`, `turn0view0`, `turn0search1`, `turnbash0`, `turn4fetch0`, …).
+# Die sind weder pfad noch URL — hinter ihnen liegt nichts, also kann kein
+# tool sie oeffnen. Der proxy verwarf sie bislang unter derselben generischen
+# meldung wie einen echten fehlaufruf, und das modell wiederholte sie bis zum
+# abbruch. Die eigene kategorie erlaubt die ehrliche rueckmeldung: "das ist
+# deine interne referenz, es gibt sie hier nicht".
+_INTERNAL_REFERENCE_RE = re.compile(r"^turn[a-z0-9]{1,20}$", re.IGNORECASE)
+
+
+def extract_native_open_target(arguments: object) -> str:
+    """Das ziel eines nativen `open`-aufrufs (ref_id/url/path) aus den
+    argumenten ziehen — dieselbe schluesselreihenfolge wie der mapper."""
+    parsed = arguments
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            return ""
+    if not isinstance(parsed, dict):
+        return ""
+    open_list = parsed.get("open")
+    if isinstance(open_list, list) and open_list and isinstance(open_list[0], dict):
+        first = open_list[0]
+        return str(
+            first.get("ref_id", "") or first.get("url", "") or first.get("path", "")
+        ).strip()
+    return str(
+        parsed.get("ref_id", "") or parsed.get("url", "") or parsed.get("path", "")
+    ).strip()
+
+
+def is_internal_reference_target(target: str) -> bool:
+    """Ist das ziel eine glm-interne scratchpad-referenz statt pfad/URL?"""
+    cleaned = target.strip().strip("`'\"() ")
+    if not cleaned:
+        return False
+    return bool(_INTERNAL_REFERENCE_RE.fullmatch(cleaned))
+
+
 def map_native_open_tool_call(
     arguments: object,
     allowed_tool_names: set[str] | None = None,
@@ -3200,6 +3241,12 @@ class GLMEventAccumulator:
     _deferred_reasoning: str = ""
     _deferred_reasoning_calls: list[dict[str, object]] = field(default_factory=list)
     blocked_tool_attempt_names: list[str] = field(default_factory=list)
+    # B-02 (live 2026-10-03): ziele eines nicht abbildbaren `open`, die keine
+    # pfad-/URL-form haben, sondern glm-interne scratchpad-referenzen
+    # (`turn0bash1`, `turn0view0`, `turn*search*`). Getrennt von
+    # `blocked_tool_attempt_names`, weil die rueckmeldung eine andere ist: der
+    # call war nicht nur gesperrt, sein ziel existiert hier prinzipbedingt nicht.
+    internal_reference_targets: list[str] = field(default_factory=list)
     _mapped_sandbox_calls: int = 0
     # S-21 (live 2026-09-28, session `ses_f17123666ffeMwmhdXlMz3HO1l`): ein
     # nativer name, der auf ein echtes Tool umgeschrieben UND ausgefuehrt
@@ -3545,6 +3592,14 @@ class GLMEventAccumulator:
                                     )
                                     if mapped is None:
                                         self.blocked_tool_attempt_names.append(entry_name)
+                                        # B-02: interne scratchpad-referenz
+                                        # gesondert merken (siehe feld-kommentar).
+                                        if is_internal_reference_target(
+                                            extract_native_open_target(entry_arguments)
+                                        ):
+                                            self.internal_reference_targets.append(
+                                                extract_native_open_target(entry_arguments)
+                                            )
                                         # B-01: listenform desselben bursts
                                         # (live: der dict-zweig traf 46x).
                                         self._note_blocked_attempt(
@@ -3667,6 +3722,11 @@ class GLMEventAccumulator:
                                     # gemeldet und NICHT ueber die interne
                                     # sanitize-stelle doch noch abgebildet.
                                     self.blocked_tool_attempt_names.append(tool_name)
+                                    # B-02: interne scratchpad-referenz
+                                    # gesondert merken (siehe feld-kommentar).
+                                    _ref_target = extract_native_open_target(arguments)
+                                    if is_internal_reference_target(_ref_target):
+                                        self.internal_reference_targets.append(_ref_target)
                                     # B-01: auch der blocked-pfad ist ein
                                     # burst-pfad. Live 2026-10-01 waren es 46
                                     # nicht abbildbare `open`-aufrufe in EINEM

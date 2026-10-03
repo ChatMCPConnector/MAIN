@@ -349,6 +349,13 @@ def _turn_notice_texts(accumulator: GLMEventAccumulator, blocked: list[str]) -> 
         blocked_notice = _blocked_notice_text(blocked)
         if blocked_notice:
             notices.append(blocked_notice)
+    # B-02: die interne-referenz-ansage NACH der blocked-notice — sie ist
+    # deren praezisierung ("nicht nur gesperrt, das ziel gibt es gar nicht").
+    internal_notice = _internal_reference_notice_text(
+        getattr(accumulator, "internal_reference_targets", [])
+    )
+    if internal_notice:
+        notices.append(internal_notice)
     # B-01: die burst-meldung kommt an eigene stelle VOR der
     # loop-guard-meldung — sie ist deren eskalation und traegt die
     # handlungsanweisung ("warte auf ein ergebnis"), nicht nur die zaehlung.
@@ -425,6 +432,12 @@ def _build_blocked_tool_follow_up_payload(
             + " For filesystem operations (such as inspecting or creating /workspaces), use `bash` or `read`/`write`."
             + " For executing code, running Python, or running tests (pytest), use `bash` (e.g. `python3 ...`). NEVER call `execute_sandbox_code`."
         )
+    # B-02: interne scratchpad-referenzen praezisieren die blocked-notice.
+    internal_notice = _internal_reference_notice_text(
+        getattr(accumulator, "internal_reference_targets", [])
+    )
+    if internal_notice:
+        parts.append(internal_notice)
     loop_notice = _loop_guard_notice_text(
         dropped, getattr(accumulator, "loop_guard_dropped_tools", [])
     )
@@ -523,6 +536,39 @@ def _blocked_notice_text(names: object) -> str:
         "both work), `glob` to find files, `bash` to list or search, and `webfetch` "
         "for an http(s) URL. Re-issue the task with those tools and continue; do not "
         "stop and do not report a tool limit."
+    )
+
+
+def _internal_reference_notice_text(targets: object) -> str:
+    """B-02 (live 2026-10-03, `ses_efd86ec2…`): das `open`-ziel war eine
+    glm-interne scratchpad-referenz (`turn0bash1`, `turn0view0`,
+    `turn*search*`), kein pfad und keine URL. Diese ziele existieren hier
+    prinzipbedingt nicht — sie stammen aus dem EIGENEN web-search/scratchpad
+    des modells und sind upstream aufgeloest, nicht auf dieser maschine.
+
+    Ohne eigene ansage las das modell die generische blocked-notice als
+    "tool kaputt" und wiederholte dieselben `turn*`-referenzen bis zum
+    abbruch. Die notice benennt deshalb den einzigen ausweg: die referenz
+    fallenlassen und den echten pfad/URL direkt nennen."""
+    if not isinstance(targets, (list, tuple, set)):
+        return ""
+    cleaned: list[str] = []
+    for item in targets:
+        name = str(item).strip()
+        if name and name not in cleaned:
+            cleaned.append(name)
+    if not cleaned:
+        return ""
+    shown = ", ".join(f"`{name}`" for name in cleaned[:6])
+    more = "" if len(cleaned) <= 6 else f" (+{len(cleaned) - 6} more)"
+    return (
+        f"[internal_reference_notice] Your `open` target(s) {shown}{more} are YOUR OWN "
+        "internal scratchpad/web-search references (`turn*` ids), not files or URLs. "
+        "They exist only inside your own reasoning and cannot be opened here — no such "
+        "file or page exists on this machine. Never call these ids again. If you need "
+        "that content, re-derive it: use `read` with an absolute local path, `glob` to "
+        "find files, `bash` to list/search, or `webfetch` with a full http(s) URL that "
+        "actually appeared in the task. Do not stop and do not report a tool limit."
     )
 
 
