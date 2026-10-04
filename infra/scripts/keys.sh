@@ -30,6 +30,7 @@ KEYDIR="$HOME/.config/landscape"
 # datei|provider|endpoint|modell  (Trenner "|" — URLs enthalten ":")
 KEYS=(
   "xinjianya.key|xinjianya|https://xn--kiv260fv3i.cn/v1|gpt-5.6-sol"
+  "aiqana.key|aiqana|https://aiqana.com/v1|gpt-6-astra"
 )
 
 # Dateien, die opencode.json per {file:...} referenziert. Muss synchron zu
