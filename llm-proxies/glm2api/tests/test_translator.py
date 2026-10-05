@@ -1749,16 +1749,26 @@ def test_accumulator_strips_transcript_echo_from_final_text():
     assert content == "Assistant: erledigt, alle Phasen abgeschlossen."
 
 
-def test_native_open_mapping_rejects_tool_name_in_path():
-    """Live-Fall 2026-09-25 (ses_f2a64f037ffeqVK86xKyAQYdSp): das Modell
-    schrieb den Toolnamen selbst ins Argument
-    ({'ref_id': 'read /workspaces/benchmark.md'}). Das ist eine Anweisung,
-    kein Pfad — der Aufruf wurde zu einem Leseversuch auf einen nicht
-    existierenden Dateinamen."""
+def test_native_open_maps_tool_name_prefixed_targets():
+    """R-05: das Modell schreibt den Toolnamen ins Ziel
+    ({'ref_id': 'read /workspaces/benchmark.md'}). Frueher wurde das
+    verworfen (die ganze Zeichenkette waere als Dateiname in einen
+    Leseversuch gefallen); jetzt wird der Prefix abgetrennt und der Rest
+    als Argument des jeweiligen Tools geliefert."""
     from glm2api.services.translator import map_native_open_tool_call
 
-    assert map_native_open_tool_call({"ref_id": "read /workspaces/benchmark.md"}, {"read"}) is None
+    assert map_native_open_tool_call({"ref_id": "read /workspaces/benchmark.md"}, {"read"}) == (
+        "read",
+        {"filePath": "/workspaces/benchmark.md"},
+    )
+    assert map_native_open_tool_call({"ref_id": "bash ls -la"}, {"bash"}) == (
+        "bash",
+        {"command": "ls -la"},
+    )
+    # nicht deklariertes tool wird nicht ausgefuehrt
     assert map_native_open_tool_call({"ref_id": "bash ls -la"}, {"read"}) is None
+    # prosa ist kein pfad
+    assert map_native_open_tool_call({"ref_id": "read the file"}, {"read"}) is None
     # echte ziele bleiben unberuehrt
     assert map_native_open_tool_call({"ref_id": "/workspaces/benchmark.md"}, {"read"}) == (
         "read",
@@ -1768,6 +1778,29 @@ def test_native_open_mapping_rejects_tool_name_in_path():
         "webfetch",
         {"url": "https://example.com"},
     )
+
+
+def test_native_open_maps_filepath_window_and_malformed_file_uri():
+    """R-05: ein echter Lese-Auftrag kann als
+    `open(filePath=…, offset=…, limit=…)` kommen (live 2026-10-04) — der
+    Mapper las nur ref_id/url/path und verwarf ihn. Ebenso das
+    Tippfehler-`file://workspaces/MAIN` (nur zwei Schraegstriche)."""
+    from glm2api.services.translator import map_native_open_tool_call
+
+    assert map_native_open_tool_call(
+        {"open": [{"filePath": "/workspaces/MAIN/infrastructure.md", "offset": 927}]},
+        {"read"},
+    ) == ("read", {"filePath": "/workspaces/MAIN/infrastructure.md", "offset": 927})
+    assert map_native_open_tool_call(
+        {"open": [{"filePath": "/workspaces/MAIN/x.py", "limit": 45, "offset": 2600}]},
+        {"read"},
+    ) == ("read", {"filePath": "/workspaces/MAIN/x.py", "offset": 2600, "limit": 45})
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "file://workspaces/MAIN"}]}, {"read"}
+    ) == ("read", {"filePath": "/workspaces/MAIN"})
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "filesystem:///workspaces/MAIN"}]}, {"bash", "read"}
+    ) == ("read", {"filePath": "/workspaces/MAIN"})
 
 
 def test_sandbox_mapping_is_capped_per_turn():

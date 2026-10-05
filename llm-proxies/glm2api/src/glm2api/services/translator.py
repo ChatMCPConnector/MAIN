@@ -1202,6 +1202,85 @@ def is_internal_reference_target(target: str) -> bool:
     return bool(_INTERNAL_REFERENCE_RE.fullmatch(cleaned))
 
 
+# R-05: das modell schreibt den toolnamen + argument in das `open`-ziel
+# (`ref_id="read /pfad"`, `ref_id="bash ls -la"`). Das war bewusst
+# verworfen worden, weil die ganze zeichenkette sonst als *dateiname* in
+# einen nicht existierenden lese-versuch fiel. Statt zu verwerfen wird der
+# praefix abgetrennt und der rest als das jeweilige tool-argument geliefert.
+_OPEN_PREFIX_TOOL_ARGS = {
+    "read": "filePath",
+    "write": "filePath",
+    "edit": "filePath",
+    "bash": "command",
+    "grep": "pattern",
+    "glob": "pattern",
+}
+
+# `file://` mit authority (zwei schraegstriche statt drei) ist meist ein
+# tippfehler fuer einen lokalen pfad: `file://workspaces/MAIN`. Nur wenn
+# der authority-anteil ein bekannter lokaler wurzelordner ist, wird er
+# zurueckgefaltet; ein echter fremd-host/UNC-pfad bleibt unmappbar.
+_LOCAL_ROOT_DIRS = frozenset(
+    {
+        "workspaces", "home", "root", "tmp", "var", "etc", "usr", "opt",
+        "srv", "mnt", "media", "data", "app", "srv", "Users", "workspace",
+    }
+)
+
+
+def _looks_like_local_path(value: str) -> bool:
+    """Sieht der rest eines `<tool> <rest>`-ziels wie ein pfad aus?
+
+    Verhindert, dass prosa ("read the file") in einen lese-auftrag auf einen
+    nicht existierenden dateinamen umgedeutet wird."""
+    text = value.strip()
+    if not text:
+        return False
+    if text.startswith(("/", "./", "../", "~/", "file:")):
+        return True
+    if "/" in text or "\\" in text:
+        return True
+    return bool(re.fullmatch(r"[^\s/]+\.[^\s/]+", text))
+
+
+def _map_tool_prefixed_target(
+    target: str,
+    allowed_tool_names: set[str] | None,
+    unrestricted: bool,
+) -> tuple[str, dict[str, object]] | None:
+    """R-05: `<tool> <argument>` im `open`-ziel in einen echten call falten."""
+    stripped = target.strip()
+    if " " not in stripped:
+        return None
+    first, rest = stripped.split(" ", 1)
+    tool_name = first.strip().strip("`'\"():,").lower()
+    argument = rest.strip().strip("`'\"")
+    argument_key = _OPEN_PREFIX_TOOL_ARGS.get(tool_name)
+    if argument_key is None or not argument:
+        return None
+    if not (unrestricted or (allowed_tool_names is not None and tool_name in allowed_tool_names)):
+        return None
+    if is_blocked_tool_name(tool_name, None):
+        return None
+    if tool_name in {"read", "write", "edit"} and not _looks_like_local_path(argument):
+        return None
+    return tool_name, {argument_key: argument}
+
+
+def _open_read_arguments(
+    file_path: str,
+    open_entry: dict[str, object] | None,
+) -> dict[str, object]:
+    """Ein fenster (`offset`/`limit`) aus dem `open`-eintrag an `read` weitergeben."""
+    arguments: dict[str, object] = {"filePath": file_path}
+    if isinstance(open_entry, dict):
+        for key in ("offset", "limit"):
+            value = open_entry.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                arguments[key] = value
+    return arguments
+
+
 def map_native_open_tool_call(
     arguments: object,
     allowed_tool_names: set[str] | None = None,
@@ -1230,13 +1309,26 @@ def map_native_open_tool_call(
     command = ""
     target = ""
     delegated_arguments: object = None
+    open_entry: dict[str, object] | None = None
     open_list = parsed.get("open")
     extra_targets = 0
     if isinstance(open_list, list) and open_list:
         first = open_list[0]
         if isinstance(first, dict):
+            open_entry = first
             command = str(first.get("command", "") or first.get("cmd", "") or "").strip()
-            target = str(first.get("ref_id", "") or first.get("url", "") or first.get("path", "")).strip()
+            # R-05: `filePath`/`file` gehoeren zur ziel-erkennung. Live
+            # 2026-10-04 kam ein echter lese-auftrag als
+            # `{"open":[{"filePath": "/workspaces/MAIN/infrastructure.md",
+            # "offset": 927}]}` — der mapper las nur ref_id/url/path und
+            # verwarf ihn als "not mappable".
+            target = str(
+                first.get("ref_id", "")
+                or first.get("url", "")
+                or first.get("path", "")
+                or first.get("filePath", "")
+                or first.get("file", "")
+            ).strip()
             delegated_arguments = first.get("arguments", first.get("args"))
         # T-21: weitere ziele wurden stillschweigend verworfen. Der erste
         # MAPPBARE gewinnt; die uebrigen werden wenigstens protokolliert,
@@ -1274,7 +1366,13 @@ def map_native_open_tool_call(
     if not delegated_arguments:
         delegated_arguments = parsed.get("arguments", parsed.get("args"))
     if not target:
-        target = str(parsed.get("ref_id", "") or parsed.get("url", "") or parsed.get("path", "") or parsed.get("file", "")).strip()
+        target = str(
+            parsed.get("ref_id", "")
+            or parsed.get("url", "")
+            or parsed.get("path", "")
+            or parsed.get("filePath", "")
+            or parsed.get("file", "")
+        ).strip()
 
     # GLM also encodes shell commands as `ref_id="bash:<command>"`.
     # Only that explicit prefix can become executable; reject it outright
@@ -1292,7 +1390,7 @@ def map_native_open_tool_call(
     ):
         file_path = target[len("read:"):].strip()
         if file_path:
-            return "read", {"filePath": file_path}
+            return "read", _open_read_arguments(file_path, open_entry)
 
     # Some streams put the requested tool's arguments at the top level
     # rather than beside the ref_id in open[]. Honor that shape only for an
@@ -1350,16 +1448,23 @@ def map_native_open_tool_call(
     # `file://` ist hier KEIN fetch-ziel, sondern ein lokaler pfad in
     # schreibweise — er wird auf den pfad zurueckgefaltet und wie jeder
     # andere pfad behandelt.
-    if target.lower().startswith("file://"):
+    if target.lower().startswith(("file://", "filesystem://")):
         from urllib.parse import unquote
 
-        # `file:///a/b` -> `//a/b` -> `/a/b`; `file://host/a` -> `/a`
+        # `file:///a/b` -> `/a/b`; `file://localhost/a` -> `/a`.
+        # Live 2026-10-04: `file://workspaces/MAIN` (nur zwei schraegstriche)
+        # — das modell meinte den lokalen pfad. Der authority-anteil wird
+        # zurueckgefaltet (`/workspaces/MAIN`) statt verworfen.
         _split = urlsplit(target)
-        target = unquote(_split.path or "")
-        if _split.netloc and _split.netloc.lower() not in {"", "localhost"}:
-            # `file://host/...` ist ein UNC-artiger zielpfad; der host ist
-            # fuer uns nicht erreichbar -> nicht abbildbar.
-            return None
+        _authority = _split.netloc or ""
+        _path = unquote(_split.path or "")
+        if _authority and _authority.lower() != "localhost":
+            if _authority.lower() not in _LOCAL_ROOT_DIRS:
+                # `file://server/share/x` ist ein UNC-artiger fremd-pfad und
+                # fuer uns nicht erreichbar -> nicht abbildbar.
+                return None
+            _path = "/" + _authority + _path
+        target = re.sub(r"/{2,}", "/", _path)
         if not target:
             return None
 
@@ -1383,6 +1488,13 @@ def map_native_open_tool_call(
                 )
             return "webfetch", {"url": f"https://{target}"}
 
+    # R-05: `<tool> <argument>` im ziel (live: `read /pfad`, `bash ls -la`)
+    # vor der pfad-erkennung in einen echten call falten.
+    if not target.lower().startswith("turn"):
+        prefixed = _map_tool_prefixed_target(target, allowed_tool_names, unrestricted)
+        if prefixed is not None:
+            return prefixed
+
     if not target.startswith("turn") and ("/" in target or target.startswith(".") or "." in target):
         if _looks_like_tool_invocable(target):
             # Das Modell hat den Toolnamen selbst in das Argument geschrieben
@@ -1398,7 +1510,7 @@ def map_native_open_tool_call(
         if "://" in target or re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", target):
             return None
         if unrestricted or (allowed_tool_names is not None and "read" in allowed_tool_names):
-            return "read", {"filePath": target}
+            return "read", _open_read_arguments(target, open_entry)
 
     return None
 

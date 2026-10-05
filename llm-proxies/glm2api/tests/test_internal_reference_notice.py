@@ -139,8 +139,12 @@ def test_accumulator_merkt_keine_echte_fehlform_als_referenz():
     acc = _acc()
     acc.consume_event(_native_open_event("c1", "read /workspaces/MAIN/x"))
     assert acc.internal_reference_targets == []
-    # der echte fehlaufruf bleibt trotzdem blockiert.
-    assert "open" in acc.blocked_tool_attempt_names
+    # R-05: `read <pfad>` ist keine interne referenz, sondern ein echter
+    # auftrag — der praefix wird abgetrennt und als read-mapping
+    # ausgeliefert, nicht mehr generisch blockiert.
+    assert ("open", "read") in acc.native_remapped_calls
+    assert acc.blocked_tool_attempt_names == []
+    assert len(acc._server_side_tool_calls) == 1
 
 
 # --- F-01 (live 2026-10-03, `ses_efd637390…`): "nach dem fazit einfach weiter" ---

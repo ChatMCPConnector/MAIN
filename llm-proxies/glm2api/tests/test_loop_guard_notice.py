@@ -293,6 +293,49 @@ def _payload():
     }
 
 
+# --- F-02: interne referenz erzwingt die korrektur auch bei gesendetem text -
+
+
+def test_internal_reference_erzwingt_korrektur_trotz_served_content():
+    """F-02 (live `ses_ef44981e…`): das modell streamte sichtbaren text und
+    rief nur un-mappbare `turn*`-referenzen auf. Der `served_content`-skip
+    verhinderte die korrekturrunde — der erfundene abbruchtext blieb stehen
+    und das modell erfuhr nie, dass `turn*` keine dateien sind. Eine interne
+    referenz muss die korrektur jetzt erzwingen."""
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.config = _LoopGuardConfig()
+    client.config.glm_blocked_tool_follow_ups = 1
+    client.logger = SimpleNamespace(
+        warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None
+    )
+    client.request_queue = SimpleNamespace(
+        acquire=lambda name: SimpleNamespace(ticket=0, released=False, release=lambda: None)
+    )
+    client.auth = SimpleNamespace(
+        get_account_count=lambda: 1, get_access_token_for_account=lambda i: "tok"
+    )
+    opens: list[object] = []
+    events = [
+        _text_event("Die Analyse konnte nicht durchgeführt werden."),
+        _native_open_event("t1", "turn0view0"),
+    ]
+
+    def _open_stream(payload, preferred_account_index=None, filtered_tools=None):
+        opens.append(payload)
+        return _FakeResponse(list(events)), "assistant-1"
+
+    client._open_chat_stream = _open_stream
+    client.delete_conversation = lambda cid, assistant_id=None: None
+    client._iter_sse_events = lambda response: iter(response._events)
+
+    "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
+
+    assert len(opens) == 2, (
+        "eine interne referenz muss die korrekturrunde auch bei bereits "
+        "gestreamtem text erzwingen (F-02)"
+    )
+
+
 # --- Sichtbarkeit im Antwortstrom ----------------------------------------
 
 

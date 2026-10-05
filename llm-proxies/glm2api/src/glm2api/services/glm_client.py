@@ -1868,12 +1868,21 @@ class GLMWebClient:
                         # sind ein sachlicher, weil sie den Auftrag
                         # abbrechen lassen und den Grund verfaelschen.
                         #
+                        # B-02/`turn*`: auch eine reine folge von
+                        # glm-internen scratchpad-referenzen (`turn0view0`, …)
+                        # erzwingt die korrektur. Sie sind — anders als ein
+                        # beliebiger blockierter name — kein bloßes
+                        # "keine-tools", sondern ein echter modell-irrweg:
+                        # live `ses_ef44981e…` streamte das modell einen
+                        # erfundenen "Rundenbegrenzung (8/8)"-text, der skip
+                        # verhinderte jede korrektur, und der auftrag brach ab.
                         # `served_content` gilt damit nur noch fuer den
-                        # blocked-only-Fall, wo es nichts zu korrigieren gibt.
+                        # generischen blocked-only-Fall OHNE interne referenz.
                         if served_content and not (
                             suppress_abandon_reason
                             or int(request_scope_signatures.get("drops", 0) or 0) > 0
                             or getattr(accumulator, "native_remapped_calls", [])
+                            or getattr(accumulator, "internal_reference_targets", [])
                         ):
                             self.logger.warning(
                                 "Correction round skipped: content already served to the client "
@@ -1888,10 +1897,11 @@ class GLMWebClient:
                             suppress_abandon_reason
                             or int(request_scope_signatures.get("drops", 0) or 0) > 0
                             or getattr(accumulator, "native_remapped_calls", [])
+                            or getattr(accumulator, "internal_reference_targets", [])
                         ):
                             self.logger.warning(
-                                "S-27: content already served, but the model needs the real facts "
-                                "(abandon/drops/remaps present) — running the correction round anyway",
+                                "S-27/B-02: content already served, but the model needs the real facts "
+                                "(abandon/drops/remaps/internal-ref present) — running the correction round anyway",
                             )
                         self.logger.warning(
                             "Starting negative-result follow-up round %s/%s (served_content=%s) "
