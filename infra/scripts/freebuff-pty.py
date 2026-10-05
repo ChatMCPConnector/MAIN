@@ -205,12 +205,14 @@ HISTORY_MODAL_OPEN_PATTERNS = (
 )
 
 # Agenten-Fragen (ask_user) mit 1 bis N Fragen
+# Bewusst OHNE "Enter select" oder "↑↓ navigate" — diese Strings gibt Freebuff
+# auch im Model-Picker (/model), Slash-Menue und Footer aus; ein Match wuerde
+# question_modal dauerhaft einrasten lassen, weil Enter es nicht schliesst.
 QUESTION_MODAL_OPEN_PATTERNS = (
-    b"Enter select",
+    b"(click to answer)",
     b"Type your own answer",
     b"Select multiple options",
-    b"(click to answer)",
-    b"\xe2\x86\x91\xe2\x86\x93 navigate",
+    b"Type your answer...",
 )
 
 # Abschluss aller Fragen (qVA in freebuff)
@@ -218,6 +220,7 @@ QUESTION_MODAL_CLOSE_PATTERNS = (
     b"Your answer:",
     b"Your answers:",
     b"You skipped the",
+    b"User answered:",
 )
 
 

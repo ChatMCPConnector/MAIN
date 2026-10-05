@@ -118,6 +118,25 @@ def test_paedagogisch_erwartete_texte_sitzen_drin():
     assert b"===/\\s/.test" in out
 
 
+def test_gepatchter_javascript_code_ist_syntaktisch_valide():
+    """Stellt sicher, dass gepatchte JS-Stellen (insb. history_delete und word_boundary)
+    valides JavaScript ergeben und keine Syntaxfehler (wie doppelte Klammern) erzeugen."""
+    out, _ = fp.apply_patches(bundle())
+    # 1. history_delete Komponente pruefen
+    m = re.search(rb"onKey=iA\.useCallback.*?\},\[.*?\]\)", out, re.S)
+    assert m is not None
+    js = b"const " + m.group() + b";\n"
+    proc = subprocess.run(["node", "--input-type=module", "--check"], input=js, capture_output=True)
+    assert proc.returncode == 0, f"History-Delete JS SyntaxError: {proc.stderr.decode()}"
+
+    # 2. word_boundary Funktionen pruefen
+    m_words = re.findall(rb"function [a-zA-Z0-9_$]+\(H,A\)\{.*?\}", out, re.S)
+    assert len(m_words) == 2
+    for w in m_words:
+        proc = subprocess.run(["node", "--input-type=module", "--check"], input=w, capture_output=True)
+        assert proc.returncode == 0, f"Word-Boundary JS SyntaxError: {proc.stderr.decode()}"
+
+
 def test_fehlende_struktur_wird_gemeldet_nicht_geraten():
     """Kein Muster -> unangetastet. Ein still falsch gepatchtes Bundle waere
     schlimmer als ein unveraendertes: es startet nicht mehr."""

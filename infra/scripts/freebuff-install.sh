@@ -110,6 +110,22 @@ if [ ! -f "\$launcher" ]; then
   echo "  Reparieren: bash ./infra/scripts/freebuff-install.sh   (im MAIN-Repo)" >&2
   exit 127
 fi
+# Gestagte Updates oder neuere Wrapper-Versionen VOR dem Patchen uebernehmen.
+# Sonst wuerde der Launcher das Binary direkt nach dem Patcher unbemerkt
+# mit der ungepatchten Upstream-Version ueberschreiben.
+if [ -f "\$launcher" ] && command -v node >/dev/null 2>&1; then
+  node -e '
+    (async () => {
+      try {
+        const t = require(process.argv[1]).__testing;
+        if (t) {
+          await t.adoptOrphanedStagedUpdates?.();
+          await t.ensureBinaryReady?.();
+        }
+      } catch (_) {}
+    })();
+  ' "\$launcher" >/dev/null 2>&1 || true
+fi
 # Patches VOR dem Start nachziehen. Grund: der npm-Launcher ersetzt das native
 # Binary bei jedem Update ungefragt (deferUpdatesUntilExit), und die Patches
 # liegen als Bytes in genau dieser Datei — ein Update loescht sie alle. Live
@@ -188,12 +204,22 @@ fi
 (cd "$APP_DIR" && npm install --no-audit --no-fund --loglevel=error "freebuff@${FREEBUFF_SCROLL_STEP_VERSION}")
 write_wrapper
 
-# Erststart holt das native Binary (~136 MB) nach ~/.config/manicode. Timeout,
-# damit ein haengender Netz-Dialog den Codespace-Build nicht blockiert.
-if [ ! -s "${NATIVE_DIR}/freebuff" ]; then
-  echo "[freebuff] Lade natives Binary (einmalig pro Codespace, ~136 MB)..."
-  timeout 600 "$WRAPPER" --version >/dev/null 2>&1 || true
-fi
+# Erststart / Update holt bzw. synchronisiert das native Binary (~136 MB) nach ~/.config/manicode.
+echo "[freebuff] Synchronisiere natives Binary (~136 MB)..."
+timeout 600 node -e '
+  (async () => {
+    try {
+      const t = require(process.argv[1]).__testing;
+      if (t) {
+        await t.adoptOrphanedStagedUpdates?.();
+        await t.ensureBinaryReady?.();
+      }
+    } catch (e) {
+      console.error(e);
+      process.exit(1);
+    }
+  })();
+' "$APP_DIR/node_modules/freebuff/index.js" || timeout 600 "$WRAPPER" --version >/dev/null 2>&1 || true
 run_patcher --force
 
 if [ -s "${NATIVE_DIR}/credentials.json" ]; then

@@ -100,7 +100,7 @@ from pathlib import Path
 # Formatversion der Patch-Logik. Steht in der Stamp-Datei: wer die Muster hier
 # aendert, invalidiert damit automatisch alle Stamps, statt still auf einem
 # gecachten "gepatcht" sitzen zu bleiben.
-STAMP_FORMAT = 1
+STAMP_FORMAT = 2
 
 DEFAULT_NATIVE_DIR = Path.home() / ".config" / "manicode"
 BINARY_NAME = "freebuff"
@@ -387,7 +387,7 @@ def patch_history_delete(data: bytes) -> tuple[bytes | None, PatchResult]:
         f"return!1"
     )
     suffix = (
-        f"}}}},[{g['query']},{g['setQuery']},{g['setIndex']},{g['items']},"
+        f"}},[{g['query']},{g['setQuery']},{g['setIndex']},{g['items']},"
         f"{g['index']},{g['openChat']},{g['cancel']}])"
     )
     fitted = fit_replacement(match.group(), (base + suffix).encode("latin1"))
@@ -481,7 +481,9 @@ def verify_starts(path: Path, timeout: int = 60) -> tuple[bool, str]:
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"{type(exc).__name__}: {exc}"
     out = proc.stdout.decode(errors="replace").strip().splitlines()
-    return proc.returncode == 0, (out[-1] if out else f"rc={proc.returncode}")
+    err = proc.stderr.decode(errors="replace").strip().splitlines()
+    detail = out[-1] if out else (err[0] if err else f"rc={proc.returncode}")
+    return proc.returncode == 0, detail
 
 
 def cleanup_partial_downloads(native_dir: Path, now: float | None = None) -> list[str]:
@@ -532,8 +534,7 @@ def patch_binary(
 
     changed = new != data
     if changed:
-        if not (native_dir / BACKUP_NAME).exists():
-            shutil.copy2(binary, native_dir / BACKUP_NAME)
+        shutil.copy2(binary, native_dir / BACKUP_NAME)
         tmp = binary.with_suffix(binary.suffix + ".patched")
         with open(tmp, "wb") as fh:
             fh.write(new)
