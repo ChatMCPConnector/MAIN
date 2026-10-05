@@ -44,6 +44,16 @@ if [ "${#APT_FEHLER[@]}" -gt 0 ]; then
   printf '      - %s\n' "${APT_FEHLER[@]}"
 fi
 
+# Node >= 20 sicherstellen (Playwright 1.63+ in zerokey verlangt Node >= 20; Ubuntu 24.04 noble apt liefert nur Node 18)
+NODE_MAJOR="$(node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || echo 0)"
+if [ "${NODE_MAJOR:-0}" -lt 20 ]; then
+  echo "    Node.js ${NODE_MAJOR} < 20 gefunden -> installiere Node 22 (LTS via NodeSource)..."
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >/dev/null 2>&1 \
+    && sudo apt-get install -y -qq nodejs >/dev/null 2>&1 \
+    && echo "    Node.js $(node -v) installiert." \
+    || echo "    WARN: Node.js 22 Upgrade fehlgeschlagen."
+fi
+
 # python-is-python3 legt /usr/bin/python an. Ohne das gibt es nur python3, und
 # alles, was bare `python` aufruft (Tooling, Editor-Integrationen, fremde
 # Wrapper), scheitert mit "command not found" — die Ursache der gelben
@@ -345,18 +355,23 @@ echo "==> [landscape] pnpm (gepinnt) installieren..."
 # llm-proxies/zerokey/package.json.
 PNPM_PIN="$(sed -nE 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@([^"]+)".*/\1/p' "$REPO_ROOT/llm-proxies/zerokey/package.json" 2>/dev/null | head -1)"
 : "${PNPM_PIN:=10.13.1}"   # Notnagel, falls package.json fehlt
-if command -v corepack >/dev/null 2>&1; then
-  corepack enable >/dev/null 2>&1 || true
+if command -v corepack >/dev/null 2>&1 && sudo corepack enable >/dev/null 2>&1; then
   # `prepare` ist in neueren Node-Versionen deprecated, `install --global` der
   # Nachfolger — deshalb der zweite Versuch.
   if corepack prepare "pnpm@$PNPM_PIN" --activate >/dev/null 2>&1 \
      || corepack install --global "pnpm@$PNPM_PIN" >/dev/null 2>&1; then
     echo "    pnpm $PNPM_PIN (corepack) aktiv."
   else
-    echo "    WARN: corepack konnte pnpm@$PNPM_PIN nicht aktivieren — manuell: corepack install --global pnpm@$PNPM_PIN"
+    sudo npm install -g "pnpm@$PNPM_PIN" >/dev/null 2>&1 \
+      && echo "    pnpm $PNPM_PIN (npm global) aktiv." \
+      || echo "    WARN: pnpm@$PNPM_PIN Install fehlgeschlagen."
   fi
+elif command -v npm >/dev/null 2>&1; then
+  sudo npm install -g "pnpm@$PNPM_PIN" >/dev/null 2>&1 \
+    && echo "    pnpm $PNPM_PIN (npm global) aktiv." \
+    || echo "    WARN: pnpm@$PNPM_PIN Install fehlgeschlagen."
 else
-  echo "    WARN: corepack fehlt — pnpm nicht gepinnt installierbar (start-zerokey.sh braucht es)."
+  echo "    WARN: corepack/npm fehlt — pnpm nicht gepinnt installierbar (start-zerokey.sh braucht es)."
 fi
 
 # CVE-Wächter (PLAN Stufe 6). Gepinnt und pruefsummenverifiziert — siehe Skript.

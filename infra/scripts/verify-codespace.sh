@@ -440,7 +440,10 @@ check_layer code  "Go-Lint antigravity (vet+fmt)" bash -c '
   # Go liegt im Codespace unter /usr/local/go/bin, auf einem CI-Runner im PATH —
   # beides muss funktionieren, sonst schlaegt der Job an der Toolchain statt am
   # Code fehl (PLAN Stufe 2).
-  GO=$(command -v go || true)
+  GO=""
+  for c in /usr/local/go/bin/go "$(command -v go 2>/dev/null)"; do
+    [ -n "$c" ] && [ -x "$c" ] && { GO="$c"; break; }
+  done
   [ -n "$GO" ] || { echo "go fehlt (weder /usr/local/go/bin/go noch im PATH) - setup.sh"; exit 1; }
   cd "$REPO_ROOT/llm-proxies/antigravity-proxy" || exit 1
   "$GO" vet ./... >/dev/null 2>&1 || { echo "go vet rot"; exit 1; }

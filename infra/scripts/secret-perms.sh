@@ -32,6 +32,7 @@ SECRET_DIRS=(
   .runtime
   config
   llm-proxies/glm2api
+  llm-proxies/zerokey
   llm-proxies/zerokey/temp
 )
 
