@@ -82,37 +82,4 @@ if ! { [ -f /tmp/opencode/config-watchdog.lock ] && kill -0 "$(cat /tmp/opencode
   echo "[boot] Config-Watchdog gestartet (inotify auf opencode.json)."
 fi
 
-# 7. VS Code: ms-python.debugpy "no-config debugging" im Terminal neutralisieren
-# debugpy injiziert ungefragt "debugpy <script.py>" in PATH und triggerte bei jedem
-# Boot "Erweiterungen möchten das Terminal neu starten". Da debugpy keinen Schalter hat,
-# wird registerNoConfigDebug beim Boot idempotent neutralisiert.
-patch_debugpy() {
-  for ext_js in "$HOME"/.vscode-remote/extensions/ms-python.debugpy*/dist/extension.js; do
-    if [ -f "$ext_js" ]; then
-      python3 -c '
-import sys
-p = sys.argv[1]
-try:
-    with open(p, "r", encoding="utf-8") as f:
-        c = f.read()
-    target = "t.registerNoConfigDebug=async function(e,t){const"
-    if target in c:
-        c = c.replace(target, "t.registerNoConfigDebug=async function(e,t){return;const", 1)
-        with open(p, "w", encoding="utf-8") as f:
-            f.write(c)
-        print("[boot] ms-python.debugpy registerNoConfigDebug neutralisiert.")
-except Exception:
-    pass
-' "$ext_js"
-    fi
-  done
-}
-patch_debugpy
-(
-  for _ in $(seq 1 30); do
-    patch_debugpy
-    sleep 2
-  done
-) >/dev/null 2>&1 &
-
 # Kein autosave-daemon (siehe setup.sh, Nutzerentscheidung 2026-09-27).

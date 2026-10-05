@@ -1197,13 +1197,12 @@ Proxy bei jedem Start automatisch hoch.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
 
-- 2026-10-05: **VS Code Terminal-Relaunch-Meldungen („Erweiterungen möchten das Terminal neu starten") bei Codespace-Start/Reload dauerhaft beseitigt.**
-  Zwei Auslöser: (1) `Python Debugger` (`ms-python.debugpy`) führte bei Aktivierung ungefragt `registerNoConfigDebug` aus und injizierte `debugpy <script.py>` in PATH/EnvironmentVariableCollection. Da debugpy keinen Schalter anbietet, meldete VS Code bei jedem Start ein gelbes Warndreieck. (2) `Python` (`ms-python.python`) setzte standardmäßig `python.terminal.shellIntegration.enabled: true` und injizierte `PYTHONSTARTUP`.
-  In Remote-/Codespaces-Umgebungen startet VS Code das Bash-Terminal vor den Erweiterungen und verweigert aus Sicherheitsgründen einen automatischen Terminal-Neustart (`attachPersistentProcess` / `hasWrittenData`), um keine Shell-Prozesse abzuwürgen.
-  **Fix:**
+- 2026-10-05: **VS Code Terminal-Relaunch-Meldungen & Python-Extension-Bloat dauerhaft beseitigt.**
+  Das Metapaket `ms-python.python` installierte ungefragt vier Erweiterungen (`python`, `debugpy`, `pylance`, `python-envs`), wovon `debugpy` („no-config debugging" in PATH) und `python` (`PYTHONSTARTUP`) bei jedem Codespace-Start/Reload Terminal-Relaunch-Warnungen erzeugten.
+  **Schlanke Architektur:**
+  - In `.devcontainer/devcontainer.json`: Metapaket `ms-python.python` ersetzt durch das schlanke `ms-python.vscode-pylance` (reine Sprachunterstützung, Typ-Prüfung, IntelliSense ohne Terminal-Eingriffe oder GUI-Debugger).
   - In `.vscode/settings.json` und `.devcontainer/devcontainer.json`: `python.terminal.shellIntegration.enabled: false`, `python.terminal.activateEnvInCurrentTerminal: false`, `python.terminal.activateEnvironment: false`.
-  - In `.devcontainer/start-on-boot.sh`: Idempotente Neutralisierung von `registerNoConfigDebug` in `ms-python.debugpy` beim Boot (inkl. kurzem Erststart-Watcher für Hintergrund-Downloads).
-  - In der laufenden Session wurde `ms-python.debugpy` bereits direkt neutralisiert und die Settings synchronisiert.
+  - Aus der laufenden Session wurden `ms-python.python`, `ms-python.debugpy` und `ms-python.vscode-python-envs` deinstalliert (~80 MB Ballast entfernt). Kein Patching mehr in `start-on-boot.sh` nötig.
 
 - 2026-10-03: **DeepSeek-Tokenzählung: Zunahme aus Dateinachschub wurde als `completion_tokens` deklariert — jetzt nach echten Ausgabetokens berechnet. Plus automatischer Session-Reset gegen Kontext-Bleed.**
   Auslöser: Die Session `ses_efc834b93ffe0kE8etaQoEM4bR` (Repo-Analyse) lief fehlerfrei durch, meldete aber **903 882 Input- und 201 210 Output-Tokens** in nur 11 Steps.
