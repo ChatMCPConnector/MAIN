@@ -3,6 +3,8 @@
   "files.eol": "\n",
   "python.defaultInterpreterPath": "/usr/bin/python3",
   "python.terminal.activateEnvironment": false,
+  "python.terminal.activateEnvInCurrentTerminal": false,
+  "python.terminal.shellIntegration.enabled": false,
   "remote.autoForwardPorts": true,
   "remote.autoForwardPortsSource": "process",
   "remote.restoreForwardedPorts": false,

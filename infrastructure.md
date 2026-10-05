@@ -1197,6 +1197,14 @@ Proxy bei jedem Start automatisch hoch.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
 
+- 2026-10-05: **VS Code Terminal-Relaunch-Meldungen („Erweiterungen möchten das Terminal neu starten") bei Codespace-Start/Reload dauerhaft beseitigt.**
+  Zwei Auslöser: (1) `Python Debugger` (`ms-python.debugpy`) führte bei Aktivierung ungefragt `registerNoConfigDebug` aus und injizierte `debugpy <script.py>` in PATH/EnvironmentVariableCollection. Da debugpy keinen Schalter anbietet, meldete VS Code bei jedem Start ein gelbes Warndreieck. (2) `Python` (`ms-python.python`) setzte standardmäßig `python.terminal.shellIntegration.enabled: true` und injizierte `PYTHONSTARTUP`.
+  In Remote-/Codespaces-Umgebungen startet VS Code das Bash-Terminal vor den Erweiterungen und verweigert aus Sicherheitsgründen einen automatischen Terminal-Neustart (`attachPersistentProcess` / `hasWrittenData`), um keine Shell-Prozesse abzuwürgen.
+  **Fix:**
+  - In `.vscode/settings.json` und `.devcontainer/devcontainer.json`: `python.terminal.shellIntegration.enabled: false`, `python.terminal.activateEnvInCurrentTerminal: false`, `python.terminal.activateEnvironment: false`.
+  - In `.devcontainer/start-on-boot.sh`: Idempotente Neutralisierung von `registerNoConfigDebug` in `ms-python.debugpy` beim Boot (inkl. kurzem Erststart-Watcher für Hintergrund-Downloads).
+  - In der laufenden Session wurde `ms-python.debugpy` bereits direkt neutralisiert und die Settings synchronisiert.
+
 - 2026-10-03: **DeepSeek-Tokenzählung: Zunahme aus Dateinachschub wurde als `completion_tokens` deklariert — jetzt nach echten Ausgabetokens berechnet. Plus automatischer Session-Reset gegen Kontext-Bleed.**
   Auslöser: Die Session `ses_efc834b93ffe0kE8etaQoEM4bR` (Repo-Analyse) lief fehlerfrei durch, meldete aber **903 882 Input- und 201 210 Output-Tokens** in nur 11 Steps.
   **Die Ursache war eine Fehlannahme beim Akkumulator-Delta:** DeepSeek meldet im SSE nur `accumulated_token_usage` (kumuliert über die gesamte Conversation). Das Delta `accumulated - prev` wurde im vorherigen Patch als `completion_tokens` deklariert. In Multi-Turn-Sessions, bei denen opencode Dateien liest und an DeepSeek zurücksendet, wächst der Akkumulator jedoch durch den **Input** (Dateiinhalt) sprunghaft an — Turn 4 meldete nach dem Lesen von `infrastructure.md` **27 693 Output-Tokens** für einen winzigen Tool-Call. In Summe addierte opencode alle Dateiinhalte als angebliche Modellausgabe (~201k).
