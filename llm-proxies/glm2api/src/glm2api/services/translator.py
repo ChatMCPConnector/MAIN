@@ -1223,7 +1223,7 @@ _OPEN_PREFIX_TOOL_ARGS = {
 _LOCAL_ROOT_DIRS = frozenset(
     {
         "workspaces", "home", "root", "tmp", "var", "etc", "usr", "opt",
-        "srv", "mnt", "media", "data", "app", "srv", "Users", "workspace",
+        "srv", "mnt", "media", "data", "app", "Users", "workspace",
     }
 )
 
