@@ -348,6 +348,23 @@ def _merge_part_texts(existing: dict[str, object], incoming: dict[str, object], 
     for item in inc_content:
         if isinstance(item, dict) and item.get("type") != "text" and item not in non_text_old:
             merged["content"].append(item)
+    # Reasoning deltas use the same snapshot/delta semantics as text. Leaving
+    # each think fragment as an independent item inserts newlines into JSON
+    # tool arguments and loses calls when a wrapper is split across chunks.
+    old_think = "".join(
+        str(item.get("think", "")) for item in (old_content or [])
+        if isinstance(item, dict) and item.get("type") == "think"
+    )
+    think = old_think
+    for item in inc_content:
+        if isinstance(item, dict) and item.get("type") == "think":
+            fragment = str(item.get("think", ""))
+            think = fragment if think and fragment.startswith(think) else think + fragment
+    if think:
+        merged["content"] = [
+            item for item in merged["content"]
+            if not isinstance(item, dict) or item.get("type") != "think"
+        ] + [{"type": "think", "think": think}]
     # T-19: der berechnete eingangs-status wurde nie geschrieben — ein part
     # behielt nach dem finish-fragment sein 'init'. Das pruefte downstream
     # auf den volltext (bei "finish" notwendig, sonst "update").
@@ -1276,6 +1293,8 @@ def _open_read_arguments(
     if isinstance(open_entry, dict):
         for key in ("offset", "limit"):
             value = open_entry.get(key)
+            if key == "offset" and value is None:
+                value = open_entry.get("lineno")
             if isinstance(value, int) and not isinstance(value, bool):
                 arguments[key] = value
     return arguments
@@ -1309,7 +1328,7 @@ def map_native_open_tool_call(
     command = ""
     target = ""
     delegated_arguments: object = None
-    open_entry: dict[str, object] | None = None
+    open_entry: dict[str, object] | None = parsed
     open_list = parsed.get("open")
     extra_targets = 0
     if isinstance(open_list, list) and open_list:
@@ -1329,7 +1348,7 @@ def map_native_open_tool_call(
                 or first.get("filePath", "")
                 or first.get("file", "")
             ).strip()
-            delegated_arguments = first.get("arguments", first.get("args"))
+            delegated_arguments = first.get("arguments", first.get("args", first.get("properties")))
         # T-21: weitere ziele wurden stillschweigend verworfen. Der erste
         # MAPPBARE gewinnt; die uebrigen werden wenigstens protokolliert,
         # damit der aufruf nicht als vollstaendig verarbeitet gilt.
@@ -1364,7 +1383,7 @@ def map_native_open_tool_call(
                 return delegated_name, parsed_delegated
 
     if not delegated_arguments:
-        delegated_arguments = parsed.get("arguments", parsed.get("args"))
+        delegated_arguments = parsed.get("arguments", parsed.get("args", parsed.get("properties")))
     if not target:
         target = str(
             parsed.get("ref_id", "")
@@ -1494,6 +1513,11 @@ def map_native_open_tool_call(
         prefixed = _map_tool_prefixed_target(target, allowed_tool_names, unrestricted)
         if prefixed is not None:
             return prefixed
+
+    # A shell command containing a path is not itself a path. Do not invent
+    # an executable command either: only explicit bash delegation is mapped.
+    if re.match(r"^(?:ls|cat|find|du|git|rg|head|tail|sed|awk|python3?|pytest|uv|pnpm|npm|make)\s", target):
+        return None
 
     if not target.startswith("turn") and ("/" in target or target.startswith(".") or "." in target):
         if _looks_like_tool_invocable(target):
@@ -6091,9 +6115,37 @@ class GLMEventAccumulator:
         if not source:
             return []
         _, tool_calls = parse_tool_calls_from_text(
-            source.strip(),
-            allowed_tool_names=self.allowed_tool_names,
+            source.strip(), allowed_tool_names=self.allowed_tool_names,
         )
+        # The parser deliberately rejects native names, even in detect_all
+        # mode. Recover only complete JSON open wrappers here, then map them
+        # against the real contract; never relax the parser's native denylist.
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r'\{\s*"tool_calls"\s*:', source):
+            try:
+                block, _ = decoder.raw_decode(source[match.start():])
+            except json.JSONDecodeError:
+                continue
+            entries = block.get("tool_calls") if isinstance(block, dict) else None
+            if not isinstance(entries, list):
+                continue
+            for index, entry in enumerate(entries):
+                if not isinstance(entry, dict) or entry.get("name") != "open":
+                    continue
+                mapped = map_native_open_tool_call(
+                    entry.get("arguments", {}), self.allowed_tool_names,
+                    user_url_context=self.user_url_context,
+                )
+                if mapped is None:
+                    continue
+                name, arguments = mapped
+                if ("open", name) not in self.native_remapped_calls:
+                    self.native_remapped_calls.append(("open", name))
+                tool_calls.append({
+                    "id": f"reasoning-open-{match.start()}-{index}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments},
+                })
         return sanitize_tool_calls(tool_calls, fallback_url=self.fallback_tool_url)
 
     def _track_emitted_state(self, text_delta: str, reasoning_delta: str) -> None:

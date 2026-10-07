@@ -1469,6 +1469,45 @@ def test_stream_notice_is_anchored_to_next_tool_result():
     assert "file contents here" in tool_message["content"]
 
 
+@pytest.mark.parametrize("stream", [True, False])
+def test_notice_is_serialized_before_upstream_request_without_mutating_client_history(stream):
+    """Inspect at the transport boundary, not a retained mutable payload."""
+    from glm2api.services.translator import convert_messages
+
+    client, _ = _make_client([[_finish_event()]])
+    payload = {
+        "model": "glm-5.3",
+        "conversation_id": "notice-transport",
+        "messages": [
+            {"role": "user", "content": "inspect"},
+            {"role": "assistant", "tool_calls": [{"id": "c1", "function": {
+                "name": "read", "arguments": '{"filePath":"/a.py"}'
+            }}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "REAL_RESULT"},
+        ],
+        "tools": [{"type": "function", "function": {
+            "name": "read", "parameters": {"type": "object"}
+        }}],
+    }
+    original = json.dumps(payload, sort_keys=True)
+    client._append_pending_result_notice_text(payload, "[native_remap_notice] open -> read")
+    send = client._open_chat_stream
+    wire_prompts = []
+
+    def capture(request, **kwargs):
+        wire_prompts.append(convert_messages(request["messages"], request["tools"])[0]["content"][0]["text"])
+        return send(request, **kwargs)
+
+    client._open_chat_stream = capture
+    if stream:
+        list(client.stream_chat_completion(payload))
+    else:
+        client.chat_completion(payload)
+    assert "[native_remap_notice] open -> read" in wire_prompts[0]
+    assert "REAL_RESULT" in wire_prompts[0]
+    assert json.dumps(payload, sort_keys=True) == original
+
+
 def test_notice_is_consumed_once():
     """Der Merker ist exhaustiv: der zweite Request derselben Konversation
     sieht keine duplizierte Rueckmeldung."""

@@ -59,6 +59,98 @@ Sweeps müssen an einem alten Stand **rot** werden. `order_matrix` meldet
 an `9054325` 14 unbekannte Verstöße, `sweep2` 7 — dort sind sie grün, wo
 sie heute grün sind.
 
+## OpenCode-MAIN-Analyse (2026-10-07)
+
+Akzeptanz: der exakte Nutzerprompt muss in `opencode run` über
+`glm2api/glm-5.3` einen vollständigen, durch Dateiinspektionen belegten
+MAIN-Bericht liefern; kein Hänger, keine ungültigen Tools und kein
+vorzeitiger Abschluss. Exit 0 allein ist **kein** Bestehen.
+
+Prompt:
+
+> Analysiere das komplette MAIN Verzeichnis, alle Datein und alle Ordner und gebe mir einen Bericht darüber, ob alles so optimiert ist und gut gebaut wurde und was die ganzen Datein tun
+
+Test mit `--agent build --format json`, 1800-s-Wallclock-Timer
+(letzter Lauf: 900 s); Edit-,
+Question- und Session-Löschtools gesperrt, damit die Analyse weder Dateien
+ändert noch auf Benutzereingaben wartet. Bash bleibt verfügbar. Rohdaten
+liegen gitignoriert unter `.runtime/glm2api-main-*.jsonl`.
+
+Belegte und durch Regressionstests abgesicherte Reparaturen:
+
+- Native `open(ref_id="bash", properties={"command": ...})`-Wrapper werden
+  genauso wie `arguments`/`args` auf das **deklarierte** Tool abgebildet.
+- `lineno` wird zu `read.offset`; top-level sowie verschachtelte
+  `offset`/`limit` bleiben erhalten. Die bisherigen Erwartungen ohne
+  `offset: 1` wurden an diese beabsichtigte Schnittstellenänderung angepasst.
+- `ls -la /workspaces/MAIN` als bloßes `ref_id` ist kein Dateipfad und wird
+  nicht mehr als unerfüllbarer `read` ausgeliefert. Ohne explizite
+  Bash-Delegation wird daraus auch kein erfundener Shell-Aufruf.
+- Vorgemerkte Proxy-Rückmeldungen werden **vor** der Serialisierung des
+  nächsten Upstream-Requests angehängt, nicht erst nach dessen Versand.
+  Message-Dicts werden kopiert; der Client-Kontext wird nicht mutiert.
+  Der Test prüft den serialisierten Prompt direkt an der Transportgrenze,
+  nicht eine später mutierte Payload-Referenz.
+- Vollständige JSON-`open`-Wrapper im Reasoning werden vor dem nativen
+  Namensfilter gezielt wiedergewonnen und gegen die echte Tool-Allowlist
+  gemappt. Die native Denylist des allgemeinen Parsers bleibt unverändert.
+- `think`-Fragmente derselben Part werden wie Text-Deltas akkumuliert;
+  Volltext-Snapshots ersetzen den bisherigen Stand idempotent. Dadurch
+  zerreißen künstliche Newlines keine über Chunks verteilten JSON-Aufrufe.
+  Gegenproben: Chunkgrößen 1/7/64, exakt eine Ausführung und kein
+  Allowlist-Bypass.
+
+**Zwischenergebnis des ersten reparierten Live-Laufs:** Exit 0 nach
+101 Sekunden, vier Tool-Ausführungen, aber nur Top-Level-Listing und
+oberflächlicher Bericht. **Akzeptanz nicht erfüllt.** Das ursprüngliche
+`read` auf einen Shell-Befehl war verschwunden und die Rückmeldung stand
+jetzt vor dem Versand im Kontext; das Modell brach dennoch zu früh ab.
+Weitere Live-Läufe zeigten wiederholte Verzeichnisaufrufe und Versuche,
+interne `turn*`-/`call_*`-IDs zu öffnen. Solche IDs sind keine Pfade und
+werden bewusst nicht in erfundene Dateizugriffe umgewandelt.
+
+| Lauf | Dauer / Exit | Client-Toolcalls | Ergebnis |
+|---|---|---|---|
+| Baseline | nach ca. 4 min gezielt beendet | 11, darunter `read` auf Shell-Befehl und 404-Webfetch | Drift; nicht bestanden |
+| Argument-/Notice-Fix | 101 s / 0 | 4 | Top-Level-Bericht, vorzeitiger Abschluss; nicht bestanden |
+| zusätzlich Reasoning-JSON-Recovery | 309 s / 0 | 11 | Verzeichnis-Wiederholungen, interne IDs, zwei widersprüchliche Berichte; nicht bestanden |
+| final inkl. Think-Chunk-Merge | 230 s / 0 | 5 Bash-Aufrufe, keine Dateiinhalt-Reads | doppeltes Listing, zwei Berichte, Session-Neustart verlangt; nicht bestanden |
+
+Letzte OpenCode-Session: `ses_eea861b20ffeHugHra9F5KGjmu`.
+Die letzte Ausführung hatte keine als `error` markierten Client-Toolparts
+und keinen Transport-Timeout, aber weiterhin einen `bash.command="..."`
+und einen doppelt ausgeführten Listing-Befehl. Fehlende Analyseabdeckung
+macht den Auftrag unabhängig von Exitcode und Berichtslänge unerfüllt.
+Es wird **keine** Beschleunigung oder erfolgreiche Gesamt-Reparatur behauptet.
+
+Final geprüft: `make check` grün, darunter **1802 glm2api-Tests**;
+Ruff/Mypy grün im vorhandenen Scope. Bundle frisch erzeugt unter
+`llm-proxies/dist/glm2api-bundle.zip` (gitignored), zusätzlich alle 34
+Python-Source-/Testdateien byteweise gegen das ZIP geprüft. Source und
+Tests sind die persistenten Artefakte; das Bundle ist daraus reproduzierbar.
+
+Weitere Architektur-Risiken (unverändert, kein verifizierter Fix):
+
+- `_conversation_key()` nutzt bei fehlender `conversation_id` für alle
+  Clients denselben leeren Schlüssel: Pending-Notices sind bei parallelen
+  OpenCode-Sessions nicht zuverlässig isoliert.
+- Request-Deadlines werden an mehreren Stellen neu erzeugt und nicht in
+  jedem SSE-Lese-/Korrekturpfad geprüft; ein echter globaler Wallclock-Cap
+  ist dadurch nicht garantiert.
+- History-Kompression ist Präfix-Kürzung, keine semantische Zusammenfassung;
+  Summary und jüngste Nachrichten können das nominelle Zeichenbudget
+  gemeinsam überschreiten. Tool-Runden am neuesten Rand verdienen eigene
+  Budget-Gegenproben.
+- Ausführbare Calls werden häufig erst nach Ende der gesamten Upstream-Runde
+  an OpenCode übergeben. Wiederholte native Calls können deshalb innerhalb
+  derselben Runde entstehen, bevor das Modell ein echtes Ergebnis sieht.
+- `glm2api.sh restart` kann gegen den Watchdog verlieren: im Test meldete es
+  zunächst einen nicht gestoppten Prozess, der tatsächlich die vom Watchdog
+  bereits neu gestartete, gesunde Instanz mit aktualisiertem Code war.
+- Große Module (`translator.py`, `glm_client.py`, `tool_parser.py`) und viele
+  sprachabhängige Textfilter erschweren klare Verträge. `mypy` meldet selbst,
+  dass untypisierte Funktionskörper standardmäßig nicht geprüft werden.
+
 ## Bekannte Befunde
 
 **Der S-15-Produktionsrand ist nicht vollständig invariant:** bei dem

@@ -1330,7 +1330,7 @@ def test_native_open_maps_to_read_when_target_is_path():
         '{"open":[{"ref_id": "/workspaces/benchmark", "lineno": 1}]}',
         allowed_tool_names={"bash", "read"},
     )
-    assert mapped == ("read", {"filePath": "/workspaces/benchmark"})
+    assert mapped == ("read", {"filePath": "/workspaces/benchmark", "offset": 1})
 
 
 def test_native_open_unwraps_declared_tool_name_and_arguments():
@@ -1801,6 +1801,93 @@ def test_native_open_maps_filepath_window_and_malformed_file_uri():
     assert map_native_open_tool_call(
         {"open": [{"ref_id": "filesystem:///workspaces/MAIN"}]}, {"bash", "read"}
     ) == ("read", {"filePath": "/workspaces/MAIN"})
+
+
+@pytest.mark.parametrize("wrapper", ["arguments", "args", "properties"])
+@pytest.mark.parametrize("nested", [True, False])
+def test_native_open_delegates_declared_tool_arguments(wrapper, nested):
+    from glm2api.services.translator import map_native_open_tool_call
+
+    entry = {"ref_id": "bash", wrapper: {"command": "ls -la /workspaces/MAIN"}}
+    arguments = {"open": [entry]} if nested else entry
+    assert map_native_open_tool_call(arguments, {"bash", "read"}) == (
+        "bash", {"command": "ls -la /workspaces/MAIN"}
+    )
+    assert map_native_open_tool_call(arguments, {"read"}) is None
+
+
+@pytest.mark.parametrize("nested", [True, False])
+@pytest.mark.parametrize("target", ["/workspaces/MAIN/x.py", "read:/workspaces/MAIN/x.py"])
+def test_native_open_preserves_read_window_and_lineno(nested, target):
+    from glm2api.services.translator import map_native_open_tool_call
+
+    entry = {"ref_id": target, "lineno": 201, "limit": 60}
+    arguments = {"open": [entry]} if nested else entry
+    assert map_native_open_tool_call(arguments, {"read"}) == (
+        "read", {"filePath": "/workspaces/MAIN/x.py", "offset": 201, "limit": 60}
+    )
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_reasoning_open_properties_becomes_one_executable_bash_call(stream):
+    accumulator = GLMEventAccumulator(model="glm-5.3", allowed_tool_names={"bash", "read"})
+    protocol = json.dumps({"tool_calls": [{"name": "open", "arguments": {
+        "open": [{"ref_id": "bash", "properties": {"command": "ls -la /workspaces/MAIN"}}]
+    }}]}) + "[]"
+    accumulator.consume_event({"status": "finish", "parts": [{
+        "logic_id": "reasoning", "content": [{"type": "think", "think": protocol}]
+    }]})
+    if stream:
+        events = [json.loads(chunk.removeprefix("data: ").strip())
+                  for chunk in accumulator.finalize("finish") if chunk.startswith("data: {")]
+        calls = [call for event in events for choice in event.get("choices", [])
+                 for call in choice.get("delta", {}).get("tool_calls", [])]
+    else:
+        calls = accumulator.build_response()["choices"][0]["message"]["tool_calls"]
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "bash"
+    assert json.loads(calls[0]["function"]["arguments"]) == {"command": "ls -la /workspaces/MAIN"}
+
+
+@pytest.mark.parametrize("allowed,target", [
+    (None, "bash"), (set(), "bash"), ({"read"}, "bash"),
+    ({"bash", "read"}, "turn0bash1"),
+])
+def test_reasoning_open_never_bypasses_tool_contract(allowed, target):
+    accumulator = GLMEventAccumulator(model="glm-5.3", allowed_tool_names=allowed)
+    source = json.dumps({"tool_calls": [{"name": "open", "arguments": {
+        "open": [{"ref_id": target, "properties": {"command": "ls /workspaces/MAIN"}}]
+    }}]})
+    assert accumulator._extract_reasoning_tool_calls(source) == []
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 64])
+def test_reasoning_open_split_chunks_deliver_exactly_once(chunk_size):
+    accumulator = GLMEventAccumulator(model="glm-5.3", allowed_tool_names={"read"})
+    source = json.dumps({"tool_calls": [{"name": "open", "arguments": {
+        "open": [{"ref_id": "/workspaces/MAIN/README.md", "lineno": 20, "limit": 40}]
+    }}]}) + "[]"
+    for index in range(0, len(source), chunk_size):
+        accumulator.consume_event({"status": "process", "parts": [{
+            "logic_id": "reasoning", "content": [{"type": "think", "think": source[index:index + chunk_size]}]
+        }]})
+    events = [json.loads(chunk.removeprefix("data: ").strip())
+              for chunk in accumulator.finalize("finish") if chunk.startswith("data: {")]
+    calls = [call for event in events for choice in event.get("choices", [])
+             for call in choice.get("delta", {}).get("tool_calls", [])]
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "read"
+    assert json.loads(calls[0]["function"]["arguments"]) == {
+        "filePath": "/workspaces/MAIN/README.md", "offset": 20, "limit": 40,
+    }
+
+
+def test_native_open_does_not_treat_shell_command_as_file_path():
+    from glm2api.services.translator import map_native_open_tool_call
+
+    assert map_native_open_tool_call(
+        {"open": [{"ref_id": "ls -la /workspaces/MAIN"}]}, {"read", "bash"}
+    ) is None
 
 
 def test_sandbox_mapping_is_capped_per_turn():
@@ -3685,11 +3772,11 @@ def test_narration_stripped_from_text_only_answer():
 @pytest.mark.parametrize("ref_id,expected", [
     # S-08, live: der allererste aufruf der session
     # `glm2api-Ordner-Analyse` war `file:///workspaces/MAIN/glm2api`.
-    ("file:///workspaces/MAIN/glm2api", ("read", {"filePath": "/workspaces/MAIN/glm2api"})),
-    ("file:///workspaces/MAIN/llm-proxies/glm2api/", ("read", {"filePath": "/workspaces/MAIN/llm-proxies/glm2api/"})),
+    ("file:///workspaces/MAIN/glm2api", ("read", {"filePath": "/workspaces/MAIN/glm2api", "offset": 1})),
+    ("file:///workspaces/MAIN/llm-proxies/glm2api/", ("read", {"filePath": "/workspaces/MAIN/llm-proxies/glm2api/", "offset": 1})),
     # prozent-encoding muss aufgeloest werden, sonst existiert die datei nicht
-    ("file:///workspaces/MAIN/mein%20ordner/a.md", ("read", {"filePath": "/workspaces/MAIN/mein ordner/a.md"})),
-    ("file://localhost/tmp/x.txt", ("read", {"filePath": "/tmp/x.txt"})),
+    ("file:///workspaces/MAIN/mein%20ordner/a.md", ("read", {"filePath": "/workspaces/MAIN/mein ordner/a.md", "offset": 1})),
+    ("file://localhost/tmp/x.txt", ("read", {"filePath": "/tmp/x.txt", "offset": 1})),
     # fremder host ist fuer uns nicht erreichbar
     ("file://server/share/x", None),
     # die CHATGLM-eigenen referenzen bleiben unauflösbar — das ist korrekt
@@ -3698,7 +3785,7 @@ def test_narration_stripped_from_text_only_answer():
     ("turn1fetch0", None),
     # Kontrollgruppe: die schon vorher funktionierenden formen
     ("https://example.com", ("webfetch", {"url": "https://example.com"})),
-    ("/workspaces/MAIN/x", ("read", {"filePath": "/workspaces/MAIN/x"})),
+    ("/workspaces/MAIN/x", ("read", {"filePath": "/workspaces/MAIN/x", "offset": 1})),
 ])
 def test_native_open_maps_file_urls(ref_id, expected):
     """S-08: `file://` ist die natuerlichste form fuer 'oeffne dieses lokale

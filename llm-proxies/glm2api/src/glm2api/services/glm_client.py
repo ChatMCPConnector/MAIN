@@ -937,6 +937,11 @@ class GLMWebClient:
 
     def chat_completion(self, payload: dict[str, object]) -> tuple[dict[str, object], str | None]:
         payload = dict(payload)  # lokal kopierbar fuer retry-mutationen (10040-budget)
+        if isinstance(payload.get("messages"), list):
+            payload["messages"] = [dict(message) for message in payload["messages"]]
+        # Feedback must be present BEFORE _open_chat_stream serializes history.
+        # Copy message dictionaries so injecting notices cannot mutate client state.
+        self._anchor_pending_result_notice(payload)
         # T-30: Holder fuer die jeweils aktive Runde. Im Stream-Pfad lebt
         # `active_payload` generator-lokal und ist fuer die Fabrik-Closure
         # nicht sichtbar — der Holder transportiert die aktive Runde hinein.
@@ -1064,9 +1069,6 @@ class GLMWebClient:
         active_payload = payload
         _active_round_payload_holder.clear()
         _active_round_payload_holder.append(active_payload)
-        # T-30: vorgemerkte Rueckmeldung ins letzte Tool-Result anhaengen
-        # (siehe Stream-Pfad).
-        self._anchor_pending_result_notice(active_payload)
 
         # S-26 (live 2026-09-28): der loop-guard-Zaehler muss request-
         # uebergreifend leben. Er lag im Accumulator, der pro Upstream-Runde
@@ -1425,6 +1427,11 @@ class GLMWebClient:
 
     def stream_chat_completion(self, payload: dict[str, object]):
         payload = dict(payload)  # lokal kopierbar fuer retry-mutationen (10040-budget)
+        if isinstance(payload.get("messages"), list):
+            payload["messages"] = [dict(message) for message in payload["messages"]]
+        # Feedback must be present BEFORE _open_chat_stream serializes history.
+        # Copy message dictionaries so injecting notices cannot mutate client state.
+        self._anchor_pending_result_notice(payload)
         # T-30: Holder fuer die jeweils aktive Runde. Im Stream-Pfad lebt
         # `active_payload` generator-lokal und ist fuer die Fabrik-Closure
         # nicht sichtbar — der Holder transportiert die aktive Runde hinein.
@@ -1597,10 +1604,6 @@ class GLMWebClient:
             active_payload = payload
             _active_round_payload_holder.clear()
             _active_round_payload_holder.append(active_payload)
-            # T-30: falls ein frueherer Request dieser Konversation eine
-            # Rueckmeldung vorgemerkt hat, geht sie jetzt ins erste
-            # Tool-Result der Historie (garantiert zurueckgespiegelt).
-            self._anchor_pending_result_notice(active_payload)
             attempt = 0
             blocked_follow_ups = 0
             # Namen, die in IRGEND EINER runde dieses turns blockiert
