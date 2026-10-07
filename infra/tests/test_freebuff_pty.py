@@ -37,6 +37,8 @@ def test_slash_menu_footer_does_not_trigger_question_modal():
 
 def test_question_modal_open_patterns():
     for text in [
+        b" Some questions for you ",
+        b"Close \xe2\x9c\x95",
         b"(click to answer)",
         b"Type your own answer",
         b"Select multiple options",
@@ -51,6 +53,7 @@ def test_question_modal_close_patterns():
         b"Your answers: Option A, Option B",
         b"You skipped the question.",
         b"User answered: Yes",
+        b"User skipped question",
     ]:
         assert any(pat in text for pat in pty.QUESTION_MODAL_CLOSE_PATTERNS)
 
