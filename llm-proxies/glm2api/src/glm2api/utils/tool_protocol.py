@@ -179,10 +179,25 @@ def serialize_tool_call_block(
 
 
 def serialize_tool_result_block(tool_call_id: object, tool_name: str, content: str) -> str:
-    """Tool-Result als JSON-Nachricht (vom Translator in eine tool-Rolle gemappt)."""
-    return safe_json_dumps(
-        [{"call_id": str(tool_call_id or "unknown"), "name": tool_name, "content": content}]
-    )
+    """Tool-Result als JSON-Nachricht (vom Translator in eine tool-Rolle gemappt).
+
+    T-31: die `call_id` wird bewusst NICHT mehr in den Block geschrieben.
+    Sie war die einzige stelle im prompt, an der das modell seine eigenen
+    tool-call-ids zu sehen bekam — und es hat sie prompt als `open`-ziel
+    zurueckgegeben: `open(ref_id="call_4ad95ea04c9146dfa28de84f")`. Ein
+    solches ziel ist weder pfad noch URL, also prinzipbedingt nicht
+    abbildbar; jede wiederholung erzwang eine eigene korrektur-runde.
+    Live 2026-10-07 (`ses_ee9f9f3ddffe0CDUZ4nrPfwXBW`, lokal 13:00–13:19):
+    fuenf `call_*`-bloecke, drei davon in korrektur-ketten; rund ein drittel
+    der 18-minuten-laufzeit ging in korrektur-runden, die genau daraus
+    entstanden. Die zuordnung aufruf->ergebnis leistet die reihenfolge im
+    transcript; die id ist fuer das modell reine verlockung. Der parameter
+    bleibt, weil der aufrufer die zuordnung call<->result an dieser stelle
+    dokumentiert (und `tool_call_id` weiterhin die OpenAI-tool-nachricht
+    identifiziert) — er geht nur nicht mehr in den text ein.
+    """
+    del tool_call_id  # T-31: nicht mehr im prompt — siehe docstring.
+    return safe_json_dumps([{"name": tool_name, "content": content}])
 
 def build_tool_call_instructions(
     tool_names: list[str],

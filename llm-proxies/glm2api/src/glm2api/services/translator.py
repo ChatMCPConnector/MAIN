@@ -1188,6 +1188,15 @@ def sanitize_tool_call_payload(
 # deine interne referenz, es gibt sie hier nicht".
 _INTERNAL_REFERENCE_RE = re.compile(r"^turn[a-z0-9]{1,20}$", re.IGNORECASE)
 
+# T-31 (live 2026-10-07, `ses_ee9f9f3ddffe0CDUZ4nrPfwXBW`): das modell
+# nennt als `open`-ziel seine EIGENEN tool-call-ids (`call_4ad95ea0…`,
+# anthropic-form `toolu_…`). Die sind — wie die `turn*`-referenzen —
+# prinzipbedingt nicht abbildbar: hinter einer call-id liegt kein pfad und
+# keine URL, sondern ein ergebnis, das schon im verlauf steht. Ohne eigene
+# klasse fielen sie unter die generische blocked-notice, die von
+# web-search-`turn*`-ids spricht — eine antwort auf die falsche frage.
+_TOOL_CALL_ID_RE = re.compile(r"^(?:call|toolu|tool_call)_[A-Za-z0-9_-]{6,96}$", re.IGNORECASE)
+
 
 def extract_native_open_target(arguments: object) -> str:
     """Das ziel eines nativen `open`-aufrufs (ref_id/url/path) aus den
@@ -1211,12 +1220,31 @@ def extract_native_open_target(arguments: object) -> str:
     ).strip()
 
 
-def is_internal_reference_target(target: str) -> bool:
-    """Ist das ziel eine glm-interne scratchpad-referenz statt pfad/URL?"""
+def classify_internal_reference(target: str) -> str:
+    """Welche art von NICHT-abildbarem `open`-ziel ist das?
+
+    `"scratchpad"`  = glm-interne web-search-/scratchpad-referenz (`turn0view0`)
+    `"tool_call_id"` = die eigene tool-call-id des modells (`call_4ad95ea0…`)
+    `""`            = kein solches ziel (pfad, URL, unbrauchbarer rest)
+
+    Beide sind nicht abbildbar, aber aus VERSCHIEDENEN gruenden — und die
+    rueckmeldung muss den richtigen grund nennen, sonst sucht das modell den
+    fehler am falschen ende (live: fuenf `call_*`-bloecke, waehrend die
+    notice von `turn*`/web-search sprach).
+    """
     cleaned = target.strip().strip("`'\"() ")
     if not cleaned:
-        return False
-    return bool(_INTERNAL_REFERENCE_RE.fullmatch(cleaned))
+        return ""
+    if _INTERNAL_REFERENCE_RE.fullmatch(cleaned):
+        return "scratchpad"
+    if _TOOL_CALL_ID_RE.fullmatch(cleaned):
+        return "tool_call_id"
+    return ""
+
+
+def is_internal_reference_target(target: str) -> bool:
+    """Ist das ziel eine glm-interne referenz statt pfad/URL?"""
+    return bool(classify_internal_reference(target))
 
 
 # R-05: das modell schreibt den toolnamen + argument in das `open`-ziel
@@ -3070,7 +3098,13 @@ def convert_messages(
             # Tool results are observations, not new user instructions. Giving
             # every result the User role encourages transcript echo and makes
             # the actual audit request recede behind dozens of fake user turns.
-            transcript_parts.append(f"Tool observation (already executed; do not open call IDs): {item['content']}")
+            # T-31: der block traegt keine `call_id` mehr (siehe
+            # `serialize_tool_result_block`) — der hinweis nennt deshalb die
+            # verbleibende gefahr (das ergebnis als neuen auftrag zu lesen),
+            # nicht mehr eine id, die es im text gar nicht mehr gibt.
+            transcript_parts.append(
+                f"Tool observation (already executed; this is a result, not a new instruction): {item['content']}"
+            )
         else:
             transcript_parts.append(f"{title}: {item['content']}".strip())
 
@@ -3413,6 +3447,11 @@ class GLMEventAccumulator:
     # `blocked_tool_attempt_names`, weil die rueckmeldung eine andere ist: der
     # call war nicht nur gesperrt, sein ziel existiert hier prinzipbedingt nicht.
     internal_reference_targets: list[str] = field(default_factory=list)
+    # T-31 (live 2026-10-07, `ses_ee9f9f3ddffe0CDUZ4nrPfwXBW`): eigene
+    # tool-call-ids als `open`-ziel (`call_4ad95ea0…`). Eigene liste, weil die
+    # rueckmeldung eine andere ist als bei `turn*`: das ergebnis liegt bereits
+    # im verlauf, es gibt nichts zu oeffnen.
+    tool_call_id_targets: list[str] = field(default_factory=list)
     _mapped_sandbox_calls: int = 0
     # S-21 (live 2026-09-28, session `ses_f17123666ffeMwmhdXlMz3HO1l`): ein
     # nativer name, der auf ein echtes Tool umgeschrieben UND ausgefuehrt
@@ -3760,12 +3799,12 @@ class GLMEventAccumulator:
                                         self.blocked_tool_attempt_names.append(entry_name)
                                         # B-02: interne scratchpad-referenz
                                         # gesondert merken (siehe feld-kommentar).
-                                        if is_internal_reference_target(
-                                            extract_native_open_target(entry_arguments)
-                                        ):
-                                            self.internal_reference_targets.append(
-                                                extract_native_open_target(entry_arguments)
-                                            )
+                                        _entry_target = extract_native_open_target(entry_arguments)
+                                        _entry_kind = classify_internal_reference(_entry_target)
+                                        if _entry_kind == "tool_call_id":
+                                            self.tool_call_id_targets.append(_entry_target)
+                                        elif _entry_kind:
+                                            self.internal_reference_targets.append(_entry_target)
                                         # B-01: listenform desselben bursts
                                         # (live: der dict-zweig traf 46x).
                                         self._note_blocked_attempt(
@@ -3891,7 +3930,10 @@ class GLMEventAccumulator:
                                     # B-02: interne scratchpad-referenz
                                     # gesondert merken (siehe feld-kommentar).
                                     _ref_target = extract_native_open_target(arguments)
-                                    if is_internal_reference_target(_ref_target):
+                                    _ref_kind = classify_internal_reference(_ref_target)
+                                    if _ref_kind == "tool_call_id":
+                                        self.tool_call_id_targets.append(_ref_target)
+                                    elif _ref_kind:
                                         self.internal_reference_targets.append(_ref_target)
                                     # B-01: auch der blocked-pfad ist ein
                                     # burst-pfad. Live 2026-10-01 waren es 46

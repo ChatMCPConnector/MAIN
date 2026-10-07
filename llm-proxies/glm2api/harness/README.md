@@ -251,6 +251,88 @@ Lauf belegt den behobenen Hänger-/Drift-Pfad; die garantierte
 Analysetiefe ist offen und gehört vor eine Freigabe mit größerem n und
 ohne Upstream-Throttle gemessen.
 
+## T-31: die Session `ses_ee9f9f3ddffe0CDUZ4nrPfwXBW` (2026-10-07, lokal 13:00–13:19)
+
+Nutzerbefund: „da ist einiges schief gegangen … noch sehr langsam und träge
+und unreliable". Untersucht wurde die Session vollständig (DB-Tabellen
+`message`/`part`) **plus** der Proxy-Log ihres echten Zeitfensters. Erste
+Verwechslungsquelle beim Lesen: der Proxy-Log schreibt **lokale** Zeit, die
+DB speichert UTC-Epoch — dieselben Ereignisse stehen dort zwei Stunden
+auseinander (`13:07:57` im Log == `11:07:57` in der DB).
+
+**Ausgangslage.** Der laufende Proxy hatte den Stand geladen: Prozessstart
+`11:32:04`, letzte Quelländerung davor (`translator.py` 11:25,
+`glm_client.py` 11:28) — der Prozess trug also den Arbeitsbaum, der um
+11:50 als `12e926c` committet wurde (Schluss aus mtimes, nicht aus einem
+Log-Statement). **Die Fixes waren aktiv — und es war trotzdem langsam.**
+
+**Gemessen** (1100 s Wallclock, 21 Modellrunden, 22 Toolcalls; aus dem Log
+Runde für Runde aufsummiert):
+
+| Posten | Sekunden | Anteil |
+|---|---|---|
+| Korrektur-Ketten aus nicht abbildbaren `open`-Aufrufen | ~378 | 34 % |
+| finale Berichtsgenerierung (194 s in einer Runde) | ~194 | 18 % |
+| Upstream-SSE ohne `[DONE]` abgebrochen + Auto-Retry (126 s) | ~144 | 13 % |
+| normale Runden (10–20 s, eine mit 90 s) | ~420 | 38 % |
+
+**Nicht abbildbare `open`-Aufrufe dieser Session: 14**, in zwei Formen:
+`ref_id=turn0view0`/`turn3view1`/`turn0search0` (scratchpad-/web-search-
+Referenzen, `turn3view1` allein fünfmal) und `ref_id=call_4ad95ea0…` —
+**die eigene Tool-Call-ID**, fünfmal. Jeder davon erzwang eine eigene
+Korrektur-Runde.
+
+**Ursache der `call_*`-Klasse (T-31).** Der gerenderte Tool-Result-Block
+enthielt die `call_id` des Clients wörtlich
+(`Tool observation …: [{"call_id": "call_4ad95ea0…", "name": "read", "content": …}]`).
+Das war die **einzige** Stelle im Prompt, an der das Modell seine eigenen
+ids zu sehen bekam — und es gab sie prompt als `open`-Ziel zurück. Der
+Hinweis „do not open call IDs" half nicht: dass glm-5.3 Verbote zuverlässig
+überstimmt, steht schon in `tool_protocol.py`.
+
+**Reparatur (durch Regressionstests abgesichert, `tests/test_internal_reference_notice.py`):**
+
+- `serialize_tool_result_block` schreibt die `call_id` **nicht mehr** in den
+  gerenderten Block; die Zuordnung Aufruf→Ergebnis leistet die Reihenfolge
+  im Transcript. Die OpenAI-`tool`-Nachricht behält `tool_call_id`
+  unverändert (nur der Prompt-Text ist betroffen).
+- `classify_internal_reference()` trennt `scratchpad` (`turn*`) von
+  `tool_call_id` (`call_*`/`toolu_*`). Eigene Liste `tool_call_id_targets`
+  plus eigene `[tool_call_id_notice]`, weil die bisherige Antwort die
+  **falsche Ursache** nannte (sie sprach von web-search-`turn*`-ids). Die
+  Korrektur-Runde wird auch für diese Klasse gefahren.
+
+**Live-Beleg (exakter Nutzerprompt, `--agent build --format json`):**
+
+| Lauf | exit | s | tools | read | bash | inv | content | Bereiche | src | chars |
+|---|---|---|---|---|---|---|---|---|---|---|
+| die Session selbst (mit Fix-Stand) | 0 | 1100 | 22 | – | – | – | – | – | – | 7751 |
+| **T-31 `t31b`** | **0** | **251** | **18** | 3 | 13 | 6 | **12** | **5** | **5** | 4478 |
+
+Der Lauf ist der bisher **schnellste und breiteste** gemessene: 4,4× schneller
+als die Session und mehr gelesene Dateien als jeder Lauf der
+Breadth-Tabelle (12 statt max. 11), mit 5 Quellcode-Dateien aus 5 Bereichen —
+ohne Abbruch, ohne Protokollfehler, ohne Upstream-Abbruch. **`call_*` kam
+null Mal vor.** Der Bericht endet nicht mit einem Aufgaben-Abbruch.
+Stichproben der genannten Zahlen stimmen: `translator.py` 6725 Zeilen,
+`setup.sh` 452, 338 getrackte Dateien, Pack 115,31 MiB,
+`.env.dist`↔`.env.example` 74 Diff-Zeilen, Entfernungs-Commit `2bd9161`
+(die KB-Angaben sind SI-vs-KiB-Rundungen derselben Dateien).
+
+**Rest-Befunde (bewusst nicht gefixt, ehrlich offen):**
+
+- `ref_id="README.md"` (bloßer Dateiname) fällt in die Bare-Domain-
+  Erkennung (T-21) und wird als erfundene URL verworfen statt als Pfad
+  gelesen. Ein relativer Pfad ist ohne bekanntes cwd des Clients nicht
+  auflösbar; die Verwerfung ist die konservative, dokumentierte Wahl.
+- `ref_id="bash"`/`"read"` ohne Argumente, `ref_id="fallback"` und leere
+  `open`-Objekte bleiben unmappbar. Sie sind im Lauf billig (2–5 s), weil
+  das Modell sofort korrigiert.
+- `turn*search*`-Referenzen bleiben vorhanden — die notice wirkt nicht bei
+  jedem Zug. Sie kosteten hier Sekunden statt der 100-s-Ketten vorher.
+- Upstream-Flakiness (SSE endet ohne `[DONE]`) ist nicht behebbar, nur
+  abgefedert (Auto-Retry); sie war 13 % der Session-Laufzeit.
+
 ## Bekannte Befunde
 
 **Der S-15-Produktionsrand ist nicht vollständig invariant:** bei dem

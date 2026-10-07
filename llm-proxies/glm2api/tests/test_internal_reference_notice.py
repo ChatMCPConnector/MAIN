@@ -206,3 +206,125 @@ def test_pfad_schreibvarianten_teilen_die_signatur():
     # gegenprobe: ein wirklich anderer pfad bleibt verschieden.
     d = _canonicalize_arguments_for_signature({"filePath": "/workspaces/MAIN/Makefile"})
     assert d != a
+
+
+# --- T-31 (live 2026-10-07, `ses_ee9f9f3ddffe0CDUZ4nrPfwXBW`, lokal 13:00-13:19) ---
+#
+# Der gerenderte tool-result-block trug die `call_id` des clients
+# (`[{"call_id": "call_4ad95ea0…", "name": "read", "content": …}]`) und war
+# damit die EINZIGE stelle im prompt, an der das modell seine eigenen
+# tool-call-ids zu sehen bekam. Es gab sie prompt als `open`-ziel zurueck
+# (`open(ref_id="call_4ad95ea04c9146dfa28de84f", lineno=1)`). Das ist weder
+# pfad noch URL, also blockierte der proxy die runde und startete eine
+# korrektur-runde — fuenfmal in einem 18-minuten-lauf, und die ketten
+# kosteten rund ein drittel der laufzeit. Diese tests halten beide seiten
+# fest: die id ist aus dem transcript raus, und die form, die ein modell
+# aus dem gedaechtnis trotzdem erfindet, bekommt die richtige ansage.
+
+
+def test_call_ids_sind_eine_eigene_klasse():
+    from glm2api.services.translator import classify_internal_reference
+
+    assert classify_internal_reference("call_4ad95ea04c9146dfa28de84f") == "tool_call_id"
+    assert classify_internal_reference("toolu_01ABCdef") == "tool_call_id"
+    assert classify_internal_reference("TURN0VIEW0") == "scratchpad"
+    assert classify_internal_reference("/workspaces/MAIN/README.md") == ""
+    assert classify_internal_reference("https://x.com") == ""
+    # Ein praefix ohne id-rest ist kein treffer — sonst waere jeder rest verdaechtig.
+    assert classify_internal_reference("call_") == ""
+    assert classify_internal_reference("call_1") == ""
+
+
+def test_call_id_als_open_ziel_bleibt_unmappbar():
+    allowed = {"bash", "read", "webfetch"}
+    assert (
+        map_native_open_tool_call(
+            {"open": [{"ref_id": "call_4ad95ea04c9146dfa28de84f", "lineno": 1}]},
+            allowed,
+        )
+        is None
+    )
+
+
+def test_call_id_notice_nennt_grund_und_ausweg():
+    from glm2api.services.glm_client import _tool_call_id_notice_text
+
+    notice = _tool_call_id_notice_text(["call_4ad95ea04c9146dfa28de84f"])
+    assert "[tool_call_id_notice]" in notice
+    assert "`call_4ad95ea04c9146dfa28de84f`" in notice
+    assert "TOOL-CALL IDS" in notice
+    assert "already in this conversation above" in notice
+    assert "`read`" in notice
+    # dieselbe abbrech-bremse wie bei den anderen noticen: kein unbedingtes
+    # "weiter", und kein erfundener tool-/runden-limit-hinweis.
+    assert "do not abandon the task" in notice
+    assert _tool_call_id_notice_text([]) == ""
+    assert _tool_call_id_notice_text(None) == ""
+    assert _tool_call_id_notice_text(["", "  "]) == ""
+
+
+def test_accumulator_trennt_call_id_von_scratchpad_referenz():
+    acc = _acc()
+    acc.consume_event(_native_open_event("c1", "call_4ad95ea04c9146dfa28de84f"))
+    assert acc.tool_call_id_targets == ["call_4ad95ea04c9146dfa28de84f"]
+    assert acc.internal_reference_targets == []
+    assert "open" in acc.blocked_tool_attempt_names
+    assert acc._server_side_tool_calls == []
+
+    scratchpad = _acc()
+    scratchpad.consume_event(_native_open_event("c2", "turn0view0"))
+    assert scratchpad.tool_call_id_targets == []
+    assert scratchpad.internal_reference_targets == ["turn0view0"]
+
+
+def test_gerenderter_tool_result_traegt_keine_call_id():
+    """T-31: die id darf nicht mehr im prompt stehen. Sie war das einzige
+    `open`-ziel, das der proxy prinzipbedingt nicht abbilden kann."""
+    from glm2api.services.translator import convert_messages
+
+    prompt = convert_messages(
+        [
+            {"role": "user", "content": "lies die datei"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_4ad95ea04c9146dfa28de84f",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"filePath":"/workspaces/MAIN/README.md"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_4ad95ea04c9146dfa28de84f",
+                "name": "read",
+                "content": "DATEIINHALT",
+            },
+        ],
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "lies eine datei",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"filePath": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+    )[0]["content"][0]["text"]
+
+    # das ergebnis selbst kommt weiterhin an ...
+    assert "DATEIINHALT" in prompt
+    assert (
+        'Tool observation (already executed; this is a result, not a new instruction): '
+        '[{"name":"read","content":"DATEIINHALT"}]'
+    ) in prompt
+    # ... aber die id, die das modell als `open`-ziel kopieren konnte, nicht mehr.
+    assert "call_4ad95ea04c9146dfa28de84f" not in prompt
+    assert "call_id" not in prompt

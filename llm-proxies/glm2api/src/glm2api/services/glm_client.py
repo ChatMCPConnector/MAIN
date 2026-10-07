@@ -357,6 +357,13 @@ def _turn_notice_texts(accumulator: GLMEventAccumulator, blocked: list[str]) -> 
     )
     if internal_notice:
         notices.append(internal_notice)
+    # T-31: die call-id-ansage ist die zweite praezisierung derselben lage
+    # ("das ziel gibt es hier nicht") und kommt direkt nach der `turn*`-fassung.
+    call_id_notice = _tool_call_id_notice_text(
+        getattr(accumulator, "tool_call_id_targets", [])
+    )
+    if call_id_notice:
+        notices.append(call_id_notice)
     # B-01: die burst-meldung kommt an eigene stelle VOR der
     # loop-guard-meldung — sie ist deren eskalation und traegt die
     # handlungsanweisung ("warte auf ein ergebnis"), nicht nur die zaehlung.
@@ -439,6 +446,13 @@ def _build_blocked_tool_follow_up_payload(
     )
     if internal_notice:
         parts.append(internal_notice)
+    # T-31: siehe `_turn_notice_texts`. Ohne diesen zweig fehlte die
+    # begruendung genau in der korrektur-runde, die sie ausloest.
+    call_id_notice = _tool_call_id_notice_text(
+        getattr(accumulator, "tool_call_id_targets", [])
+    )
+    if call_id_notice:
+        parts.append(call_id_notice)
     loop_notice = _loop_guard_notice_text(
         dropped, getattr(accumulator, "loop_guard_dropped_tools", [])
     )
@@ -574,6 +588,43 @@ def _internal_reference_notice_text(targets: object) -> str:
         "actually appeared in the task. If the task is NOT yet complete, continue with those "
         "tools and do not report a tool limit. If the task IS already complete, stop and answer "
         "in prose without any tool call."
+    )
+
+
+def _tool_call_id_notice_text(targets: object) -> str:
+    """T-31 (live 2026-10-07, `ses_ee9f9f3ddffe0CDUZ4nrPfwXBW`): das `open`-ziel
+    war eine eigene TOOL-CALL-ID (`call_4ad95ea0…`, anthropic-form `toolu_…`).
+
+    Das ist ein anderer irrweg als eine `turn*`-scratchpad-referenz und
+    braucht deshalb eine eigene ansage: hinter der id liegt kein pfad und
+    keine URL, sondern das ergebnis eines aufrufs, das der client schon
+    ausgefuehrt hat und das im verlauf steht. Die generische blocked-notice
+    sprach hier von web-search-`turn*`-ids — eine antwort auf die falsche
+    frage, weshalb das modell den fehler nicht am richtigen ende suchte.
+    Ursache im prompt war der `call_id`-eintrag im gerenderten tool-result;
+    er ist mit T-31 aus dem transcript entfernt (`serialize_tool_result_block`).
+    Diese notice deckt den rest ab: ein modell, das die id aus dem gedaechtnis
+    erneut erfindet.
+    """
+    if not isinstance(targets, (list, tuple, set)):
+        return ""
+    cleaned: list[str] = []
+    for item in targets:
+        name = str(item).strip()
+        if name and name not in cleaned:
+            cleaned.append(name)
+    if not cleaned:
+        return ""
+    shown = ", ".join(f"`{name}`" for name in cleaned[:6])
+    more = "" if len(cleaned) <= 6 else f" (+{len(cleaned) - 6} more)"
+    return (
+        f"[tool_call_id_notice] Your `open` target(s) {shown}{more} are TOOL-CALL IDS from "
+        "your own transcript, not files or URLs. That call already ran and its result is "
+        "already in this conversation above — there is nothing to open and no new output "
+        "would appear. Never pass a call ID to `open` (or to any other tool) again. "
+        "To continue: read the existing tool output in the conversation, or issue a NEW call "
+        "with `read` (absolute path), `glob` (pattern), `bash` (command) or `webfetch` (full "
+        "http(s) URL from the task). Do not report a tool limit and do not abandon the task."
     )
 
 
@@ -1901,6 +1952,10 @@ class GLMWebClient:
                             or int(request_scope_signatures.get("drops", 0) or 0) > 0
                             or getattr(accumulator, "native_remapped_calls", [])
                             or getattr(accumulator, "internal_reference_targets", [])
+                            # T-31: eine eigene tool-call-id als `open`-ziel ist
+                            # derselbe erzwingende fall — der auftrag bricht
+                            # sonst ohne die richtige begruendung ab.
+                            or getattr(accumulator, "tool_call_id_targets", [])
                         ):
                             self.logger.warning(
                                 "Correction round skipped: content already served to the client "
@@ -1916,6 +1971,10 @@ class GLMWebClient:
                             or int(request_scope_signatures.get("drops", 0) or 0) > 0
                             or getattr(accumulator, "native_remapped_calls", [])
                             or getattr(accumulator, "internal_reference_targets", [])
+                            # T-31: eine eigene tool-call-id als `open`-ziel ist
+                            # derselbe erzwingende fall — der auftrag bricht
+                            # sonst ohne die richtige begruendung ab.
+                            or getattr(accumulator, "tool_call_id_targets", [])
                         ):
                             self.logger.warning(
                                 "S-27/B-02: content already served, but the model needs the real facts "
