@@ -19,6 +19,8 @@ cd llm-proxies/glm2api
 .venv/bin/python3 harness/order_matrix.py --quiet  # Reihenfolge-Invariante
 .venv/bin/python3 harness/sweep2.py --quiet        # Vertrags-Sweep beider Pfade
 .venv/bin/python3 harness/trace_stream.py s09 7    # Delta-für-Delta-Trace
+.venv/bin/python3 harness/breadth_variance.py ../../.runtime/glm2api-*.jsonl
+.venv/bin/python3 harness/breadth_variance.py --selftest   # Auflisten≠Lesen
 ```
 
 `trace_stream.py <preset> <chunk>`: `preamble`, `fence`, `s09`, `s14`, oder
@@ -53,6 +55,7 @@ Messung auch dort grün, ist entweder die Messung blind oder der Fix wirkungslos
 | `order_matrix.py` | Exakter Soll- und Chunk-Invarianzvergleich über 17 Text/Call-Layouts × 10 Chunkgrößen; zusätzlich S-14-Rest über alle 215 Chunkgrößen | zuletzt: 170 Layout-Messungen + 215 S-14-Messungen, 0 unbekannte Abweichungen; S-14 ohne Rest, 4/10 bekannte Whitespacevarianten nur in `rand-links-im-carry` |
 | `sweep2.py` | Exakter Vertrags-Sweep: 23 Szenarien × 6 Chunkgrößen, Stream- **und** Non-Stream-Pfad (Text, Aufrufe, `finish_reason`, Body) | zuletzt: 138 Messungen, 0 unbekannte Verstöße; S-15-Schlussleerzeichen 2/6 bekannte Chunk-Abweichungen; keine S-14-Ausnahme |
 | `trace_stream.py` | Delta-für-Delta-Trace, wenn ein Fall unklar ist | Werkzeug, kein Soll |
+| `breadth_variance.py` | Breite der Dateiinspektion je `opencode run`-Lauf aus den JSON-Ereignislogs (`read`-Ziele + bash-Lesekommandos); trennt Auflisten von Lesen | `--selftest` hält die Trennung fest (Auflisten zählt 0 Inhalt); Messung siehe „Breadth-Varianz-Studie" |
 
 **Eigenprüfung der Harnesses** (Pflicht, sonst misst man nichts): beide
 Sweeps müssen an einem alten Stand **rot** werden. `order_matrix` meldet
@@ -189,6 +192,64 @@ Weitere Architektur-Risiken (unverändert, kein verifizierter Fix):
 - Große Module (`translator.py`, `glm_client.py`, `tool_parser.py`) und viele
   sprachabhängige Textfilter erschweren klare Verträge. `mypy` meldet selbst,
   dass untypisierte Funktionskörper standardmäßig nicht geprüft werden.
+
+## Breadth-Varianz-Studie (2026-10-07)
+
+Frage: liefert der Proxy-Auftrag die Analyse **zuverlässig** breit, oder ist
+das ein Glücksfall einzelner Läufe? Gemessen mit
+`harness/breadth_variance.py` über die `--format json`-Logs der
+`opencode run`-Läufe (identischer Prompt, `--agent build`).
+
+Wichtig für die Lesart: `content_files` zählt nur Dateien, deren Inhalt
+nachweislich gelesen wurde (`read`-Ziel oder bash-Lesekommandos mit
+Pfadargument); `git ls-files`/`find`/`du`/`wc -l` zählen getrennt als
+`inventory`. `src` ist die Teilmenge mit Quellendung. Eine hohe
+`content`-Zahl bei `src=0` heißt: viel Config/Doku, kein Quellcode.
+
+| Lauf | Config | exit | s | tools | read | bash | inv | content | Bereiche | src | chars |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `correction-run` | webfetch erlaubt | 0 | 417 | 17 | 9 | 7 | 1 | 6 | 4 | 3 | 9945 |
+| `correction-run2` | webfetch verboten | 0 | 275 | 4 | 1 | 3 | 1 | 8 | 2 | 0 | 5691 |
+| `var3` | webfetch verboten | **1** | 626 | 14 | 11 | 2 | 1 | 11 | 4 | **8** | 0 |
+| `var4` | webfetch verboten | **1** | 125 | 1 | 0 | 1 | 1 | 0 | 0 | 0 | 0 |
+
+**Befund 1 — Breite streut stark, und die breiteste Inspektion lieferte
+gar keinen Bericht.** `var3` las 11 Dateien aus 4 Bereichen (8 davon
+Quellcode: `app.py`, `server.py`, `config.py`, `glm_client.py`,
+`zerokey/server.js`, `antigravity/internal/server/server.go`, `save.sh`,
+`setup.sh`) — die breiteste Messung überhaupt — und starb danach mit
+`exit=1` und **0** sichtbaren Zeichen. Umgekehrt lieferte
+`correction-run2` nur 4 Toolcalls, davon 1 `read`, aber einen vollständigen
+belegten Bericht. Toolcall-Zahl und Berichtsqualität sind also **entkoppelt**.
+
+**Befund 2 — `webfetch: deny` erzeugt harte Fehlschläge, nicht bloß
+weniger Breite.** In der verbotenen Config fehlt `webfetch` in der
+Tool-Allowlist; ein `open(ref_id="https://…")` des Modells ist dann nicht
+mehr abbildbar. Der Proxy blockiert die Runde, startet eine Korrektur-Runde,
+wiederholt das bis 5/5 und feuert danach bewusst
+`Streaming blocked-tool protocol failure` — opencode meldet
+`Model tool protocol failure` und endet mit `exit=1`. Belegt in `var3`
+(Blockade-Zyklus über `turn0search1`, `call_*`, `todowrite`, eine URL) und
+`var4`; der ältere Quick-Control-Lauf (10:46) zeigt dasselbe mit
+`tools=open_url`. **Der lautstarke Abbruch ist beabsichtigt** (nicht endlos
+schleifen), aber er ist eine Folge der *Config*, nicht des Prompts: bei
+erlaubtem `webfetch` mappt `open(url)` erfolgreich und der Zyklus entsteht
+nicht. Lehre: das Live-Szenario mit erlaubtem `webfetch` fahren.
+
+**Befund 3 — die saubere Nachmessung war blockiert (Umgebung, kein Code).**
+Drei weitere Läufe mit erlaubtem `webfetch` endeten nach 114–141 s mit
+`exit=1`, `Upstream service error` — der GLM-Upstream antwortete mit
+**HTTP 429, code 10061** („请求过于频繁"), nachdem an einem Tag ~15 Live-Läufe
+gegen ein Konto gelaufen waren. Der Proxy backofft (2 Versuche) und gibt
+danach 429 an den Client. Ein sauberer `n≥3`-Vergleich derselben Config
+steht damit noch aus; die obige Tabelle ist **klein-n** und mischt zwei
+Configs. Sie belegt die Streuung und den `webfetch`-Effekt, nicht eine
+Verteilung.
+
+**Nicht behauptet:** keine Erfolgsquote, keine „reproduzierte Breite". Ein
+Lauf belegt den behobenen Hänger-/Drift-Pfad; die garantierte
+Analysetiefe ist offen und gehört vor eine Freigabe mit größerem n und
+ohne Upstream-Throttle gemessen.
 
 ## Bekannte Befunde
 
