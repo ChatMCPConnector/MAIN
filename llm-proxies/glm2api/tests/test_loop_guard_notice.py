@@ -241,6 +241,17 @@ class _FakeResponse:
 
 
 
+def _batched_native_events(events):
+    """Notices can coexist only in one event: mapped calls now hand off early.
+
+    Keep notice-order/duplicate assertions intact while representing calls
+    already received together, not future events after client handoff.
+    """
+    return [{"status": "finish", "parts": [
+        part for event in events for part in event.get("parts", [])
+    ]}]
+
+
 def _make_client():
     client = GLMWebClient.__new__(GLMWebClient)
     client.config = _LoopGuardConfig()
@@ -253,7 +264,7 @@ def _make_client():
     client.auth = SimpleNamespace(
         get_account_count=lambda: 1, get_access_token_for_account=lambda i: "tok"
     )
-    events = [_native_open_event(f"call_{i}") for i in range(6)]
+    events = _batched_native_events([_native_open_event(f"call_{i}") for i in range(6)])
     client._open_chat_stream = lambda p, preferred_account_index=None, filtered_tools=None: (
         _FakeResponse(events),
         "assistant-1",
@@ -432,6 +443,7 @@ def test_stream_blocked_tool_notice_survives_alongside_valid_native_calls():
         "assistant-1",
     )
 
+    events[:] = _batched_native_events(events)
     text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
 
     assert "[blocked_tool_notice]" in text
@@ -470,6 +482,7 @@ def test_stream_loop_guard_notice_survives_alongside_valid_native_calls():
         "assistant-1",
     )
 
+    events[:] = _batched_native_events(events)
     text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
 
     assert "[loop_guard_notice]" in text
@@ -614,6 +627,7 @@ def test_stream_remap_und_blocked_notice_koexistieren_konsistent():
         _FakeResponse(events),
         "assistant-1",
     )
+    events[:] = _batched_native_events(events)
     text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
 
     assert "[native_remap_notice]" in text, "ausgefuehrtes mapping muss sichtbar sein"
@@ -705,6 +719,7 @@ def test_stream_notices_kommen_in_fester_reihenfolge_remap_blocked_loop():
         _FakeResponse(events),
         "assistant-1",
     )
+    events[:] = _batched_native_events(events)
     text = "".join(c.decode("utf-8") for c in client.stream_chat_completion(_payload()))
 
     positions = {}

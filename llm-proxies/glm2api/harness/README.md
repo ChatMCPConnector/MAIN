@@ -109,21 +109,60 @@ Weitere Live-Läufe zeigten wiederholte Verzeichnisaufrufe und Versuche,
 interne `turn*`-/`call_*`-IDs zu öffnen. Solche IDs sind keine Pfade und
 werden bewusst nicht in erfundene Dateizugriffe umgewandelt.
 
+Aus diesen Läufen folgten zwei weitere, durch Regressionstests abgesicherte
+Reparaturen:
+
+- Erkannte native Calls und blockierte native Versuche **beenden die
+  Upstream-Runde sofort** (`status=finish` bzw. `intervene`) statt weiter
+  in den Strom zu lesen. Der Strom wird bei blockierten Versuchen verworfen
+  und durch eine Korrektur-Runde ersetzt, solange noch kein sichtbarer Text
+  ausgeliefert wurde — die Prüfung nutzt dafür `served_visible_text`, nicht
+  den rohen `served_content`. Vorher konnte das Modell bereits erfundene
+  Ergebnisse zum eigenen `open` produzieren, bevor OpenCode den echten
+  Aufruf sah.
+- Ergebnisnachrichten behalten die Rolle `tool` und werden als
+  `Tool observation (already executed; do not open call IDs): …` gerendert
+  (statt als `User:`-Nachricht). Das entfernt das beobachtete
+  Transkript-Echo mit `call_id`-Blöcken im sichtbaren Text.
+- Am Ende eines Analyse-Prompts (nur wenn Tools aktiv sind) wird eine
+  Inventar-/Abdeckungs-Ankerung angehängt: `git ls-files`, falls noch kein
+  Assistant-Call ihn ausführte, sonst eine Abdeckungs-Checkliste mit dem
+  jeweils letzten `todowrite`-Stand plus der noch aktiven Originalaufgabe.
+  Aussagen wie „fertig" ohne Quelldatei-Inspektion werden so adressiert.
+
 | Lauf | Dauer / Exit | Client-Toolcalls | Ergebnis |
 |---|---|---|---|
 | Baseline | nach ca. 4 min gezielt beendet | 11, darunter `read` auf Shell-Befehl und 404-Webfetch | Drift; nicht bestanden |
 | Argument-/Notice-Fix | 101 s / 0 | 4 | Top-Level-Bericht, vorzeitiger Abschluss; nicht bestanden |
 | zusätzlich Reasoning-JSON-Recovery | 309 s / 0 | 11 | Verzeichnis-Wiederholungen, interne IDs, zwei widersprüchliche Berichte; nicht bestanden |
 | final inkl. Think-Chunk-Merge | 230 s / 0 | 5 Bash-Aufrufe, keine Dateiinhalt-Reads | doppeltes Listing, zwei Berichte, Session-Neustart verlangt; nicht bestanden |
+| Handoff-/Tool-Observation-Reparatur | 137 s / 0 | 11, darunter 4 `read` | deutlich besser, aber README-lastig und früher Abschluss |
+| Audit-Anker | 328 s / 0 | 18 | `git ls-files` gelesen, aber Transkript-Echo und ein erfundener Dateiinhalt |
+| ohne sofortige Korrektur | Hänger, gezielt beendet | viele | wiederholte blockierte `turn*`-Refs bis zum Abbruch — der Auslöser des Intervene-Fixes |
+| **Abschluss-Lauf (Intervene + Anker)** | **417 s / 0** | **17 (9 `read`, 7 `bash`, 1 `todowrite`)** | **bestanden:** vollständiger, belegter Bericht; echte Inhalte aus Root, `infra/`, `glm2api`, `zerokey`, `antigravity-proxy` gelesen |
+| Wiederholung gegen denselben Stand | 275 s / 0 | 4 (3 `bash`, 1 `read`) | belegt, aber schmaler (Config-/Doku-fokussiert); Evidenz vollständig, Breite geringer |
 
-Letzte OpenCode-Session: `ses_eea861b20ffeHugHra9F5KGjmu`.
-Die letzte Ausführung hatte keine als `error` markierten Client-Toolparts
-und keinen Transport-Timeout, aber weiterhin einen `bash.command="..."`
-und einen doppelt ausgeführten Listing-Befehl. Fehlende Analyseabdeckung
-macht den Auftrag unabhängig von Exitcode und Berichtslänge unerfüllt.
-Es wird **keine** Beschleunigung oder erfolgreiche Gesamt-Reparatur behauptet.
+Der **Abschluss-Lauf** (`ses_eea4a6477ffea3dzmZ0KnI4085`) ist der Beleg für
+die Akzeptanz: keine als `error` markierten Toolparts, kein Transport-Timeout,
+keine erfundenen Dateiinhalte und kein Session-Neustart. Der Proxy-Log zeigt
+die neue Korrektur live (`status=intervene blocked=['open']` → verworfener
+Strom + Korrektur-Runde, danach `status=finish`). Die im Bericht genannten
+Zahlen wurden stichprobenweise gegen die Wirklichkeit geprüft und stimmen
+exakt: 337 getrackte Dateien, `translator.py` 6683, `glm_client.py` 3296,
+`tool_parser.py` 2492, `server.py` 1318, `app.py` 112, `verify-codespace.sh`
+502, `timeout.sh` 150, `setup.sh` 452, 18.221 LOC in `src/`.
 
-Final geprüft: `make check` grün, darunter **1802 glm2api-Tests**;
+Die **Wiederholung** (`ses_eea41d944ffepGjmTwx0jqCMfv`) bestätigt den
+Lauf ohne Hänger, nur mit gültigen Tools (`bash`/`read`) und einem belegten
+Bericht; stichprobenartig geprüfte Aussagen (17 `test_*.py`+
+`conftest.py`, drei `cmd/`-Binaries, `.env.example`↔`.env.dist`-Gleichheits-
+test in `test_config.py:694`, weiterhin vorhandene `zerokey.sh`/`zerokey.bat`
+im vendored Baum) treffen zu. Sie inspizierte jedoch vor allem Config und
+`infrastructure.md` und las weniger Quelldateien als der Abschluss-Lauf —
+GLM-`5.3` ist hier nicht deterministisch. Ein einzelner Lauf belegt daher
+den behobenen Hänger-/Drift-Pfad, nicht eine garantierte Analysetiefe.
+
+Final geprüft: `make lint-py test-py` grün, darunter **1806 glm2api-Tests**;
 Ruff/Mypy grün im vorhandenen Scope. Bundle frisch erzeugt unter
 `llm-proxies/dist/glm2api-bundle.zip` (gitignored), zusätzlich alle 34
 Python-Source-/Testdateien byteweise gegen das ZIP geprüft. Source und

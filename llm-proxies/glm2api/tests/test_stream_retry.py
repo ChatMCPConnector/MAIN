@@ -1420,6 +1420,54 @@ def _notice_turn_events():
     ]
 
 
+def test_native_tool_handoff_closes_upstream_before_model_invents_result():
+    native = {"status": "process", "parts": [{"logic_id": "native", "content": [{
+        "type": "tool_calls", "tool_calls": {"id": "open-first", "name": "open",
+        "arguments": {"open": [{"ref_id": "/workspaces/MAIN/README.md"}]}}
+    }]}]}
+    client, _ = _make_client([[native, _finish_event("Invented analysis before client execution")]])
+    seen = []
+    original = client._iter_sse_events
+
+    def record(response):
+        for event in original(response):
+            seen.append(event)
+            yield event
+
+    client._iter_sse_events = record
+    payload = {"model": "glm-5.3", "messages": [{"role": "user", "content": "inspect"}],
+               "tools": [{"type": "function", "function": {"name": "read", "parameters": {
+                   "type": "object", "properties": {"filePath": {"type": "string"}}}}}]}
+    output = b"".join(client.stream_chat_completion(payload)).decode()
+    assert len(seen) == 1
+    assert '"name":"read"' in output
+    assert '"finish_reason":"tool_calls"' in output
+    assert "Invented analysis" not in output
+
+
+def test_blocked_native_reference_corrects_before_reading_more_upstream_events():
+    bad = {"status": "process", "parts": [{"logic_id": "bad", "content": [{
+        "type": "tool_calls", "tool_calls": {"id": "bad-open", "name": "open",
+        "arguments": {"open": [{"ref_id": "turn0view0"}]}}
+    }]}]}
+    client, calls = _make_client([[bad, _finish_event("fabricated")], [_finish_event("corrected")]])
+    client.config.glm_blocked_tool_follow_ups = 1
+    seen = []
+    original = client._iter_sse_events
+    def record(response):
+        for event in original(response):
+            seen.append(event)
+            yield event
+    client._iter_sse_events = record
+    output = b"".join(client.stream_chat_completion({"model": "glm-5.3", "messages": [
+        {"role": "user", "content": "inspect"}], "tools": [{"type": "function", "function": {
+            "name": "read", "parameters": {"type": "object"}}}]})).decode()
+    assert calls["count"] == 2
+    assert len(seen) == 2
+    assert "fabricated" not in output
+    assert "corrected" in output
+
+
 def test_stream_notice_is_anchored_to_next_tool_result():
     """T-30: Nach einem Turn mit Remap/Loop-Drops muss die Rueckmeldung im
     naechsten Client-Request IM Tool-Result stehen — nicht als Echo des

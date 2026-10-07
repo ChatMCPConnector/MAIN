@@ -43,6 +43,7 @@ from .translator import (
     resolve_chat_mode,
     resolve_networking,
     resolve_upstream_model,
+    sanitize_tool_calls,
 )
 
 
@@ -1684,6 +1685,20 @@ class GLMWebClient:
                                     served_content = True
                             yield encoded
 
+                        # Native open is an upstream browser action. Once mapped
+                        # to a client tool, stop this upstream round immediately:
+                        # the web model cannot observe OpenCode's result until the
+                        # next request and otherwise invents results/loops on refs.
+                        if (
+                            accumulator.native_remapped_calls
+                            and sanitize_tool_calls(accumulator._server_side_tool_calls)
+                        ):
+                            status = "finish"
+                        elif accumulator.blocked_tool_attempt_names:
+                            # There can be no result for an undeclared/native
+                            # reference. Correct it now, not after minutes of
+                            # upstream retries against the same phantom ID.
+                            status = "intervene"
                         if status in {"finish", "intervene"}:
                             finalize_chunks = accumulator.finalize(
                                 status=status,
@@ -1881,7 +1896,7 @@ class GLMWebClient:
                         # verhinderte jede korrektur, und der auftrag brach ab.
                         # `served_content` gilt damit nur noch fuer den
                         # generischen blocked-only-Fall OHNE interne referenz.
-                        if served_content and not (
+                        if served_visible_text and not (
                             suppress_abandon_reason
                             or int(request_scope_signatures.get("drops", 0) or 0) > 0
                             or getattr(accumulator, "native_remapped_calls", [])

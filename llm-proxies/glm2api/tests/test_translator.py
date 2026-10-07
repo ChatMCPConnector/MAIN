@@ -17,6 +17,30 @@ from glm2api.utils.tool_protocol import BLOCKED_NATIVE_TOOL_NAMES
 import pytest
 
 
+def test_repository_audit_protocol_requires_source_coverage_before_completion():
+    from glm2api.utils.tool_protocol import build_tool_call_instructions
+
+    protocol = build_tool_call_instructions(["bash", "read", "todowrite"])
+    assert "git ls-files" in protocol
+    assert "actual implementation files and tests in EVERY top-level area" in protocol
+    assert "README-only assessment" in protocol
+    assert "timeout wrapper" in protocol
+    assert "justified exclusions" in protocol
+
+
+def test_repository_inventory_action_is_anchored_until_actually_called():
+    tools = [{"type": "function", "function": {"name": "bash", "parameters": {"type": "object"}}}]
+    messages = [{"role": "user", "content": "Analysiere das komplette MAIN Verzeichnis"}]
+    prompt = convert_messages(messages, tools)[0]["content"][0]["text"]
+    assert 'Repository audit next action:' in prompt
+    assert '"command":"git ls-files"' in prompt
+    messages.append({"role": "assistant", "tool_calls": [{"function": {
+        "name": "bash", "arguments": '{"command":"git ls-files"}'}}]})
+    prompt = convert_messages(messages, tools)[0]["content"][0]["text"]
+    assert 'Repository audit next action:' not in prompt
+    assert 'implementation/test inspection in every area' in prompt
+
+
 def test_convert_messages_injects_json_tool_prompt_and_history():
     converted = convert_messages(
         messages=[
@@ -62,7 +86,8 @@ def test_convert_messages_injects_json_tool_prompt_and_history():
     # ausgabe-anweisung bleibt am prompt-ende.
     assert 'Assistant: {"tool_calls":[{"name":"get_weather","arguments":{"city":"上海"}}]}' in prompt
     assert 'Assistant: {"tool_calls":[{"name":"get_weather","arguments":{"city":"上海"}}]}[]' not in prompt
-    assert '[{"call_id":"call_1","name":"get_weather","content":"晴"}]' in prompt
+    assert 'Tool observation (already executed; do not open call IDs): [{"call_id":"call_1","name":"get_weather","content":"晴"}]' in prompt
+    assert 'User: [{"call_id"' not in prompt
     assert "<ml_tool_calls>" not in prompt
     assert "# TOOL USE PROTOCOL" in prompt
     assert "tool_calls" in prompt
