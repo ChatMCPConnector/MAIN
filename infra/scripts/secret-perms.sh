@@ -10,7 +10,7 @@
 #   (b) die zu weite Default-ACL der empfindlichen Verzeichnisse (inkl.
 #       Repo-Root) per python3 `os.removexattr` entfernen — danach greift dort
 #       wieder `umask`, sodass auch zur Laufzeit neu geschriebene Dateien 600
-#       werden (z.B. `temp/users.json`, das die ZeroKey-App atomar neu anlegt).
+#       werden.
 #
 # Idempotent; Inhalte werden nie angefasst. Aufruf: setup.sh (vor dem Unlock).
 # `verify-codespace.sh` prüft das Ergebnis.

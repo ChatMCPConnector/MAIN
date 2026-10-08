@@ -5,7 +5,7 @@ Ebene 1 aus PLAN 6b: reine Logik, kein I/O in der eigentlichen Entscheidung.
 genau die Sorte Funktion, die man ehrlich testen kann.
 
 **Warum dieser Check Tests braucht und nicht nur einen Baseline-Eintrag:**
-die erste Fassung erkannte `PORT=8001` (unquotiert), aber `PORT="7250"`
+die erste Fassung erkannte `PORT=8001` (unquotiert), aber `PORT="8001"`
 (quotiert) nicht. Der Negativtest „Label entfernen" lief deshalb durch, statt
 anzuschlagen — der Check war gruen und haette Drift durchgelassen. Genau das
 ist der Fehler, den Tests hier fangen: nicht der Ausgabe, sondern der
@@ -55,14 +55,10 @@ def test_unquotiertes_PORT_wird_erkannt(tmp_path):
 
 
 def test_quotiertes_PORT_wird_erkannt(tmp_path):
-    """`PORT="7250"` — die Form aus start-zerokey.sh.
-
-    Genau dieser Fall fehlte in der ersten Fassung; ohne ihn faellt der
-    Negativtest des Checks still durch.
-    """
+    """`PORT="9878"` — quotiert in Shell-Skripten."""
     f = tmp_path / "s.sh"
-    f.write_text('#!/usr/bin/env bash\nPORT="7250"\nMODELS_URL="http://h:${PORT}/v1"\n')
-    assert pdc.bound_ports(tmp_path, ["s.sh"]) == {7250: ["s.sh"]}
+    f.write_text('#!/usr/bin/env bash\nPORT="9878"\nMODELS_URL="http://h:${PORT}/v1"\n')
+    assert pdc.bound_ports(tmp_path, ["s.sh"]) == {9878: ["s.sh"]}
 
 
 def test_einfach_quotiertes_PORT_wird_erkannt(tmp_path):
@@ -85,10 +81,10 @@ def test_double_dash_port_wird_erkannt(tmp_path):
 
 
 def test_js_port_feld_wird_erkannt(tmp_path):
-    """zerokey/constants.js: `PORT: process.env.PORT || 7250,`"""
+    """JS-Portfeld: `PORT: process.env.PORT || 8000,`"""
     f = tmp_path / "c.js"
-    f.write_text("module.exports = {\n  PORT: process.env.PORT || 7250,\n};\n")
-    assert pdc.bound_ports(tmp_path, ["c.js"]) == {7250: ["c.js"]}
+    f.write_text("module.exports = {\n  PORT: process.env.PORT || 8000,\n};\n")
+    assert pdc.bound_ports(tmp_path, ["c.js"]) == {8000: ["c.js"]}
 
 
 def test_kommentarzeilen_werden_ignoriert(tmp_path):

@@ -227,9 +227,7 @@ echo "==> [landscape] Git-Hooks aktivieren (pre-commit: ruff + mypy fuer glm2api
 # core.hooksPath zeigt auf die VERSIONIERTE .githooks/ im Repo — jeder Account
 # bekommt denselben Hook, kein per-Clone-Gefrickel. Der Pfad ist bewusst relativ:
 # er loest vom Repo-Root auf, und genau deshalb setzt ihn NUR dieses Skript aus
-# dem Repo-Root. Das 2026-09-29 entfernte zerokey-`postinstall` setzte denselben
-# Wert aus einem Unterordner und bog damit den Haupt-Repo-Hookpfad ins Leere aus
-# (infrastructure.md) — hier passiert das nicht.
+# dem Repo-Root (infrastructure.md) — hier passiert das nicht.
 if [ -x "$REPO_ROOT/.githooks/pre-commit" ]; then
   git -C "$REPO_ROOT" config core.hooksPath .githooks
   chmod +x "$REPO_ROOT/.githooks/pre-commit" 2>/dev/null || true

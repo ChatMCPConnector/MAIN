@@ -241,8 +241,7 @@ check_layer code  "keine divergierenden Client-Kopien" bash -c '
 check_layer code  "nested AGENTS.md tragen einen MAIN-Hinweis" bash -c '
   # Vendored Unterordner haben ihr eigenes AGENTS.md. Das darf keinen
   # Upstream-Stand behaupten (driftete schon: antigravity-Proxys Datei war
-  # upstreams CLAUDE.md mit falschem Port, zerokeys Datei widersprach sich
-  # zum entfernten pre-commit-Hook).
+  # upstreams CLAUDE.md mit falschem Port).
   bad=""
   while IFS= read -r f; do
     rel="${f#$REPO_ROOT/}"

@@ -92,7 +92,7 @@ Werkzeugbeschreibungen, alle bisherigen Runden und die Ergebnisse. Ein einzelnes
 `read`-Fenster von 50 KB ist also per Konstruktion größer als der gesamte
 Prompt, den der Proxy jemals bauen kann.
 
-Was dann passiert, ist still: ZeroKey schneidet middle-out, es fällt der
+Was dann passiert, ist still: Prompts über Budget werden middle-out gekürzt, es fällt der
 **Mittelteil genau dieses einen Ergebnisses** weg — der Auftrag (Kopf) und die
 neuesten Ergebnisse (Tail) bleiben, der Inhalt in der Mitte nicht. Du bekommst
 keine Fehlermeldung, nur ein Dokument mit einer Lücke. Live belegt am

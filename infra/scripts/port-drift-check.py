@@ -54,9 +54,8 @@ BINDING_SCRIPTS = [
 # Wo ein Port in einem Skript *deklariert* wird. Bewusst eng: ein Port, der in
 # einem Kommentar oder in einer Health-URL auftaucht, ist kein gebundener Port.
 #
-# Die Anführungszeichen sind nicht optional — genau das war der Fehler in der
-# ersten Fassung: `PORT="7250"` wurde nicht gematcht, also fiel der Negativtest
-# (Label entfernen) nicht durch. `PORT=8001` und `PORT="7250"` kommen beide vor.
+# Die Anführungszeichen sind nicht optional — sowohl unquotierte als auch
+# quotierte Zuweisungen wie `PORT="4096"` oder `PORT=8001` kommen vor.
 PORT_PATTERNS = [
     re.compile(r"""^\s*(?:export\s+)?PORT\s*=\s*["']?(\d{4,5})["']?\s*$"""),
     re.compile(r"--port[=\s]+(\d{4,5})\b"),

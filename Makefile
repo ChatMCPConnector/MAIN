@@ -1,10 +1,10 @@
 # Makefile: EIN Einstiegspunkt für die Checks (AGENTS.md §6).
 #
-# Warum es das gibt (2026-10-01): die_checks lagen an vier Stellen verteilt —
-# AGENTS.md-Tabelle, .githooks/pre-commit, verify-codespace.sh und zerokeys
-# package.json. Nichts hat geprueft, ob die vier noch uebereinstimmen. `make
-# check` ist ab jetzt der eine Befehl; die Einzelausschreibungen bleiben
-# bestehen, weil der Hook nu die *angefasste* Sprache pruefen soll.
+# Warum es das gibt (2026-10-01): die_checks lagen an drei Stellen verteilt —
+# AGENTS.md-Tabelle, .githooks/pre-commit und verify-codespace.sh. Nichts hat
+# geprueft, ob die drei noch uebereinstimmen. `make check` ist ab jetzt der eine
+# Befehl; die Einzelausschreibungen bleiben bestehen, weil der Hook nu die
+# *angefasste* Sprache pruefen soll.
 #
 # Grundregel: dieses Makefile dupliziert KEINE Check-Liste. Jedes Target ruft
 # exakt die Kommandos auf, die auch .githooks/pre-commit fahrt. Der Check
