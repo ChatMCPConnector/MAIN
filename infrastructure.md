@@ -410,12 +410,9 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   `ruff`+`mypy`, antigravity-proxy `go vet`+`gofmt -l`, MAIN-eigenes JS
   (`infra/**.js`) `node --check` — jeweils **nur** wenn die passenden Dateien
   gestagt sind, damit Commits an fremde Teile nicht ausgebremst werden.
-  `setup.sh` setzt `core.hooksPath=.githooks` (vom Repo-Root, relativ — genau
-  das machte das entfernte zerokey-`postinstall` falsch, das denselben Wert aus
-  einem Unterordner ins Leere bog). Der Hook fasst den Index **nicht** an (kein
-  `git add`, kein `--fix`/`--write`); Notausstieg `git commit --no-verify`.
-  `verify-codespace.sh` prüft die Verdrahtung. zerokeys `pnpm precommit`
-  (Format+Lint+Check+Test) bleibt handgestartet, weil es `node_modules` braucht.
+  `setup.sh` setzt `core.hooksPath=.githooks` (vom Repo-Root, relativ).
+  Der Hook fasst den Index **nicht** an (kein `git add`, kein `--fix`/`--write`);
+  Notausstieg `git commit --no-verify`. `verify-codespace.sh` prüft die Verdrahtung.
 - **Go-Toolchain:** Go 1.25.7 (gepinnt, entspricht `mise.toml` im antigravity-proxy)
   nach `/usr/local/go` via setup.sh — das Proxy-Binary liegt nicht im Git und wird
   pro Codespace neu gebaut (`scripts/start.sh` baut automatisch nach, Fallback
