@@ -27,7 +27,6 @@ Alltag:
 
 - `llm-proxies/glm2api/` — Python-Haupt-Proxy (Port 8001), `src/` + `tests/`, uv.
 - `llm-proxies/antigravity-proxy/` — Go (Port 9878), `mise`-Tasks, Binary wird gebaut.
-- `llm-proxies/zerokey/` — Node/Express (Port 7250), `pnpm` (eslint + Tests).
 - `infra/scripts/` — Shell-Werkzeugkasten (`save.sh`, `secrets.sh`, `keys.sh`, …).
 - `infra/scripts/freebuff_patch.py` — die **Byte-Patches** des freebuff-Binaries
   (Mausrad-Scroll, `Entf` löscht eine Session in `/history`, Wortgrenzen,
@@ -104,7 +103,6 @@ Nur ein Teil:
 | Bereich | Befehl |
 |---|---|
 | glm2api (Python) | `make lint-py` / `make test-py` |
-| zerokey (JS) | `make lint-zk` / `make test-zk` |
 | antigravity-proxy (Go) | `make lint-go` / `make test-go` |
 | MAIN-eigenes JS | `make lint-js` |
 | Shell | `make syntax-sh` (bash -n über alle getrackten Skripte) |
@@ -125,10 +123,6 @@ antigravity-proxy (`mise run test`/`format`) sind der Upstream-Weg, laufen aber
 nur mit mise. Deshalb stehen oben die direkten `go`-Befehle (Go liegt unter
 `/usr/local/go/bin`, auf dem PATH via `aliases.sh`).
 
-Bei zerokey ist `pnpm lint`/`check`/`test` der belastbare Check; `pnpm format`
-(prettier) ist auf dem vendorten Baum derzeit **nicht** sauber (5 Dateien, u.a.
-Prosa-Instruktionen) — ein blindes `--write` kann Instruktionstexte umbrechen.
-
 **Automatik:** `.githooks/pre-commit` fährt die Checks der **betroffenen**
 Sprache bei jedem Commit, der die jeweiligen Dateien stagt — schlägt ein Check
 fehl, bricht der Commit ab:
@@ -143,8 +137,7 @@ Aktiviert `setup.sh` per `core.hooksPath=.githooks`. Der Hook fasst den Index
 **nicht** an (kein `git add`, kein `--fix`/`--write`) und läuft nur, wenn die
 Sprache betroffen ist — Doku-/Infra-Commits kostet er nichts. Die Tabellen-
 Befehle oben bleiben der **volle** Check (Tests laufen dort mit, der Hook
-lintet nur). zerokeys `pnpm precommit` bleibt handgestartet (braucht
-`node_modules`). Notausstieg: `git commit --no-verify`.
+lintet nur). Notausstieg: `git commit --no-verify`.
 
 ## 7. Anti-Drift (kein neues Rad)
 

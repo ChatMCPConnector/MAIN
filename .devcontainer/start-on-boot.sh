@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # start-on-boot.sh: läuft bei JEDEM Codespace-Start (postStartCommand, auch Resume).
 # Leichtgewichtig: stellt sicher, dass die lokalen Dienste laufen und die
-# Watchdogs aktiv sind — glm2api (8001), antigravity-proxy (9878), zerokey (7250),
+# Watchdogs aktiv sind — glm2api (8001), antigravity-proxy (9878),
 # opencode-server (4096) plus proxy- und config-watchdog.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,21 +42,7 @@ else
   fi
 fi
 
-# 3. zerokey (Port 7250)
-# Fehlte hier bisher (die Schritte liefen 0,1,2,4,5,6). Nach jedem Resume blieb
-# zerokey tot, bis der 30-s-Proxy-Watchdog ihn startete — bei totem Watchdog
-# dauerhaft. Gegenprobe wie bei den anderen: /v1/models antwortet = laeuft.
-if curl -sf -m 2 http://127.0.0.1:7250/v1/models >/dev/null 2>&1; then
-  echo "[boot] zerokey läuft bereits."
-else
-  if [ -x "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" ]; then
-    bash "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" >/dev/null 2>&1 \
-      && echo "[boot] zerokey gestartet." \
-      || echo "[boot] WARN: zerokey Start fehlgeschlagen."
-  fi
-fi
-
-# 4. opencode-server (Port 4096)
+# 3. opencode-server (Port 4096)
 if curl -sf -m 2 http://127.0.0.1:4096/ >/dev/null 2>&1; then
   echo "[boot] opencode-server läuft bereits."
 else
@@ -67,7 +53,7 @@ else
   fi
 fi
 
-# 5. Proxy-Watchdog immer (re-)starten: hält alle Proxies und opencode-server am Leben
+# 4. Proxy-Watchdog immer (re-)starten: hält alle Proxies und opencode-server am Leben
 mkdir -p /tmp/opencode
 if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/proxy-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
   setsid nohup bash "$REPO_ROOT/.devcontainer/proxy-watchdog.sh" </dev/null >> /tmp/opencode/watchdog.log 2>&1 &
@@ -75,7 +61,7 @@ if ! { [ -f /tmp/opencode/proxy-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/
   echo "[boot] Proxy-Watchdog gestartet (30s-Intervall für alle Proxies + Server)."
 fi
 
-# 6. Config-Watchdog: restartet opencode-server automatisch bei opencode.json-Änderung
+# 5. Config-Watchdog: restartet opencode-server automatisch bei opencode.json-Änderung
 if ! { [ -f /tmp/opencode/config-watchdog.lock ] && kill -0 "$(cat /tmp/opencode/config-watchdog.lock 2>/dev/null)" 2>/dev/null; }; then
   setsid nohup bash "$REPO_ROOT/infra/scripts/config-watchdog.sh" </dev/null >>/tmp/opencode/config-watchdog.log 2>&1 &
   disown $! 2>/dev/null || true

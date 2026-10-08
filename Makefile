@@ -22,7 +22,6 @@ TIMEOUT := $(ROOT)/infra/scripts/timeout.sh
 
 GLMAPI      := llm-proxies/glm2api
 ANTIGRAVITY := llm-proxies/antigravity-proxy
-ZEROKEY     := llm-proxies/zerokey
 
 GO     := $(if $(wildcard /usr/local/go/bin/go),/usr/local/go/bin/go,go)
 GOFMT  := $(if $(wildcard /usr/local/go/bin/gofmt),/usr/local/go/bin/gofmt,gofmt)
@@ -32,7 +31,7 @@ GOFMT  := $(if $(wildcard /usr/local/go/bin/gofmt),/usr/local/go/bin/gofmt,gofmt
 OSV_DEST ?=
 
 .PHONY: help check check-fast verify verify-code smoke check-all ci \
-        lint-py test-py lint-go test-go lint-js lint-zk test-zk syntax-sh \
+        lint-py test-py lint-go test-go lint-js syntax-sh \
         lint-py-infra mypy-infra test-infra cov cov-floor claims shellcheck shellcheck-baseline \
         deps deps-audit osv-install
 
@@ -41,7 +40,7 @@ help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /'
 
 ## check: alle Schnell-Checks inkl. Tests (der vollstaendige Gate-Lauf)
-check: check-fast test-py test-go test-zk test-infra
+check: check-fast test-py test-go test-infra
 	@echo "make check: alles gruen."
 
 ## check-fast: nur Lint/Syntax, ohne Tests — das ist das Hook-Niveau
@@ -142,15 +141,6 @@ lint-js:
 	@cd $(ROOT) && files=$$(git ls-files '*.js' | grep '^infra/' || true); \
 	 if [ -z "$$files" ]; then echo "keine infra-JS-Dateien"; exit 0; fi; \
 	 echo "$$files" | xargs -r -n1 node --check && echo "infra-JS ok"
-
-## lint-zk: zerokey mit pnpm lint + pnpm check (braucht node_modules)
-lint-zk:
-	cd $(ZEROKEY) && pnpm lint
-	cd $(ZEROKEY) && pnpm check
-
-## test-zk: zerokey-Testsuite
-test-zk:
-	cd $(ZEROKEY) && $(TIMEOUT) run 600 pnpm test
 
 ## syntax-sh: bash -n ueber alle getrackten Shell-Skripte
 syntax-sh:

@@ -25,7 +25,6 @@ cd "$REPO_ROOT" || exit 1
 
 GLMAPI="llm-proxies/glm2api"
 ANTIGRAVITY="llm-proxies/antigravity-proxy"
-ZEROKEY="llm-proxies/zerokey"
 
 audit=0
 [ "${1:-}" = "--audit" ] && audit=1
@@ -71,29 +70,6 @@ if [ -f "$ANTIGRAVITY/go.sum" ]; then
   fi
 fi
 
-# JS: --frozen-lockfile schlaegt fehl, wenn package.json und Lockfile
-# auseinanderlaufen. Schreibt node_modules — deshalb hier, nicht im Hook.
-if [ -f "$ZEROKEY/pnpm-lock.yaml" ]; then
-  if command -v pnpm >/dev/null 2>&1; then
-    if out="$(cd "$ZEROKEY" && pnpm install --frozen-lockfile 2>&1)"; then
-      echo "  OK    pnpm install --frozen-lockfile"
-      # Zweiter Teil: schreibt jemand am Lockfile vorbei?
-      if [ -n "$(git status --porcelain -- "$ZEROKEY/pnpm-lock.yaml")" ]; then
-        echo "  FEHL  $ZEROKEY/pnpm-lock.yaml wurde gerade veraendert"
-        echo "        -> Lockfile-Aenderung gehoert mit ins selbe Commit"
-        fail=1
-      fi
-    else
-      echo "  FEHL  pnpm install --frozen-lockfile"
-      printf '%s\n' "$out" | tail -5 | sed 's/^/        /'
-      echo "        -> 'cd $ZEROKEY && pnpm install' und Lockfile mit committen"
-      fail=1
-    fi
-  else
-    echo "  --    uebersprungen (kein pnpm)"
-  fi
-fi
-
 # --- CVE-Report (weich) -----------------------------------------------------
 if [ "$audit" -eq 1 ]; then
   echo ""
@@ -103,27 +79,12 @@ if [ "$audit" -eq 1 ]; then
     echo "  (Report-Modus: das ist kein Fehler, nur ein fehlender Befund)"
     exit "$fail"
   fi
-  # `llm-proxies/antigravity-proxy/bun.lock` wird bewusst NICHT gescannt:
-  # es ist ein nie installiertes Lockfile (es gibt dort kein node_modules,
-  # kein Skript ruft bun auf, der Betrieb ist das Go-Binary) und liefert ~100
-  # Pakete Phantom-Befunde, die niemals behebbar sind. Sie auszuschliessen ist
-  # kein Verschweigen, sondern Ausschluss von Rauschen — getestet wird der
-  # builds, den es tatsaechlich gibt.
-  # Scan-Umfang: explizite Liste statt `-r .`. Zwei Gruende:
-  #   (a) nur die Lockfiles, die wir wirklich bauen — ein Verzeichnis-Scan
-  #       nimmt jede Datei mit, die jemand irgendwann mal erzeugt hat;
-  #   (b) `bun.lock` im antigravity-Verzeichnis wird NICHT gescannt: es gab dort
-  #       nie ein `node_modules`, kein Skript ruft bun auf, der Betrieb ist das
-  #       Go-Binary. Es liefert ~100 Pakete Phantom-Befunde, die niemand je
-  #       beheben kann — Rauschen, kein Signal.
-  # Damit das nicht still verrottet, prueft die Schleife darunter: JEDE
-  # committete Lockfile muss entweder in der Scan-Liste oder mit Grund in
-  # `IGNORIERT` stehen. Eine neue Lockfile, die jemand hinzufuegt, faellt
-  # sofort auf, statt unbemerkt ungeprueft zu bleiben.
+  # Scan-Umfang: explizite Liste statt `-r .`.
+  # `bun.lock` im antigravity-Verzeichnis wird NICHT gescannt: es gab dort
+  # nie ein node_modules, kein bun im Repo.
   SCAN_LIST=(
     uv.lock
     llm-proxies/glm2api/uv.lock
-    llm-proxies/zerokey/pnpm-lock.yaml
     llm-proxies/antigravity-proxy/go.mod
     llm-proxies/antigravity-proxy/package-lock.json
     llm-proxies/antigravity-proxy/npm/package-lock.json

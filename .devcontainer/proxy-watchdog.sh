@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # proxy-watchdog.sh: hält alle lokalen LLM-Proxies am Leben (glm2api,
-# antigravity-proxy, zerokey) egal was passiert (OOM-Kill, Container-Reattach,
+# antigravity-proxy) egal was passiert (OOM-Kill, Container-Reattach,
 # Idle-Stopp...).
 #
 # Wird von start-on-boot.sh und setup.sh als Hintergrund-Daemon gestartet und prüft
@@ -27,22 +27,6 @@ while true; do
   if ! curl -sf -m 3 http://127.0.0.1:9878/v1/models >/dev/null 2>&1; then
     echo "$(date '+%H:%M:%S') [watchdog] antigravity-proxy (Port 9878) weg — starte neu..." >> /tmp/opencode/watchdog.log
     bash "$REPO_ROOT/llm-proxies/antigravity-proxy/scripts/start.sh" >> /tmp/opencode/watchdog.log 2>&1 || true
-  fi
-
-  # 3. zerokey / ChatGPT (Port 7250)
-  if ! curl -sf -m 3 http://127.0.0.1:7250/v1/models >/dev/null 2>&1; then
-    echo "$(date '+%H:%M:%S') [watchdog] zerokey/chatgpt (Port 7250) weg — starte neu..." >> /tmp/opencode/watchdog.log
-    bash "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" >> /tmp/opencode/watchdog.log 2>&1 || true
-  fi
-
-  # 3b. zerokey / DeepSeek (Port 7300). Eigene Instanz, weil ZeroKey einen
-  # Provider pro Prozess bedient. Xvfb macht start-zerokey.sh selbst — der
-  # Watchdog muss sich darum nicht kümmern (sonst gäbe es einen zweiten Pfad
-  # zum Display und zwei Orte, an denen er kaputtgehen kann).
-  if ! curl -sf -m 3 http://127.0.0.1:7300/v1/models >/dev/null 2>&1; then
-    echo "$(date '+%H:%M:%S') [watchdog] zerokey/deepseek (Port 7300) weg — starte neu..." >> /tmp/opencode/watchdog.log
-    bash "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" --provider deepseek --port 7300 \
-      >> /tmp/opencode/watchdog.log 2>&1 || true
   fi
 
   # 4. opencode-server (Port 4096)

@@ -29,14 +29,6 @@ llm-proxies/dist/glm2api-bundle.zip
 # arbeit gehoert nach /workspaces/MAIN, dieser file ist ein zwischenstand):
 /handoff.mc
 
-# ZeroKey-Runtime im Repo (Code ist committet, das hier nicht).
-# temp/users.json enthaelt die ChatGPT-Cookies + das Sentinel-Token: Secret,
-# niemals committen. Wiederherstellung laeuft ueber config/secrets.enc
-# (zerokey-users.json) -> ~/.config/landscape/ -> hier; siehe infrastructure.md.
-llm-proxies/zerokey/temp/
-llm-proxies/zerokey/data/
-llm-proxies/zerokey/node_modules/
-
 # Freebuff-Projektzustand (lokaler Projekt-Scope, enthaelt u.a. die project-id).
 # Stand 2026-10-01 nur in .git/info/exclude — das ist NICHT versioniert, in
 # einem frischen Clone also trackbar.

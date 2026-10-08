@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """port-drift-check.py — Ports gegen ihre einzige Quelle halten.
 
-Warum überhaupt: die Ports 8001/9878/7250/4096 stehen in `ports.sh`, in
+Warum überhaupt: die Ports 8001/9878/4096 stehen in `ports.sh`, in
 `.devcontainer/devcontainer.json`, in `infrastructure.md` und in den
 Start-Skripten. Das ist keine Dokumentationsfrage, sondern ein Check-Problem
 (PLAN §11) — Umschreiben der Doku hält nichts dauerhaft, ein Gate schon.
@@ -48,9 +48,7 @@ DEVCONTAINER = REPO / ".devcontainer" / "devcontainer.json"
 BINDING_SCRIPTS = [
     "infra/scripts/glm2api.sh",
     "infra/scripts/opencode-server.sh",
-    "llm-proxies/scripts/start-zerokey.sh",
     "llm-proxies/antigravity-proxy/scripts/start.sh",
-    "llm-proxies/zerokey/config/constants.js",
 ]
 
 # Wo ein Port in einem Skript *deklariert* wird. Bewusst eng: ein Port, der in

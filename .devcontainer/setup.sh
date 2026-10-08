@@ -44,7 +44,7 @@ if [ "${#APT_FEHLER[@]}" -gt 0 ]; then
   printf '      - %s\n' "${APT_FEHLER[@]}"
 fi
 
-# Node >= 20 sicherstellen (Playwright 1.63+ in zerokey verlangt Node >= 20; Ubuntu 24.04 noble apt liefert nur Node 18)
+# Node >= 20 sicherstellen (Ubuntu 24.04 noble apt liefert nur Node 18)
 NODE_MAJOR="$(node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || echo 0)"
 if [ "${NODE_MAJOR:-0}" -lt 20 ]; then
   echo "    Node.js ${NODE_MAJOR} < 20 gefunden -> installiere Node 22 (LTS via NodeSource)..."
@@ -347,33 +347,6 @@ else
   fi
 fi
 
-echo "==> [landscape] pnpm (gepinnt) installieren..."
-# start-zerokey.sh ruft zwingend `pnpm install --frozen-lockfile`. Weder
-# setup.sh noch devcontainer.json haben pnpm installiert — die benutzte Version
-# war damit nicht reproduzierbar (zerokey.sh:107 holte sie per `npm i -g pnpm`
-# UNgepinnt). Quelle der Wahrheit ist das packageManager-Feld in
-# llm-proxies/zerokey/package.json.
-PNPM_PIN="$(sed -nE 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@([^"]+)".*/\1/p' "$REPO_ROOT/llm-proxies/zerokey/package.json" 2>/dev/null | head -1)"
-: "${PNPM_PIN:=10.13.1}"   # Notnagel, falls package.json fehlt
-if command -v corepack >/dev/null 2>&1 && sudo corepack enable >/dev/null 2>&1; then
-  # `prepare` ist in neueren Node-Versionen deprecated, `install --global` der
-  # Nachfolger — deshalb der zweite Versuch.
-  if corepack prepare "pnpm@$PNPM_PIN" --activate >/dev/null 2>&1 \
-     || corepack install --global "pnpm@$PNPM_PIN" >/dev/null 2>&1; then
-    echo "    pnpm $PNPM_PIN (corepack) aktiv."
-  else
-    sudo npm install -g "pnpm@$PNPM_PIN" >/dev/null 2>&1 \
-      && echo "    pnpm $PNPM_PIN (npm global) aktiv." \
-      || echo "    WARN: pnpm@$PNPM_PIN Install fehlgeschlagen."
-  fi
-elif command -v npm >/dev/null 2>&1; then
-  sudo npm install -g "pnpm@$PNPM_PIN" >/dev/null 2>&1 \
-    && echo "    pnpm $PNPM_PIN (npm global) aktiv." \
-    || echo "    WARN: pnpm@$PNPM_PIN Install fehlgeschlagen."
-else
-  echo "    WARN: corepack/npm fehlt — pnpm nicht gepinnt installierbar (start-zerokey.sh braucht es)."
-fi
-
 # CVE-Wächter (PLAN Stufe 6). Gepinnt und pruefsummenverifiziert — siehe Skript.
 # Nur für `make deps-audit` nötig, nicht für den Betrieb; deshalb der Fehler
 # ist weich.
@@ -381,33 +354,6 @@ echo "==> [landscape] osv-scanner (CVE-Wächter) installieren..."
 bash "$REPO_ROOT/infra/scripts/osv-install.sh" >/dev/null 2>&1 \
   && echo "    osv-scanner bereit (make deps-audit)." \
   || echo "    WARN: osv-scanner nicht installiert — manuell: sudo ./infra/scripts/osv-install.sh"
-
-echo "==> [landscape] LLM-Proxy zerokey wiederherstellen & starten..."
-# ZeroKey (ChatGPT-Web-Provider, Port 7250) liegt komplett im Repo unter
-# llm-proxies/zerokey/ — kein Klon. start-zerokey.sh macht pnpm install
-# (einmalig, lädt Playwright-Chromium) und startet. Ohne die ChatGPT-Cookies
-# (temp/users.json, aus dem Secret-Bundle) startet er nicht sinnvoll; das
-# Skript sagt das dann klar, statt still zu scheitern.
-if ss -tln | grep -q ":7250 "; then
-  echo "    Port 7250 belegt — zerokey läuft bereits."
-else
-  bash "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" \
-    && echo "    zerokey läuft." \
-    || echo "    WARN: zerokey-Start fehlgeschlagen — manuell: ./llm-proxies/scripts/start-zerokey.sh"
-fi
-
-echo "==> [landscape] LLM-Proxy zerokey (DeepSeek, Port 7300) starten..."
-# Zweite ZeroKey-Instanz: ZeroKey bedient EINEN Provider pro Prozess
-# (server.js:50), DeepSeek braucht also ein eigenes. start-zerokey.sh startet
-# für Provider deepseek auch den Xvfb, den der headed Chromium braucht
-# (browser-transport.js:102) — hier und im Watchdog derselbe Weg.
-if ss -tln | grep -q ":7300 "; then
-  echo "    Port 7300 belegt — zerokey/deepseek läuft bereits."
-else
-  bash "$REPO_ROOT/llm-proxies/scripts/start-zerokey.sh" --provider deepseek --port 7300 \
-    && echo "    zerokey/deepseek läuft." \
-    || echo "    WARN: DeepSeek-Start fehlgeschlagen — manuell: ./llm-proxies/scripts/start-zerokey.sh --provider deepseek --port 7300"
-fi
 
 echo "==> [landscape] Zentralen opencode-Server starten..."
 if ss -tln | grep -q ":4096 "; then
@@ -420,7 +366,7 @@ else
   fi
 fi
 
-echo "==> [landscape] Proxy-Watchdog starten (hält glm2api, antigravity-proxy und zerokey am Leben)..."
+echo "==> [landscape] Proxy-Watchdog starten (hält glm2api und antigravity-proxy am Leben)..."
 # Watchdog auch beim Codespace-Bau/Rebuild starten (postStartCommand macht es bei
 # jedem Start zusätzlich). setsid, damit devcontainer-cli ihn nicht mitkillt.
 mkdir -p /tmp/opencode

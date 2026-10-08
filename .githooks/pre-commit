@@ -10,9 +10,6 @@
 #   Makefile/pyproject/coverage-floor/checks.yml -> Gate-Claims vs. Config
 #   **.sh                            -> shellcheck gegen Baseline (PLAN Stufe 4)
 #
-# zerokeys `pnpm lint` laeuft hier bewusst NICHT: das braucht node_modules und
-# ist der eigene, handgestartete `pnpm precommit` (llm-proxies/zerokey/).
-#
 # Drei Eigenschaften, an denen hier NICHTS geaendert werden darf:
 #   1. Der Hook fasst den Index nicht an (kein `git add`, kein `--fix`/`--write`
 #      an den Quelldateien). In diesem geteilten Repo hat ein Hook mit `git add`
@@ -107,7 +104,7 @@ fi
 # Ein neuer gebundener oder weitergeleiteter Port ohne Label laeuft und zeigt
 # in `ports.sh` als "sonstiger Prozess". Der Check liest ports.sh und die
 # Deklarationen in den Start-Skripten plus devcontainer.json.
-if grep -qE '^infra/scripts/(ports|port-drift-check)\.(sh|py)$|^\.devcontainer/(devcontainer\.json|.*\.sh)$|^llm-proxies/(scripts|zerokey|antigravity-proxy)/' <<< "$changed"; then
+if grep -qE '^infra/scripts/(ports|port-drift-check)\.(sh|py)$|^\.devcontainer/(devcontainer\.json|.*\.sh)$|^llm-proxies/(scripts|antigravity-proxy)/' <<< "$changed"; then
   echo "[pre-commit] Ports betroffen -> Label-Drift pruefen..."
   # Direkt aufrufen, nicht `bash <datei>.py` — der Shell-Interpreter wuerde das
   # Python-Skript parsen (live gesehen: „syntax error near unexpected token").
@@ -116,7 +113,7 @@ if grep -qE '^infra/scripts/(ports|port-drift-check)\.(sh|py)$|^\.devcontainer/(
 fi
 
 # --- 3) MAIN-eigenes JS (infra/): node --check ----------------------------
-# Nur MAINs eigener JS-Code. Vendorte Proxies (zerokey) haben eigene Checks.
+# Nur MAINs eigener JS-Code.
 js="$(printf '%s\n' "$changed" | grep -E '^infra/.*\.js$' || true)"
 if [ -n "$js" ]; then
   echo "[pre-commit] infra-JS geaendert -> node --check..."

@@ -38,7 +38,7 @@ dev = [
 
 [tool.ruff]
 target-version = "py314"
-# Nur MAIN-eigenes Python. Die Vendor-Baeume (glm2api, zerokey, antigravity)
+# Nur MAIN-eigenes Python. Die Vendor-Baeume (glm2api, antigravity)
 # haben ihre eigenen Konfigurationen und werden hier bewusst nicht angefasst.
 extend-exclude = [
   "llm-proxies",
@@ -87,7 +87,7 @@ branch = true
 # (PTY + Subprozesse, ueber eine Mock-Session nur teilweise sinnvoll testbar —
 # eine hohe Zahl waere Pseudosicherheit) und watch-subagent.py.
 #
-# Aufgenommen sind check-proxy-budget.py, freebuff_patch.py und
+# Aufgenommen sind freebuff_patch.py, gate-claims-check.py und
 # port-drift-check.py — alle drei sind reine Text-/Zaehllogik und ehrlich
 # testbar. Der Floor ist damit eine Untergrenze fuer getestete Logik, nicht
 # eine Zahl, die man durch Weglassen von Dateien bekommt.

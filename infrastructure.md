@@ -22,7 +22,7 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
 | `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, verify-codespace.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
-| `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) + **zerokey** (Port 7250, ChatGPT-Web) |
+| `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
 
 | `.env` `.runtime/` | GITIGNORED — Klartext-Secrets (.env), Browser-Profil, Runtime (nie committen) |
 
@@ -30,10 +30,9 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 
 Codespace bauen → `setup.sh` stellt ALLES automatisch wieder her (Systempakete,
 opencode, uv, Secrets-Unlock, Git-Auth, Freebuff-CLI, Browser-Runtime,
-**glm2api-, antigravity- und zerokey-Proxy inkl. Start** — der Code liegt
+**glm2api- und antigravity-Proxy inkl. Start** — der Code liegt
 komplett im Repo, es gibt nichts mehr zu klonen; nur `uv sync` (Python 3.14 +
-Deps, beim ersten Mal ~2-5 Min) + `pnpm install` (ZeroKey, lädt einmalig
-Playwright-Chromium) + Autostart). Danach:
+Deps, beim ersten Mal ~2-5 Min) + Autostart). Danach:
 
 ```bash
 ./infra/scripts/save.sh status                       # Überblick (Repo, Auth, Secrets)
@@ -120,9 +119,9 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
    `doctor` und `opencode-version.sh check` liefern einen ehrlichen Exit-Code**
    (0 nur, wenn wirklich alles stimmt) — sie sind damit als Gate in
    `verify-codespace.sh` brauchbar, statt nur Text auszugeben.
-   **Secret-Rechte:** alle Secret-Dateien (`config/passphrase`, `config/secrets.enc`,
-   `config/secrets.manifest`, `llm-proxies/glm2api/.env`, `llm-proxies/zerokey/temp/users.json`)
-   liegen auf 600, `.runtime` auf 700. `infra/scripts/secret-perms.sh` erzwingt das
+    **Secret-Rechte:** alle Secret-Dateien (`config/passphrase`, `config/secrets.enc`,
+    `config/secrets.manifest`, `llm-proxies/glm2api/.env`)
+    liegen auf 600, `.runtime` auf 700. `infra/scripts/secret-perms.sh` erzwingt das
    und entfernt die geerbte POSIX-Default-ACL (`rwx rwx rwx`), die `umask` aushebelt;
    `verify-codespace.sh` prüft die Rechte („Secrets nicht world-readable“).
    **Zwei bekannte Fehlalarme von `doctor`** (beide kein Key-Problem, live geprüft
@@ -140,23 +139,8 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 | Provider | Modelle | Auth |
 |---|---|---|
 | xinjianya | gpt-5.6-sol | xinjianya.key |
-| **deepseek** | `default` = DeepSeek V4.1 (ZeroKey-Instanz auf 7300, `thinking_enabled`+`search_enabled` per Default) | lokal, Port 7300, Platzhalter-Key `opencode`, Web-Konto in `temp/users.json` |
 | **glm2api** | glm-5.3 | lokal, Port 8001, kein Key |
 | **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
-| downloaddoctor | ZeroKey (16k Context, **2k** Output — `.opencode/opencode.json` `limit.output=2000`) | lokal, Port 7250, Platzhalter-Key `opencode`, Code im Repo |
-
-- `downloaddoctor` ist in `opencode.json` konfiguriert (Loopback-only,
-  Platzhalter-Key `opencode`).
-- **`downloaddoctor` (ZeroKey) ist seit 2026-09-29 Teil der Setup-/Watchdog-Kette.**
-  Vorher war er nur konfiguriert, aber in keiner Doku erwähnt und von keinem Skript
-  gestartet (Befund aus dem Main-Analyse-Run 2026-09-28) — der Proxy lief nur, weil
-  er von Hand gestartet worden war. `setup.sh` und `proxy-watchdog.sh` kümmern sich
-  jetzt um ihn, der Code liegt in `llm-proxies/zerokey/`. Details im Abschnitt
-  [ZeroKey](#zerokey--der-chatgpt-web-proxy-port-7250).
-- `cyberpradeep` (ZeroKey-Variante, Port 8088) bleibt **außen vor**: kein Code im
-  Repo, keine Credentials, nicht Teil der Kette — und **kein Provider-Eintrag in
-  `opencode.json`**. Die frühere Doku behauptete hier das Gegenteil (acht Zeilen
-  weiter oben), korrigiert 2026-10-01.
 
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
@@ -239,186 +223,6 @@ einem Codespace-Wechsel macht setup.sh automatisch: uv-Install (falls nötig),
   im Repo (kein Patch-Artefakt mehr).
 - setup.sh rebuilt nur bei `LANDSCAPE_REBUILD_LLM_PROXIES=1` (sonst manuell).
 - Upstream-Limit ist pro Guest-Token (~5 Nachrichten) — der Pool rotiert das weg.
-
-## ZeroKey — der ChatGPT-Web-Proxy (Port 7250)
-
-OpenAI-kompatibler Proxy, der eine **ChatGPT-Web-Conversation** als
-`/v1/chat/completions`-Endpunkt anbietet. Nötig, weil es keinen API-Key für
-ChatGPT gibt: der Proxy fährt einen echten Browser (Playwright), übernimmt
-Cookies und Sentinel-Token aus einem Capture und streamt die Conversation.
-
-| | |
-|---|---|
-| **Code** | `llm-proxies/zerokey/` — **liegt im Repo, kein Klon** (vendored 2026-09-29 aus `/workspaces/downloaddoctor-zerokey`) |
-| **Start** | `./llm-proxies/scripts/start-zerokey.sh` (`node server.js chatgpt main MAIN`), **`--restart`** beendet einen laufenden Proxy und startet ihn neu (ohne Flag gilt weiter die Doppelstart-Sperre). Skript ist **parametrisiert**: `--provider/--user/--session/--port`, Defaults unverändert ChatGPT/7250. Log und PID-Datei sind **pro Provider** (`/tmp/opencode/zerokey-<provider>.log`), sonst hätte ein `--restart` die falsche Instanz beendet. |
-| **Port** | 7250, loopback-only |
-| **opencode** | Provider `downloaddoctor`, Modell `zerokey`, Platzhalter-Key `opencode` |
-| **Log** | `/tmp/opencode/zerokey.log`, PID `/tmp/opencode/zerokey.pid` |
-| **Fehler-Log** | `llm-proxies/zerokey/temp/errors.log` (rotierend, 1 MB) — **nicht dasselbe wie der Log oben.** Fehler, die nach `_finished` auftreten, landen nur hier und nie im Hauptlog; 2026-10-02 hat genau diese Lücke 18 stille Hänger verschluckt (Changelog 26). Format: eine JSON-Zeile je Fehler, `reason` nennt `route` / `stream` und ggf. `post-finalization`. |
-| **Health** | `curl -s 127.0.0.1:7250/health` |
-| **Stall-Watchdog** | `ZEROKEY_STREAM_IDLE_TIMEOUT_MS` (Default `90000`) — Stille-Budget pro SSE-Chunk. Ein Turn ohne jedes Byte für 90 s wird als `stream_stalled` (504) abgebrochen statt bis zum 300-s-`https.Agent`-Timeout zu warten. `0` schaltet den Watchdog ab. Siehe Changelog 2026-10-02 (16). |
-| **Header-Watchdog** | `ZEROKEY_HEADER_TIMEOUT_MS` (Default `90000`) — dasselbe Budget für die Phase **vor** dem ersten Response-Byte. `nodeFetch` löst erst mit den Response-Headern auf; ein Upstream, das die Anfrage annimmt und dann schweigt, war deshalb bis zum 300-s-Cap unsichtbar (der Stream-Watchdog greift nicht, es gibt noch keinen Stream). Endet jetzt nach 90 s als `upstream_stall` (504), mit Log-Zeile. `0` schaltet ihn ab. Siehe Changelog 2026-10-02 (21). |
-| **Quelle** | upstream `downloaddoctor/zerokey`, Stand `11ea0bf` (Version 0.3.0) — vollständig, `origin/main` endet bei `4d635ab` und ist Vorfahr davon |
-| **Historie** | `llm-proxies/zerokey/upstream-history.bundle` (198 Commits, alle Branches/Tags). Die beiden alten Checkouts unter `/workspaces` sind gelöscht; Wiederherstellung: `git clone llm-proxies/zerokey/upstream-history.bundle <ziel>` |
-
-### ZeroKey auf DeepSeek — zweite Instanz, Port 7300
-
-ZeroKey kann **mehr**, als hier betrieben wird: der vendored Baum bringt **vier**
-Provider mit (`providers/{chatgpt,deepseek,claude,qwen}`). Sie sind **Wahlalternativen,
-keine Liste** — `server.js:50` liest den Provider aus `argv[2]`, ein Prozess
-bedient genau einen. „DeepSeek hinzufügen" heißt deshalb: **zweite Instanz auf
-zweitem Port**, nicht ein zweites Startskript (Anti-Drift, AGENTS.md §7).
-
-```bash
-./llm-proxies/scripts/start-zerokey.sh --provider deepseek --port 7300 [--restart]
-```
-
-| | |
-|---|---|
-| **Port** | 7300, loopback-only, Provider `deepseek`, User `main`, Session `MAIN` |
-| **opencode** | Provider **`deepseek-web`** (bewusst *nicht* `deepseek` — das ist der Name von opencodes eingebautem API-Katalog; beide ohne Key wären tot, und die Modellliste zeigte kaputte Namen), Modell `default`, Key `opencode`. **`limit.context = 512000`, `limit.output = 4000`** — nicht die Modellkarte, sondern **gemessen**: `promptLimit` steht auf 2 000 000 Zeichen (~500k Tokens), weil 2M Zeichen in ~20 s durchlaufen und 3M mit `unexpected error` scheitern. **Was opencode wirklich sendet** (per Capture-Proxy am 7300 am Rohbody gemessen): `--variant high` → `reasoning_effort: "high"`, **ohne Variant bzw. `--variant max` → gar kein Feld**. Beides fällt auf `DeepThink`; der höhere Variant sendet ausgerechnet **weniger**, weil opencodes Mapping nur `high` als Effort kennt. |
-| **Token-Meldung** | MAIN-Fix, siehe Changelog. DeepSeek liefert **nur eine** Zahl für die ganze Conversation (`accumulated_token_usage`, keine Input/Output-Trennung — nachgemessen 49 → 97 → 189 über drei Turns). Gemeldet wird deshalb: `prompt_tokens` = **akkumulierter Stand** (wächst monoton, das ist die Größe, die opencodes Kompaktierung braucht, dabei eine **Obergrenze** des echten Kontexts, weil Output mit enthalten ist), `completion_tokens` = **Zunahme dieses Turns** (echtes Delta, die Kostenzahl). Die beiden **überlappen** — dokumentiert, nicht kaschiert. **Nachgemessen end-to-end:** `in=58241, out=833` für einen normalen Turn; vorher `in=855` (nur der Nachschub) bzw. `out=804724` (Gesamtsumme). Regressionstest `node scripts/test-token-usage.js` (11 Prüfungen), in `pnpm test` verdrahtet. |
-| **Was ZeroKey wirklich sendet** | **Den Nachschub, nicht die ganze Unterhaltung** — opencode pruned die Historie (`compaction.prune`), DeepSeek hält den Faden serverseitig über `parent_message_id`. Gemessen: Prompts von 2532 über 58141 runter auf 3418 Zeichen, während die Conversation auf 54 900 Token wuchs. **Deshalb war `prompt.length / 4` als Kontextzahl falsch** (opencode sah 855 statt 30 000) und `promptLimit` (2M Zeichen) ist eine Schranke für den **Nachschub**, nicht für die Conversation. Die Conversation-Obergrenze ist DeepSeks eigene (~500–750k Tokens, gemessen). |
-| **Modell** | `providers/deepseek/config.js` kennt genau **ein** Modell: `default` = „DeepSeek V4.1", 1M Context, 384k Output, `vision: true`. **Es lässt sich per API nicht umschalten** — siehe unten. |
-| **Sessions** | **Genau eine, dauerhaft.** Die Conversation entsteht nicht per API, sondern dadurch, dass `browser-transport.js:351` die **echte UI ansteuert** und eine Aufwärm-Aufgabe `What is <a> + <b>?` sendet — deshalb heißen die Chats im Web „362 plus 671". Der echte Turn läuft in derselben Conversation weiter (`parentMessageId` steigt). `flush()` beim sauberen Herunterfahren (`session-selector.js:140`) persistiert die `chatSessionId` **nach `users.json`** — deshalb wächst die Liste über Neustarts hinweg **nicht** (verifiziert: Zählung vor und nach Neustart identisch, `chatSessionId` danach `54eb2190…`). Kein `deleteSession`-Hook nötig: der Router kehrt für ephemere Calls in `router.js:62` zurück, **bevor** `createChatSession()` (Zeile 67) läuft. |
-| **Reasoning** | vier Labels, `think`/`search` sind **zwei unabhängige Flags**: `Off` = ✗/✗ · `Search` = ✗/✓ · `DeepThink` = ✓/✗ · `DeepThink Search` = ✓/✓. **Default ist `DeepThink`** (MAIN-Änderung, siehe unten). Effort kommt als `reasoning_effort` aus dem Request-Body; **unbekannte Werte fallen auf den Default**, nicht auf „kein Denken". |
-| **Gemessen** | über die laufende Instanz, Aufgabe „wie viele r in *Erdbeermarmelade*": `kein effort` → 311 Denk-Deltas / 834 Zeichen / **Antwort 3** ✓ · `Off` → 0 / 0 / 7 ✗ · `Search` → 0 / 0 / 6 ✗ · `unsinn` → 305 / 731 / **3** ✓. **Kostet:** ohne Denken 8 SSE-Events, mit ~300–1200. |
-| **Transport** | **`api` = Direkt-Fetch von ZeroKey, ohne Browser** (Default, MAIN-Abweichung, 2026-10-03): (`providers/deepseek/wasm/`), **kein Browser, kein Xvfb, kein 16-MB-Profil**. `browser` bleibt erzwingbar (`ZK_BROWSER_TRANSPORT=1`) — **nicht empfehlen**, siehe unten. |
-| **Warum der Faden im Direkt-Fetch trägt** | `chat_session_id` **plus fortschreitende `parent_message_id`**. Gemessen: `msg=2/parent=1` → `msg=4/parent=3` → `msg=6/parent=5`. Laut Upstream-README ist der Direkt-Fetch „legacy" und DeepSeek hat den Endpunkt nachgeschärft — **heute funktioniert er**: PoW in 0,1 s, und ein absichtlich ungültiger Body kommt als **HTTP 422 mit DeepSeks eigener Fehlermeldung** zurück (`chat_session_id: invalid type: null`), nicht als Abweisung. **Zwei Einschränkungen, beide gemessen:** die erste Anfrage nach einem Session-Reset kann eine fremde Antwort liefern (beobachtet: „No MCP tags registered yet!"), danach ist der Faden sauber; und eine Conversation, die der **Browser**-Transport angelegt hat, lässt sich per Direkt-Fetch **nicht** fortsetzen — nach einem Transportwechsel muss `chatSessionId` neu gesetzt werden. |
-| **X-Server** | **Pflicht im Browser-Modus.** `browser-transport.js:102` startet Chromium *headed*; ohne X stirbt die Instanz mit `Missing X server or $DISPLAY … The platform failed to initialize.` (live belegt 2026-10-03). `start-zerokey.sh` startet für Provider `deepseek` darum selbst ein `Xvfb` auf `$ZK_DISPLAY` (Default `:120`, MAIN-Konvention wie `browser-start.sh`). **Bewusst im Startskript und nicht im Watchdog:** sonst gäbe es zwei Orte, an denen das Display entsteht, und der Watchdog müsste es auch noch kennen. |
-| **Prompt-Limit** | 128 000 Zeichen (Zerokey `promptLimit`) — `compiler.limitPrompt` wirft die **Mitte** eines Over-Budget-Prompts weg, nicht den Schwanz |
-| **Credentials** | Web-Konto = ein `fetch()`-Call von `chat.deepseek.com` auf `/api/v0/chat/completion`. `validateFetch` (in `providers/deepseek/index.js`) verlangt `cookie` **und** `authorization` und die exakte URL. Das Ergebnis liegt in `temp/users.json` unter `deepseek/main` und damit im Secret-Bundle. |
-| **Health** | `curl -s 127.0.0.1:7300/health` → `{"provider":"deepseek",…}` |
-
-**Achtung beim `validateCredentials`:** es prüft im Browser-Modus **nichts
-gegen DeepSeek.** `browser-transport.js:80` ist `this._seedToken = token` — ein
-No-Op, der in 0 s „success" meldet. Der Wizard-Text „Session verified" ist damit
-irreführend; **einzig `POST /v1/chat/completions` beweist, dass das Konto
-funktioniert.** (Live 2026-10-03: genau so eingerichtet.)
-
-**Bekannter Upstream-Bug, nicht behoben:** `GET /v1/models` merged *alle*
-Provider (`registry.getModels()` filtert nicht nach der laufenden Instanz), also
-bewirbt 7300 auch `claude-sonnet-4-6` & Co., die DeepSeek nicht bedienen kann.
-**Der Bug ist älter als die zweite Instanz** — 7250 bewirbt seit jeher 11 Modelle,
-von denen ChatGPT nur `auto` besitzt. Nicht angefasst, weil die Korrektur die
-dokumentierte Modelliste des bestehenden `downloaddoctor`-Providers verändern
-würde. Der opencode-Provider `deepseek` ist deshalb **explizit auf `default`
-gepinnt**, damit die falschen Namen gar nicht erst wählbar sind.
-
-**V4-Pro (Expert) ist über diesen Weg nicht erreichbar — und es ist keine
-Client-Einschränkung, sondern eine serverseitige Berechtigung.**
-`GET /api/v0/client/settings?scope=model` (die UI lädt sie beim Start) liefert
-die vollständige `model_configs`-Enum:
-
-| `model_type` | name | enabled | switchable |
-|---|---|---|---|
-| `default` | Instant | **true** | true |
-| `expert` | Expert | **false** | **false** |
-| `vision` | Vision | **false** | **false** |
-
-Auf diesem Konto ist **nur `default` aktiv** — deshalb zeigt die UI auch keinen
-Modellschalter, sondern nur `DeepThink` und `Search`. Und `model_type` wird
-nicht bloß ignoriert, sondern **vom Server zurückgeschrieben**: sendet man
-`expert`, spiegelt der SSE `model_type: "default"` zurück. Das ist die
-eindeutigste denkbare Antwort, weil sie vom Server selbst stammt. Verifiziert
-zusätzlich an einer diskriminierenden Frage (Buchstaben zählen, `think=true`):
-`default` und `expert` liefern identische Token-Nutzung (87), identische Antwort
-und gleiche Ereignisform — bei **gleicher** Denkmenge für beide ist der
-Tokenwert allein schwach, weil er das Denken nicht mitzählt; die Enum und der
-zurückgeschriebene Wert sind die eigentlichen Belege. **Wer Pro braucht, braucht
-die offizielle API** — oder ein Konto, bei dem DeepSeek `expert` freischaltet.
-Das ist eine Entscheidung auf DeepSeks Seite und hier nicht erzwingbar.
-
-**Warum Default `DeepThink` (MAIN-Änderung, 2026-10-03):** upstream fiel bei
-fehlendem `reasoning_effort` auf `{think:false, search:false}` zurück — es wurde
-also **gar nicht gedacht**, was erst auffiel, als man es nachmessen wollte.
-`config.js` hat jetzt `reasoning.default`, `router.js` löst
-`REASONING_MAP[effort] ?? reasoning.default`. **`defaultReasoning` am Modell ist
-nicht derselbe Hebel** — das liest nur `utils/sync-ide-config.js`, und nur für
-die VS-Code-Config; opencode/hermes erreicht es so nicht. **Die
-Semantikänderung wird mitprotokolliert:** ein *unbekannter* `reasoning_effort`
-bekommt jetzt ebenfalls DeepThink statt „kein Denken". Ein explizites `Off`
-schaltet weiterhin ab.
-
-**`DeepThink` ist die höchste erreichbare Reasoning-Stufe — es gibt keine
-darüber.** Das ist am UI selbst abgelesen, nicht aus Doku abgeleitet: die
-Conversation-Seite von chat.deepseek.com bietet genau **zwei** Regler,
-`DeepThink` und `Search`. Beide sind boolesche Schalter, kein Stufenregler. Eine
-Recherche von dritter Seite sprach von drei Denkstufen (Non-Think / Think High /
-Think Max) — **das ist an DeepSeks eigenem UI nicht vorhanden** und war eine
-unbelegte Behauptung, die ich übernommen hatte. Praktisch heißt das: `DeepThink`
-an ist die volle Denkstufe, mehr ist über diesen Weg nicht bestellbar.
-
-**Sessions: es gibt kein Leak — und der naheliegende „Fix" dafür wäre toter
-Code gewesen.** ChatGPT ruft bei ephemeralen Calls `deleteSession` auf
-(`providers/chatgpt/router.js:34`); im DeepSeek-Router steht kein solcher
-Aufruf, obwohl `browser-transport.js:481` die Methode implementiert. **Das sieht
-nach einem Loch aus und ist keines:** DeepSeek kehrt bei `router.js:62` mit
-`if (pipeline.ephemeralMode) { sendFinalChunk(); return }` zurück, **bevor**
-`createChatSession()` (Zeile 67) läuft — es entsteht keine Wegwerf-Session.
-ChatGPT ist funktional verschieden, nicht nur anders gebaut: dort läuft
-`pipeline.setup()` zuerst und `chatCompletion` erzeugt serverseitig eine
-Conversation, weshalb der Hook dort tragend ist. **Per A/B belegt** (Block drin
-→ ephemerer Request → zählen; Block raus, neu starten, gleicher Request, gleiches
-Zählen → **in beiden Fällen unverändert**), deshalb wurde der gespiegelte Hook
-wieder entfernt. **13 Altlasten waren meine eigenen Mess-Turns**, keine
-Betriebs-Altlasten; gelöscht, Web-Übersicht zeigt danach „No chat history" und
-genau **1** Session (die benannte `MAIN`). Ein Proxy-Neustart **ohne** Chat-Request
-erzeugt nachweislich keine zusätzliche. Der Listen-Endpoint ist
-`GET /api/v0/chat_session/fetch_page?lte_cursor.pinned=false` (nicht
-`/chat_session/list` — der liefert die SPA-HTML zurück) und verlangt den
-Bearer-Token **im Header**; mit Cookies allein antwortet er `Missing Token`. **Zählen
-geht nur ohne Browser**, sonst legt das Messwerkzeug selbst eine Session an.
-
-**Warum Web und nicht die offizielle API:** DeepSeek-V4.1-Flash kostet
-off-peak $0,15/$0,60 je 1M Token, V4-Pro $0,66/$1,98 — 2-9× **billiger** als
-z.ai für GLM-5.3 ($1,40/$4,40). Der Web-Weg ist hier also **nicht** der
-Preis-Hack wie bei chatglm.cn; er lohnt sich, weil das Konto ohnehin existiert
-und V4-Pro im Web-Chat **vollständig und unbegrenzt** enthalten ist. Wer lieber
-zahlt, trägt `deepseek` mit `DEEPSEEK_API_KEY` direkt in `opencode.json` ein
-(opencode hat den Provider nativ im Katalog) und braucht dann weder Port noch
-Browser.
-
-`llm-proxies/zerokey/temp/users.json` enthält die **ChatGPT-Cookies, das
-Sentinel-Token und die Session-IDs** — und seit 2026-10-03 zusätzlich das
-**DeepSeek-Konto** (`authorization`-Bearer + `cookie` inkl. `aws-waf-token`).
-Das ist ein Secret mit Auslaufdatum, kein Quelltext — deshalb ist `temp/` per
-`.gitignore` ausgeschlossen und die Datei wandert über das Secret-Bundle:
-
-```
-config/secrets.enc  --(secrets.sh unlock)-->  ~/.config/landscape/zerokey-users.json
-                    --(start-zerokey.sh)-->  llm-proxies/zerokey/temp/users.json
-```
-
-`secrets.sh` packt sie bei `lock` ein und legt sie bei `unlock` ab (symmetrisch
-zum `chatglm-refresh-token`). **Nach dem ersten `lock` mit dem neuen Eintrag**
-überlebt der Proxy einen Codespace-Neubau ohne Browser-Login.
-
-Solange das Bundle sie nicht enthält, startet `start-zerokey.sh` **nicht**
-sondern sagt es klar — ein stiller Fehlstart ohne Credentials wäre ein Proxy, der
-401 liefert und den Agenten raten lässt.
-
-**Wenn die Cookies abgelaufen sind** (ChatGPT-Session, typisch nach Tagen):
-`initializeFromJSON` schlägt dann mit `openai-sentinel-proof-token not found`
-fehl. Neuer Login = ChatGPT im Browser öffnen, die Conversation als HAR
-capturen, `utils/har-to-capture.js` drüber, Ergebnis nach
-`~/.config/landscape/zerokey-users.json`, dann `secrets.sh lock` + `save.sh`.
-
-### Abweichungen vom Upstream-Stand
-
-Bewusst, beim Vendoring gemacht — jeweils weil das Original im MAIN-Repo Schaden
-angerichtet hätte:
-
-| Entfernt | Warum |
-|---|---|
-| `"postinstall": "git config core.hooksPath .githooks"` | Läuft bei jedem `pnpm install` **im MAIN-Repo** und würde dessen `core.hooksPath` auf einen relativen, nicht existierenden Pfad umbiegen — die Hooks des Haupt-Repos wären still weg. |
-| `.githooks/pre-commit` | Macht `git add $files` über alle geänderten Dateien. Im geteilten MAIN-Repo (mehrere eigene Accounts) würde ein Commit eines Agenten damit fremde Arbeit mit einfrieren. |
-| `.vscode/settings.json` | Editor-Konfiguration des Upstream-Klons (`chat.tools.terminal.autoApprove` für `Set-Content`). MAIN hat eigene `.vscode/`; die Datei hätte im Unterordner nur überflüssig gewirkt. |
-
-`zerokey.sh` / `zerokey.bat` (Upstream-Download-/Klon-Helfer) sind bewusst
-**da** — sie sind Teil der Upstream-Distribution und in dessen README
-dokumentiert. Für dieses Setup gilt `llm-proxies/scripts/start-zerokey.sh`;
-wer `./zerokey.sh` hier ausführt, erzeugt ein verschachteltes `zerokey/zerokey`.
 
 ## Antigravity Quota-Architektur & Token-Multiplikator (Befunde)
 
@@ -1196,6 +1000,12 @@ Proxy bei jedem Start automatisch hoch.
     * **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):** Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2 springt). Der Fragenmodus schließt erst, wenn Freebuff `Your answer:` / `Your answers:` ausgibt oder der Nutzer Esc / Strg+C drückt.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
+
+- 2026-10-08: **ZeroKey vollständig und rückstandslos aus MAIN entfernt.**
+  Der ZeroKey-Proxy (Port 7250 für ChatGPT, Port 7300 für DeepSeek) wird nicht mehr benötigt.
+  - Laufende Instanzen auf Port 7250 und 7300 gestoppt, Ports freigegeben und geschlossen.
+  - `llm-proxies/zerokey/` sowie Start- und Hilfsskripte (`start-zerokey.sh`, `check-proxy-budget.py`, `test_check_proxy_budget.py`) restlos gelöscht.
+  - Watchdogs (`proxy-watchdog.sh`, `start-on-boot.sh`), Boot-Skripte (`setup.sh`), CI-Workflows (`checks.yml`), Makefiles, Port-Prüfer (`ports.sh`, `port-drift-check.py`), Hooks (`pre-commit`), Secrets-Management (`secrets.sh`, `secrets.manifest`, `secret-perms.sh`, `zerokey-users.json`) und Doku (`AGENTS.md`, `README.md`, `infrastructure.md`, `opencode.json`) vollständig bereinigt.
 
 - 2026-10-05: **VS Code Terminal-Relaunch-Meldungen & Python-Extension-Bloat dauerhaft beseitigt.**
   Das Metapaket `ms-python.python` installierte ungefragt vier Erweiterungen (`python`, `debugpy`, `pylance`, `python-envs`), wovon `debugpy` („no-config debugging" in PATH) und `python` (`PYTHONSTARTUP`) bei jedem Codespace-Start/Reload Terminal-Relaunch-Warnungen erzeugten.

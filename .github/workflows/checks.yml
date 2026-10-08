@@ -6,7 +6,7 @@
 #
 # Ehrliche Abgrenzung — was dieser Workflow **nicht** ersetzt:
 #   * `verify-codespace.sh` im Codespace bleibt die Aussage über die LAUFENDE
-#     Kette (Ports 8001/9878/7250/4096, Daemons, Secrets-Bundle, Drive).
+#     Kette (Ports 8001/9878/4096, Daemons, Secrets-Bundle, Drive).
 #     Ein Runner hat davon nichts — dort wären ~20 Checks FAIL, ohne dass
 #     etwas defekt ist.
 #   * Deshalb fährt der `repo`-Job `verify-codespace.sh --code`: nur der
@@ -96,43 +96,6 @@ jobs:
           if [ -n "$un" ]; then echo "gofmt noetig: $un"; exit 1; fi
       - name: go test
         run: go test ./...
-
-  zerokey:
-    name: zerokey (pnpm lint + check + test)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: llm-proxies/zerokey
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          # engines.node sagt ">=18"; der Codespace nutzt eine aktuelle LTS.
-          node-version: '22'
-      # corepack NACH setup-node, und bewusst OHNE `cache: pnpm` in der
-      # Node-Action: die Cache-Ermittlung sucht pnpm auf dem PATH, bevor es
-      # aktiviert ist, und bricht mit „Unable to locate executable file: pnpm"
-      # ab (hat der erste Lauf gezeigt). Ohne Cache ist der Job nur ein paar
-      # Sekunden langsamer, aber robust — ein Cache-Fehler wäre ein rotes
-      # Roteichen, das nichts über den Code sagt.
-      - name: corepack + pnpm (Pin aus packageManager)
-        run: |
-          corepack enable
-          echo "pnpm $(pnpm --version) (Pin aus packageManager)"
-      # --frozen-lockfile: schlägt fehl, wenn package.json und Lockfile
-      # auseinanderlaufen. Danach der Diff-Test: schreibt jemand am Lockfile
-      # vorbei, sieht es dieser Job.
-      - name: install (frozen lockfile)
-        run: pnpm install --frozen-lockfile
-      - name: Lockfile unveraendert
-        run: git diff --exit-code -- pnpm-lock.yaml
-      - name: lint
-        run: pnpm lint
-      - name: check
-        run: pnpm check
-      - name: test
-        run: pnpm test
 
   infra-python:
     name: infra-Python (ruff + mypy + pytest + Coverage-Floor)

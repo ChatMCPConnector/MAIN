@@ -47,24 +47,6 @@
         }
       }
     },
-    "deepseek-web": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "DeepSeek V4.1 via ZeroKey (Web)",
-      "options": {
-        "baseURL": "http://127.0.0.1:7300/v1",
-        "apiKey": "opencode"
-      },
-      "models": {
-        "default": {
-          "name": "DeepSeek V4.1",
-          "reasoning": true,
-          "limit": {
-            "context": 512000,
-            "output": 4000
-          }
-        }
-      }
-    },
     "glm2api": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "glm2api",
@@ -87,35 +69,6 @@
             "max": {
               "reasoningEffort": "max"
             }
-          }
-        }
-      }
-    },
-    "downloaddoctor": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Downloaddoctor",
-      "options": {
-        "baseURL": "http://127.0.0.1:7250/v1",
-        "apiKey": "opencode"
-      },
-      "models": {
-        "zerokey": {
-          "name": "ZeroKey",
-          "reasoning": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "high": {
-              "reasoningEffort": "high"
-            },
-            "none": {
-              "reasoningEffort": "none"
-            }
-          },
-          "limit": {
-            "context": 16000,
-            "output": 2000
           }
         }
       }

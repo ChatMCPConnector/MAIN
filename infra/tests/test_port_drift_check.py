@@ -44,11 +44,6 @@ def test_ports_sh_liefert_labels():
     assert 9878 in labels and "antigravity" in labels[9878]
 
 
-def test_zerokey_port_7250_hat_ein_label():
-    """Regression: 7250 fehlte, obwohl zerokey seit A7 im Boot-Pfad laeuft."""
-    assert 7250 in pdc.labelled_ports()
-
-
 # --- bound_ports: was wird tatsaechlich gebunden ---------------------------
 
 
@@ -163,14 +158,14 @@ def test_echter_repo_zustand_ist_ju_st_gruen():
     assert pdc.main([]) == 0
 
 
-def test_echte_ports_sind_die_vier_bekannten():
-    """Gegenueber A7/§9.8: die vier Dienste des Codespaces.
+def test_echte_ports_sind_die_drei_bekannten():
+    """Gegenueber A7/§9.8: die drei Dienste des Codespaces.
 
     Faellt einer weg, laeuft der Dienst ohne Label — oder der Check hat einen
     echten Port verloren (der Bug, den die erste Fassung hatte).
     """
     bound = set(pdc.bound_ports())
-    assert {4096, 7250, 8001, 9878} <= bound
+    assert {4096, 8001, 9878} <= bound
 
 
 # --- Negativtest als Prozess: der Weg, den Hook und CI fahren ----------------
@@ -201,12 +196,12 @@ def test_negativtest_end_to_end():
     ports = SCRIPT.parent / "ports.sh"
     orig = ports.read_text(encoding="utf-8")
     try:
-        ports.write_text(orig.replace('7250) echo "zerokey', '9999) echo "zerokey'), encoding="utf-8")
+        ports.write_text(orig.replace('8001) echo "glm2api', '9999) echo "glm2api'), encoding="utf-8")
         res = subprocess.run(
             [str(SCRIPT)], capture_output=True, text=True, timeout=60
         )
         assert res.returncode == 1, res.stdout + res.stderr
-        assert "7250" in res.stdout
+        assert "8001" in res.stdout
     finally:
         ports.write_text(orig, encoding="utf-8")
 

@@ -22,7 +22,3 @@ llm-proxies/antigravity-proxy/scripts/start.sh | note | Note that A && B || C is
 llm-proxies/antigravity-proxy/scripts/start.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
 llm-proxies/rebuild.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
 llm-proxies/scripts/bundle/start.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
-llm-proxies/scripts/start-zerokey.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
-llm-proxies/zerokey/start.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
-llm-proxies/zerokey/zerokey.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
-llm-proxies/zerokey/zerokey.sh | warning | TOOLS appears unused. Verify use (or export if used externally). | SC2034

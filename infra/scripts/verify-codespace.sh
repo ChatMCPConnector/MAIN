@@ -130,7 +130,7 @@ check_layer code  "Secret-Rechte: Werkzeug verdrahtet" bash -c '
 check_layer chain "Secrets nicht world-readable" bash -c '
   bad=""
   for f in config/passphrase config/secrets.enc config/secrets.manifest \
-           llm-proxies/glm2api/.env llm-proxies/zerokey/temp/users.json; do
+           llm-proxies/glm2api/.env; do
     [ -e "$f" ] || continue
     m="$(stat -c %a "$f" 2>/dev/null)"
     [ "$m" = "600" ] || bad="$bad $f($m)"
@@ -164,41 +164,6 @@ check_layer chain "antigravity antwortet"    bash -c '
       <<<"$ag_headers")
   printf "%s" "$r" | grep -q "\"content\"" || { echo "keine content-Antwort"; exit 1; }
   echo "gemini-3.8-flash liefert Antwort"'
-check_layer chain "zerokey Health"           bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:7250/v1/models && echo "GET /v1/models ok"'
-check_layer chain "zerokey DeepSeek Health" bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:7300/v1/models && echo "GET /v1/models ok"'
-check_layer chain "zerokey-Credentials"      bash -c '
-  f="$REPO_ROOT/llm-proxies/zerokey/temp/users.json"
-  [ -s "$f" ] || { echo "FEHLT: $f (Session-Cookies) — secrets.sh unlock ODER HAR aus ~/.config/landscape/"; exit 1; }
-  python3 -c "import json,sys;d=json.load(open(sys.argv[1]));u=d.get(\"chatgpt\",{}).get(\"main\",{});h=u.get(\"parsedFetch\",{}).get(\"headers\",{});sys.exit(0 if any(\"cookie\" in k.lower() for k in h) else 1)" "$f" \
-    && echo "ChatGPT-Cookies vorhanden" || { echo "kein Cookie-Header in users.json"; exit 1; }'
-check_layer chain "zerokey DeepSeek-Credentials" bash -c '
-  f="$REPO_ROOT/llm-proxies/zerokey/temp/users.json"
-  python3 -c "import json,sys;d=json.load(open(sys.argv[1]));u=d.get(\"deepseek\",{}).get(\"main\",{});h=u.get(\"parsedFetch\",{}).get(\"headers\",{});ok=any(\"cookie\" in k.lower() for k in h) and any(\"authorization\" in k.lower() for k in h);sys.exit(0 if ok else 1)" "$f" \
-    && echo "DeepSeek-Credentials vorhanden" || { echo "kein Cookie-/Authorization-Header fuer deepseek/main"; exit 1; }'
-# Der DeepSeek-Provider faehrt einen headed Chromium (browser-transport.js:102).
-# Ohne X-Server stirbt er mit "Missing X server or $DISPLAY" — live belegt am
-# 2026-10-03. Geprueft wird deshalb der X-Socket, den start-zerokey.sh per
-# ensure_x_display erzeugt, nicht der laufende Browser: der ist nach einem
-# Codespace-Neustart weg, der Socket auch, und beide muessen zusammenpassen.
-# Der Display-Check gilt nur im Browser-Transport. Seit 2026-10-03 laeuft
-# DeepSeek im Default auf 'api' (Direkt-Fetch + PoW), der keinen Browser und
-# keinen X-Server braucht — und der Browser-Transport hat den Fehler, dass er
-# parentMessageId verwirft und pro Turn eine eigene Conversation anlegt. Wer
-# auf 'browser' umstellt, braucht den Socket wieder.
-check_layer chain "zerokey DeepSeek-Display" bash -c '
-  t="${DEEPSEEK_TRANSPORT:-api}"
-  if [ "$t" = "api" ]; then echo "api-Transport: kein X-Server noetig (Transport=$t)"; exit 0; fi
-  d="${ZK_DISPLAY:-:120}"
-  [ -S "/tmp/.X11-unix/X${d#:}" ] && echo "X-Socket /tmp/.X11-unix/X${d#:} da (Transport=$t)" \
-    || { echo "kein X-Socket fuer $d bei Transport=$t — start-zerokey.sh --provider deepseek startet Xvfb selbst"; exit 1; }'
-
-# Kopplung Client-Budget <-> Proxy-Budget. Am 2026-09-30 lief eine Session
-# 20 Requests lang in eine Schleife, weil opencode limit.context=16000 TOKENS
-# bei compaction.reserved=15000 fuer nur ~1000 Token echte Arbeit hatte. Die
-# Logik steht in check-proxy-budget.py, damit sie einzeln lauffaehig und
-# millisekundenschnell pruefbar ist (ein Heredoc in bash -c hat hier zweimal
-# in Quote-Fehler gefuehrt).
-check_layer code  "zerokey Budget-Kopplung"  bash -c 'python3 "$REPO_ROOT/infra/scripts/check-proxy-budget.py"'
 
 # Die Quoten-Anzeige macht echte Upstream-Calls. Im --code-Modus gibt es
 # dafür weder Proxy noch Quota — dort bleibt sie leer, statt einen Network-
@@ -353,17 +318,13 @@ check_layer code  "CI-Pins decken Repo-Pins" bash -c '
   wf="$REPO_ROOT/.github/workflows/checks.yml"
   [ -f "$wf" ] || { echo "kein Workflow — ohne Agent laeuft kein Check"; exit 1; }
   miss=""
-  for must in "go-version-file: " "uv lock --check" "pnpm install --frozen-lockfile" "verify-codespace.sh --code"; do
+  for must in "go-version-file: " "uv lock --check" "verify-codespace.sh --code"; do
     grep -qF "$must" "$wf" || miss="$miss [$must]"
   done
   pyver=$(cat "$REPO_ROOT/llm-proxies/glm2api/.python-version" 2>/dev/null | tr -d "[:space:]")
   grep -q "python-version: .*${pyver}" "$wf" || miss="$miss [python != .python-version=$pyver]"
   [ -z "$miss" ] || { echo "Workflow deckt nicht ab:$miss"; exit 1; }
-  # pnpm-Pin muss der aus package.json sein, nicht eine eigene Zahl.
-  zk=$(grep -oE "pnpm@[0-9.]+" "$REPO_ROOT/llm-proxies/zerokey/package.json" | head -1 | cut -d@ -f2)
-  grep -q "corepack enable" "$wf" || miss="$miss [kein corepack]"
-  [ -z "$miss" ] || { echo "Workflow deckt nicht ab:$miss"; exit 1; }
-  echo "Go aus go.mod, Python $pyver, pnpm-Pin aus package.json ($zk), Lockfile-Drift + verify-code abgedeckt"'
+  echo "Go aus go.mod, Python $pyver, Lockfile-Drift + verify-code abgedeckt"'
 check_layer code  "Shellcheck-Baseline verdrahtet" bash -c '
   # PLAN Stufe 4: `bash -n` faengt Syntax, shellcheck faengt die echten Shell-
   # Fehler. Damit das Gate benutzbar bleibt, ist der heutige Bestand als

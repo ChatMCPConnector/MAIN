@@ -1,5 +1,0 @@
-AGENTS.md
-*.yaml
-# engine/*.md verfehlte das verschachtelte engine/extra/instructions.md
-# (Prosa-Instruktionen, die prettier umbrechen würde) — ** deckt es mit ab.
-engine/**/*.md

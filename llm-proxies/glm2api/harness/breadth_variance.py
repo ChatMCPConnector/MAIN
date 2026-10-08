@@ -54,9 +54,8 @@ AREAS: list[tuple[str, str]] = [
     ("config", r"(?<![\w./])config/"),
     ("infra", r"(?<![\w./])infra/"),
     ("glm2api", r"llm-proxies/glm2api/"),
-    ("zerokey", r"llm-proxies/zerokey/"),
     ("antigravity", r"llm-proxies/antigravity-proxy/"),
-    ("llm-proxies-other", r"llm-proxies/(?!glm2api/|zerokey/|antigravity-proxy/)"),
+    ("llm-proxies-other", r"llm-proxies/(?!glm2api/|antigravity-proxy/)"),
 ]
 
 ABORT = r"neue Nachricht|new message|neue Session|restart the session|schick(e)? (mir )?(einfach|bitte)"

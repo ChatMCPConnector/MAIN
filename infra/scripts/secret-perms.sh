@@ -25,15 +25,12 @@ SECRET_FILES=(
   config/secrets.enc
   config/secrets.manifest
   llm-proxies/glm2api/.env
-  llm-proxies/zerokey/temp/users.json
 )
 # Empfindliche Verzeichnisse, deren geerbte Default-ACL entfernt wird.
 SECRET_DIRS=(
   .runtime
   config
   llm-proxies/glm2api
-  llm-proxies/zerokey
-  llm-proxies/zerokey/temp
 )
 
 for f in "${SECRET_FILES[@]}"; do
