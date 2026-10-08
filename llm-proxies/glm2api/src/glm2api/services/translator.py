@@ -3148,14 +3148,34 @@ def convert_messages(
                             candidate = line.strip()
                             if re.fullmatch(r"[.\w/-]+\.(?:py|sh|go|json|ya?ml)", candidate):
                                 inventory_paths.append(candidate)
-                inspected = " ".join(args for name, args in calls
-                    if name == "read" or (name == "bash" and re.search(r"\b(?:cat|sed|head|tail|grep)\b", args)
-                        and not re.search(r"\b(?:git ls-files|du|ls)\b", args)))
+                inspected_args: list[str] = []
+                for name, args in calls:
+                    if name == "read":
+                        try:
+                            read_args = json.loads(args)
+                        except (ValueError, TypeError):
+                            continue
+                        path = str(read_args.get("filePath", "")) if isinstance(read_args, dict) else ""
+                        # Directory reads are listings, not implementation evidence.
+                        if re.search(r"\.(?:py|sh|go|json|ya?ml)$", path):
+                            inspected_args.append(path)
+                    elif name == "bash" and re.search(r"\b(?:cat|sed|head|tail|grep)\b", args) and not re.search(r"\b(?:git ls-files|du|ls)\b", args):
+                        inspected_args.append(args)
+                inspected = " ".join(inspected_args)
                 areas = (".devcontainer/", ".github/", ".opencode/", "infra/scripts/",
                          "infra/tests/", "llm-proxies/glm2api/src/", "llm-proxies/glm2api/tests/",
                          "llm-proxies/antigravity-proxy/internal/")
-                next_path = next((path for area in areas for path in inventory_paths
+                missing_areas = [area for area in areas if area not in inspected]
+                # Breadth first: finish one real implementation read per area
+                # before spending the whole context on setup/config scripts.
+                priority_areas = missing_areas or list(areas)
+                next_path = next((path for area in priority_areas for path in inventory_paths
                     if path.startswith(area) and path not in inspected), "")
+                if missing_areas:
+                    prompt += "\nObserved implementation coverage still missing: " + ", ".join(missing_areas)
+                    prompt += "\nTodo completion is not evidence: do not claim these areas inspected until real content results exist."
+                prompt += "\nFinal report must distinguish structural inventory from content sampling, list uninspected/excluded files, and never infer compressed Git-pack savings from uncompressed blob sums."
+                prompt += "\nFor checks piped through tail/head, set -o pipefail and inspect output; a pipeline exit alone does not prove the check passed."
                 if next_path:
                     prompt += "\nRepository audit missing implementation evidence; next inspection example: " + serialize_tool_call_block(
                         "bash", {"command": "sed -n '1,120p' " + next_path})

@@ -334,7 +334,7 @@ Stichproben der genannten Zahlen stimmen: `translator.py` 6725 Zeilen,
 - Upstream-Flakiness (SSE endet ohne `[DONE]`) wird durch Auto-Retry
   abgefedert; ihr disjunkter Anteil an der Session-Laufzeit ist nicht bestimmt.
 
-## Live-Nachprüfung 2026-10-08 (laufend)
+## Live-Nachprüfung 2026-10-08 (Zwischenstand; Akzeptanz offen)
 
 Exakter neuer Nutzerprompt, OpenCode `build`, `glm2api/glm-5.3`, explizit
 `--variant max`. SQLite-Parts werden alle zwei Sekunden read-only beobachtet;
@@ -378,7 +378,20 @@ unter `.runtime/main-audit-20261008-*`.
   nur die Korrekturrunde auf `reasoning_effort=low` (Quick-Mode), ohne die
   Client-Einstellung für spätere Requests zu ändern. Stream und Nonstream
   sind getestet; keine erfundene Datei-/Tool-Ausführung als Ersatz.
-- Testproxys temporär auf Loopback 18001/18002, mit Timer; der gemeinsam genutzte
+- Lauf D: Exit 0 nach 624,6 s; Checks tatsächlich ausgeführt (1841 Python-,
+  73 Infra-Tests und Go-Pakete grün). Die Modell-Pipelines nutzten kein
+  `pipefail`; unabhängig ausgeführtes `make check` bewahrt den Exit und ist
+  grün. Inhaltliche Akzeptanz dennoch offen: GLM-/Go-Implementierung und
+  Infra-Skripte nur gelistet/gezählt, nicht inhaltlich geprüft, aber Todos
+  bereits als erledigt markiert. Der Bericht lässt diese Lücken unerwähnt.
+- Der Anker priorisiert nun fehlende Bereiche vor weiteren Dateien desselben
+  Bereichs. `read` auf Verzeichnisse zählt nicht als Implementierungsbeleg.
+  Er fordert ehrliche Sampling-/Exclusion-Angaben und `pipefail` bei Checks.
+- Lauf E: am 17:06:44/17:07:17 Upstream-Code 10061, Rate-Limit-Backoff.
+  Unbegrenztes Kontingent hebt diese Upstream-Drosselung nicht auf; weitere
+  unmittelbare Voll-Läufe wurden deshalb nicht gestartet. Kein erfolgreicher
+  Gesamtaudit und keine Erfolgsquote sind belegt.
+- Testproxys temporär auf Loopback 18001/18002/18003, mit Timer; der gemeinsam genutzte
   Proxy auf 8001 wurde nicht unterbrochen. Dies ist kein neuer Soll-Service.
 
 ## Bekannte Befunde

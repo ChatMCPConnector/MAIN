@@ -135,11 +135,20 @@ def test_audit_anchor_survives_internal_correction_and_selects_observed_path():
         {'role': 'assistant', 'content': 'Tool call attempt: open'},
         {'role': 'user', 'content': '[internal_reference_notice] invalid turn0search1'},
     ]
+    messages.insert(-2, {'role': 'assistant', 'tool_calls': [{'id': 'directory', 'function': {
+        'name': 'read', 'arguments': '{"filePath":"/workspaces/MAIN/.devcontainer"}'}}]})
     prompt = convert_messages(messages, tools)[0]['content'][0]['text']
     assert 'Original task, still active: Analysiere das komplette MAIN Verzeichnis' in prompt
     assert "sed -n '1,120p' .devcontainer/setup.sh" in prompt
     assert 'Mark deleted/missing inventory entries explicitly' in prompt
     assert "sed -n '1,120p' infra/scripts/timeout.sh" not in prompt
+    messages.insert(-2, {'role': 'assistant', 'tool_calls': [{'id': 'read-setup', 'function': {
+        'name': 'bash', 'arguments': json.dumps({'command': "sed -n '1,120p' .devcontainer/setup.sh"})}}]})
+    prompt = convert_messages(messages, tools)[0]['content'][0]['text']
+    assert "sed -n '1,120p' infra/scripts/timeout.sh" in prompt
+    assert 'Todo completion is not evidence' in prompt
+    assert 'set -o pipefail' in prompt
+    assert 'uncompressed blob sums' in prompt
 
 
 def test_notice_leer_ohne_ziele():
