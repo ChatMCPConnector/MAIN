@@ -27,7 +27,7 @@ from typing import Callable, Iterator
 from ..config import AppConfig
 from ..logging_utils import debug_dump, redact_sensitive_text
 from .glm_auth import GLMAccessTokenManager, build_sign
-from ..utils.tool_protocol import BLOCKED_NATIVE_TOOL_NAMES, TOOL_DISCIPLINE_RECAP
+from ..utils.tool_protocol import BLOCKED_NATIVE_TOOL_NAMES, TOOL_DISCIPLINE_RECAP, serialize_tool_call_block
 from .translator import (
     GLMEventAccumulator,
     compress_history_messages,
@@ -458,6 +458,15 @@ def _build_blocked_tool_follow_up_payload(
     )
     if loop_notice:
         parts.append(loop_notice)
+    if "bash" in allowed:
+        # Native-reference loops need a full executable shape, not just
+        # more prose mentioning the same broken open/ref_id vocabulary.
+        parts.append(
+            "Recovery call format (replace the command with the next task-relevant "
+            "command; do not copy the example merely to repeat it):\n"
+            + serialize_tool_call_block("bash", {"command": "pwd"})
+            + "\nEmit this JSON protocol directly as text, not through a native browser call."
+        )
     correction = "\n\n".join(parts)
 
     if assistant_content:
@@ -898,7 +907,19 @@ class GLMWebClient:
         return store, lock
 
     def _conversation_key(self, payload: dict[str, object]) -> str:
-        return str(payload.get("conversation_id", "") or "")
+        explicit = str(payload.get("conversation_id", "") or "")
+        if explicit:
+            return "conversation:" + explicit
+        # OpenCode does not send conversation_id. Match feedback to an
+        # actual wire call ID instead of sharing the empty key across users.
+        messages = payload.get("messages", [])
+        if isinstance(messages, list):
+            for message in reversed(messages):
+                if isinstance(message, dict) and message.get("role") == "tool":
+                    call_id = str(message.get("tool_call_id", "") or "")
+                    if call_id and call_id != "system-notice":
+                        return "call:" + call_id
+        return ""
 
     def _store_pending_result_notice(
         self,
@@ -916,7 +937,19 @@ class GLMWebClient:
         notices = _turn_notice_texts(accumulator, list(blocked or []))
         if not notices:
             return
-        self._append_pending_result_notice_text(payload, " \n".join(notices))
+        text = " \n".join(notices)
+        if payload.get("conversation_id"):
+            self._append_pending_result_notice_text(payload, text)
+            return
+        # Only executable calls can carry feedback into the next client
+        # request. Blocked-only corrections are already present inline.
+        calls = list(getattr(accumulator, "delivered_tool_calls", []) or [])
+        for call in calls:
+            call_id = str(call.get("id", "") or "")
+            if call_id:
+                self._append_pending_result_notice_text(
+                    {"messages": [{"role": "tool", "tool_call_id": call_id}]}, text
+                )
 
     def _append_pending_result_notice_text(self, payload: dict[str, object], text: str) -> None:
         """T-30: Rohtext an die vorgemerkte Rueckmeldung derselben Konversation
@@ -926,17 +959,34 @@ class GLMWebClient:
             return
         store, lock = self._ensure_notice_store()
         key = self._conversation_key(payload)
+        if not key:
+            return
         with lock:
+            # Unconsumed calls must not grow a process-global store forever.
+            if key not in store and len(store) >= 256:
+                store.pop(next(iter(store)))
             existing = store.get(key, "")
             combined = f"{existing}\n{text}" if existing else text
-            store[key] = combined
+            store[key] = combined[-self._RESULT_NOTICE_MAX_CHARS:]
 
     def _take_pending_result_notice(self, payload: dict[str, object]) -> str:
         """T-30: vorgemerkte Rueckmeldung abholen (und verbrauchen)."""
         store, lock = self._ensure_notice_store()
         key = self._conversation_key(payload)
+        if not key:
+            return ""
         with lock:
-            return store.pop(key, "")
+            notice = store.pop(key, "")
+            # Sibling parallel tool results belong to this same round.
+            messages = payload.get("messages", [])
+            if isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, dict) and message.get("role") == "tool":
+                        sibling = "call:" + str(message.get("tool_call_id", "") or "")
+                        sibling_notice = store.pop(sibling, "")
+                        if not notice:
+                            notice = sibling_notice
+            return notice
 
     def _anchor_pending_result_notice(self, payload: dict[str, object]) -> None:
         """T-30: vorgemerkte Rueckmeldung an das LETZTE Tool-Result der
@@ -1290,6 +1340,17 @@ class GLMWebClient:
                         # enthaelt — sonst wuerde das Ergebnis verwerfen.
                         blocked_follow_ups += 1
                         follow_up = _build_blocked_tool_follow_up_payload(active_payload, accumulator, allowed_tool_names)
+                        if follow_up is not None and blocked_follow_ups >= 2 and (
+                            getattr(accumulator, "internal_reference_targets", [])
+                            or getattr(accumulator, "tool_call_id_targets", [])
+                        ):
+                            # The thinking browser repeatedly opens nonexistent
+                            # scratchpad IDs. Retry only this blocked-only round
+                            # in quick mode; preserve the caller's setting for
+                            # subsequent requests and never fabricate a tool.
+                            follow_up["reasoning_effort"] = "low"
+                            follow_up["deep_research"] = False
+                            self.logger.warning("Native reference recovery: switching blocked-only correction to quick mode")
                         if follow_up is None:
                             return result, accumulator.conversation_id
                         self.logger.warning(
@@ -1910,6 +1971,17 @@ class GLMWebClient:
                         # as final assistant text.
                         blocked_follow_ups += 1
                         follow_up = _build_blocked_tool_follow_up_payload(active_payload, accumulator, allowed_tool_names)
+                        if follow_up is not None and blocked_follow_ups >= 2 and (
+                            getattr(accumulator, "internal_reference_targets", [])
+                            or getattr(accumulator, "tool_call_id_targets", [])
+                        ):
+                            # The thinking browser repeatedly opens nonexistent
+                            # scratchpad IDs. Retry only this blocked-only round
+                            # in quick mode; preserve the caller's setting for
+                            # subsequent requests and never fabricate a tool.
+                            follow_up["reasoning_effort"] = "low"
+                            follow_up["deep_research"] = False
+                            self.logger.warning("Native reference recovery: switching blocked-only correction to quick mode")
                         if follow_up is None:
                             self.logger.warning("blocked_tool_follow_up_payload returned None; blocked=%s", blocked)
                             for chunk in finalize_chunks:

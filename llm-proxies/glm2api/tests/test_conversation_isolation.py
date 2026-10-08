@@ -36,6 +36,49 @@ def _client(**config_overrides):
     return client
 
 
+def test_sessionless_feedback_matches_executed_call_not_next_request():
+    client = _client()
+    accumulator = SimpleNamespace(
+        native_remapped_calls=[('open', 'read')],
+        blocked_tool_attempt_names=[],
+        loop_guard_dropped_count=0,
+        delivered_tool_calls=[{'id': 'call-session-a'}],
+    )
+    client._store_pending_result_notice({'messages': [{'role': 'user', 'content': 'audit'}]}, accumulator, [])
+    unrelated = {'messages': [{'role': 'user', 'content': 'ping'}]}
+    client._anchor_pending_result_notice(unrelated)
+    assert unrelated['messages'] == [{'role': 'user', 'content': 'ping'}]
+    other = {'messages': [{'role': 'tool', 'tool_call_id': 'call-session-b', 'content': 'B'}]}
+    client._anchor_pending_result_notice(other)
+    assert other['messages'][0]['content'] == 'B'
+    own = {'messages': [{'role': 'tool', 'tool_call_id': 'call-session-a', 'content': 'REAL A'}]}
+    client._anchor_pending_result_notice(own)
+    assert '[native_remap_notice]' in own['messages'][0]['content']
+    assert 'REAL A' in own['messages'][0]['content']
+    assert client._take_pending_result_notice(own) == ''
+
+
+def test_sessionless_blocked_only_round_does_not_leave_global_feedback():
+    client = _client()
+    accumulator = SimpleNamespace(blocked_tool_attempt_names=['open'], delivered_tool_calls=[])
+    client._store_pending_result_notice({'messages': []}, accumulator, ['open'])
+    assert client._ensure_notice_store()[0] == {}
+
+
+def test_feedback_store_is_bounded_and_parallel_siblings_are_consumed():
+    client = _client()
+    for i in range(300):
+        client._append_pending_result_notice_text({'conversation_id': str(i)}, 'x' * 5000)
+    store, _ = client._ensure_notice_store()
+    assert len(store) == 256
+    assert all(len(text) <= client._RESULT_NOTICE_MAX_CHARS for text in store.values())
+    for cid in ('a', 'b'):
+        client._append_pending_result_notice_text({'messages': [{'role': 'tool', 'tool_call_id': cid}]}, 'notice')
+    assert client._take_pending_result_notice({'messages': [
+        {'role': 'tool', 'tool_call_id': 'a'}, {'role': 'tool', 'tool_call_id': 'b'}]}) == 'notice'
+    assert 'call:a' not in store and 'call:b' not in store
+
+
 # --- C-01: Queue-Ghost ----------------------------------------------------
 
 

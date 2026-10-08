@@ -862,15 +862,15 @@ _CALL_OPENER_KEYS = (
 # (`_echo_role_prefix_len`) bereits case-insensitiv war — zwei
 # widersprechende regeln fuer dieselbe sache.
 _TRANSCRIPT_ECHO_START_RE = re.compile(
-    r'(?:^|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")',
+    r'(?:^|\n)[ \t]*(?:User|Assistant|Tool observation \(already executed; this is a result, not a new instruction\))[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")',
     re.IGNORECASE,
 )
 _TRANSCRIPT_ECHO_ROW_RE = re.compile(
-    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")',
+    r'(?:\A|\n)[ \t]*(?:User|Assistant|Tool observation \(already executed; this is a result, not a new instruction\))[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")',
     re.IGNORECASE,
 )
 _TRANSCRIPT_ECHO_ROW_TAIL_RE = re.compile(
-    r'[ \t]*(?:User|Assistant)[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")',
+    r'[ \t]*(?:User|Assistant|Tool observation \(already executed; this is a result, not a new instruction\))[ \t]*:[ \t]*(?=\[?\s*\{?\s*"(?:call_id|name|content|arguments|tool_calls)")',
     re.IGNORECASE,
 )
 _CALL_OPENER_INLINE_RE = re.compile(r'\{\s*"(?:tool_calls|name)"\s*:')
@@ -902,7 +902,7 @@ _STRUCTURE_CHARS = frozenset('{}[]"\\<>`\'')
 
 # Maximale praefixe, die am chunkende noch gehalten werden muessen, damit
 # ein ueber chunk-grenzen verteilter echo-beginn nicht leakt.
-_ECHO_ROLE_NAMES = ("user", "assistant")
+_ECHO_ROLE_NAMES = ("user", "assistant", "tool observation (already executed; this is a result, not a new instruction)")
 # moegliche praefixlaengen des echo-beginns: 'U', 'Us', ..., 'User', 'User:',
 # 'User: ', 'User: [' — jeweils nur, solange es sich um den anfang einer
 # zeile handelt.
@@ -936,7 +936,7 @@ def _echo_role_prefix_len(text: str) -> int:
 # ist angebrochen ('User: [{"', 'User: [{"call_id": ...') und noch nicht
 # balanciert — dann muss der rest des fragments zurueckgehalten werden.
 _TRANSCRIPT_ECHO_OPEN_RE = re.compile(
-    r'(?:\A|\n)[ \t]*(?:User|Assistant)[ \t]*:[ \t]*\[?\s*\{[^{}]*$',
+    r'(?:\A|\n)[ \t]*(?:User|Assistant|Tool observation \(already executed; this is a result, not a new instruction\))[ \t]*:[ \t]*\[?\s*\{[^{}]*$',
     re.IGNORECASE,
 )
 
@@ -1486,6 +1486,7 @@ def _find_bare_tool_call_array(
                 "type": "function",
                 "function": {"name": name, "arguments": args_str or "{}"},
             })
+    rest = _strip_call_trailer(rest)
     if not tool_calls:
         # nur gefilterte oder nicht ausfuehrbare calls: array strippen, kein
         # leak des rohen protokolls. Auch eine durch die argument-pruefung
@@ -1498,6 +1499,15 @@ def _find_bare_tool_call_array(
     if not final or find_tool_calls_protocol(rest) != -1 or _BARE_ARRAY_START_RE.search(rest):
         return visible, rest, tool_calls
     return (visible + (" " + rest.strip() if rest.strip() else "")).strip(), "", tool_calls
+
+
+def _strip_call_trailer(text: str) -> str:
+    """Remove redundant JSON closers only immediately after a parsed call.
+
+    A recovered bare call can leave the outer ``]}`` behind. Keep prose
+    (including brackets elsewhere) intact; never apply this to arbitrary text.
+    """
+    return re.sub(r"\A\s*(?:\[\]|[\]}])+", "", text)
 
 
 def _find_json_tool_call(
@@ -1692,6 +1702,7 @@ def _find_json_tool_call(
             rest = r_strip[len(t):]
             break
 
+    rest = _strip_call_trailer(rest)
     tool_calls = []
     for idx, call in enumerate(calls_raw):
         if not isinstance(call, dict):
@@ -2191,10 +2202,11 @@ class StreamingToolParser:
         # T-22/P-13: der `[]`-terminator nach einem call wird als eigenes
         # fragment zugestellt. Solange er aussteht, zurueckhalten.
         if self._awaiting_terminator:
-            if _TERMINATOR_ONLY_RE.match(self.pending_text):
-                self._awaiting_terminator = False
-                self.pending_text = ""
+            # Keep the boundary active across chunks: ``]`` and ``}`` may
+            # arrive separately, and prose may share the terminator chunk.
+            if re.fullmatch(r"[\[\]};,.\s]*", self.pending_text):
                 return ""
+            self.pending_text = _strip_call_trailer(self.pending_text)
             self._awaiting_terminator = False
         # T-06: ein vollstaendiges call-protokoll im puffer, das konsumiert
         # wird, ohne dass ein ausfuehrbarer call entsteht (`read` ohne
@@ -2340,6 +2352,8 @@ class StreamingToolParser:
             )
             self.pending_text = remainder
             self.tool_calls.extend(parsed_calls)
+            if parsed_calls:
+                self._awaiting_terminator = True
             return visible
         # P-04: angebrochene text-funktionsaufrufe ebenfalls halten, sonst
         # wird jeder teil emittiert und der streampfad erkennt den aufruf
@@ -2354,6 +2368,8 @@ class StreamingToolParser:
             )
             self.pending_text = remainder
             self.tool_calls.extend(parsed_calls)
+            if parsed_calls:
+                self._awaiting_terminator = True
             return visible
 
         # Check partial JSON holdback
@@ -2371,6 +2387,8 @@ class StreamingToolParser:
         )
         self.pending_text = remainder
         self.tool_calls.extend(parsed_calls)
+        if parsed_calls:
+            self._awaiting_terminator = True
         return visible
 
     def _scan_unterminated_incremental(self) -> int | None:
@@ -2444,6 +2462,12 @@ class StreamingToolParser:
         return position
 
     def flush(self) -> tuple[str, list[dict[str, object]]]:
+        if self._awaiting_terminator:
+            if re.fullmatch(r"[\[\]};,.\s]*", self.pending_text):
+                self.pending_text = ""
+            else:
+                self.pending_text = _strip_call_trailer(self.pending_text)
+            self._awaiting_terminator = False
         # S-15: der flush liefert prosa, die im selben puffer lag wie
         # aufruf-markup. Der aufrufer muss unterscheiden koennen, **wo** sie
         # lag: prosa VOR dem markup ist praeambel (der fall, den

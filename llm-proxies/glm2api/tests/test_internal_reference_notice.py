@@ -79,6 +79,69 @@ def test_notice_nennt_die_referenz_und_den_ausweg():
     assert "Never call these ids again" in notice
 
 
+def test_blocked_reference_recovery_contains_executable_json_without_invented_result():
+    from glm2api.services.glm_client import _build_blocked_tool_follow_up_payload
+    acc = _acc()
+    acc.consume_event(_native_open_event('bad', 'turn0search1'))
+    payload = _build_blocked_tool_follow_up_payload(
+        {'messages': [{'role': 'user', 'content': 'audit'}]}, acc, {'bash', 'read'}
+    )
+    assert payload is not None
+    correction = payload['messages'][-1]['content']
+    assert '{"tool_calls":[{"name":"bash","arguments":{"command":"pwd"}}]}[]' in correction
+    assert 'replace the command' in correction
+    assert 'NOT executed' in correction
+    assert 'If the task is now COMPLETE' in correction
+    assert all(message['role'] != 'tool' for message in payload['messages'])
+
+
+def test_pending_feedback_uses_final_wire_call_ids_for_recovered_calls():
+    import logging
+    from glm2api.services.glm_client import GLMWebClient
+    client = GLMWebClient.__new__(GLMWebClient)
+    client.logger = logging.getLogger('test.feedback.wire')
+    acc = _acc()
+    acc.consume_event({
+        'status': 'finish', 'parts': [{'logic_id': 'text-call', 'role': 'assistant',
+        'content': [{'type': 'text', 'text':
+        '{"tool_calls":[{"name":"bash","arguments":{"command":"pwd"}}]}[]'}]}]
+    })
+    chunks = acc.finalize('finish')
+    acc.blocked_tool_attempt_names = ['open']
+    client._store_pending_result_notice({'messages': []}, acc, ['open'])
+    wire_ids = []
+    for chunk in chunks:
+        if not chunk.startswith('data: {'):
+            continue
+        data = json.loads(chunk[6:])
+        for choice in data.get('choices', []):
+            wire_ids.extend(call['id'] for call in choice.get('delta', {}).get('tool_calls', []) if 'id' in call)
+    assert len(wire_ids) == 1
+    notice = client._take_pending_result_notice({'messages': [
+        {'role': 'tool', 'tool_call_id': wire_ids[0], 'content': 'REAL'}]})
+    assert '[blocked_tool_notice]' in notice
+    assert client._ensure_notice_store()[0] == {}
+
+
+def test_audit_anchor_survives_internal_correction_and_selects_observed_path():
+    from glm2api.services.translator import convert_messages
+    tools = [{'type': 'function', 'function': {'name': 'bash', 'parameters': {'type': 'object'}}}]
+    messages = [
+        {'role': 'user', 'content': 'Analysiere das komplette MAIN Verzeichnis'},
+        {'role': 'assistant', 'tool_calls': [{'id': 'inventory', 'function': {
+            'name': 'bash', 'arguments': '{"command":"git ls-files"}'}}]},
+        {'role': 'tool', 'tool_call_id': 'inventory', 'name': 'bash',
+         'content': '.devcontainer/setup.sh\ninfra/scripts/timeout.sh\n'},
+        {'role': 'assistant', 'content': 'Tool call attempt: open'},
+        {'role': 'user', 'content': '[internal_reference_notice] invalid turn0search1'},
+    ]
+    prompt = convert_messages(messages, tools)[0]['content'][0]['text']
+    assert 'Original task, still active: Analysiere das komplette MAIN Verzeichnis' in prompt
+    assert "sed -n '1,120p' .devcontainer/setup.sh" in prompt
+    assert 'Mark deleted/missing inventory entries explicitly' in prompt
+    assert "sed -n '1,120p' infra/scripts/timeout.sh" not in prompt
+
+
 def test_notice_leer_ohne_ziele():
     assert _internal_reference_notice_text([]) == ""
     assert _internal_reference_notice_text(None) == ""

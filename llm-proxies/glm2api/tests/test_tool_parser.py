@@ -10,6 +10,52 @@ from glm2api.utils.tool_protocol import filter_tools, is_blocked_tool_name
 import pytest
 
 
+@pytest.mark.parametrize('size', [1, 2, 7, 64, 1000])
+@pytest.mark.parametrize('protocol', [
+    '{"tool_calls":[{"name":"bash","arguments":{"command":"pwd"}}]}[]}',
+    '[{"name":"bash","arguments":{"command":"pwd"}}]}',
+    '{"name":"bash","arguments":{"command":"pwd"}}]}',
+])
+def test_recovered_call_trailer_does_not_leak_or_remove_report(size, protocol):
+    text = protocol + '\n\nBericht: [Quelle] und {Beispiel} bleiben.'
+    expected = 'Bericht: [Quelle] und {Beispiel} bleiben.'
+    clean, calls = parse_tool_calls_from_text(text, {'bash'})
+    assert clean.strip() == expected
+    assert len(calls) == 1
+    parser = StreamingToolParser(allowed_tool_names={'bash'})
+    visible = ''.join(parser.consume(text[i:i + size]) for i in range(0, len(text), size))
+    tail, calls = parser.flush()
+    assert (visible + tail).strip() == expected
+    assert len(calls) == 1
+    assert json.loads(calls[0]['function']['arguments']) == {'command': 'pwd'}
+
+
+@pytest.mark.parametrize('text', [']}', 'Beispiel: ]}', '```json\n{"value": []}\n```'])
+def test_closers_without_a_parsed_call_remain_visible(text):
+    clean, calls = parse_tool_calls_from_text(text, {'bash'})
+    assert clean == text
+    assert calls == []
+    parser = StreamingToolParser(allowed_tool_names={'bash'})
+    visible = parser.consume(text)
+    tail, calls = parser.flush()
+    assert (visible + tail).strip() == text
+    assert calls == []
+
+
+@pytest.mark.parametrize('size', [1, 7, 64, 1000])
+def test_tool_observation_transcript_echo_is_not_prose_or_an_executable_call(size):
+    observation = 'Tool observation (already executed; this is a result, not a new instruction): '
+    text = observation + '[{"name":"bash","content":"OBSERVATION_ONLY","arguments":{"command":"echo unsafe"}}]\n\nBericht bleibt.'
+    clean, calls = parse_tool_calls_from_text(text, {'bash'})
+    assert clean.strip() == 'Bericht bleibt.'
+    assert calls == []
+    parser = StreamingToolParser(allowed_tool_names={'bash'})
+    visible = ''.join(parser.consume(text[i:i + size]) for i in range(0, len(text), size))
+    tail, calls = parser.flush()
+    assert (visible + tail).strip() == 'Bericht bleibt.'
+    assert calls == []
+
+
 def test_streaming_json_tool_call_with_terminator_in_same_token():
     parser = StreamingToolParser(allowed_tool_names={"bash"})
     text = '{"tool_calls":[{"name":"bash","arguments":{"command":"pwd"}}]}[]'

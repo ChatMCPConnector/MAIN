@@ -1445,6 +1445,37 @@ def test_native_tool_handoff_closes_upstream_before_model_invents_result():
     assert "Invented analysis" not in output
 
 
+@pytest.mark.parametrize('stream', [True, False])
+def test_repeated_native_reference_recovers_in_quick_mode_without_mutating_caller(stream):
+    bad = {'status': 'finish', 'parts': [{'logic_id': 'bad', 'content': [{
+        'type': 'tool_calls', 'tool_calls': {'id': 'bad-open', 'name': 'open',
+        'arguments': {'open': [{'ref_id': 'turn0view0'}]}}
+    }]}]}
+    client, calls = _make_client([[bad], [bad], [_finish_event('corrected')]])
+    client.config.glm_blocked_tool_follow_ups = 3
+    sent = []
+    original = client._open_chat_stream
+    def capture(payload, **kwargs):
+        sent.append(dict(payload))
+        return original(payload, **kwargs)
+    client._open_chat_stream = capture
+    payload = {'model': 'glm-5.3', 'reasoning_effort': 'max', 'messages': [
+        {'role': 'user', 'content': 'inspect'}], 'tools': [{'type': 'function',
+        'function': {'name': 'read', 'parameters': {'type': 'object'}}}]}
+    if stream:
+        output = b''.join(client.stream_chat_completion(payload)).decode()
+        assert 'corrected' in output
+    else:
+        output, _ = client.chat_completion(payload)
+        assert output['choices'][0]['message']['content'] == 'corrected'
+    assert calls['count'] == 3
+    assert sent[0]['reasoning_effort'] == 'max'
+    assert sent[1]['reasoning_effort'] == 'max'
+    assert sent[2]['reasoning_effort'] == 'low'
+    assert sent[2]['deep_research'] is False
+    assert payload['reasoning_effort'] == 'max'
+
+
 def test_blocked_native_reference_corrects_before_reading_more_upstream_events():
     bad = {"status": "process", "parts": [{"logic_id": "bad", "content": [{
         "type": "tool_calls", "tool_calls": {"id": "bad-open", "name": "open",

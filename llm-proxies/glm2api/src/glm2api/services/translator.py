@@ -3117,7 +3117,10 @@ def convert_messages(
         # client's filesystem. Keep a concrete, schema-valid action closest
         # to the action point, rather than another negative open prohibition.
         latest_request = next((extract_text_content(m.get("content")) for m in reversed(messages)
-                               if m.get("role") == "user"), "")
+                               if m.get("role") == "user"
+                               and "[blocked_tool_notice]" not in extract_text_content(m.get("content"))
+                               and "[internal_reference_notice]" not in extract_text_content(m.get("content"))
+                               and "do NOT exist in this environment and were NOT executed" not in extract_text_content(m.get("content"))), "")
         audit_request = bool(re.search(r"(?i)(analys|audit).*(komplet|complete|alle date|all files|verzeichnis|repository)", latest_request))
         if audit_request and "bash" in available_tool_names:
             calls = [(str(call.get("function", {}).get("name", "")),
@@ -3136,6 +3139,27 @@ def convert_messages(
                     if call.get("function", {}).get("name") == "todowrite"), "")
                 if latest_todos:
                     prompt += "\nCurrent audit coverage checklist (pending means NOT DONE): " + str(latest_todos)
+                # Choose from client-observed inventory, never from the proxy's
+                # own cwd. Listing/size calls do not establish content coverage.
+                inventory_paths: list[str] = []
+                for m in messages:
+                    if m.get("role") == "tool":
+                        for line in extract_text_content(m.get("content")).splitlines():
+                            candidate = line.strip()
+                            if re.fullmatch(r"[.\w/-]+\.(?:py|sh|go|json|ya?ml)", candidate):
+                                inventory_paths.append(candidate)
+                inspected = " ".join(args for name, args in calls
+                    if name == "read" or (name == "bash" and re.search(r"\b(?:cat|sed|head|tail|grep)\b", args)
+                        and not re.search(r"\b(?:git ls-files|du|ls)\b", args)))
+                areas = (".devcontainer/", ".github/", ".opencode/", "infra/scripts/",
+                         "infra/tests/", "llm-proxies/glm2api/src/", "llm-proxies/glm2api/tests/",
+                         "llm-proxies/antigravity-proxy/internal/")
+                next_path = next((path for area in areas for path in inventory_paths
+                    if path.startswith(area) and path not in inspected), "")
+                if next_path:
+                    prompt += "\nRepository audit missing implementation evidence; next inspection example: " + serialize_tool_call_block(
+                        "bash", {"command": "sed -n '1,120p' " + next_path})
+                    prompt += "\nDo not treat listings as file reads. Mark deleted/missing inventory entries explicitly; do not invent their contents."
                 prompt += "\nOriginal task, still active: " + latest_request
         # T-29: zuerst der Tool-Disziplin-RECAP (Name + Quellen-Disziplin),
         # dann der Format-Reminder. Beide am ENDE des Prompts — der einzige
@@ -5466,6 +5490,9 @@ class GLMEventAccumulator:
                 self.tool_choice_mode,
             )
 
+        # Feedback must follow the final wire IDs, including calls recovered
+        # at finalize time; raw parser/native lists can contain dropped calls.
+        self.delivered_tool_calls = list(all_tool_calls)
         # S-10: der rand-links kommt zurueck (siehe oben) — er gehoert zu
         # dem text, der schon im stream steht. Ohne das wurde aus
         # 'Der Bericht' + ' ist fuer Sie.' ein 'Der Berichtist fuer Sie.'.
@@ -6115,6 +6142,7 @@ class GLMEventAccumulator:
                     f"[tool_choice_violation] The client required {contract} in this round, "
                     "but the model answered with text only. No tool was executed.\n\n" + final_content
                 )
+        self.delivered_tool_calls = list(all_tool_calls)
         message: dict[str, object] = {
             "role": "assistant",
             "content": None if all_tool_calls or not final_content else final_content,

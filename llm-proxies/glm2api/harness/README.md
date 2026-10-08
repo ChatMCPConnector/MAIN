@@ -173,9 +173,9 @@ Tests sind die persistenten Artefakte; das Bundle ist daraus reproduzierbar.
 
 Weitere Architektur-Risiken (unverändert, kein verifizierter Fix):
 
-- `_conversation_key()` nutzt bei fehlender `conversation_id` für alle
-  Clients denselben leeren Schlüssel: Pending-Notices sind bei parallelen
-  OpenCode-Sessions nicht zuverlässig isoliert.
+- Die frühere fehlende Pending-Notice-Isolation ohne `conversation_id`
+  ist in der Live-Nachprüfung vom 2026-10-08 über Wire-Call-IDs repariert
+  und regressionsgetestet (siehe unten).
 - Request-Deadlines werden an mehreren Stellen neu erzeugt und nicht in
   jedem SSE-Lese-/Korrekturpfad geprüft; ein echter globaler Wallclock-Cap
   ist dadurch nicht garantiert.
@@ -254,8 +254,9 @@ ohne Upstream-Throttle gemessen.
 ## T-31: die Session `ses_ee9f9f3ddffe0CDUZ4nrPfwXBW` (2026-10-07, lokal 13:00–13:19)
 
 Nutzerbefund: „da ist einiges schief gegangen … noch sehr langsam und träge
-und unreliable". Untersucht wurde die Session vollständig (DB-Tabellen
-`message`/`part`) **plus** der Proxy-Log ihres echten Zeitfensters. Erste
+und unreliable". Untersucht wurden die DB-Tabellen `message`/`part`
+**plus** der Proxy-Log ihres echten Zeitfensters. Der damalige Text-Dump
+kürzte einzelne Parts; er belegt keine vollständige inhaltliche Prüfung. Erste
 Verwechslungsquelle beim Lesen: der Proxy-Log schreibt **lokale** Zeit, die
 DB speichert UTC-Epoch — dieselben Ereignisse stehen dort zwei Stunden
 auseinander (`13:07:57` im Log == `11:07:57` in der DB).
@@ -266,15 +267,12 @@ auseinander (`13:07:57` im Log == `11:07:57` in der DB).
 11:50 als `12e926c` committet wurde (Schluss aus mtimes, nicht aus einem
 Log-Statement). **Die Fixes waren aktiv — und es war trotzdem langsam.**
 
-**Gemessen** (1100 s Wallclock, 21 Modellrunden, 22 Toolcalls; aus dem Log
-Runde für Runde aufsummiert):
-
-| Posten | Sekunden | Anteil |
-|---|---|---|
-| Korrektur-Ketten aus nicht abbildbaren `open`-Aufrufen | ~378 | 34 % |
-| finale Berichtsgenerierung (194 s in einer Runde) | ~194 | 18 % |
-| Upstream-SSE ohne `[DONE]` abgebrochen + Auto-Retry (126 s) | ~144 | 13 % |
-| normale Runden (10–20 s, eine mit 90 s) | ~420 | 38 % |
+**Gemessen:** 1100 s Wallclock, 21 Modellrunden und 22 Toolcalls.
+Im Log sind Korrektur-Ketten, ein nach 126 s abgeschnittener SSE-Strom mit
+Retry und eine 194-s-Berichtsrunde sichtbar. Die frühere Aufsummierung
+(378 + 194 + 144 + 420 s) überstieg die Wallclock und trennte parallele
+Anfragen nicht sauber. Sie ist deshalb keine belastbare, disjunkte
+Laufzeitaufteilung; die daraus berechneten Prozentwerte sind zurückgezogen.
 
 **Nicht abbildbare `open`-Aufrufe dieser Session: 14**, in zwei Formen:
 `ref_id=turn0view0`/`turn3view1`/`turn0search0` (scratchpad-/web-search-
@@ -285,10 +283,10 @@ Korrektur-Runde.
 **Ursache der `call_*`-Klasse (T-31).** Der gerenderte Tool-Result-Block
 enthielt die `call_id` des Clients wörtlich
 (`Tool observation …: [{"call_id": "call_4ad95ea0…", "name": "read", "content": …}]`).
-Das war die **einzige** Stelle im Prompt, an der das Modell seine eigenen
-ids zu sehen bekam — und es gab sie prompt als `open`-Ziel zurück. Der
-Hinweis „do not open call IDs" half nicht: dass glm-5.3 Verbote zuverlässig
-überstimmt, steht schon in `tool_protocol.py`.
+Damit waren die IDs im Prompt sichtbar und konnten als `open`-Ziel
+kopiert werden. Das ist ein plausibler Mechanismus, kein isoliert bewiesener
+Kausalvergleich. Der Hinweis „do not open call IDs" verhinderte die
+beobachteten Aufrufe nicht.
 
 **Reparatur (durch Regressionstests abgesichert, `tests/test_internal_reference_notice.py`):**
 
@@ -309,11 +307,14 @@ Hinweis „do not open call IDs" half nicht: dass glm-5.3 Verbote zuverlässig
 | die Session selbst (mit Fix-Stand) | 0 | 1100 | 22 | – | – | – | – | – | – | 7751 |
 | **T-31 `t31b`** | **0** | **251** | **18** | 3 | 13 | 6 | **12** | **5** | **5** | 4478 |
 
-Der Lauf ist der bisher **schnellste und breiteste** gemessene: 4,4× schneller
-als die Session und mehr gelesene Dateien als jeder Lauf der
-Breadth-Tabelle (12 statt max. 11), mit 5 Quellcode-Dateien aus 5 Bereichen —
-ohne Abbruch, ohne Protokollfehler, ohne Upstream-Abbruch. **`call_*` kam
-null Mal vor.** Der Bericht endet nicht mit einem Aufgaben-Abbruch.
+Der Replay dauerte 251 s statt 1100 s. Die ursprüngliche TUI-Session
+nutzte Variante `max`, der CLI-Replay keine explizite Variante; ein
+kontrollierter Speedup ist damit nicht belegt. Der Harness zählte 12
+inhaltlich gelesene Dateien aus 5 Bereichen, darunter 5 Quelldateien —
+keine vollständige Prüfung aller Dateien. Kein eigener Call-ID-Open und
+kein terminaler Transport-/Protokollfehler wurden beobachtet; dennoch
+waren sieben native Aufrufe korrekturbedürftig. Ein abgeschlossener Lauf
+belegt keine Zuverlässigkeit. Der Bericht endet nicht mit einem Aufgaben-Abbruch.
 Stichproben der genannten Zahlen stimmen: `translator.py` 6725 Zeilen,
 `setup.sh` 452, 338 getrackte Dateien, Pack 115,31 MiB,
 `.env.dist`↔`.env.example` 74 Diff-Zeilen, Entfernungs-Commit `2bd9161`
@@ -330,8 +331,55 @@ Stichproben der genannten Zahlen stimmen: `translator.py` 6725 Zeilen,
   das Modell sofort korrigiert.
 - `turn*search*`-Referenzen bleiben vorhanden — die notice wirkt nicht bei
   jedem Zug. Sie kosteten hier Sekunden statt der 100-s-Ketten vorher.
-- Upstream-Flakiness (SSE endet ohne `[DONE]`) ist nicht behebbar, nur
-  abgefedert (Auto-Retry); sie war 13 % der Session-Laufzeit.
+- Upstream-Flakiness (SSE endet ohne `[DONE]`) wird durch Auto-Retry
+  abgefedert; ihr disjunkter Anteil an der Session-Laufzeit ist nicht bestimmt.
+
+## Live-Nachprüfung 2026-10-08 (laufend)
+
+Exakter neuer Nutzerprompt, OpenCode `build`, `glm2api/glm-5.3`, explizit
+`--variant max`. SQLite-Parts werden alle zwei Sekunden read-only beobachtet;
+Proxy-Log und JSONL bleiben zusätzliche Evidenz. Rohdaten liegen gitignored
+unter `.runtime/main-audit-20261008-*`.
+
+- Lauf A (`ses_ee41c72a6ffelsLUGI0NdVNxqE`): Exit 1 nach 222,4 s,
+  vier Tools (drei Inventur-Bash-Calls, ein Todo), kein fertiger Bericht.
+  Wiederholte `turn0search1`-Opens erschöpften fünf Korrekturrunden.
+  Sichtbares `]}` und englische Selbst-Narration: Akzeptanz nicht erfüllt.
+- Lokal reproduziert: ein extrahierter Bare-Call lässt äußere `]}`-Klammern
+  im Resttext stehen. Parser-Reparatur entfernt redundante Closers nur an
+  einer tatsächlich erkannten Call-Grenze; Stream-Chunkgrößen 1/2/7/64/1000,
+  nachfolgender Bericht und Prosa-/Code-Gegenproben sind getestet.
+- Live-Log 16:24:44: die Fehlernotiz von A wurde einer separaten, toolfreien
+  Anfrage angehängt. `_conversation_key()` teilte ohne `conversation_id`
+  den leeren Schlüssel. Rückmeldungen werden jetzt an tatsächlich erzeugte
+  Call-IDs gebunden; fremde/neue Requests können sie nicht verbrauchen.
+  Speicher ist auf 256 Einträge und 1800 Zeichen pro Eintrag begrenzt.
+- Korrektur-Prompts enthalten nun zusätzlich eine vollständige ausführbare
+  JSON-Call-Form statt ausschließlich weiterer Verbote. Ob dies die native
+  Referenzschleife live behebt, muss die Nachprüfung zeigen.
+- Lauf B (`ses_ee4149f29ffedCPDF21zEN9CmE`): Exit 0 nach 468,2 s,
+  aber Akzeptanz nicht erfüllt: wiederholte Listings/Größenmessungen,
+  keine Implementierungsprüfung und keine ausgeführten Checks. Der Bericht
+  behauptet dennoch Abschluss und ungemessene ~100-MB-Historienersparnis;
+  sichtbares Fremdwort `toiletcleaning`. Ein früher SSE-Abbruch erforderte
+  Retry; native Open-Versuche wurden weiterhin korrigiert.
+- Die Originalaufgabe wird in internen Korrekturrunden jetzt nicht mehr
+  durch die synthetische Korrektur-Nachricht ersetzt. Der Audit-Anker wählt
+  als nächste Inspektion einen noch nicht gelesenen Implementierungspfad
+  ausschließlich aus einem echten Tool-Inventar (nicht aus Server-cwd).
+- Feedback bindet sich an die endgültigen ausgelieferten Call-IDs, auch
+  bei erst im Finalize-Pfad geretteten Text-Calls, nicht an Rohparser-IDs.
+- Lauf C (`ses_ee40a4683ffeNisLJIuyaiyX6N`): Exit 0 nach 580,4 s,
+  weiterhin unzureichende Implementierungsabdeckung, vorzeitige Berichtsteile
+  und sichtbares Echo von `Tool observation …`. Die bestehende Echo-Erkennung
+  kannte nur `User:`/`Assistant:`; sie erkennt nun auch das exakte
+  Tool-Observation-Label, ohne dessen Inhalt als neuen Call auszuführen.
+- Nach zwei blockierten-only Korrekturen mit internen Referenzen wechselt
+  nur die Korrekturrunde auf `reasoning_effort=low` (Quick-Mode), ohne die
+  Client-Einstellung für spätere Requests zu ändern. Stream und Nonstream
+  sind getestet; keine erfundene Datei-/Tool-Ausführung als Ersatz.
+- Testproxys temporär auf Loopback 18001/18002, mit Timer; der gemeinsam genutzte
+  Proxy auf 8001 wurde nicht unterbrochen. Dies ist kein neuer Soll-Service.
 
 ## Bekannte Befunde
 
