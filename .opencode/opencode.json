@@ -234,12 +234,12 @@
     "prune": true,
     "reserved": 2000
   },
-  "agent": {
+  "agents": {
     "build": {
-      "color": "warning"
+      "color": "#ffca85"
     },
     "plan": {
-      "color": "accent"
+      "color": "#a277ff"
     }
   }
 }
