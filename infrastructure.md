@@ -19,8 +19,8 @@ Secrets-Modell + Changelog). `AGENTS.md` = Verhaltensregeln für Agenten
 | Pfad | Zweck |
 |---|---|
 | `.devcontainer/` | devcontainer.json + setup.sh (läuft automatisch bei jedem Codespace-Bau), proxy-watchdog.sh. **Kein autosave-daemon** (Nutzerentscheidung 2026-09-27, siehe Changelog) |
-| `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
-| `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst) |
+| `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json (v1) |
+| `config/` | secrets.enc (verschlüsseltes Bundle) + Manifest + passphrase (Klartext, bewusst); `opencode-cli.json` = v2-TUI-Config |
 | `infra/` | **Werkzeugkasten:** `scripts/` (save/auth/secrets/ports/browser-*.sh, aliases.sh, config-watchdog.sh, verify-codespace.sh), `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | LLM-Proxies: **glm2api** (Port 8001, GLM-Haupt-Proxy) + **antigravity-proxy** (Port 9878, CloudCode OAuth) |
 
@@ -131,12 +131,18 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 - `mcp.opencode-sessions`: Session-Verwaltung direkt auf der SQLite-DB
   (`infra/mcp/opencode-sessions-mcp.js`, zero deps) — list/preview/delete/search,
   kaskadierende Löschung + Orphan-Event-Cleanup, schützt aktive/aktuelle/geteilte
-  Sessions, `confirm:true` Pflicht. Details: `infra/mcp/README.md`.
+  Sessions, `confirm:true` Pflicht. **Dual-Schema (v1 + v2):** erkennt
+  `session_v2` automatisch, liest v2 aus `session_v2`/`session_message` und
+  entfernt in migrierten DBs auch die v1-Altzeilen. Details: `infra/mcp/README.md`.
 - `agent/glm2api.md`: Arbeits-Subagent fest auf `glm2api/glm-5.3` (Haupt-Proxy).
 - `tui.json`: Maus-Capture **aus** (`mouse: false` ist Absicht: sobald eine App
   Mouse-Reporting einschaltet, behandelt das Terminal Mausereignisse als
   App-Eingaben — Text markieren und kopieren geht dann nicht mehr.
   **Nicht auf `true` ändern.**)
+- **v2-TUI-Config:** `config/opencode-cli.json` ist die v2-Entsprechung; setup.sh
+  installiert sie nach `~/.config/opencode/cli.json`. v1 ignoriert die Datei.
+  Die Keybinds sind 1:1 zu `tui.json` gemappt; `infra/tests/test_opencode_cli_config.py`
+  haelt beide Seiten synchron (Maus aus, Bildvorschau an, Halbseiten-Scrollen).
 - **Das Mausrad lässt sich in VS Code nicht umleiten.** Ohne Mouse-Reporting
   übersetzt **xterm.js das Rad in `up`/`down`** (live gemessen: die Testsession
   bekam `ESC[A`/`ESC[B`, siehe `infra/scripts/freebuff-pty.py`-Log). Eine
@@ -377,6 +383,29 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Release das Repo verändern und über den Autosave-Daemon die Historie
   beschreiben. Ein Codespace, ein Build — der laufende Server nutzt bis zum
   Neustart seine alte Version.
+
+### opencode v2 — Migrationsstand (2026-10-21)
+
+- **v1 bleibt der aktive Default.** Der Repo-Pin steht weiterhin auf `1.18.32`;
+  v2.1.2 wurde nur isoliert unter `/workspaces/opencode2` geprüft, nicht in MAIN
+  installiert. Ein v2-Server läuft nicht.
+- **DB-Schema v2:** `session_v2`/`session_message` statt `session`/`message`/`part`.
+  Migrierte DBs behalten die v1-Tabellen; neue Sessions schreiben nur v2.
+- **MCP ist portiert:** `infra/mcp/opencode-sessions-mcp.js` erkennt beide
+  Schemata, zählt v2-Parts aus `session_message.data.content` und löscht in
+  migrierten DBs beide Welten. Tests:
+  `uv run pytest -q infra/tests/test_opencode_sessions_mcp.py`.
+- **TUI-Config ist vorbereitet:** `config/opencode-cli.json` + Setup-Installation
+  nach `~/.config/opencode/cli.json`, Paritaetstest gegen `.opencode/tui.json`.
+- **Wrapper ist versionsbewusst:** v1 nutzt weiter `attach` auf Port 4096; v2
+  wird direkt durchgereicht, weil v2 kein `attach` hat und seinen Managed
+  Service selbst startet.
+- **Noch offen (Cutover, nicht Teil des Ist-Zustands):** v2-Service auf Port
+  `49374` statt des v1-Servers 4096; `OPENCODE_PASSWORD` bei `--server`-Nutzung;
+  native Entsprechung fuer `provider.opencode.blacklist` (v2 ignoriert das Feld);
+  manueller Sichttest von Mausrad-Halbseiten-Scrollen und Bildvorschau.
+- **Upstream-Install:** v2 nutzt `https://opencode.ai/v2/install`; der v1-Pin
+  bleibt bewusst unveraendert, bis der Cutover getestet ist.
 - **Git-Identität folgt dem Account** (siehe Secrets-/Auth-Abschnitt): `auth.sh
   setup` leitet Name + `<id>+<login>@users.noreply.github.com` aus dem Token ab und
   setzt sie **repo-lokal**; `auth.sh identity` zeigt sie. Beim Account-Wechsel

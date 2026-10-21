@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# opencode system wrapper: sorgt dafür, dass jeder Aufruf automatisch
-# an den zentralen opencode-Server (Port 4096) andockt.
-# Dadurch terminieren sich parallele Terminals NIEMALS gegenseitig.
+# opencode system wrapper: v1-Aufrufe docken automatisch an den zentralen
+# Server (Port 4096) an, damit parallele Terminals sich niemals gegenseitig
+# terminieren. v2 wird unveraendert durchgereicht (Managed Service, kein attach).
 set -u
 
-REAL_OPENCODE="/home/vscode/.opencode/bin/opencode-bin"
+REAL_OPENCODE="${OPENCODE_BIN:-/home/vscode/.opencode/bin/opencode-bin}"
 SERVER_URL="http://127.0.0.1:4096"
 REPO="/workspaces/MAIN"
+
+# v2 hat kein `attach` mehr und startet seinen Managed Service selbst. Der
+# Wrapper darf dort nichts umleiten; v1 behaelt den Multi-Client-Pfad unten.
+# Das `--version`-Format unterscheidet sich: v1 = "1.18.32", v2 = "opencode v2.1.2".
+VERSION_LINE="$("$REAL_OPENCODE" --version 2>/dev/null | head -n 1 || true)"
+VERSION_MAJOR="$(printf '%s\n' "$VERSION_LINE" | sed -nE 's/.*v?([0-9]+)\.[0-9]+\..*/\1/p')"
+if [ -n "$VERSION_MAJOR" ] && [ "$VERSION_MAJOR" -ge 2 ]; then
+  exec "$REAL_OPENCODE" "$@"
+fi
 
 # Nicht-TUI Befehle direkt durchreichen
 case "${1:-}" in

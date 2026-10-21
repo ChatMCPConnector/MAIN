@@ -79,7 +79,8 @@ installed_opencode_version() {
   local bin="$HOME/.opencode/bin/opencode-bin"
   command -v opencode >/dev/null 2>&1 && [ ! -x "$bin" ] && bin="$(command -v opencode)"
   [ -x "$bin" ] || return 1
-  "$bin" --version 2>/dev/null | tr -d '[:space:]'
+  # v1 liefert "1.18.32", v2 "opencode v2.1.2" — beide auf Semver normalisieren.
+  "$bin" --version 2>/dev/null | sed -nE 's/.*v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1
 }
 INSTALLED_OC="$(installed_opencode_version || true)"
 if [ -z "$INSTALLED_OC" ]; then
@@ -122,6 +123,14 @@ if [ -f "$HOME/.opencode/bin/opencode-bin" ]; then
   chmod +x "$HOME/.opencode/bin/opencode"
   echo "    opencode Multi-Client-Wrapper installiert."
 fi
+
+# v2 liest die TUI-Keybinds aus ~/.config/opencode/cli.json (v1 nutzt weiter
+# .opencode/tui.json und ignoriert die Datei). Die Datei wird deshalb schon vor
+# dem Cutover installiert: sie ist der getestete, versionsfeste Stand und
+# verhindert, dass beim Umschalten Keybinds/Maus versehentlich zurueckfallen.
+mkdir -p "$HOME/.config/opencode"
+install -m 644 "$REPO_ROOT/config/opencode-cli.json" "$HOME/.config/opencode/cli.json"
+echo "    opencode v2 CLI-Config installiert (~/.config/opencode/cli.json)."
 
 echo "==> [landscape] uv installieren (Python-Runtime für glm2api)..."
 # glm2api braucht Python 3.14 (pyproject: requires-python >=3.14) — das System-

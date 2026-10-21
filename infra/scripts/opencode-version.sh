@@ -36,7 +36,8 @@ installed_version() {
   local bin="$HOME/.opencode/bin/opencode-bin"
   command -v opencode >/dev/null 2>&1 && [ ! -x "$bin" ] && bin="$(command -v opencode)"
   [ -x "$bin" ] || return 1
-  "$bin" --version 2>/dev/null | tr -d '[:space:]'
+  # v1 liefert "1.18.32", v2 "opencode v2.1.2" — beide auf Semver normalisieren.
+  "$bin" --version 2>/dev/null | sed -nE 's/.*v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1
 }
 
 latest_version() {

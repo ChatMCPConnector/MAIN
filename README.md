@@ -9,8 +9,8 @@ im Repo.
 | Pfad | Zweck |
 |---|---|
 | `.devcontainer/` | Dev-Container-Definition + Setup-Skript |
-| `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json |
-| `config/` | verschlüsseltes Secrets-Bundle + Manifest |
+| `.opencode/` | opencode-Config: opencode.json (Provider/MCP), tui.json (v1) |
+| `config/` | verschlüsseltes Secrets-Bundle + Manifest; `opencode-cli.json` (v2-TUI) |
 | `infra/` | Werkzeugkasten: `scripts/`, `mcp/` (opencode-sessions MCP), `docs/` (Reverse-Engineering-Doku) |
 | `llm-proxies/` | LLM-Proxies: **glm2api** (GLM-Haupt-Proxy), **antigravity-proxy** (CloudCode OAuth) |
 

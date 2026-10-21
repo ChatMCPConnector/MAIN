@@ -21,6 +21,11 @@ Ein schlanker, hochperformanter **Model Context Protocol (MCP)** Server, der es 
 7. [Sicherheitsmechanismen & Kill-Schutz](#sicherheitsmechanismen--kill-schutz)
 8. [Troubleshooting & FAQ](#troubleshooting--faq)
 
+> **opencode v1 und v2:** Der Adapter erkennt das Schema automatisch. v1 nutzt
+> `session`/`message`/`part`, v2 `session_v2`/`session_message`. Migrierte
+> Datenbanken enthalten beide Welten; gelesen wird die v2-Sicht, beim Löschen
+> werden die Altzeilen mit entfernt.
+
 ---
 
 ## Vorteile & Architektur
@@ -31,6 +36,7 @@ Dieser MCP-Server bietet signifikante Vorteile:
 - **Keine externen npm-Abhängigkeiten**: Basiert ausschließlich auf Node.js-Standardmodulen (`child_process`, `fs`, `os`, `path`) und dem systemweiten `sqlite3`-CLI.
 - **Enorme Geschwindigkeit**: Direkte SQL-Abfragen statt langsamer CLI/API-Umwege.
 - **Gründliche Bereinigung**: opencode hinterlässt beim Löschen von Nachrichten oft hunderttausende Events (`event`, `event_sequence`), die Datenbanken auf hunderte Megabyte aufblähen (in der Praxis getestet: Reduktion von **574 MB auf 2 MB** und Entfernung von über 93.000 verwaisten Events in einem einzigen Durchlauf). Dieser Server bereinigt verwaiste Events kaskadierend und führt automatisch `VACUUM` aus.
+- **Dual-Schema**: v1 (`session`, `message`, `part`) und v2 (`session_v2`, `session_message`) werden ohne Migration oder API-Umweg gelesen. `db_stats.schema` sagt, welche Sicht aktiv ist.
 - **Integrierter Kill-Schutz**: Verhindert zuverlässig, dass ein aktiver opencode-Prozess oder die aktuelle Sitzung versehentlich gelöscht wird.
 
 ---
@@ -58,6 +64,15 @@ Dieser MCP-Server bietet signifikante Vorteile:
 3. **opencode SQLite-Datenbank**:
    Standardmäßig unter:
    `~/.local/share/opencode/opencode.db`
+
+### Tests (MAIN)
+
+```bash
+uv run pytest -q infra/tests/test_opencode_sessions_mcp.py
+```
+
+Die Tests bauen v1-/v2-Fixtures in `tmp_path`; sie brauchen weder eine echte
+Session noch eine laufende opencode-Instanz.
 
 ---
 
@@ -210,7 +225,7 @@ Ruft Metadaten, Statistiken, Tokenverbrauch und Kosten einer konkreten Session a
 ---
 
 ### 3. `search_sessions`
-Volltextsuche nach Begriffen sowohl im Session-Titel als auch in allen Nachrichtenblöcken (`part.data`).
+Volltextsuche nach Begriffen sowohl im Session-Titel als auch in den Nachrichtenblöcken. v1 durchsucht `part.data`, v2 `session_message.data`.
 
 #### Parameter
 | Name | Typ | Erforderlich | Beschreibung |
@@ -250,7 +265,8 @@ Liefert eine Statusübersicht über die SQLite-Datenbank: Dateigröße, Anzahl d
   "events": 28410,
   "active_opencode_processes": 2,
   "current_session_id": "ses_4a71bc9ef201d4a8",
-  "version": "1.1.0"
+  "schema": "v2",
+  "version": "2.0.0"
 }
 ```
 
@@ -298,18 +314,23 @@ Löscht Sessions dauerhaft und kaskadierend.
 
 #### Kaskadierender Löschprozess:
 Folgende Tabellen werden atomar in einer Transaktion bereinigt:
-1. `part` (zugehörig zu `message`)
-2. `message`
-3. `session_message`
+1. `part` (zugehörig zu `message`, nur v1)
+2. `message` (nur v1)
+3. `session_message` (v2)
 4. `session_input`
 5. `session_context_epoch`
 6. `session_share`
 7. `todo`
-8. `event` (zugehörig zur Session)
-9. `event_sequence` (zugehörig zur Session)
-10. `session`
-11. Verwaiste Events (`aggregate_id LIKE 'ses_%'`)
-12. Automatisches `VACUUM` (gibt Speicherplatz sofort an das Dateisystem frei).
+8. `session_inbox` / `session_pending`
+9. `instruction_entry` / `instruction_state`
+10. `event` (zugehörig zur Session)
+11. `event_sequence` (zugehörig zur Session)
+12. `session_v2` **und** `session` (migrierte DBs: beide)
+13. Verwaiste Events (`aggregate_id LIKE 'ses_%'`)
+14. Automatisches `VACUUM` (gibt Speicherplatz sofort an das Dateisystem frei).
+
+Die Kaskade prüft jede Tabelle vorher per `sqlite_master`; frische v2-Datenbanken
+ohne v1-Altzeilen und ohne `event`-Tabellen bleiben damit fehlerfrei.
 
 #### Parameter
 | Name | Typ | Erforderlich | Beschreibung |

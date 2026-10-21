@@ -20,7 +20,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const VERSION = "1.1.0";
+const VERSION = "2.0.0";
 
 /**
  * Diagnose nach stderr. Ein MCP-Server hat keinen Log-Kanal: was auf stdout
@@ -46,6 +46,35 @@ function findDb() {
 }
 
 const DB = findDb();
+
+let _schema = null;
+let _tables = null;
+
+function tableNames() {
+  if (_tables) return _tables;
+  ensureDb();
+  _tables = new Set(
+    sql("SELECT name FROM sqlite_master WHERE type='table'")
+      .map((row) => row.name),
+  );
+  return _tables;
+}
+
+function schema() {
+  if (_schema) return _schema;
+  _schema = tableNames().has("session_v2") ? "v2" : "v1";
+  return _schema;
+}
+
+const isV2 = () => schema() === "v2";
+const sessionTable = () => (isV2() ? "session_v2" : "session");
+const messageTable = () => (isV2() ? "session_message" : "message");
+const hasTable = (name) => tableNames().has(name);
+
+function parseModel(value) {
+  if (!isV2() || typeof value !== "string") return value || null;
+  try { return JSON.parse(value); } catch { return value; }
+}
 
 /** Sicheres SQL-Literal (Inline-Escaping, sqlite3-CLI bindet keine ?-Parameter). */
 function lit(v) {
@@ -208,7 +237,7 @@ function guessActiveSessionIds() {
   // Sessions nach Verzeichnis gruppiert, neueste zuerst
   const byDir = new Map();
   try {
-    const rows = sql("SELECT id, directory, time_updated, time_created FROM session ORDER BY time_updated DESC, time_created DESC");
+    const rows = sql(`SELECT id, directory, time_updated, time_created FROM ${sessionTable()} ORDER BY time_updated DESC, time_created DESC`);
     for (const r of rows) {
       if (!byDir.has(r.directory)) byDir.set(r.directory, r);
     }
@@ -224,13 +253,13 @@ function callerSessionId() {
   if (process.env.OPENCODE_PID && /^\d+$/.test(process.env.OPENCODE_PID)) {
     try {
       const cwd = fs.readlinkSync(`/proc/${process.env.OPENCODE_PID}/cwd`) || process.cwd();
-      const rows = sql("SELECT id, directory FROM session WHERE directory = ? ORDER BY time_updated DESC, time_created DESC LIMIT 1", cwd);
+      const rows = sql(`SELECT id, directory FROM ${sessionTable()} WHERE directory = ? ORDER BY time_updated DESC, time_created DESC LIMIT 1`, cwd);
       if (rows.length) return rows[0].id;
     } catch { /* fall through */ }
   }
   const cwd = process.cwd();
   try {
-    const rows = sql("SELECT id FROM session WHERE directory = ? ORDER BY time_updated DESC, time_created DESC LIMIT 1", cwd);
+    const rows = sql(`SELECT id FROM ${sessionTable()} WHERE directory = ? ORDER BY time_updated DESC, time_created DESC LIMIT 1`, cwd);
     if (rows.length) return rows[0].id;
   } catch { /* ignore */ }
   return null;
@@ -252,9 +281,9 @@ function toolListSessions(args) {
 
   const rows = sql(
     `SELECT s.id, s.title, s.directory, s.agent, s.model,
-            (SELECT count(*) FROM message m WHERE m.session_id = s.id) as message_count,
+            (SELECT count(*) FROM ${messageTable()} m WHERE m.session_id = s.id) as message_count,
             s.time_created, s.time_updated
-     FROM session s JOIN project p ON p.id = s.project_id ${whereSql}
+     FROM ${sessionTable()} s JOIN project p ON p.id = s.project_id ${whereSql}
      ORDER BY s.time_updated DESC, s.time_created DESC LIMIT ?`,
     ...params, Math.min(Number(args.limit) || 100, 500));
 
@@ -266,7 +295,7 @@ function toolListSessions(args) {
     title: r.title || "",
     directory: r.directory,
     agent: r.agent || null,
-    model: r.model || null,
+    model: parseModel(r.model),
     messages: r.message_count,
     created: new Date(Number(r.time_created)).toISOString(),
     updated: new Date(Number(r.time_updated)).toISOString(),
@@ -274,6 +303,44 @@ function toolListSessions(args) {
     active: active.has(r.id),
     is_current_session: r.id === mine,
   }));
+}
+
+function sharedSessionIds() {
+  const ids = new Set();
+  if (isV2()) {
+    for (const r of sql("SELECT id FROM session_v2 WHERE share_url IS NOT NULL")) ids.add(r.id);
+  }
+  if (hasTable("session_share")) {
+    for (const r of sql("SELECT session_id FROM session_share")) ids.add(r.session_id);
+  }
+  return ids;
+}
+
+function knownSessionTables() {
+  return ["session_v2", "session"].filter(hasTable);
+}
+
+function knownSessionIdsSql() {
+  return knownSessionTables().map((table) => `SELECT id FROM ${table}`).join(" UNION ");
+}
+
+function deleteCascadeSql(idList) {
+  const stmts = [];
+  if (hasTable("part") && hasTable("message")) {
+    stmts.push(`DELETE FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id IN (${idList}))`);
+  }
+  for (const table of [
+    "message", "session_message", "session_input", "session_context_epoch",
+    "session_share", "todo", "session_inbox", "session_pending",
+    "instruction_entry", "instruction_state", "event", "event_sequence",
+  ]) {
+    if (!hasTable(table)) continue;
+    const column = table === "event" || table === "event_sequence" ? "aggregate_id" : "session_id";
+    stmts.push(`DELETE FROM ${table} WHERE ${column} IN (${idList})`);
+  }
+  if (hasTable("session_v2")) stmts.push(`DELETE FROM session_v2 WHERE id IN (${idList})`);
+  if (hasTable("session")) stmts.push(`DELETE FROM session WHERE id IN (${idList})`);
+  return stmts.join(";\n") + ";";
 }
 
 function toolDeleteSessions(args) {
@@ -296,10 +363,7 @@ function toolDeleteSessions(args) {
   if (mine) protectedIds.add(mine);
 
   // shared sessions: opencode-share Links — standardmäßig schützen
-  let sharedIds = new Set();
-  try {
-    for (const r of sql("SELECT session_id FROM session_share")) sharedIds.add(r.session_id);
-  } catch { /* table may not exist */ }
+  const sharedIds = sharedSessionIds();
   if (args.keep_shared === true) {
     // explizit: shared NICHT schützen
   } else {
@@ -310,7 +374,7 @@ function toolDeleteSessions(args) {
   // Zielmenge bestimmen
   let targets = [];
   if (deleteIds.length) {
-    targets = sql(`SELECT id, title FROM session WHERE id IN (${deleteIds.map(q).join(",")})`);
+    targets = sql(`SELECT id, title FROM ${sessionTable()} WHERE id IN (${deleteIds.map(q).join(",")})`);
   } else {
     let where = [];
     const params = [];
@@ -320,7 +384,7 @@ function toolDeleteSessions(args) {
       params.push(Date.now() - Number(olderThanDays) * 86400000);
     }
     const whereSql = where.length ? "WHERE " + where.join(" AND ") : "";
-    targets = sql(`SELECT id, title FROM session ${whereSql}`, ...params);
+    targets = sql(`SELECT id, title FROM ${sessionTable()} ${whereSql}`, ...params);
   }
 
   const victims = targets.filter((t) => !protectedIds.has(t.id));
@@ -329,33 +393,29 @@ function toolDeleteSessions(args) {
   let orphansRemoved = 0;
   if (victims.length) {
     const idList = victims.map((v) => q(v.id)).join(",");
-    // Kaskade über alle session-bezogenen Tabellen
-    sqlRun(`
-      BEGIN;
-      DELETE FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id IN (${idList}));
-      DELETE FROM message WHERE session_id IN (${idList});
-      DELETE FROM session_message WHERE session_id IN (${idList});
-      DELETE FROM session_input WHERE session_id IN (${idList});
-      DELETE FROM session_context_epoch WHERE session_id IN (${idList});
-      DELETE FROM session_share WHERE session_id IN (${idList});
-      DELETE FROM todo WHERE session_id IN (${idList});
-      DELETE FROM event WHERE aggregate_id IN (${idList});
-      DELETE FROM event_sequence WHERE aggregate_id IN (${idList});
-      DELETE FROM session WHERE id IN (${idList});
-      COMMIT;
-    `);
+    sqlRun(`BEGIN;\n${deleteCascadeSql(idList)}\nCOMMIT;`);
   }
 
   // Events: opencode schreibt pro Message viele Events mit aggregate_id = session_id.
   // Nach Session-Löschung bleiben sonst Orphan-Events zurück (Hauptursache der DB-Größe).
-  const evOrphans = sql(`SELECT count(*) as c FROM event e WHERE e.aggregate_id LIKE 'ses_%' AND NOT EXISTS (SELECT 1 FROM session s WHERE s.id = e.aggregate_id)`)[0].c;
-  const seqOrphans = sql(`SELECT count(*) as c FROM event_sequence es WHERE es.aggregate_id LIKE 'ses_%' AND NOT EXISTS (SELECT 1 FROM session s WHERE s.id = es.aggregate_id)`)[0].c;
+  const knownIds = knownSessionIdsSql();
+  // Ohne verbleibende Session sind alle `ses_%`-Events Waisen; mit Sessions
+  // muessen beide Schemata (v1 und v2) als bekannt gelten.
+  const orphanClause = knownIds ? `aggregate_id NOT IN (${knownIds})` : "1=1";
+  let evOrphans = 0;
+  let seqOrphans = 0;
+  if (hasTable("event")) {
+    evOrphans = sql(`SELECT count(*) as c FROM event WHERE aggregate_id LIKE 'ses_%' AND ${orphanClause}`)[0].c;
+  }
+  if (hasTable("event_sequence")) {
+    seqOrphans = sql(`SELECT count(*) as c FROM event_sequence WHERE aggregate_id LIKE 'ses_%' AND ${orphanClause}`)[0].c;
+  }
   if (evOrphans > 0) {
-    sqlRun(`DELETE FROM event WHERE aggregate_id LIKE 'ses_%' AND aggregate_id NOT IN (SELECT id FROM session)`);
+    sqlRun(`DELETE FROM event WHERE aggregate_id LIKE 'ses_%' AND ${orphanClause}`);
     orphansRemoved += evOrphans;
   }
   if (seqOrphans > 0) {
-    sqlRun(`DELETE FROM event_sequence WHERE aggregate_id LIKE 'ses_%' AND aggregate_id NOT IN (SELECT id FROM session)`);
+    sqlRun(`DELETE FROM event_sequence WHERE aggregate_id LIKE 'ses_%' AND ${orphanClause}`);
     orphansRemoved += seqOrphans;
   }
   sqlRun("VACUUM;");
@@ -380,10 +440,7 @@ function toolDeletePreview(args) {
   if (keepActive) for (const id of guessActiveSessionIds()) protectedIds.add(id);
   const mine = callerSessionId();
   if (mine) protectedIds.add(mine);
-  let sharedIds = new Set();
-  try {
-    for (const r of sql("SELECT session_id FROM session_share")) sharedIds.add(r.session_id);
-  } catch { /* ignore */ }
+  const sharedIds = sharedSessionIds();
   if (args.keep_shared !== true) for (const id of sharedIds) protectedIds.add(id);
   for (const id of keepIds) protectedIds.add(id);
 
@@ -395,7 +452,7 @@ function toolDeletePreview(args) {
     params.push(Date.now() - Number(olderThanDays) * 86400000);
   }
   const whereSql = where.length ? "WHERE " + where.join(" AND ") : "";
-  const targets = sql(`SELECT id, title, time_updated FROM session ${whereSql}`, ...params);
+  const targets = sql(`SELECT id, title, time_updated FROM ${sessionTable()} ${whereSql}`, ...params);
   const victims = targets.filter((t) => !protectedIds.has(t.id));
   const skipped = targets.filter((t) => protectedIds.has(t.id));
   return {
@@ -414,19 +471,19 @@ function toolSessionInfo(args) {
   ensureDb();
   const id = args.session_id;
   if (!id) throw new Error("session_id erforderlich");
-  const s = sql("SELECT * FROM session WHERE id = ?", id);
+  const s = sql(`SELECT * FROM ${sessionTable()} WHERE id = ?`, id);
   if (!s.length) throw new Error(`Session ${id} nicht gefunden`);
   const sess = s[0];
-  const msgCount = sql("SELECT count(*) as c FROM message WHERE session_id = ?", id)[0].c;
-  const first = sql("SELECT time_created FROM message WHERE session_id = ? ORDER BY time_created ASC LIMIT 1", id)[0];
-  const last = sql("SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 1", id)[0];
-  const todoCount = sql("SELECT count(*) as c FROM todo WHERE session_id = ?", id)[0].c;
+  const msgCount = sql(`SELECT count(*) as c FROM ${messageTable()} WHERE session_id = ?`, id)[0].c;
+  const todoCount = hasTable("todo")
+    ? sql("SELECT count(*) as c FROM todo WHERE session_id = ?", id)[0].c
+    : 0;
   return {
     id: sess.id,
     title: sess.title || "",
     directory: sess.directory,
     parent_id: sess.parent_id || null,
-    model: sess.model || null,
+    model: parseModel(sess.model),
     agent: sess.agent || null,
     messages: msgCount,
     todos: todoCount,
@@ -447,16 +504,27 @@ function toolSearchSessions(args) {
   const term = (args.query || "").trim();
   if (!term) throw new Error("query erforderlich");
   const like = `%${term.replace(/[%_]/g, (m) => "\\" + m)}%`;
-  const rows = sql(
-    `SELECT s.id, s.title, s.directory, s.time_updated
-     FROM session s
-     WHERE (s.title LIKE ? ESCAPE '\\' OR s.id IN (
-       SELECT m.session_id FROM message m
-       JOIN part p ON p.message_id = m.id
-       WHERE p.data LIKE ? ESCAPE '\\'
-     ))
-     ORDER BY s.time_updated DESC LIMIT ?`,
-    like, like, [Math.min(Number(args.limit) || 30, 100)]);
+  const limit = [Math.min(Number(args.limit) || 30, 100)];
+  const rows = isV2()
+    ? sql(
+      `SELECT s.id, s.title, s.directory, s.time_updated
+       FROM session_v2 s
+       WHERE (s.title LIKE ? ESCAPE '\\' OR s.id IN (
+         SELECT m.session_id FROM session_message m
+         WHERE m.data LIKE ? ESCAPE '\\'
+       ))
+       ORDER BY s.time_updated DESC LIMIT ?`,
+      like, like, limit)
+    : sql(
+      `SELECT s.id, s.title, s.directory, s.time_updated
+       FROM session s
+       WHERE (s.title LIKE ? ESCAPE '\\' OR s.id IN (
+         SELECT m.session_id FROM message m
+         JOIN part p ON p.message_id = m.id
+         WHERE p.data LIKE ? ESCAPE '\\'
+       ))
+       ORDER BY s.time_updated DESC LIMIT ?`,
+      like, like, limit);
   const mine = callerSessionId();
   return rows.map((r) => ({
     id: r.id,
@@ -469,15 +537,32 @@ function toolSearchSessions(args) {
 
 function toolDbStats(args) {
   ensureDb();
-  const sessions = sql("SELECT count(*) as c FROM session")[0].c;
-  const messages = sql("SELECT count(*) as c FROM message")[0].c;
-  const parts = sql("SELECT count(*) as c FROM part")[0].c;
-  const events = sql("SELECT count(*) as c FROM event")[0].c;
+  let sessions;
+  let messages;
+  let parts;
+  if (isV2()) {
+    sessions = sql("SELECT count(*) as c FROM session_v2")[0].c;
+    messages = sql("SELECT count(*) as c FROM session_message")[0].c;
+    parts = sql(
+      `SELECT COALESCE(SUM(CASE
+         WHEN json_valid(data) AND json_type(data, '$.content') = 'array'
+           THEN json_array_length(data, '$.content')
+         WHEN json_valid(data) AND json_type(data, '$.text') = 'text' THEN 1
+         ELSE 0 END), 0) as c
+       FROM session_message`,
+    )[0].c;
+  } else {
+    sessions = sql("SELECT count(*) as c FROM session")[0].c;
+    messages = sql("SELECT count(*) as c FROM message")[0].c;
+    parts = sql("SELECT count(*) as c FROM part")[0].c;
+  }
+  const events = hasTable("event") ? sql("SELECT count(*) as c FROM event")[0].c : 0;
   let dbSize = null;
   try { dbSize = fs.statSync(DB).size; } catch { /* ignore */ }
   return {
     db_path: DB,
     db_size_mb: dbSize ? Math.round(dbSize / 1048576 * 10) / 10 : null,
+    schema: schema(),
     sessions, messages, parts, events,
     active_opencode_processes: activeOpencodePids().length,
     current_session_id: callerSessionId(),
