@@ -69,7 +69,7 @@ def test_global_und_nicht_pro_datei_grossgeschrieben_ok():
 
 
 def test_global_und_einzeldatei_behauptung_schlaegt_an():
-    why = gcc.line_problem("global", "# Der Floor gilt fuer check-proxy-budget.py — der Bug")
+    why = gcc.line_problem("global", "# Der Floor gilt fuer einzeldatei.py — der Bug")
     assert why is not None
 
 

@@ -17,23 +17,10 @@ alias csecret='bash /workspaces/MAIN/infra/scripts/codespace-secret.sh'
 # pushte unabhaengig vom Arbeitsgang. Gesichert wird jetzt ausdruecklich per
 # ./infra/scripts/save.sh am Ende eines Arbeitsgangs (Commit + Push + Drive-Backup).
 
-# opencode Server-Client Wrapper: verbindet mehrere Terminal-Tabs mit dem
-# zentralen Server (Port 4096), damit sich parallele Sessions nie gegenseitig abbrechen.
-opencode() {
-  local server_url="http://127.0.0.1:4096"
-  case "${1:-}" in
-    serve|attach|models|stats|export|import|completion|agent|upgrade|uninstall|db|mcp|plugin|providers|debug|github|pr|run)
-      command opencode "$@"
-      return $?
-      ;;
-  esac
-
-  if curl -sf -m 2 "$server_url/" >/dev/null 2>&1; then
-    command opencode attach "$server_url" "$@"
-  else
-    command opencode "$@"
-  fi
-}
+# opencode Server-Client-Wrapper: liegt nach setup.sh unter
+# ~/.opencode/bin/opencode (Quelle: infra/scripts/opencode-wrapper.sh) und wird
+# über den PATH oben verwendet. Keine Shell-Funktion mehr — zwei Kopien der
+# Attach-Logik konnten auseinanderlaufen.
 
 opencode-server() {
   /workspaces/MAIN/infra/scripts/opencode-server.sh "$@"

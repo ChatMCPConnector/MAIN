@@ -20,9 +20,11 @@ Zusatzfund: Die UI sendet `"selected_model": "glm-5.3"` in meta_data.
 ## Methodik (CDP, keine externen Dependencies)
 
 1. Playwright-Chromium (Repo-Runtime) mit CDP :9222 auf chatglm.cn
-2. `reverse-engeneer/capture.py`: minimaler CDP-WebSocket-Client (raw socket,
-   Python-stdlib) — zeichnet `Network.requestWillBeSent`-POST-Bodies auf (JSONL)
-3. `reverse-engeneer/cdp.py`: JS-Injection (Runtime.evaluate) für UI-Automatisierung:
+2. `infra/docs/reverse-engineering/capture.py`: minimaler CDP-WebSocket-Client
+   (raw socket, Python-stdlib) — zeichnet `Network.requestWillBeSent`-POST-Bodies
+   auf (JSONL)
+3. `infra/docs/reverse-engineering/cdp.py`: JS-Injection (Runtime.evaluate) für
+   UI-Automatisierung:
    - `.think-mode-trigger` (Modell/Stufen-Button) klicken
    - `.think-mode-item.has-submenu` hovern ( öffnet Stufen-Submenü)
    - Stufen-Container `.think-mode-item` je Stufe klicken

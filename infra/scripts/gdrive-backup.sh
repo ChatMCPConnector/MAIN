@@ -97,8 +97,8 @@ cmd_backup() {
   # unterscheidbar — der einzige Bruch in einem sonst fail-closed Skript. Der
   # Push bleibt trotzdem sicher: save.sh faengt den Fehler ab.
   require_auth || exit 1
-  # Lock: der Autosave-Daemon feuert alle 30 Min ungefragt, dazu kommt jeder
-  # manuelle 'gdrive backup'. Ohne Lock teilen sich zwei Läufe dieselbe Datei
+  # Lock: jeder 'save.sh' ruft das Backup, dazu kommt jeder manuelle
+  # 'gdrive backup'. Ohne Lock teilen sich zwei Läufe dieselbe Datei
   # (.runtime/MAIN.new.bundle) — das 'rm -f' am Ende des einen löscht die Datei,
   # die der andere gerade hochlädt. Live passiert am 2026-09-26 17:18:
   # "Failed to calculate src hash: open .runtime/MAIN.bundle: no such file".

@@ -31,7 +31,7 @@ case "${1:-status}" in
     disown "$SERVER_PID" 2>/dev/null || true
     echo "$SERVER_PID" > "${PIDFILE}"
 
-    for i in $(seq 1 20); do
+    for _ in $(seq 1 20); do
       if curl -sf -m 2 "${HEALTH_URL}" >/dev/null 2>&1; then
         echo "[opencode-server] OK: Läuft auf Port ${PORT} (PID: ${SERVER_PID})."
         exit 0

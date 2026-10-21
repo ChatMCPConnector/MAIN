@@ -16,8 +16,8 @@
 # setup.sh liest ihn von dort, es gibt keine zweite Zahl.
 #
 # Upgrades bleiben bewusst ein Schritt (ein Commit), kein Auto-Tracking: ein
-# automatisch nachgeführter Pin würde bei jedem neuen Release das Repo und über den
-# Autosave-Daemon die Historie verändern.
+# automatisch nachgeführter Pin würde bei jedem neuen Release ungefragte
+# Repo-Aenderungen erzeugen.
 #
 # Rückweg eines Bumps: ./infra/scripts/opencode-version.sh bump <vorherige Version>
 set -uo pipefail

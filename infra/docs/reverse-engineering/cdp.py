@@ -57,5 +57,7 @@ if __name__ == "__main__":
         else: print(json.dumps(res.get("result", {}).get("value"))[:4000])
     elif cmd == "screenshot":
         r = c.send("Page.enable"); r = c.send("Page.captureScreenshot", {"format": "png"})
-        open("/workspaces/reverse-engeneer/screen.png", "wb").write(base64.b64decode(r["result"]["data"]))
-        print("saved screen.png")
+        out = "/tmp/opencode/screen.png"
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        open(out, "wb").write(base64.b64decode(r["result"]["data"]))
+        print("saved", out)

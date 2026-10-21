@@ -59,7 +59,7 @@ if [ "$ONLY_PUSH" -eq 0 ]; then
     # haelt den Save auch dann am Laufen, wenn eine geerbte Repo-Config das
     # Signieren reaktiviert.
     if ! git -c commit.gpgsign=false commit -m "$MSG" --quiet; then
-      echo "COMMIT FEHLGESCHLAGEN (un signiert nicht möglich)."
+      echo "COMMIT FEHLGESCHLAGEN (unsigniert nicht möglich)."
       exit 1
     fi
     echo "Committed: $MSG"

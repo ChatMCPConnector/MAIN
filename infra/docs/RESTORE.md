@@ -23,13 +23,13 @@ läuft evtl. auf altem Stand oder ist leer).
 ### 1. Bundle herunterladen
 
 **Variante Browser (empfohlen, kein Tool nötig):**
-drive.google.com → Ordner `MAIN-backup` → `MAIN.backup.bundle`
-(oder `MAIN.bundle`) herunterladen → per **Drag & Drop in den Codespace-Explorer**
+drive.google.com → Ordner `MAIN-backup` → `MAIN.bundle`
+(Fallback: `MAIN.backup.bundle`) herunterladen → per **Drag & Drop in den Codespace-Explorer**
 hochladen (landet unter `/workspaces/`).
 
 **Variante rclone (falls rclone + Google-Login im Codespace vorhanden):**
 ```bash
-rclone copy gdrive:MAIN-backup/MAIN.backup.bundle /workspaces --drive-chunk-size 32M
+rclone copy gdrive:MAIN-backup/MAIN.bundle /workspaces --drive-chunk-size 32M
 ```
 
 ### 2. Repo-Inhalt ersetzen
@@ -44,7 +44,7 @@ mv MAIN MAIN.old            # altes (leeres/minimales) Repo beiseite
 mv MAIN-restored MAIN       # Bundle-Inhalt an den kanonischen Platz
 cd MAIN
 git remote remove origin 2>/dev/null || true
-git remote add origin https:/​/github.com/<NEUER-ACCOUNT>/MAIN
+git remote add origin https://github.com/<NEUER-ACCOUNT>/MAIN
 ```
 
 > Wenn `/workspaces/MAIN` komplett leer ist (kein Git-Repo), einfach das `mv MAIN MAIN.old` weglassen.
@@ -74,7 +74,7 @@ bash .devcontainer/setup.sh
 Das stellt automatisch her: Systempakete, opencode, uv, Firefox-Browser-Runtime,
 rclone, **Secrets-Unlock** (alle API-Keys, LLM-Proxy-Credentials,
 rclone-Conf — Passphrase liegt als `config/passphrase` im Bundle), Git-Auth,
-MCP-Registrierung, glm2api-Proxy inkl. Start, Autosave- + Watchdog-Daemons.
+MCP-Registrierung, glm2api-Proxy inkl. Start, Proxy- und Config-Watchdog.
 
 Danach: Codespace einmal **Rebuild** (oder weiterarbeiten) — alles läuft wie vorher.
 
@@ -108,6 +108,7 @@ unter `/tmp/opencode/MAIN-restored` — einzelne Dateien/Commits daraus
 - **Bundle-Integrität:** Jedes Bundle wurde vor dem Upload MD5-verifiziert.
   Zur Sicherheit: `git bundle verify /workspaces/MAIN.backup.bundle`.
 - **Backup-Alter:** Bundles werden nur bei neuen Commits erzeugt — der Stand
-  entspricht dem letzten gepushten Commit (max. 30 Min plus Rotationszyklus).
+  entspricht dem letzten `save.sh`-Lauf. Ohne weiteren Save bleibt es alt;
+  einen Hintergrund-Daemon gibt es bewusst nicht.
 - **Passphrase:** liegt im Klartext im Bundle (`config/passphrase`) — das ist
   Absicht (Komfort > Sicherheit, siehe infrastructure.md).

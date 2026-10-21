@@ -207,8 +207,10 @@ check_layer chain "freebuff kein Update-Rest"  bash -c '
 
 echo "== 5. Daemons =="
 # Kein autosave-daemon-Check mehr (Nutzerentscheidung 2026-09-27)
-check_layer chain "config-watchdog"          bash -c 'pgrep -f "config-watchdog.sh" >/dev/null && echo "laeuft"'
-check_layer chain "proxy-watchdog"           bash -c 'pgrep -f "proxy-watchdog.sh" >/dev/null && echo "laeuft"'
+# Klammer-Muster gegen den Selbsttreffer: `pgrep -f "config-watchdog.sh"`
+# matcht auch die eigene bash -c-Zeile und waere damit immer gruen.
+check_layer chain "config-watchdog"          bash -c 'pgrep -f "[c]onfig-watchdog.sh" >/dev/null && echo "laeuft"'
+check_layer chain "proxy-watchdog"           bash -c 'pgrep -f "[p]roxy-watchdog.sh" >/dev/null && echo "laeuft"'
 
 echo "== 6. Browser-Runtime =="
 check_layer chain "Firefox installiert"      bash -c '[ -x .runtime/firefox/firefox ] && .runtime/firefox/firefox --version 2>/dev/null | head -1'

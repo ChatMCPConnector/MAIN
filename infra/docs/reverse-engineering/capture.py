@@ -8,10 +8,13 @@ import base64
 import urllib.request
 
 WS_URL = None
+PAGE_URL = ""
 # 1) CDP-WebSocket-Endpoint der Chat-Seite holen
 for p in json.loads(urllib.request.urlopen("http://127.0.0.1:9222/json").read()):
     if p["type"] == "page" and "chatglm.cn" in p.get("url", ""):
         WS_URL = p["webSocketDebuggerUrl"]; PAGE_URL = p["url"]
+if WS_URL is None:
+    raise SystemExit("keine chatglm-Seite auf CDP :9222 offen")
 print(f"Ziel: {PAGE_URL}", flush=True)
 
 # 2) WebSocket per stdio-Proxy? Nein — direkter WS-Client mit stdlib reicht nicht.
@@ -66,7 +69,9 @@ def send(method, params=None):
 send("Network.enable")
 print("Capture läuft — jetzt im Browser die Reasoning-Stufen durchschalten + je 1 Nachricht senden. Ctrl+C zum Beenden.", flush=True)
 
-out = open("/workspaces/reverse-engeneer/reasoning-capture.jsonl", "a")
+out_path = "/tmp/opencode/reasoning-capture.jsonl"
+os.makedirs(os.path.dirname(out_path), exist_ok=True)
+out = open(out_path, "a")
 requests = {}
 while True:
     try:

@@ -7,8 +7,6 @@ infra/scripts/firefox-install.sh | warning | Declare and assign separately to av
 infra/scripts/freebuff-install.sh | warning | Declare and assign separately to avoid masking return values. | SC2155
 infra/scripts/gdrive-backup.sh | warning | Use 'cd ... || exit' or 'cd ... || return' in case cd fails. | SC2164
 infra/scripts/glm2api.sh | note | Double quote to prevent globbing and word splitting. | SC2086
-infra/scripts/glm2api.sh | warning | OUTPUT_LOG_GENERATIONS appears unused. Verify use (or export if used externally). | SC2034
-infra/scripts/opencode-server.sh | warning | i appears unused. Verify use (or export if used externally). | SC2034
 infra/scripts/ports.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015
 infra/scripts/save.sh | warning | Use 'cd ... || exit' or 'cd ... || return' in case cd fails. | SC2164
 infra/scripts/secret-perms.sh | note | Note that A && B || C is not if-then-else. C may run when A is true. | SC2015

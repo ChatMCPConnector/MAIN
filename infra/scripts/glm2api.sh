@@ -19,7 +19,6 @@ OUTPUT_LOG="$LOG_DIR/glm2api_output.log"
 # jetzt beim Start rotiert und zur Laufzeit von einem Größenwächter
 # gekappt — es gibt im Container weder logrotate noch systemd.
 OUTPUT_LOG_MAX_BYTES=20971520   # 20 MiB
-OUTPUT_LOG_GENERATIONS=2
 GUARD_PID_FILE="$LOG_DIR/.output_log_guard.pid"
 HOST="127.0.0.1"
 PORT=8001
