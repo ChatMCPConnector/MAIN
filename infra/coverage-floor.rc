@@ -14,10 +14,9 @@
 [run]
 source = infra/scripts
 # `source` akzeptiert keinen Dateipfad, deshalb wird gefiltert statt eingegrenzt.
-# Nur echte Ausnahmen, beide mit Begruendung in pyproject.toml.
+# Nur eine echte Ausnahme, mit Begruendung in pyproject.toml.
 omit =
     infra/scripts/freebuff-pty.py
-    infra/scripts/watch-subagent.py
 branch = True
 
 [report]

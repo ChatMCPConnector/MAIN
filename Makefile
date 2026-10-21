@@ -119,9 +119,9 @@ cov:
 ## cov-floor: Gate fuer die getesteten infra-Skripte. Der Floor ist GLOBAL
 # (fail_under auf TOTAL ueber alle in coverage-floor.rc eingeschlossenen
 # Dateien), NICHT pro Datei — eine fruehere Fassung dieses Kommentars behauptete
-# das Gegenteil. freebuff-pty.py (576 LOC, PTY + Subprozesse) und
-# watch-subagent.py sind per `omit` in infra/coverage-floor.rc ausgenommen
-# (ohne PTY-Mock waere eine hohe Zahl Pseudosicherheit, PLAN Stufe 3).
+# das Gegenteil. freebuff-pty.py (576 LOC, PTY + Subprozesse) ist per `omit`
+# in infra/coverage-floor.rc ausgenommen (ohne PTY-Mock waere eine hohe Zahl
+# Pseudosicherheit, PLAN Stufe 3).
 # `make cov` bleibt OHNE Floor und zeigt alle infra-Skripte.
 cov-floor:
 	cd $(ROOT) && $(TIMEOUT) run 300 uv run pytest -q --cov --cov-config=infra/coverage-floor.rc --cov-report=term-missing

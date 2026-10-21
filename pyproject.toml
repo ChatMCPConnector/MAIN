@@ -61,10 +61,10 @@ select = ["E4", "E7", "E9", "F"]
 [tool.mypy]
 python_version = "3.14"
 files = ["infra/scripts"]
-# freebuff-pty.py ist ein PTY-Wrapper ueber Subprozesse; watch-subagent.py liest
-# eine fremde Session-Struktur. Beides ist dynamischer als der Vendor-Baum,
-# mypy liefert dort Rauschen statt Befunde — deshalb starten wir mit `warn` und
-# schalten scharf, wenn die Liste kurz ist (PLAN Stufe 3: erst Bestandsaufnahme).
+# freebuff-pty.py ist ein PTY-Wrapper ueber Subprozesse und damit dynamischer
+# als der Vendor-Baum; mypy liefert dort Rauschen statt Befunde — deshalb
+# starten wir mit `warn` und schalten scharf, wenn die Liste kurz ist (PLAN
+# Stufe 3: erst Bestandsaufnahme).
 ignore_missing_imports = true
 warn_unused_configs = true
 no_implicit_optional = true
@@ -85,7 +85,7 @@ branch = true
 #
 # Ausgeschlossen (`omit` in coverage-floor.rc, nicht hier): freebuff-pty.py
 # (PTY + Subprozesse, ueber eine Mock-Session nur teilweise sinnvoll testbar —
-# eine hohe Zahl waere Pseudosicherheit) und watch-subagent.py.
+# eine hohe Zahl waere Pseudosicherheit).
 #
 # Aufgenommen sind freebuff_patch.py, gate-claims-check.py und
 # port-drift-check.py — alle drei sind reine Text-/Zaehllogik und ehrlich
