@@ -17,7 +17,10 @@ weder Config, Flag noch Env:
      Pfeiltaste vorher abfangen und nativ bedienbar bleiben.
   3. Wortgrenzen: `word-backward`/`word-forward` fressen Leerzeile UND Wort in
      einem Aufruf und springen ueber Zeilengrenzen -> stoppen an der ersten
-     Klassengrenze (Whitespace / Wort).
+     Klassengrenze (Whitespace / Wort). Der Clamp davor steht je nach Version
+     inline (`Math.max(0,Math.min(...))`) oder als minifizierter Helfer
+     (`X9(pos,0,len)`, ab 0.2.30) — beide Formen werden erkannt und bleiben im
+     Ersatz unveraendert stehen.
   4. `/history` loescht eine Session nur per Mausklick `[x]`; die Maus ist
      bewusst aus -> Delete / Ctrl+D / Ctrl+X auf der fokussierten Session.
 
@@ -100,7 +103,9 @@ from pathlib import Path
 # Formatversion der Patch-Logik. Steht in der Stamp-Datei: wer die Muster hier
 # aendert, invalidiert damit automatisch alle Stamps, statt still auf einem
 # gecachten "gepatcht" sitzen zu bleiben.
-STAMP_FORMAT = 2
+# 3 (2026-10-21): 0.2.30 clamped die Wortfunktionen ueber einen minifizierten
+# Helfer (`X9(A,0,H.length)`) statt inline `Math.max(0,Math.min(...))`.
+STAMP_FORMAT = 3
 
 DEFAULT_NATIVE_DIR = Path.home() / ".config" / "manicode"
 BINARY_NAME = "freebuff"
@@ -251,27 +256,40 @@ def patch_arrow_scroll(data: bytes) -> tuple[bytes | None, PatchResult]:
 # zusammen. Die gepatchte Form merkt sich die Klasse des Zeichens VOR der
 # Position (`s`) und laeuft nur, solange die Klasse gleich bleibt — damit
 # stoppt `Strg+Links` am Zeilenende und frisst keine Folgezeile mit.
+# Der Clamp ist in 0.2.30 gewandert: `Math.max(0,Math.min(pos,str.length))`
+# inline ODER ein minifizierter Helfer `X9(pos,0,str.length)`. Beide Formen
+# werden als EINE Gruppe `clamp` gefangen und im Ersatz unveraendert
+# wiederverwendet — damit bleibt der Patch unabhaengig davon, ob der Minifier
+# den Helfer kuenftig umbenennt oder wieder inlinet.
+_CLAMP = (
+    rb"(?P<clamp>Math\.max\(0,Math\.min\((?P=pos),(?P=str)\.length\)\)"
+    rb"|(?P<clampfn>" + _IDENT + rb")\((?P=pos),0,(?P=str)\.length\))"
+)
 _WORD_BODY = (
     rb"function (?P<fn>" + _IDENT + rb")\((?P<str>" + _IDENT + rb"),(?P<pos>" + _IDENT + rb")\)\{"
-    rb"let (?P<i>" + _IDENT + rb")=Math\.max\(0,Math\.min\((?P=pos),(?P=str)\.length\)\);"
+    rb"let (?P<i>" + _IDENT + rb")=" + _CLAMP + rb";"
     rb"while\((?P=i)>0&&/\\s/\.test\((?P=str)\[(?P=i)-1\]\)\)(?P=i)--;"
     rb"while\((?P=i)>0&&!/\\s/\.test\((?P=str)\[(?P=i)-1\]\)\)(?P=i)--;"
     rb"return (?P=i)\}"
 )
 _WORD_BODY_FWD = (
     rb"function (?P<fn>" + _IDENT + rb")\((?P<str>" + _IDENT + rb"),(?P<pos>" + _IDENT + rb")\)\{"
-    rb"let (?P<i>" + _IDENT + rb")=Math\.max\(0,Math\.min\((?P=pos),(?P=str)\.length\)\);"
+    rb"let (?P<i>" + _IDENT + rb")=" + _CLAMP + rb";"
     rb"while\((?P=i)<(?P=str)\.length&&!/\\s/\.test\((?P=str)\[(?P=i)\]\)\)(?P=i)\+\+;"
     rb"while\((?P=i)<(?P=str)\.length&&/\\s/\.test\((?P=str)\[(?P=i)\]\)\)(?P=i)\+\+;"
     rb"return (?P=i)\}"
 )
+# "Bereits gepatcht" erkennt beide Clamp-Formen (die Flag-Deklaration mit
+# Komma ist der Unterschied zum Original, nicht die Schreibweise des Clamps).
 _WORD_PATCHED_BWD = re.compile(
-    rb"let (?P<i>" + _IDENT + rb")=Math\.max\(0,Math\.min\((?P<pos>" + _IDENT
-    + rb"),(?P<str>" + _IDENT + rb")\.length\)\),(?P<s>" + _IDENT + rb")=(?P=i)>0&&/\\s/\.test"
+    rb"let (?P<i>" + _IDENT + rb")=(?:Math\.max\(0,Math\.min\(" + _IDENT + rb"," + _IDENT
+    + rb"\.length\)\)|" + _IDENT + rb"\(" + _IDENT + rb",0," + _IDENT + rb"\.length\)),"
+    + rb"(?P<s>" + _IDENT + rb")=(?P=i)>0&&/\\s/\.test"
 )
 _WORD_PATCHED_FWD = re.compile(
-    rb"let (?P<i>" + _IDENT + rb")=Math\.max\(0,Math\.min\((?P<pos>" + _IDENT
-    + rb"),(?P<str>" + _IDENT + rb")\.length\)\),(?P<s>" + _IDENT + rb")=(?P=i)<(?P=str)\.length&&/\\s/\.test"
+    rb"let (?P<i>" + _IDENT + rb")=(?:Math\.max\(0,Math\.min\(" + _IDENT + rb"," + _IDENT
+    + rb"\.length\)\)|" + _IDENT + rb"\(" + _IDENT + rb",0," + _IDENT + rb"\.length\)),"
+    + rb"(?P<s>" + _IDENT + rb")=(?P=i)<" + _IDENT + rb"\.length&&/\\s/\.test"
 )
 
 
@@ -283,19 +301,20 @@ def _patch_word_function(data: bytes, pattern: re.Pattern[bytes], backward: bool
             "word_boundary", "unrecognized", f"{len(matches)} Treffer fuer {direction}"
         )
     m = matches[0]
-    g = {k: v.decode("latin1") for k, v in m.groupdict().items()}
+    # `clampfn` ist nur in der Helfer-Variante gesetzt (Alternative), sonst None.
+    g = {k: v.decode("latin1") for k, v in m.groupdict().items() if v is not None}
     taken = set(g.values())
     flag = fresh_name(taken)
     if backward:
         body = (
-            f"let {g['i']}=Math.max(0,Math.min({g['pos']},{g['str']}.length)),"
+            f"let {g['i']}={g['clamp']},"
             f"{flag}={g['i']}>0&&/\\s/.test({g['str']}[{g['i']}-1]);"
             f"while({g['i']}>0&&{flag}===/\\s/.test({g['str']}[{g['i']}-1])){g['i']}--;"
             f"return {g['i']};"
         )
     else:
         body = (
-            f"let {g['i']}=Math.max(0,Math.min({g['pos']},{g['str']}.length)),"
+            f"let {g['i']}={g['clamp']},"
             f"{flag}={g['i']}<{g['str']}.length&&/\\s/.test({g['str']}[{g['i']}]);"
             f"while({g['i']}<{g['str']}.length&&{flag}===/\\s/.test({g['str']}[{g['i']}])){g['i']}++;"
             f"return {g['i']};"

@@ -62,6 +62,15 @@ WORD = (
     b"function aaQ(H,A){let $=Math.max(0,Math.min(A,H.length));"
     b"while($<H.length&&!/\\s/.test(H[$]))$++;while($<H.length&&/\\s/.test(H[$]))$++;return $}"
 )
+# Dieselben zwei Funktionen in der 0.2.30-Form: der Clamp ist ein minifizierter
+# Helfer (`Yd(A,0,H.length)`) statt `Math.max(0,Math.min(...))`. Aus WORD
+# abgeleitet, damit die Byte-Escaping nicht doppelt gepflegt werden muss — und
+# mit anderen Namen, damit der Test weiterhin einen Rename faengt.
+WORD_CLAMP = (
+    WORD.replace(b"Math.max(0,Math.min(A,H.length))", b"Yd(A,0,H.length)")
+    .replace(b"zzQ", b"mQ")
+    .replace(b"aaQ", b"nQ")
+)
 # History-Komponente. Die Bezeichner sind 1-2 Zeichen lang, weil der Minifier
 # so vergibt — und weil der Patch **in die vorhandene Byte-Lage passen muss**
 # (das Bundle haengt an Fixed Offsets). Die Namen sind andere als im echten
@@ -87,6 +96,11 @@ def bundle() -> bytes:
     return b"\x00ELF-fake\x00" + SCROLL + ARROW + WORD + HISTORY + FOOTER + b"\x00trailer"
 
 
+def bundle_clamp() -> bytes:
+    """Wie `bundle()`, aber mit der Clamp-Helfer-Form aus freebuff 0.2.30."""
+    return b"\x00ELF-fake\x00" + SCROLL + ARROW + WORD_CLAMP + HISTORY + FOOTER + b"\x00trailer"
+
+
 # --- Die vier Patches ----------------------------------------------------------
 def test_alle_vier_werden_erkannt_und_angewandt():
     data = bundle()
@@ -95,6 +109,31 @@ def test_alle_vier_werden_erkannt_und_angewandt():
                                          "history_delete"]
     assert all(r.status == "applied" for r in results), [r.status for r in results]
     assert len(out) == len(data), "Bundle ist an Fixed Offsets verlinkt: Laenge muss gleich bleiben"
+
+
+def test_clamp_helfer_form_wird_erkannt_und_bleibt_erhalten():
+    """0.2.30 clamped ueber `Yd(A,0,H.length)` statt inline Math.max/min.
+
+    Der Patch muss die Clamp-Form unveraendert wiederverwenden (sie ist kuerzer
+    als die Inline-Form, also ist Ersetzen auch ein Platzproblem) und in die
+    Byte-Lage passen.
+    """
+    data = bundle_clamp()
+    out, results = fp.apply_patches(data)
+    word = next(r for r in results if r.name == "word_boundary")
+    assert word.status == "applied", word.detail
+    assert len(out) == len(data), "Bundle ist an Fixed Offsets verlinkt"
+    assert b"Yd(A,0,H.length)" in out, "Clamp-Form muss erhalten bleiben"
+    assert out.count(b"while(") == 2, "je Richtung muss die zweite Schleife weg sein"
+
+
+def test_clamp_form_ist_idempotent():
+    """Die "bereits gepatcht"-Erkennung darf nicht nur die Inline-Form kennen."""
+    once, _ = fp.apply_patches(bundle_clamp())
+    twice, results = fp.apply_patches(once)
+    word = next(r for r in results if r.name == "word_boundary")
+    assert word.status == "already", word.detail
+    assert twice == once
 
 
 def test_idempotenz_zweiter_lauf_meldet_alles_als_already():
@@ -129,12 +168,16 @@ def test_gepatchter_javascript_code_ist_syntaktisch_valide():
     proc = subprocess.run(["node", "--input-type=module", "--check"], input=js, capture_output=True)
     assert proc.returncode == 0, f"History-Delete JS SyntaxError: {proc.stderr.decode()}"
 
-    # 2. word_boundary Funktionen pruefen
-    m_words = re.findall(rb"function [a-zA-Z0-9_$]+\(H,A\)\{.*?\}", out, re.S)
-    assert len(m_words) == 2
-    for w in m_words:
-        proc = subprocess.run(["node", "--input-type=module", "--check"], input=w, capture_output=True)
-        assert proc.returncode == 0, f"Word-Boundary JS SyntaxError: {proc.stderr.decode()}"
+    # 2. word_boundary Funktionen pruefen — in beiden Clamp-Formen
+    for source in (bundle(), bundle_clamp()):
+        patched, _ = fp.apply_patches(source)
+        m_words = re.findall(rb"function [a-zA-Z0-9_$]+\(H,A\)\{.*?\}", patched, re.S)
+        assert len(m_words) == 2
+        for w in m_words:
+            proc = subprocess.run(
+                ["node", "--input-type=module", "--check"], input=w, capture_output=True
+            )
+            assert proc.returncode == 0, f"Word-Boundary JS SyntaxError: {proc.stderr.decode()}"
 
 
 def test_fehlende_struktur_wird_gemeldet_nicht_geraten():

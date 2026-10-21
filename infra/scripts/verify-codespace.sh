@@ -192,9 +192,18 @@ check_layer chain "freebuff-Patches sitzen"    bash -c '
   exit 1'
 check_layer chain "freebuff kein Update-Rest"  bash -c '
   d="$HOME/.config/manicode"
-  n="$(find "$d" -maxdepth 1 \( -name ".freebuff-download-temp-*" -o -name ".freebuff-*.tar.gz.part" \) 2>/dev/null | wc -l | tr -d " ")"
+  now=$(date +%s); n=0
+  for p in "$d"/.freebuff-download-temp-* "$d"/.freebuff-*.tar.gz.part; do
+    [ -e "$p" ] || continue
+    # Dieselbe Schwelle wie freebuff_patch.py (STALE_AFTER_S=1800): ein
+    # LAUFENDER Download ist kein Rest und darf nicht rot werden. Ohne diese
+    # Bedingung war der Check direkt nach jedem Install 30 Minuten rot,
+    # obwohl der Patcher den Eintrag bewusst noch nicht anfasst.
+    [ $(( now - $(stat -c %Y "$p") )) -ge 1800 ] || continue
+    n=$((n+1))
+  done
   [ "$n" = "0" ] && { echo "keine Download-Reste"; exit 0; }
-  echo "$n Reste (Start raeumt alte auf)"; exit 1'
+  echo "$n Reste aelter als 30 min (Start raeumt sie auf)"; exit 1'
 
 echo "== 5. Daemons =="
 # Kein autosave-daemon-Check mehr (Nutzerentscheidung 2026-09-27)
