@@ -17,7 +17,7 @@ im Repo.
 ## Dokumentation
 
 Die vollständige Doku — Layout, Betrieb, Proxies, Infrastruktur-Soll,
-Changelog — liegt in **[infrastructure.md](infrastructure.md)**.
+Changelog — liegt in **[infra/docs/changelog.md](infra/docs/changelog.md)**.
 
 ## Quick Start
 

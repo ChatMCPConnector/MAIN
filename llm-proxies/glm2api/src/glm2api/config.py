@@ -394,22 +394,28 @@ class AppConfig:
 
 
 def ensure_env_file(env_path: Path) -> bool:
+    """Saet eine fehlende `.env` aus der **einen** ausgelieferten Vorlage.
+
+    Die Vorlage ist `.env.dist` — dieselbe Datei, aus der `rebuild.sh` und
+    `infra/scripts/glm2api.sh` saeen. Bis 2026-10-21 gab es daneben eine
+    zweite Kopie `.env.example`, die hier gelesen wurde; zwei handgepflegte
+    Vorlagen mit demselben Inhalt sind genau die Drift-Quelle, die am
+    2026-10-02 einen frischen Codespace mit veralteten Werten gestartet haette.
+    Wieder eine zweite Datei einfuehren? Dann faellt
+    `tests/test_config.py::test_only_one_shipped_env_template`.
+    """
     if env_path.exists():
         return False
 
-    example_candidates = [
-        env_path.with_name(".env.example"),
-        env_path.parent / ".env.example",
-    ]
-    example_path = next((candidate for candidate in example_candidates if candidate.exists()), None)
-    if example_path is None:
+    template_path = env_path.with_name(".env.dist")
+    if not template_path.exists():
         return False
 
     try:
         env_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(example_path, env_path)
+        shutil.copyfile(template_path, env_path)
     except OSError as exc:
-        raise ConfigError(f"Failed to auto-create config file: source={example_path} target={env_path} error={exc}") from exc
+        raise ConfigError(f"Failed to auto-create config file: source={template_path} target={env_path} error={exc}") from exc
     return True
 
 
@@ -529,7 +535,7 @@ def _resolve_env_file(env_file: str) -> Path:
 
     Reihenfolge: expliziter pfad (absolut oder mit pfadanteil) bleibt
     unveraendert; ein reiner dateiname wird zuerst im
-    arbeitsverzeichnis, dann neben dem paket gesucht. `.env.example`
+    arbeitsverzeichnis, dann neben dem paket gesucht. `.env.dist`
     wandert fuer die erzeugung mit.
     """
     given = Path(env_file)
@@ -714,8 +720,8 @@ def load_config(env_file: str = ".env") -> AppConfig:
         logger,
     )
     # S-13: der betrieb laeuft auf 8001 (infrastructure.md, infra/scripts/glm2api.sh,
-    # openode-provider). Der default 8000 trieb code, .env.example und
-    # betrieb auseinander — ein frischer clone haette auf 8000 gehoert und
+    # openode-provider). Der default 8000 trieb code, die ausgelieferte
+    # Vorlage und betrieb auseinander — ein frischer clone haette auf 8000 gehoert und
     # damit jeden client und jedes script gebrochen.
     port = _config_int(values, "PORT", 8001, 1, 65535, logger)
     # D-11: diese drei standen vorher nur in `logging_utils` und wurden

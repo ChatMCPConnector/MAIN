@@ -50,17 +50,19 @@ GLM_USE_GUEST_REFRESH_TOKEN=true
   Upstream-Limit ~5 Nachrichten pro Gast-Token, Rotation fängt das ab.
 - Temporäre Gast-Tokens werden nicht in `.env`/`token.txt` persistiert.
 
-Alle weiteren Config-Variablen: `.env.example` (kommentiert).
+Alle Config-Variablen: `.env.dist` (kommentiert, die einzige ausgelieferte
+Vorlage).
 
-**`.env.example` ist nicht nur Doku, sondern ein zweiter Saat-Pfad.** Es gibt
-zwei Stellen, die eine `.env` erzeugen, wenn sie fehlt: `rebuild.sh:30` kopiert
-`.env.dist`, und `config.py:ensure_env_file()` kopiert `.env.example`.
+**Eine Vorlage, drei Sätstellen.** `.env.dist` ist die Betriebs-Config dieses
+Proxys und die **einzige** Saat-Quelle: `rebuild.sh:30` und
+`infra/scripts/glm2api.sh` kopieren sie nach `.env`, und
+`config.py:ensure_env_file()` tut dasselbe zur Laufzeit, wenn `.env` fehlt.
 `secrets.sh` stellt nur die **Wurzel**-`.env` aus dem Bundle wieder her, nicht
-die hier. Deshalb müssen beide Dateien **denselben Wert** für jeden Key tragen —
-`tests/test_config.py::test_shipped_env_files_agree_on_every_value` prüft das.
-Am 2026-10-02 standen hier 300k Zeichen History-Budget, in `.env.dist` noch 1M:
-Der laufende Betrieb merkte nichts, ein frischer Codespace hätte die alte
-Konfiguration bekommen.
+die hier. Bis 2026-10-21 lag daneben eine zweite Kopie `.env.example`, aus der
+`ensure_env_file()` las — am 2026-10-02 liefen die beiden auseinander (300k vs.
+1M History-Zeichen), was nur ein frischer Codespace gemerkt hätte. Die Kopie
+ist entfallen; `tests/test_config.py::test_only_one_shipped_env_template`
+verhindert, dass eine zweite zurückkommt.
 
 ## Betrieb
 

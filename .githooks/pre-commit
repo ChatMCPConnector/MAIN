@@ -14,7 +14,7 @@
 #   1. Der Hook fasst den Index nicht an (kein `git add`, kein `--fix`/`--write`
 #      an den Quelldateien). In diesem geteilten Repo hat ein Hook mit `git add`
 #      schon fremde, parallel gestagte Aenderungen mitcommittet
-#      (infrastructure.md, Changelog 2026-09-29). Der Hook liest nur und bricht ab.
+#      (infra/docs/changelog.md, Eintrag 2026-09-29). Der Hook liest nur und bricht ab.
 #   2. Er laeuft nur, wenn gestagte Dateien die jeweilige Sprache betreffen —
 #      Commits an Doku/Infra werden nicht ausgebremst.
 #   3. Nichts ohne Timer (AGENTS.md §4) — alles laeuft ueber timeout.sh.

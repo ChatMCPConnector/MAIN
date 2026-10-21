@@ -14,8 +14,7 @@ glm2api-bundle/
 │   ├── main.py             #   Entry-Point
 │   ├── pyproject.toml      #   Python >=3.14, zero dependencies
 │   ├── uv.lock             #   Lockfile (nur das Projekt selbst)
-│   ├── glm2api.env          #   Fertige Config: Port 8001, Guest-Mode (wird zu .env kopiert)
-│   ├── .env.example        #   Original-Beispielconfig
+│   ├── glm2api.env          #   Fertige Config: Port 8001, Guest-Mode (wird zu .env kopiert; Quelle: .env.dist)
 │   └── README.md           #   Original-README (chinesisch, API-Referenz)
 ├── scripts/
 │   ├── install.sh          #   uv installieren + venv + .env (idempotent)

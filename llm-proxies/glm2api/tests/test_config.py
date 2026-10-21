@@ -212,7 +212,7 @@ def test_debug_log_directory_and_file_are_private(tmp_path, monkeypatch):
 
 
 def test_default_port_matches_the_documented_operational_port(tmp_path, monkeypatch):
-    """S-13: code-default und `.env.example` sagten 8000, der Betrieb läuft
+    """S-13: code-default und die ausgelieferte Vorlage sagten 8000, der Betrieb läuft
     auf 8001 (infrastructure.md, infra/scripts/glm2api.sh, opencode). Ein
     frischer Clone haette den proxy auf 8000 gestartet und damit jeden
     client und jedes betriebsscript gebrochen."""
@@ -223,11 +223,11 @@ def test_default_port_matches_the_documented_operational_port(tmp_path, monkeypa
     assert load_config(env_path).port == 8001
 
 
-def test_env_example_port_matches_code_default():
-    """Der Beispiel-koern darf nicht vom code-default abweichen."""
+def test_env_dist_port_matches_code_default():
+    """Die eine Vorlage darf nicht vom code-default abweichen."""
     from pathlib import Path
 
-    example = Path(__file__).resolve().parents[1] / ".env.example"
+    example = Path(__file__).resolve().parents[1] / ".env.dist"
     port_lines = [
         line.strip()
         for line in example.read_text(encoding="utf-8").splitlines()
@@ -237,8 +237,8 @@ def test_env_example_port_matches_code_default():
     assert port_lines == ["PORT=8001"]
 
 
-def test_env_example_documents_every_operational_config_key():
-    """D-11: 16 Betriebs-Keys der AppConfig fehlten in `.env.example` — sie
+def test_env_dist_documents_every_operational_config_key():
+    """D-11: 16 Betriebs-Keys der AppConfig fehlten in der Vorlage — sie
     waren nur implizit über die Standardwerte sichtbar.
 
     Geprüft werden die Keys, die `load_config` TATSÄCHLICH liest (nicht die
@@ -264,7 +264,7 @@ def test_env_example_documents_every_operational_config_key():
     not_env_keys = {"ENV_FILE_PATH", "ENV_FILE_CREATED", "LOG_LEVEL_FORMAT", "LOG_DATE_FORMAT", "LOG_STREAM_LOG_LEVEL"}
     read_keys -= not_env_keys
 
-    example_text = (pathlib.Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+    example_text = (pathlib.Path(__file__).resolve().parents[1] / ".env.dist").read_text(encoding="utf-8")
     documented = {
         line.split("=", 1)[0].strip()
         for line in example_text.splitlines()
@@ -272,7 +272,7 @@ def test_env_example_documents_every_operational_config_key():
     }
     missing = sorted(key for key in read_keys if key not in documented)
 
-    assert not missing, f"in .env.example nicht dokumentiert: {missing}"
+    assert not missing, f"in .env.dist nicht dokumentiert: {missing}"
 
 
 # --- S-15: stille tippfehler -------------------------------------------
@@ -448,19 +448,19 @@ def test_cors_wildcard_still_possible_when_explicitly_requested(tmp_path, monkey
 
 def test_env_files_do_not_reintroduce_the_cors_wildcard():
     """Die ausgelieferte Beispielkonfiguration darf das Loch nicht
-    wieder aufmachen — sonst waere die Umstellung in `.env.example`
-    nach dem naechsten deploy wieder rueckgaengig."""
+    wieder aufmachen — sonst waere die Umstellung in der ausgelieferten
+    Vorlage nach dem naechsten deploy wieder rueckgaengig."""
     from pathlib import Path as _P
 
-    example = _P(__file__).resolve().parent.parent / ".env.example"
+    example = _P(__file__).resolve().parent.parent / ".env.dist"
     if not example.exists():
-        pytest.skip("keine .env.example im repo")
+        pytest.skip("keine .env.dist im repo")
     for line in example.read_text(encoding="utf-8").splitlines():
         if line.strip().startswith("CORS_ALLOW_ORIGIN="):
             value = line.split("=", 1)[1].strip()
             assert value != "*", "die beispielkonfiguration darf CORS nicht auf '*' setzen"
             return
-    pytest.fail("CORS_ALLOW_ORIGIN fehlt in .env.example")
+    pytest.fail("CORS_ALLOW_ORIGIN fehlt in .env.dist")
 
 
 def test_output_token_budget_allows_deep_reasoning_runs():
@@ -491,7 +491,7 @@ def test_valid_keys_are_never_reported_as_typos(tmp_path):
     vom betreiber ignoriert; dann schuetzt sie nicht mehr.
 
     Gepruft wird gegen die tatsaechlich gueltigen keys aus der
-    `.env`/`.env.example` des betriebs."""
+    `.env`/`.env.dist` des betriebs."""
     import logging as _logging
 
     from glm2api.config import _warn_unknown_config_keys
@@ -523,9 +523,10 @@ def test_valid_keys_are_never_reported_as_typos(tmp_path):
 
 # --- 2026-09-26: tote keys in den ausgelieferten .env --------------------
 
-# Diese vier standen in `.env`, `.env.example` und `llm-proxies/glm2api/.env.dist`
-# und wirkten nicht. Zwei wurden als Nahbeirrung gemeldet, zwei stillschweigend
-# ignoriert — und die beiden stillen hatten zudem exakt den Standardwert.
+# Diese vier standen in `.env` und in der ausgelieferten Vorlage
+# `llm-proxies/glm2api/.env.dist` und wirkten nicht. Zwei wurden als
+# Nahbeirrung gemeldet, zwei stillschweigend ignoriert — und die beiden
+# stillen hatten zudem exakt den Standardwert.
 _ENV_KEYS_THAT_NEVER_WORKED = (
     ("GLM_REFRESH_TOKENS", "GLM_REFRESH_TOKEN"),
     ("REQUEST_TIMEOUT", "REQUEST_TIMEOUT_SECONDS"),
@@ -534,24 +535,23 @@ _ENV_KEYS_THAT_NEVER_WORKED = (
 )
 
 
-@pytest.mark.parametrize("file_name", [".env.example", ".env.dist"])
 @pytest.mark.parametrize("dead,correct", _ENV_KEYS_THAT_NEVER_WORKED)
-def test_shipped_env_files_contain_no_dead_config_key(file_name, dead, correct):
+def test_shipped_env_template_contains_no_dead_config_key(dead, correct):
     """Ein key, den `load_config` nicht liest, sieht aus wie eine
     konfiguration und ist keine. Bei `GLM_REFRESH_TOKENS=` waere der
     inline-kommentar sogar als WERT gelandet.
 
-    Geprueft werden ALLE ausgelieferten dateien, nicht nur `.env.example`:
-    die drei sind handgepflegte kopien, und die drift ist genau das, was
-    hier passiert war.
+    Geprueft wird die eine ausgelieferte Vorlage (`.env.dist`). Die frueher
+    zusaetzlich geprueft Kopie `.env.example` ist am 2026-10-21 entfallen —
+    siehe `test_only_one_shipped_env_template`.
     """
     import pathlib
 
     import glm2api.config as config_module
 
-    path = pathlib.Path(__file__).resolve().parents[1] / file_name
+    path = pathlib.Path(__file__).resolve().parents[1] / ".env.dist"
     if not path.exists():
-        pytest.skip(f"{file_name} nicht im repo")
+        pytest.skip(".env.dist nicht im repo")
     values = config_module.parse_dotenv(path)
 
     assert dead not in values, f"{path.name}: '{dead}' wird nicht gelesen (richtig waere {correct})"
@@ -636,18 +636,16 @@ def test_duplicate_key_with_the_same_value_stays_quiet(tmp_path, caplog):
     assert values["GLM_TOKEN_FILE"] == "token.txt"
 
 
-@pytest.mark.parametrize("file_name", [".env.example", ".env.dist"])
-def test_shipped_env_files_have_no_duplicate_keys(file_name):
-    """Die handgepflegten kopien der betriebsdatei: ein doppelter key ist
-    dort immer ein merge-fehler, und die files werden nicht automatisch
-    aus einer quelle erzeugt."""
+def test_shipped_env_template_has_no_duplicate_keys():
+    """Die ausgelieferte Vorlage der Betriebsdatei: ein doppelter key ist
+    dort immer ein merge-fehler."""
     import pathlib
 
     from glm2api.config import parse_dotenv
 
-    path = pathlib.Path(__file__).resolve().parents[1] / file_name
+    path = pathlib.Path(__file__).resolve().parents[1] / ".env.dist"
     if not path.exists():
-        pytest.skip(f"{file_name} nicht im repo")
+        pytest.skip(".env.dist nicht im repo")
 
     seen: dict[str, int] = {}
     duplicates: list[str] = []
@@ -665,43 +663,43 @@ def test_shipped_env_files_have_no_duplicate_keys(file_name):
     assert isinstance(parse_dotenv(path), dict)
 
 
-def test_shipped_env_seeds_agree_on_every_value():
-    """`.env.example` und `.env.dist` sind **zwei Saat-Pfade**, nicht Doku.
+def test_only_one_shipped_env_template():
+    """Es gibt genau **eine** Vorlage fuer die Betriebsdatei: `.env.dist`.
 
-    Am 2026-10-02 war das der Fund: U1 (`14bae8f`) senkte
+    Am 2026-10-02 war die zweite Kopie die Drift-Quelle: U1 (`14bae8f`) senkte
     `GLM_HISTORY_MAX_CHARS` von 1M auf 300k und `GLM_BLOCKED_TOOL_FOLLOW_UPS`
-    von 2 auf 5 — in `.env.example`, aber nicht in `.env.dist`. Die drei
-    obigen Tests pruefen *Schluessel* (vorhanden, kein Tippfehler, kein
-    Duplikat); **Werte** fielen durch, und die Folgen waren ungleich verteilt:
+    von 2 auf 5 — in `.env.example`, aber nicht in `.env.dist`. `rebuild.sh`
+    saete aus `.env.dist`, `config.py:ensure_env_file()` aus `.env.example`:
+    ein frischer Codespace haette die alte Konfiguration bekommen, waehrend
+    dieser Codespace (mit vorhandener `.env`) sauber durchfiel.
 
-      * `rebuild.sh:29` saet `glm2api/.env` aus `.env.dist`, wenn sie fehlt,
-      * `config.py:ensure_env_file()` kopiert `.env.example` nach `.env`,
-      * `secrets.sh` stellt nur die **Wurzel**-`.env` aus dem Bundle wieder her.
-
-    Ein frischer Codespace haette also 1M Zeichen History-Budget bekommen,
-    dieser Codespace (mit bereits vorhandener `.env`) faellt unter der
-    Aenderung nicht durch. Das ist die ungute Richtung: der Fehler ist nur
-    beim Neuaufbau sichtbar.
-
-    Wer eine der beiden Dateien anfasst, muss die andere mitziehen — dieser
-    Test ist die Billigste Stelle, an der das auffaellt.
+    Behoben nicht durch einen Gleichheits-Test auf zwei Dateien, sondern
+    durch **eine** Datei: `ensure_env_file()` liest jetzt `.env.dist`, die
+    Kopie ist geloescht. Dieser Test haelt das fest — wer eine zweite Vorlage
+    anlegt, faellt hier auf, bevor sie auseinanderlaeuft.
     """
     import pathlib
 
-    from glm2api.config import parse_dotenv
-
     base = pathlib.Path(__file__).resolve().parents[1]
-    example, dist = base / ".env.example", base / ".env.dist"
-    if not example.exists() or not dist.exists():
-        pytest.skip("eine der beiden Saat-Dateien nicht im Repo")
+    assert (base / ".env.dist").exists(), "die eine Vorlage fehlt"
+    assert not (base / ".env.example").exists(), (
+        ".env.example ist wieder da — es gibt bewusst nur EINE Saat-Vorlage "
+        "(.env.dist); eine zweite handgepflegte Kopie laeuft frueher oder "
+        "spaeter auseinander (siehe Docstring)"
+    )
 
-    a, b = parse_dotenv(example), parse_dotenv(dist)
-    assert set(a) == set(b), (
-        f"Schluessel unterscheiden sich: nur .env.example={sorted(set(a) - set(b))} "
-        f"nur .env.dist={sorted(set(b) - set(a))}"
-    )
-    differing = {k: (a[k], b[k]) for k in a if a[k] != b[k]}
-    assert not differing, (
-        "Werte unterscheiden sich zwischen .env.example und .env.dist — einer "
-        f"der beiden Saat-Pfade liefert die falsche Konfiguration: {differing}"
-    )
+
+def test_missing_env_is_seeded_from_the_single_template(tmp_path):
+    """Positivpfad des vereinheitlichten Saens: `ensure_env_file()` kopiert
+    `.env.dist` und nichts anderes."""
+    from glm2api.config import ensure_env_file, parse_dotenv
+
+    template = tmp_path / ".env.dist"
+    template.write_text("GLM_PORT=8001\nGLM_HISTORY_MAX_CHARS=300000\n", encoding="utf-8")
+    env = tmp_path / ".env"
+
+    assert ensure_env_file(env) is True
+    assert env.read_text(encoding="utf-8") == template.read_text(encoding="utf-8")
+    values = parse_dotenv(env)
+    assert values["GLM_PORT"] == "8001"
+    assert values["GLM_HISTORY_MAX_CHARS"] == "300000"

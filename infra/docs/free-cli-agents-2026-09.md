@@ -52,7 +52,7 @@ gegengefetcht.
 1. **Sofort, ohne neues Tool:** opencode `/connect` → Zen, Free-Modelle wählen (Space Bunny Free / Nemotron / MiMo) — nur für Code ohne Vertraulichkeit.
 2. **Stärkster Gratis-Zugang:** offizielle **Antigravity CLI** (`agy`) — Gemini 3.8 Flash + Claude 4.6 gratis, sanktionierter Weg (Alternative zum inoffiziellen Proxy); `GOOGLE_GEMINI_BASE_URL` erlaubt Custom-Endpoints.
 3. **Zweit-Tool mit Planbarkeit:** Kiro CLI Free (50 Credits/Mo) oder Kilo Code (17 $0-Modelle, EU).
-4. **BYOK-Pools** für opencode: Groq (großzügig, schnell), OpenRouter `:free`, Z.ai GLM-Flash. ~~NVIDIA (im Repo)~~ — und Cline-`stealth/*`: beide am 2026-09-26 entfernt (Cline-Ausfälle, siehe `infrastructure.md`-Changelog).
+4. **BYOK-Pools** für opencode: Groq (großzügig, schnell), OpenRouter `:free`, Z.ai GLM-Flash. ~~NVIDIA (im Repo)~~ — und Cline-`stealth/*`: beide am 2026-09-26 entfernt (Cline-Ausfälle, siehe `infra/docs/changelog.md`).
 5. **Vorsicht:** Freebuff = werbefinanziert/Datenräume beachten; Cline-Promo/Freebuff/Zen-Free nie mit Secrets/Kundencode füttern.
 
 ## Quellen (selbst geprüft am 2026-09-26)
