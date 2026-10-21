@@ -28,9 +28,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 KEYDIR="$HOME/.config/landscape"
 
 # datei|provider|endpoint|modell  (Trenner "|" — URLs enthalten ":")
-KEYS=(
-  "xinjianya.key|xinjianya|https://xn--kiv260fv3i.cn/v1|gpt-5.6-sol"
-)
+KEYS=()
 
 # Dateien, die opencode.json per {file:...} referenziert. Muss synchron zu
 # .opencode/opencode.json bleiben — dort nach "{file:" greppen und hier nachtragen.
@@ -78,6 +76,9 @@ cmd_status() {
   local rc=0
   echo "Key-Dateien in $KEYDIR:"
   local entry name provider endpoint model st
+  if [ "${#KEYS[@]}" -eq 0 ]; then
+    echo "  (keine externen Provider-Keys in opencode konfiguriert)"
+  fi
   for entry in "${KEYS[@]}"; do
     IFS="|" read -r name provider endpoint model <<< "$entry"
     st="$(state_of "$name")"
@@ -161,6 +162,10 @@ reachable() {
 
 cmd_doctor() {
   local entry name provider endpoint model st key res code body failed=0
+  if [ "${#KEYS[@]}" -eq 0 ]; then
+    echo "Keine externen Provider-Keys in opencode konfiguriert."
+    return 0
+  fi
   for entry in "${KEYS[@]}"; do
     IFS="|" read -r name provider endpoint model <<< "$entry"
     st="$(state_of "$name")"

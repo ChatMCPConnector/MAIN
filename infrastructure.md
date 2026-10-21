@@ -102,7 +102,7 @@ Aliase (via `infra/scripts/aliases.sh`, automatisch in .bashrc): `save`, `auth`,
   deshalb wird der Ambient-Token bevorzugt und ein nicht lesbarer Scope **nicht
   geraten**, sondern mit Fehler abgebrochen (sonst würde der PUT den Scope
   stillschweigend auf ein Repo zurücksetzen).
-- XinJianYa-Keys in `opencode.json` referenzieren `{file:~/.config/landscape/<key>}` und kommen über das Bundle in jeden neuen Codespace. `glm2api` nutzt lokal `local` als Platzhalter. Ein Literalwert bleibt getrackt und steht deshalb hier ausgeschrieben statt als Verweis auf einen gelöschten Audit: **Antigravity** trägt den selbst erzeugten Admin-Key des lokalen Proxys (`127.0.0.1:9878`, nur von `localhost` erreichbar). Der zweite Literalwert ist am 2026-10-03 weggefallen: **TokenRouter wurde aus `opencode.json` entfernt**, samt seines echten `sk-…`-Keys (siehe Changelog).
+- `glm2api` nutzt lokal `local` als Platzhalter. Ein Literalwert bleibt getrackt und steht deshalb hier ausgeschrieben statt als Verweis auf einen gelöschten Audit: **Antigravity** trägt den selbst erzeugten Admin-Key des lokalen Proxys (`127.0.0.1:9878`, nur von `localhost` erreichbar). Frühere externe Provider (`xinjianya`, `tokenrouter`) wurden aus `opencode.json` entfernt.
 - **Start-Garantie:** eine fehlende `{file:...}`-Referenz lässt opencode
   *komplett* nicht starten (`Configuration is invalid … bad file reference`).
   Deshalb legt `infra/scripts/keys.sh ensure` jede referenzierte Key-Datei als
@@ -138,7 +138,6 @@ Provider (`opencode.json`, Default `antigravity/gemini-3.8-flash`):
 
 | Provider | Modelle | Auth |
 |---|---|---|
-| xinjianya | gpt-5.6-sol | xinjianya.key |
 | **glm2api** | glm-5.3 | lokal, Port 8001, kein Key |
 | **antigravity** | claude-opus-4-6 (100k Context, Thinking 1k/4k/8k), gemini-3.8-flash (1M, 64k Output, fest auf High-Thinking gemappt) | lokal, Port 9878, Google Cloud Code OAuth |
 
