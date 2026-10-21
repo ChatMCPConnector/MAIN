@@ -134,10 +134,13 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 
 echo "==> [landscape] Shell-Aliase verlinken..."
-MARKER="# MAIN-landscape"
+# Eigener Marker: der PATH-Block oben enthaelt "# MAIN-landscape opencode-path"
+# und haette den alten, zu kurzen Marker matchbar gemacht — dann wurde die
+# source-Zeile nie geschrieben und Aliase wie `save`/`ocver` fehlten im Terminal.
+MARKER="# MAIN-landscape aliases"
 for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
   [ -f "$rc" ] || touch "$rc"
-  if ! grep -qF "$MARKER" "$rc" 2>/dev/null; then
+  if ! grep -qF "source \"$REPO_ROOT/infra/scripts/aliases.sh\"" "$rc" 2>/dev/null; then
     {
       echo ""
       echo "$MARKER (nicht editieren, Quelle: $REPO_ROOT/infra/scripts/aliases.sh)"
