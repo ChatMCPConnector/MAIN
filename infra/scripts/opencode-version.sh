@@ -41,13 +41,20 @@ installed_version() {
 }
 
 latest_version() {
-  curl -fsSL --max-time 20 "https://api.github.com/repos/$REPO_SLUG/releases/latest" 2>/dev/null \
-    | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v?([^"]+)".*/\1/p' | head -1
+  local d; d="$(declared_version || true)"
+  local major; major="$(printf '%s\n' "$d" | sed -nE 's/.*v?([0-9]+)\.[0-9]+\..*/\1/p')"
+  if [ -n "$major" ] && [ "$major" -ge 2 ]; then
+    curl -fsSL --max-time 10 "https://registry.npmjs.org/@opencode/cli" 2>/dev/null \
+      | jq -r '."dist-tags".latest // empty' | head -1
+  else
+    curl -fsSL --max-time 20 "https://api.github.com/repos/$REPO_SLUG/releases/latest" 2>/dev/null \
+      | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v?([^"]+)".*/\1/p' | head -1
+  fi
 }
 
 lock_version() {
   [ -f "$LOCK" ] || return 1
-  grep -A3 '"node_modules/@opencode-ai/plugin"' "$LOCK" 2>/dev/null \
+  grep -E -A3 '"node_modules/(@opencode/cli|@opencode-ai/plugin)"' "$LOCK" 2>/dev/null \
     | grep -m1 '"version"' | sed -nE 's/.*"version": "([^"]+)".*/\1/p'
 }
 
@@ -96,8 +103,13 @@ cmd_bump() {
   fi
   target="${target#v}"
   if [ "$target" = "$cur" ]; then echo "Pin ist bereits $cur — nichts zu tun."; return 0; fi
-  # 1) Pin in package.json (nur die Versionszeile, Format bleibt erhalten)
-  sed -i -E "s|(\"@opencode-ai/plugin\"[[:space:]]*:[[:space:]]*\")[^\"]+(\")|\1$target\2|" "$PKG" \
+  local target_major; target_major="$(printf '%s\n' "$target" | sed -nE 's/.*v?([0-9]+)\.[0-9]+\..*/\1/p')"
+  local pkg_name="@opencode-ai/plugin"
+  if [ -n "$target_major" ] && [ "$target_major" -ge 2 ]; then
+    pkg_name="@opencode/cli"
+  fi
+  # 1) Pin in package.json (Paketname und Version)
+  sed -i -E "s%\"(@opencode/cli|@opencode-ai/plugin)\"[[:space:]]*:[[:space:]]*\"[^\"]+\"%\"$pkg_name\": \"$target\"%" "$PKG" \
     || { echo "FEHLER: package.json nicht schreibbar."; return 1; }
   # 2) Lock nachziehen (nur der Lock, kein node_modules-Tausch).
   #    Bewusst `npm install --package-lock-only` und keine Hand-Edit: nur npm

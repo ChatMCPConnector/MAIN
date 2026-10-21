@@ -374,8 +374,8 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   genau sie (`opencode.ai/install --version`); weicht die vorhandene Installation
   ab, aktualisiert setup.sh (Vergleich über `opencode-bin`, weil der
   Multi-Client-Wrapper `opencode` ersetzt). **Pin wechseln:**
-  **Aktueller Pin: `1.18.32`** (Stand 2026-10-01; Quelle `.opencode/package.json`,
-  Dep `@opencode-ai/plugin` + `package-lock.json`) — die einzige Versionszahl im
+  **Aktueller Pin: `2.1.2`** (Stand 2026-10-21; Quelle `.opencode/package.json`,
+  Dep `@opencode/cli` + `package-lock.json`) — die einzige Versionszahl im
   Repo. `./infra/scripts/opencode-version.sh bump` (Alias `ocver`) — updated Pin **und**
   Lock in einem Schritt, ein Commit. `ocver check` zeigt Repo-Pin / Lock /
   installiert / Latest und ein Urteil; `ocver latest` nur die neueste Release.
@@ -384,30 +384,24 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   beschreiben. Ein Codespace, ein Build — der laufende Server nutzt bis zum
   Neustart seine alte Version.
 
-### opencode v2 — Migrationsstand (2026-10-21)
+### opencode v2 — Vollzogener Cutover (2026-10-21)
 
-- **v1 bleibt bis zum Cutover der aktive Default.** Der Repo-Pin steht
-  weiterhin auf `1.18.32`.
+- **v2.1.2 ist der aktive Default.** Der Repo-Pin steht auf `2.1.2`
+  (`@opencode/cli`).
 - **DB-Schema v2:** `session_v2`/`session_message` statt `session`/`message`/`part`.
   Migrierte DBs behalten die v1-Tabellen; neue Sessions schreiben nur v2.
-  Eine Sicherung der aktiven v1-DB liegt unter
+  Eine Sicherung der v1-DB vor dem Cutover liegt unter
   `~/.local/share/opencode/opencode.db.pre-v2-backup`.
 - **MCP ist portiert:** `infra/mcp/opencode-sessions-mcp.js` (v2.0.0) erkennt
   beide Schemata, zählt v2-Parts aus `session_message.data.content` und löscht
   in migrierten DBs beide Welten.
-- **TUI-Config ist vorbereitet:** `config/opencode-cli.json` + Setup-Installation
-  nach `~/.config/opencode/cli.json`, Paritätstest gegen `.opencode/tui.json`.
-- **Wrapper ist versionsbewusst:** v1 nutzt weiter `attach` auf Port 4096; v2
-  wird direkt durchgereicht, weil v2 kein `attach` hat und seinen Managed
-  Service selbst startet.
-- **Server & Setup sind dual-fähig:** `opencode-server.sh`, `setup.sh` und
-  `opencode-version.sh` unterstützen sowohl v1 (`@opencode-ai/plugin`) als auch
-  v2 (`@opencode/cli`). `verify-codespace.sh` prüft bei v1 den 4096-Server und
-  akzeptiert bei v2 den Managed Service.
-- **Cutover-Werkzeug:** `infra/scripts/opencode-cutover.sh` erlaubt den sicheren
-  Wechsel (`status`, `v2`, `rollback`). **Sicherheitsregel:** Der Cutover darf
-  nicht aus einer laufenden opencode-Session aufgerufen werden (der v1-Server
-  ist der Host-Prozess der Session). Ausführung in einem normalen VS-Code-Terminal.
+- **TUI-Config:** `config/opencode-cli.json` + Setup-Installation nach
+  `~/.config/opencode/cli.json`. Maus-Capture bleibt aus (`mouse: false`),
+  Bildvorschau und Halbseiten-Scrollen aktiv.
+- **Wrapper:** v2 wird direkt durchgereicht (Managed Service, kein `attach`
+  mehr nötig).
+- **Cutover- & Rollback-Werkzeug:** `infra/scripts/opencode-cutover.sh` erlaubt
+  Statusprüfung, erneuten Cutover sowie Rollback auf v1.18.32.
 - **Git-Identität folgt dem Account** (siehe Secrets-/Auth-Abschnitt): `auth.sh
   setup` leitet Name + `<id>+<login>@users.noreply.github.com` aus dem Token ab und
   setzt sie **repo-lokal**; `auth.sh identity` zeigt sie. Beim Account-Wechsel

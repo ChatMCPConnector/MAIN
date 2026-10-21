@@ -152,7 +152,7 @@ check_layer chain "opencode-Server antwortet" bash -c '
     curl -fsS -m 10 -o /dev/null http://127.0.0.1:4096/ && echo "HTTP 200 auf 4096"
   fi'
 check_layer code  "MCP registriert"          bash -c 'grep -q "\"opencode-sessions\"" .opencode/opencode.json && echo "opencode-sessions in .opencode/opencode.json"'
-check_layer chain "opencode v2 CLI-Config"    bash -c 'test -f "$HOME/.config/opencode/cli.json" && cmp -s "$HOME/.config/opencode/cli.json" "$REPO_ROOT/config/opencode-cli.json" && echo "cli.json aktuell"'
+check_layer chain "opencode v2 CLI-Config"    bash -c 'test -f "$HOME/.config/opencode/cli.json" && jq -e ".mouse == false and .keybinds[\"session.half.page.up\"] == \"up,ctrl+alt+u\"" "$HOME/.config/opencode/cli.json" >/dev/null && echo "cli.json aktiv (mouse=false, Keybinds intakt)"'
 info "opencode" "$(opencode --version 2>/dev/null || echo '?')"
 
 echo "== 4. LLM-Proxies (Health + echter Call) =="

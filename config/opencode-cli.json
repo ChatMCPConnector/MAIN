@@ -5,7 +5,11 @@
     "image_preview": true
   },
   "session": {
-    "image_preview": true
+    "image_preview": true,
+    "thinking": "show",
+    "verbosity": "high",
+    "scrollbar": true,
+    "grouping": "auto"
   },
   "keybinds": {
     "session.page.up": "pageup,ctrl+alt+b",
@@ -20,5 +24,14 @@
     "input.move.up": "none",
     "input.move.down": "none",
     "session.parent": "<leader>up"
+  },
+  "terminal": {
+    "title": true
+  },
+  "animations": true,
+  "tabs": {
+    "layout": "horizontal",
+    "mode": "off",
+    "scope": "cwd"
   }
 }
