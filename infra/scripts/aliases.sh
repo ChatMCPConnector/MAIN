@@ -39,6 +39,23 @@ opencode-server() {
   /workspaces/MAIN/infra/scripts/opencode-server.sh "$@"
 }
 
+# opencode 2: lokaler Probe-Install unter /workspaces/opencode2 (nicht Teil des
+# Repos). Eigenes HOME/XDG/Runtime -> v1-Config, Server auf 4096 und DB bleiben
+# unberuehrt. Nur definiert, wenn der Probe-Install vorhanden ist.
+if [ -x /workspaces/opencode2/home/.opencode/bin/opencode ]; then
+  code2() {
+    local home=/workspaces/opencode2/home
+    env HOME="$home" \
+      XDG_CONFIG_HOME="$home/.config" \
+      XDG_DATA_HOME="$home/.local/share" \
+      XDG_CACHE_HOME="$home/.cache" \
+      XDG_STATE_HOME="$home/.local/state" \
+      XDG_RUNTIME_DIR=/workspaces/opencode2/run \
+      TMPDIR=/workspaces/opencode2/tmp \
+      "$home/.opencode/bin/opencode" "$@"
+  }
+fi
+
 # Config-Watchdog: status / start / stop / log
 config-watchdog() {
   local lock=/tmp/opencode/config-watchdog.lock
