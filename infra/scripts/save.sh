@@ -52,17 +52,14 @@ push_cmd() {
 if [ "$ONLY_PUSH" -eq 0 ]; then
   git add -A
   if ! git diff --cached --quiet; then
-    # Signiert committen (setup.sh konfiguriert SSH-Signierung, seit 2026-09-27
-    # funktioniert sie). Fallback UNSIGNIERT nur als Notnagel — mit lauter
-    # Warnung, sonst sah ein Verlust der Signatur wie ein normaler Save aus.
-    # Persistence (Komfort) bleibt immer möglich, aber sie wird protokolliert.
-    if git commit -m "$MSG" --quiet; then
-      :
-    elif git -c commit.gpgsign=false commit -m "$MSG" --quiet; then
-      echo "WARNUNG: Commit UNSIGNIERT — SSH-Signatur fehlgeschlagen (frischer"
-      echo "         Codespace vor setup.sh? allowed_signers/.ssh-Key prüfen)."
-    else
-      echo "COMMIT FEHLGESCHLAGEN (auch unsigniert nicht möglich)."
+    # Unsigniert committen — bewusst so (Nutzerentscheidung 2026-10-21). Der
+    # Codespaces-Signierer lehnt mit dem App-Token jede Signatur ab (403 Author
+    # is invalid), und der frueher genutzte Fallback war der Normalfall statt
+    # die Ausnahme. `-c commit.gpgsign=false` gilt fuer diesen einen Commit und
+    # haelt den Save auch dann am Laufen, wenn eine geerbte Repo-Config das
+    # Signieren reaktiviert.
+    if ! git -c commit.gpgsign=false commit -m "$MSG" --quiet; then
+      echo "COMMIT FEHLGESCHLAGEN (un signiert nicht möglich)."
       exit 1
     fi
     echo "Committed: $MSG"

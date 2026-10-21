@@ -271,27 +271,18 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
   Profil `.runtime/firefox-profile/` enthält evtl. Logins — nie committen.
 - **Systempakete** via setup.sh (idempotent): nodejs, npm, xvfb, x11vnc, novnc,
   websockify, sqlite3, dbus-x11, build-essential, python3-* etc.
-- **Commit-Signierung: SSH statt Codespaces-Token.** `setup.sh` setzt repo-lokal
-  `gpg.format=ssh`, `user.signingkey=~/.ssh/codespaces.auto.pub`,
-  `gpg.ssh.allowedSignersFile=config/git-allowed-signers` (versioniert, Dedup pro
-  Fingerabdruck — der hier früher genannte Pfad `.runtime/git-allowed-signers` ist
-  der Stand vor 2026-09-30 und existiert nicht mehr) und `commit.gpgsign=true`. **Warum nicht der Codespaces-Signierer:**
-  `/.codespaces/bin/gh-gpgsign` benutzt den Codespaces-`GITHUB_TOKEN`, ein
-  App-/Integrationstoken, und lehnt jede Signatur ab: **`403 Author is
-  invalid`**. In zwei Wegwerf-Repos reproduziert — **nicht** an Identität oder
-  Token-Scope: Commit-Autor `tadeuslol <334215299+tadeuslol@…>`, GitHub-Account
-  `login=tadeuslol id=334215299`, PAT gehört demselben Account, und trotzdem
-  403, auch mit `GH_TOKEN`/`GITHUB_TOKEN` auf den PAT. Beleg für die
-  Integrations-Art: `gh api user/emails` → `Resource not accessible by
-  integration`. **SSH-Signierung läuft rein lokal**, braucht keine API und
-  keinen Token. Verifiziert: Commit mit `sig=G`, Key
-  `SHA256:jWmmf21DqioRG6oW/xFE8S5I3NG57BVKXQ79a1suSbA`.
-  Die `allowedSignersFile` liegt in `.runtime/` (gitignoriert), weil der
-  Codespace-Key pro Codespace neu sein kann — sie enthält nur den **öffentlichen**
-  Schlüssel, ist also kein Secret. **Offen:** GitHub zeigt „Verified" erst, wenn
-  der Key einmalig als **Signing key** im Account registriert ist
-  (`user/ssh_signing_keys` ist derzeit leer); die Signatur ist gültig, aber
-  serverseitig unbestätigt.
+- **Commit-Signierung: bewusst AUS** (Nutzerentscheidung 2026-10-21).
+  `setup.sh` und `auth.sh` setzen repo-lokal `commit.gpgsign=false`, `save.sh`
+  committet mit `git -c commit.gpgsign=false` (gilt auch bei geerbter Config).
+  Grund: der Codespaces-Signierer `/.codespaces/bin/gh-gpgsign` (aus
+  `/etc/gitconfig`) benutzt den Codespaces-`GITHUB_TOKEN`, ein
+  App-/Integrationstoken, und lehnt jede Signatur ab — **`403 Author is
+  invalid`** (nicht Identität oder Token-Scope; `gh api user/emails` liefert
+  „Resource not accessible by integration"). Die frühere SSH-Lösung
+  (2026-09-27 bis 2026-10-21: `gpg.format=ssh`, `user.signingkey`,
+  `config/git-allowed-signers`) ist mit `config/git-allowed-signers` entfernt;
+  sie brachte auf GitHub nur „signed, unverified", weil der Key pro Codespace
+  neu ist. Kein Ersatz, keine Prüfung im Verify — nichts hängt an Signaturen.
 
 - **Freebuff CLI** (werbefinanzierter, kostenloser Coding-Agent von CodebuffAI),
   **keine Versions-Pin** (Nutzerentscheidung 2026-09-27: `freebuff@latest`, weil
@@ -983,6 +974,8 @@ Proxy bei jedem Start automatisch hoch.
     * **Multi-Fragen-Unterstützung (Frage 1 → 2 → 3...):** Enter schließt den Fragenmodus bewusst **nicht** (da Enter von Frage 1 zu Frage 2 springt). Der Fragenmodus schließt erst, wenn Freebuff `Your answer:` / `Your answers:` ausgibt oder der Nutzer Esc / Strg+C drückt.
     * **Textauswahl & Copy/Paste:** Bleibt unberührt (PTY-Filter filtert Maus-Reporting, Strg+C kopiert, Strg+V fügt ein).
 ## Changelog
+
+- 2026-10-21: **Commit-Signierung komplett entfernt — sie kostete bei jedem Save einen Fehlversuch und brachte nichts.** Der Codespaces-Signierer `/.codespaces/bin/gh-gpgsign` (aus `/etc/gitconfig`) lehnt mit dem App-/Integrationstoken jede Signatur ab (`403 Author is invalid`), und die 2026-09-27 gebaute SSH-Lösung brauchte einen pro Codespace neuen Key, den GitHub ohne manuelle Registrierung als *Signing key* nie „verified" zeigt. `save.sh` committete deshalb im Regelfall über den Ausnahme-Zweig und warnte bei jedem Lauf. **Entfernt:** der SSH-Setup-Block in `setup.sh`, die `commit.gpgsign`-Logik in `auth.sh`, der Signier-Fallback samt Warnung in `save.sh` und `config/git-allowed-signers`. **Neu:** `setup.sh`/`auth.sh` setzen repo-lokal `commit.gpgsign=false`, `save.sh` committet mit `git -c commit.gpgsign=false` (überlebt eine geerbte Config). **Verifiziert:** Commit läuft ohne Signatur-Fehlversuch durch, `git config --local` ohne `gpg.*`, `bash -n` + `make check` grün. **Zurück:** `git revert` (Signaturen sind nicht Teil des Betriebs).
 
 - 2026-10-21: **Wortgrenzen-Patch an freebuff 0.2.30 angepasst — der Minifier hat den Clamp in einen Helfer ausgelagert.** `verify-codespace.sh` meldete `word_boundary=unrecognized` (0 Treffer), weil 0.2.30 `Math.max(0,Math.min(pos,str.length))` durch `X9(pos,0,str.length)` ersetzt. Der Patch erkennt jetzt **beide** Formen als eine Gruppe und setzt sie im Ersatz unverändert wieder ein — dadurch bleibt er unabhängig davon, ob der Helfer künftig umbenannt oder wieder inlined wird; `STAMP_FORMAT` 2 → 3 invalidiert alte Stamps. Fixture `WORD_CLAMP` (aus `WORD` abgeleitet, mit anderen Bezeichnern) plus zwei Tests: Anwenden bei Helfer-Form und Idempotenz in beiden Formen. **Zweiter Fund:** der Verify-Check „freebuff kein Update-Rest" war direkt nach jedem Install 30 Minuten rot, weil er Reste zählte, die `cleanup_partial_downloads` per `STALE_AFTER_S=1800` bewusst noch schützt; der Check nutzt jetzt dieselbe Altersschwelle. **Verifiziert:** `freebuff_patch.py --check` = 4× `already`, Status meldet `binary_start=ok 0.2.32`, `freebuff-install.sh` + Start ok, `make check` grün, `verify-codespace.sh` 40 PASS / 0 FAIL. **Zurück:** `git revert` (Binary-Patches kommen beim nächsten Start automatisch aus dem Repo-Stand).
 

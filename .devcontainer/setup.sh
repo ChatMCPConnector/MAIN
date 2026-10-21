@@ -186,37 +186,14 @@ else
   echo "    kein Token gefunden. Einmalig: ./infra/scripts/auth.sh setup  (oder LANDSCAPE_PAT als Codespaces-Secret setzen)"
 fi
 
-echo "==> [landscape] Commit-Signierung einrichten (SSH-Signatur)..."
-# Warum SSH und nicht der Codespaces-Signierer: /.codespaces/bin/gh-gpgsign
-# nutzt den Codespaces-GITHUB_TOKEN, ein App-/Integrationstoken. Der lehnt jede
-# Signatur ab: "403 Author is invalid" — unabhaengig von Identitaet und PAT, live
-# in zwei Test-Repos reproduziert (der Code-Account passt, /user/emails liefert
-# "Resource not accessible by integration"). SSH-Signierung laeuft dagegen rein
-# lokal, braucht keine API und keinen Token.
-# Der Codespace-Key ~/.ssh/codespaces.auto (ED25519) gehört dem CODESPACE,
-# nicht dem Konto: jeder neue Codespace hat einen anderen. Damit die Signaturen
-# aller Codespaces lokal pruefbar sind, sammelt setup.sh die oeffentlichen Keys
-# in config/git-allowed-signers (versioniert, Dedup pro Fingerabdruck, kein
-# Secret) statt in einer .runtime-Datei, die nur den letzten Key kennt.
-SIGN_KEY="$HOME/.ssh/codespaces.auto"
-if [ -f "$SIGN_KEY" ]; then
-  SIGNERS="$REPO_ROOT/config/git-allowed-signers"
-  FP="$(ssh-keygen -lf "$SIGN_KEY.pub" 2>/dev/null | awk '{print $2}')"
-  MAIL="$(git -C "$REPO_ROOT" config user.email 2>/dev/null || echo unknown)"
-  if [ -n "$FP" ] && ! grep -qF "$FP" "$SIGNERS" 2>/dev/null; then
-    printf '%s %s # %s\n' "$MAIL" "$(cut -d' ' -f1,2 "$SIGN_KEY.pub")" "$FP" >> "$SIGNERS"
-    echo "    Signing-Key neuer Codespace eingetragen: ${FP:0:24}…"
-  fi
-  git -C "$REPO_ROOT" config gpg.format ssh
-  git -C "$REPO_ROOT" config user.signingkey "$SIGN_KEY.pub"
-  git -C "$REPO_ROOT" config gpg.ssh.allowedSignersFile "$SIGNERS"
-  git -C "$REPO_ROOT" config commit.gpgsign true
-  echo "    SSH-Signatur aktiv (Key ${FP:0:24}…, $(grep -c . "$SIGNERS") bekannte Signierer)."
-  echo "    Hinweis: GitHub zeigt 'Verified' erst nach Registrierung des Keys"
-  echo "    als SIGNING key — und der Key ist pro Codespace neu."
-else
-  echo "    WARN: kein $SIGN_KEY — Commits bleiben unsigniert (nicht fatal)."
-fi
+echo "==> [landscape] Commit-Signierung abschalten..."
+# Bewusst KEINE Commit-Signatur (Nutzerentscheidung 2026-10-21: nicht benoetigt).
+# Der Codespaces-Signierer /.codespaces/bin/gh-gpgsign (aus /etc/gitconfig)
+# lehnt mit dem App-/Integrationstoken JEDE Signatur ab — live: "403 Author is
+# invalid" — und liess `save.sh` bei jedem Commit in den Ausnahme-Zweig laufen.
+# Ohne `commit.gpgsign` committet git plain und ohne API. Explizit auf false,
+# damit ein geerbtes `true` (alter Codespace/Repo-Config) nicht zurueckkommt.
+git -C "$REPO_ROOT" config --local commit.gpgsign false
 
 echo "==> [landscape] Git-Hooks aktivieren (pre-commit: ruff + mypy fuer glm2api)..."
 # core.hooksPath zeigt auf die VERSIONIERTE .githooks/ im Repo — jeder Account
