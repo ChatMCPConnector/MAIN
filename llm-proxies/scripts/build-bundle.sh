@@ -5,8 +5,8 @@
 #
 # Quelle des Bundles: llm-proxies/glm2api (Code, kanonischer Source — kein
 # Patch-Artefakt mehr), llm-proxies/glm2api/.env.dist (Config, landet im
-# Bundle als app/glm2api.env), infra/docs/reverse-engineering (Doku). Kein
-# Klon, keine externen Quellen.
+# Bundle als app/glm2api.env) und die Bundle-README. Kein Klon, keine
+# externen Quellen.
 #
 # Determinismus (N-2): alle gestagten Dateien bekommen einen festen Zeitstempel
 # (SOURCE_DATE_EPOCH oder Default 0), damit inhaltlich identische Builds
@@ -24,7 +24,7 @@ ZIP="$DIST/glm2api-bundle.zip"
 
 # 1) Stage frisch aufbauen
 rm -rf "$STAGE"
-mkdir -p "$STAGE/app" "$STAGE/scripts" "$STAGE/docs"
+mkdir -p "$STAGE/app" "$STAGE/scripts"
 
 # 2) App-Code (nur Source, keine Runtime-Artefakte); tests/ komplett via cp -r
 cp -r "$APP_DIR/src" "$APP_DIR/tests" "$STAGE/app/"
@@ -40,8 +40,7 @@ cp "$ENV_SRC" "$STAGE/app/glm2api.env"
 cp "$REPO_ROOT/llm-proxies/scripts/bundle/install.sh" "$STAGE/scripts/"
 cp "$REPO_ROOT/llm-proxies/scripts/bundle/start.sh" "$STAGE/scripts/"
 
-# 4) Doku
-cp "$REPO_ROOT/infra/docs/reverse-engineering/chatglm-reasoning-modes.md" "$STAGE/docs/" 2>/dev/null || true
+# 4) Bundle-README
 cp "$REPO_ROOT/llm-proxies/scripts/bundle/README.md" "$STAGE/README.md"
 
 chmod +x "$STAGE/scripts/"*.sh

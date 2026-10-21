@@ -45,11 +45,6 @@ extend-exclude = [
   ".runtime",
   ".venv",
   "node_modules",
-  # infra/docs/reverse-engineering/*.py sind archivierte Reverse-Engineering-
-  # Skripte (CDP-Client, HAR-Capture) aus der ChatGLM-Recherche. Sie sind
-  # Dokumentation, nicht Teil der Codespace-Kette. ruff meldete dort 27 E7xx-
-  # Befunde — ohne Nutzen, weil niemand diese Dateien beim Boot ausfuehrt.
-  "infra/docs",
 ]
 # Default-Regelsatz E4/E7/E9/F wie in glm2api: findet toten Code, bestraft aber
 # die bewusst dynamischen Strukturen in freebuff-pty.py nicht.
