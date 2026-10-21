@@ -12,6 +12,28 @@ PIDFILE="/tmp/opencode/opencode-serve.pid"
 
 mkdir -p /tmp/opencode
 
+OPENCODE_BIN="${OPENCODE_BIN:-/home/vscode/.opencode/bin/opencode-bin}"
+VERSION_LINE="$("$OPENCODE_BIN" --version 2>/dev/null | head -n 1 || true)"
+VERSION_MAJOR="$(printf '%s\n' "$VERSION_LINE" | sed -nE 's/.*v?([0-9]+)\.[0-9]+\..*/\1/p')"
+
+# v2 hat keinen separaten HTTP-Server auf Port 4096 mehr (Managed Service)
+if [ -n "$VERSION_MAJOR" ] && [ "$VERSION_MAJOR" -ge 2 ]; then
+  case "${1:-status}" in
+    start)
+      echo "[opencode-server] OpenCode v2 nutzt den internen Managed Service; kein Server auf Port 4096 nötig."
+      exit 0
+      ;;
+    status)
+      echo "[opencode-server] OpenCode v2 aktiv (Managed Service, kein 4096-Server nötig)."
+      exit 0
+      ;;
+    restart)
+      echo "[opencode-server] OpenCode v2 nutzt den internen Managed Service; kein Restart auf Port 4096 nötig."
+      exit 0
+      ;;
+  esac
+fi
+
 case "${1:-status}" in
   start)
     if ss -tln | grep -q ":${PORT} "; then

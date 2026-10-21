@@ -68,11 +68,16 @@ fi
 # TUI-Start um (package.json + package-lock.json) und hinterließ dauerhaft
 # uncommitteten Churn, den der Autosave-Daemon mitcommittete.
 # Pin wechseln: ./infra/scripts/opencode-version.sh bump   (eine Stelle, ein Commit)
-OPENCODE_VERSION="$(sed -nE 's/.*"@opencode-ai\/plugin"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$REPO_ROOT/.opencode/package.json" 2>/dev/null | head -1)"
+OPENCODE_VERSION="$(sed -nE 's/.*"(@opencode\/cli|@opencode-ai\/plugin)"[[:space:]]*:[[:space:]]*"([^"]+)".*/\2/p' "$REPO_ROOT/.opencode/package.json" 2>/dev/null | head -1)"
 : "${OPENCODE_VERSION:=1.18.32}"   # Notnagel, falls package.json fehlt/kaputt ist
 echo "==> [landscape] opencode installieren (gepinnt auf $OPENCODE_VERSION)..."
 opencode_install() {
-  curl -fsSL https://opencode.ai/install | bash -s -- --version "$OPENCODE_VERSION"
+  local major; major="$(printf '%s\n' "$OPENCODE_VERSION" | sed -nE 's/.*v?([0-9]+)\.[0-9]+\..*/\1/p')"
+  if [ -n "$major" ] && [ "$major" -ge 2 ]; then
+    curl -fsSL https://opencode.ai/v2/install | bash -s -- --version "$OPENCODE_VERSION"
+  else
+    curl -fsSL https://opencode.ai/install | bash -s -- --version "$OPENCODE_VERSION"
+  fi
 }
 #Vorhandene Version ermitteln: einmal das Binary, das der Wrapper ersetzt hat.
 installed_opencode_version() {

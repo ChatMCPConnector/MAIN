@@ -143,7 +143,14 @@ info "LANDSCAPE_PASSPHRASE" "$([ -n "${LANDSCAPE_PASSPHRASE:-}" ] && echo "geset
 echo "== 3. opencode =="
 check_layer chain "opencode installiert"     bash -c 'command -v opencode >/dev/null || [ -x "$HOME/.opencode/bin/opencode" ]'
 check_layer code  "Versions-Pin konsistent"  bash "$REPO_ROOT/infra/scripts/opencode-version.sh" check
-check_layer chain "opencode-Server antwortet" bash -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:4096/ && echo "HTTP 200 auf 4096"'
+check_layer chain "opencode-Server antwortet" bash -c '
+  v="$(opencode --version 2>/dev/null || $HOME/.opencode/bin/opencode-bin --version 2>/dev/null || true)"
+  m="$(printf "%s\n" "$v" | sed -nE "s/.*v?([0-9]+)\.[0-9]+\..*/\1/p")"
+  if [ -n "$m" ] && [ "$m" -ge 2 ]; then
+    echo "v2 aktiv (Managed Service, Port 4096 entfaellt)"
+  else
+    curl -fsS -m 10 -o /dev/null http://127.0.0.1:4096/ && echo "HTTP 200 auf 4096"
+  fi'
 check_layer code  "MCP registriert"          bash -c 'grep -q "\"opencode-sessions\"" .opencode/opencode.json && echo "opencode-sessions in .opencode/opencode.json"'
 check_layer chain "opencode v2 CLI-Config"    bash -c 'test -f "$HOME/.config/opencode/cli.json" && cmp -s "$HOME/.config/opencode/cli.json" "$REPO_ROOT/config/opencode-cli.json" && echo "cli.json aktuell"'
 info "opencode" "$(opencode --version 2>/dev/null || echo '?')"

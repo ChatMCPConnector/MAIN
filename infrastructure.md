@@ -386,26 +386,28 @@ In langen Konversationen kann ein einzelner, scheinbar harmloser Prompt in kürz
 
 ### opencode v2 — Migrationsstand (2026-10-21)
 
-- **v1 bleibt der aktive Default.** Der Repo-Pin steht weiterhin auf `1.18.32`;
-  v2.1.2 wurde nur isoliert unter `/workspaces/opencode2` geprüft, nicht in MAIN
-  installiert. Ein v2-Server läuft nicht.
+- **v1 bleibt bis zum Cutover der aktive Default.** Der Repo-Pin steht
+  weiterhin auf `1.18.32`.
 - **DB-Schema v2:** `session_v2`/`session_message` statt `session`/`message`/`part`.
   Migrierte DBs behalten die v1-Tabellen; neue Sessions schreiben nur v2.
-- **MCP ist portiert:** `infra/mcp/opencode-sessions-mcp.js` erkennt beide
-  Schemata, zählt v2-Parts aus `session_message.data.content` und löscht in
-  migrierten DBs beide Welten. Tests:
-  `uv run pytest -q infra/tests/test_opencode_sessions_mcp.py`.
+  Eine Sicherung der aktiven v1-DB liegt unter
+  `~/.local/share/opencode/opencode.db.pre-v2-backup`.
+- **MCP ist portiert:** `infra/mcp/opencode-sessions-mcp.js` (v2.0.0) erkennt
+  beide Schemata, zählt v2-Parts aus `session_message.data.content` und löscht
+  in migrierten DBs beide Welten.
 - **TUI-Config ist vorbereitet:** `config/opencode-cli.json` + Setup-Installation
-  nach `~/.config/opencode/cli.json`, Paritaetstest gegen `.opencode/tui.json`.
+  nach `~/.config/opencode/cli.json`, Paritätstest gegen `.opencode/tui.json`.
 - **Wrapper ist versionsbewusst:** v1 nutzt weiter `attach` auf Port 4096; v2
   wird direkt durchgereicht, weil v2 kein `attach` hat und seinen Managed
   Service selbst startet.
-- **Noch offen (Cutover, nicht Teil des Ist-Zustands):** v2-Service auf Port
-  `49374` statt des v1-Servers 4096; `OPENCODE_PASSWORD` bei `--server`-Nutzung;
-  native Entsprechung fuer `provider.opencode.blacklist` (v2 ignoriert das Feld);
-  manueller Sichttest von Mausrad-Halbseiten-Scrollen und Bildvorschau.
-- **Upstream-Install:** v2 nutzt `https://opencode.ai/v2/install`; der v1-Pin
-  bleibt bewusst unveraendert, bis der Cutover getestet ist.
+- **Server & Setup sind dual-fähig:** `opencode-server.sh`, `setup.sh` und
+  `opencode-version.sh` unterstützen sowohl v1 (`@opencode-ai/plugin`) als auch
+  v2 (`@opencode/cli`). `verify-codespace.sh` prüft bei v1 den 4096-Server und
+  akzeptiert bei v2 den Managed Service.
+- **Cutover-Werkzeug:** `infra/scripts/opencode-cutover.sh` erlaubt den sicheren
+  Wechsel (`status`, `v2`, `rollback`). **Sicherheitsregel:** Der Cutover darf
+  nicht aus einer laufenden opencode-Session aufgerufen werden (der v1-Server
+  ist der Host-Prozess der Session). Ausführung in einem normalen VS-Code-Terminal.
 - **Git-Identität folgt dem Account** (siehe Secrets-/Auth-Abschnitt): `auth.sh
   setup` leitet Name + `<id>+<login>@users.noreply.github.com` aus dem Token ab und
   setzt sie **repo-lokal**; `auth.sh identity` zeigt sie. Beim Account-Wechsel

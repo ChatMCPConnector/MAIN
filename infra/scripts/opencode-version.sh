@@ -28,7 +28,7 @@ REPO_SLUG="anomalyco/opencode"
 
 declared_version() {
   [ -f "$PKG" ] || return 1
-  sed -nE 's/.*"@opencode-ai\/plugin"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$PKG" | head -1
+  sed -nE 's/.*"(@opencode\/cli|@opencode-ai\/plugin)"[[:space:]]*:[[:space:]]*"([^"]+)".*/\2/p' "$PKG" | head -1
 }
 
 # Auch nach dem Binary greifen, das der Multi-Client-Wrapper (opencode) ersetzt hat.
@@ -124,9 +124,16 @@ cmd_bump() {
 cmd_install() {
   local d; d="$(declared_version || true)"
   [ -n "$d" ] || { echo "FEHLER: kein Pin im Repo gefunden."; return 1; }
-  echo "Installiere opencode $d (Repo-Pin) ..."
-  curl -fsSL https://opencode.ai/install | bash -s -- --version "$d" \
-    || { echo "FEHLER: Install fehlgeschlagen."; return 1; }
+  local major; major="$(printf '%s\n' "$d" | sed -nE 's/.*v?([0-9]+)\.[0-9]+\..*/\1/p')"
+  if [ -n "$major" ] && [ "$major" -ge 2 ]; then
+    echo "Installiere opencode $d (v2 Repo-Pin) ..."
+    curl -fsSL https://opencode.ai/v2/install | bash -s -- --version "$d" \
+      || { echo "FEHLER: Install fehlgeschlagen."; return 1; }
+  else
+    echo "Installiere opencode $d (v1 Repo-Pin) ..."
+    curl -fsSL https://opencode.ai/install | bash -s -- --version "$d" \
+      || { echo "FEHLER: Install fehlgeschlagen."; return 1; }
+  fi
   [ -f "$HOME/.opencode/bin/opencode-bin" ] \
     || mv "$HOME/.opencode/bin/opencode" "$HOME/.opencode/bin/opencode-bin" 2>/dev/null || true
   echo "Installiert: $(installed_version || echo unbekannt)"
