@@ -53,7 +53,7 @@ GLM_USE_GUEST_REFRESH_TOKEN=true
 Alle weiteren Config-Variablen: `.env.example` (kommentiert).
 
 **`.env.example` ist nicht nur Doku, sondern ein zweiter Saat-Pfad.** Es gibt
-zwei Stellen, die eine `.env` erzeugen, wenn sie fehlt: `rebuild.sh:29` kopiert
+zwei Stellen, die eine `.env` erzeugen, wenn sie fehlt: `rebuild.sh:30` kopiert
 `.env.dist`, und `config.py:ensure_env_file()` kopiert `.env.example`.
 `secrets.sh` stellt nur die **Wurzel**-`.env` aus dem Bundle wieder her, nicht
 die hier. Deshalb müssen beide Dateien **denselben Wert** für jeden Key tragen —

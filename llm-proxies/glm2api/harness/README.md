@@ -159,8 +159,8 @@ Die **Wiederholung** (`ses_eea41d944ffepGjmTwx0jqCMfv`) bestätigt den
 Lauf ohne Hänger, nur mit gültigen Tools (`bash`/`read`) und einem belegten
 Bericht; stichprobenartig geprüfte Aussagen (17 `test_*.py`+
 `conftest.py`, drei `cmd/`-Binaries, `.env.example`↔`.env.dist`-Gleichheits-
-test in `test_config.py:694`, weiterhin vorhandene `zerokey.sh`/`zerokey.bat`
-im vendored Baum) treffen zu. Sie inspizierte jedoch vor allem Config und
+test in `test_config.py:694`, die `AGENTS.md`/`GEMINI.md`-Symlinks im vendored
+Baum) treffen zu. Sie inspizierte jedoch vor allem Config und
 `infrastructure.md` und las weniger Quelldateien als der Abschluss-Lauf —
 GLM-`5.3` ist hier nicht deterministisch. Ein einzelner Lauf belegt daher
 den behobenen Hänger-/Drift-Pfad, nicht eine garantierte Analysetiefe.

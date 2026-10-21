@@ -12,7 +12,8 @@ if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" 
     # SECRETS_NO_PROMPT + </dev/null: derselbe Boot-Hang wie in setup.sh — ohne
     # die beiden Flags kann secrets.sh bei vorhandenem TTY interaktiv nach der
     # Passphrase fragen, und der Boot wartet unsichtbar (Ausgabe geht nach
-    # /dev/null). keys.sh ensure legt bei Fehlschlag Platzhalter an.
+    # /dev/null). Der Unlock ist best-effort: opencode.json referenziert keine
+    # Key-Dateien mehr, der Editor startet auch ohne ihn.
     SECRETS_NO_PROMPT=1 bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock </dev/null >/dev/null 2>&1 || true
   fi
 fi

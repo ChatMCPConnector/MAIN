@@ -111,7 +111,6 @@ info "commits" "$(git rev-list --count HEAD)"
 
 echo "== 2. Secrets =="
 check_layer chain "Bundle entschluesselbar"  bash "$REPO_ROOT/infra/scripts/secrets.sh" status
-check_layer chain "Key-Dateien OK"           bash "$REPO_ROOT/infra/scripts/keys.sh" status
 check_layer chain "Passphrase-Kandidaten"    bash -c '
   out=$("$REPO_ROOT/infra/scripts/secrets.sh" status 2>&1)
   printf "%s" "$out" | grep -q "Passphrase: OK" || { printf "%s" "$out" | tail -1; exit 1; }
@@ -442,7 +441,6 @@ echo "== 9. Provider live =="
 # Roundtrip ueber 2 Turns). Gehoert bewusst hierher und nicht in die schnelle
 # Runde: er macht echte Upstream-Calls und dauert Minuten. timeout.sh als
 # Schutz (AGENTS.md §4), das Skript selbst hat kein Gesamtlimit.
-check_layer live  "keys.sh doctor"         bash "$REPO_ROOT/infra/scripts/keys.sh" doctor
 check_layer live  "glm2api Smoke-Test (live)" bash -c '
   mkdir -p /tmp/opencode
   bash "$REPO_ROOT/infra/scripts/timeout.sh" run 400 bash "$REPO_ROOT/llm-proxies/scripts/smoke-test.sh"'

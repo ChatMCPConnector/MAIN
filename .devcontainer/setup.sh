@@ -162,7 +162,8 @@ if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" 
   # eine Eingabe warten lassen. Live am 2026-09-26 belegt: leeres
   # LANDSCAPE_PASSPHRASE -> secrets.sh fragt interaktiv von /dev/tty -> Haenger
   # (im Testblock reproduziert). Fehlt die Passphrase, soll der Build schnell
-  # mit WARN weiterlaufen — keys.sh ensure legt Platzhalter an, opencode startet.
+  # mit WARN weiterlaufen — opencode.json referenziert keine Key-Dateien mehr
+  # (externe Provider entfernt), der Editor startet auch ohne Unlock.
   UNLOCK_LOG="$(SECRETS_NO_PROMPT=1 bash "$REPO_ROOT/infra/scripts/secrets.sh" unlock </dev/null 2>&1)" \
     && echo "    Secrets automatisch wiederhergestellt." \
     || { echo "    WARN: Auto-Unlock fehlgeschlagen — Keys fehlen, opencode startet nicht:"
@@ -170,12 +171,6 @@ if [ -f "$REPO_ROOT/config/secrets.enc" ] && { [ -n "${LANDSCAPE_PASSPHRASE:-}" 
 elif [ -f "$REPO_ROOT/config/secrets.enc" ]; then
   echo "    Bundle vorhanden, keine Passphrase. Entsperren mit: ./infra/scripts/secrets.sh unlock"
 fi
-
-echo "==> [landscape] API-Key-Dateien sicherstellen..."
-# opencode verweigert den Start, wenn eine per {file:...} referenzierte Key-Datei
-# fehlt. ensure legt fehlende Dateien als leere Platzhalter an — so startet
-# opencode in JEDEM Codespace, auch wenn der Unlock oben gescheitert ist.
-bash "$REPO_ROOT/infra/scripts/keys.sh" ensure || true
 
 echo "==> [landscape] .env prüfen..."
 if [ ! -f "$REPO_ROOT/.env" ] && [ -f "$REPO_ROOT/.env.example" ]; then

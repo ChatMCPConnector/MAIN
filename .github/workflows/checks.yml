@@ -12,7 +12,7 @@
 #   * Deshalb fährt der `repo`-Job `verify-codespace.sh --code`: nur der
 #     Quellcode-Teil. Job `repo` kann sauber sein, während die Kette im
 #     Codespace steht — und umgekehrt. Beide Aussagen bleiben, nur getrennt.
-#   * Provider-Calls (keys.sh doctor, glm2api-Smoke-Test) laufen hier NICHT:
+#   * Provider-Calls (glm2api-Smoke-Test, Live-Checks) laufen hier NICHT:
 #     sie kosten Kontingent, treffen Rate-Limits und ein flaky Live-Check wird
 #     sehr schnell übersprungen (PLAN Stufe 5, dort als Tier B).
 #

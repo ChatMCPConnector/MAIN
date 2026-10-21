@@ -112,8 +112,8 @@ find_working_passphrase() {
   return 1
 }
 
-# "fehlt" aus Sicht des Unlock: Datei existiert nicht ODER ist 0 Byte
-# (Platzhalter aus keys.sh ensure). Belegte lokale Secrets bleiben unangetastet.
+# "fehlt" aus Sicht des Unlock: Datei existiert nicht ODER ist 0 Byte.
+# Belegte lokale Secrets bleiben unangetastet.
 missing_or_empty() {
   [ ! -f "$1" ] || [ ! -s "$1" ]
 }
@@ -146,11 +146,9 @@ cmd_lock() {
   trap "rm -rf '$stage'" EXIT
   local found=0
   mkdir -p "$stage/files"
-  # "-s" statt "-f": 0-Byte-Platzhalter aus keys.sh ensure dürfen NICHT ins
-  # Bundle — sonst überschreiben sie beim nächsten Unlock den echten Key.
+  # "-s" statt "-f": eine 0-Byte-Datei ist kein Secret und darf nicht ins
+  # Bundle — sonst überschreibt sie beim nächsten Unlock den echten Wert.
   [ -s "$HOME/.config/landscape/pat" ] && { cp "$HOME/.config/landscape/pat" "$stage/files/pat"; found=1; }
-  [ -s "$HOME/.config/landscape/xinjianya.key" ] && { cp "$HOME/.config/landscape/xinjianya.key" "$stage/files/xinjianya-key"; found=1; }
-  [ -s "$HOME/.config/landscape/aiqana.key" ] && { cp "$HOME/.config/landscape/aiqana.key" "$stage/files/aiqana.key"; found=1; }
   [ -s "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" ] && { cp "$HOME/.config/antigravity-oauth-proxy/oauth_creds.json" "$stage/files/antigravity-oauth_creds.json"; found=1; }
   [ -s "$HOME/.config/landscape/chatglm-refresh-token" ] && { cp "$HOME/.config/landscape/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
   missing_or_empty "$HOME/.config/landscape/chatglm-refresh-token" && [ -f ".secrets/chatglm-refresh-token" ] && { cp ".secrets/chatglm-refresh-token" "$stage/files/chatglm-refresh-token"; found=1; }
@@ -193,9 +191,8 @@ cmd_unlock() {
   fi
   mkdir -p "$stage/files" && tar -xzf "$stage/bundle.tgz" -C "$stage/files"
   # Bestehendes nie überschreiben (lokale Secrets behalten Vorrang) — ABER eine
-  # 0-Byte-Datei ist kein Secret, sondern der Platzhalter aus keys.sh ensure.
-  # Sonst blockiert der Platzhalter den echten Key und der Provider bleibt
-  # dauerhaft auf 401. Leere Datei zählt deshalb als "fehlt".
+  # 0-Byte-Datei ist kein Secret. Sonst blockiert sie den echten Wert und der
+  # Provider bleibt dauerhaft auf 401. Leere Datei zählt deshalb als "fehlt".
   if [ -f "$stage/files/pat" ] && missing_or_empty "$HOME/.config/landscape/pat"; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/pat" "$HOME/.config/landscape/pat" && chmod 600 "$HOME/.config/landscape/pat"
     ./infra/scripts/auth.sh setup "$(cat "$HOME/.config/landscape/pat")" >/dev/null 2>&1 || true
@@ -204,14 +201,6 @@ cmd_unlock() {
   if [ -f "$stage/files/opencode-auth.json" ] && missing_or_empty "$HOME/.local/share/opencode/auth.json"; then
     mkdir -p "$HOME/.local/share/opencode" && cp "$stage/files/opencode-auth.json" "$HOME/.local/share/opencode/auth.json" && chmod 600 "$HOME/.local/share/opencode/auth.json"
     echo "    opencode-Login wiederhergestellt."
-  fi
-  if [ -f "$stage/files/xinjianya-key" ] && missing_or_empty "$HOME/.config/landscape/xinjianya.key"; then
-    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/xinjianya-key" "$HOME/.config/landscape/xinjianya.key" && chmod 600 "$HOME/.config/landscape/xinjianya.key"
-    echo "    XinJianYa-Key wiederhergestellt."
-  fi
-  if [ -f "$stage/files/aiqana.key" ] && missing_or_empty "$HOME/.config/landscape/aiqana.key"; then
-    mkdir -p "$HOME/.config/landscape" && cp "$stage/files/aiqana.key" "$HOME/.config/landscape/aiqana.key" && chmod 600 "$HOME/.config/landscape/aiqana.key"
-    echo "    Aiqana-Key wiederhergestellt."
   fi
   if [ -f "$stage/files/chatglm-refresh-token" ] && missing_or_empty "$HOME/.config/landscape/chatglm-refresh-token"; then
     mkdir -p "$HOME/.config/landscape" && cp "$stage/files/chatglm-refresh-token" "$HOME/.config/landscape/chatglm-refresh-token" && chmod 600 "$HOME/.config/landscape/chatglm-refresh-token"
@@ -234,14 +223,12 @@ cmd_unlock() {
     echo "    .env wiederhergestellt."
   fi
   [ "$noninteractive" -eq 0 ] && unset LANDSCAPE_PASSPHRASE
-  # Key-Dateien garantiert vorhanden halten, damit opencode immer startet
-  bash ./infra/scripts/keys.sh ensure || true
   echo "Unlock fertig."
 }
 
 cmd_status() {
   # Exit-Code ist hier die einzige ehrliche Aussage: `verify-codespace.sh` wertet
-  # ihn aus. Früher endete die Funktion immer auf `keys.sh status` (Exit 0) und
+  # ihn aus. Früher endete die Funktion immer auf einem Echo (Exit 0) und
   # konnte damit nie rot werden — auch bei falscher Passphrase nicht.
   local rc=0
   if [ -f "$BUNDLE" ]; then
@@ -267,9 +254,6 @@ cmd_status() {
     rc=1
   fi
   echo ""
-  # keys.sh status ist reine Zusatzinfo; sein Exit-Code darf den Bundle-Status
-  # nicht verfälschen (sonst koppelt sich dieser Check an ein fremdes Skript).
-  bash ./infra/scripts/keys.sh status || true
   if [ "$rc" -ne 0 ]; then
     echo ""
     echo "STATUS: FEHLER — Bundle ist nicht (mit den vorhandenen Kandidaten) entschlüsselbar."

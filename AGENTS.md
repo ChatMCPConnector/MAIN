@@ -27,7 +27,7 @@ Alltag:
 
 - `llm-proxies/glm2api/` — Python-Haupt-Proxy (Port 8001), `src/` + `tests/`, uv.
 - `llm-proxies/antigravity-proxy/` — Go (Port 9878), `mise`-Tasks, Binary wird gebaut.
-- `infra/scripts/` — Shell-Werkzeugkasten (`save.sh`, `secrets.sh`, `keys.sh`, …).
+- `infra/scripts/` — Shell-Werkzeugkasten (`save.sh`, `secrets.sh`, `timeout.sh`, …).
 - `infra/scripts/freebuff_patch.py` — die **Byte-Patches** des freebuff-Binaries
   (Mausrad-Scroll, `Entf` löscht eine Session in `/history`, Wortgrenzen,
   halbe Scrollseite). Freebuffs Launcher ersetzt das native Binary bei jedem
