@@ -29,6 +29,7 @@ KEYBIND_MAP = {
 # v2-spezifische Keybinds ohne v1-Entsprechung (z. B. neues open.menu)
 V2_ONLY_KEYBINDS = {
     "open.menu": "ctrl+l",
+    "session.child.first": "<leader>down",
 }
 
 

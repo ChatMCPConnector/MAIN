@@ -158,7 +158,6 @@ export default Plugin.define({
   setup(context) {
     const [quota, setQuota] = createSignal<QuotaState | null>(null)
     const [loading, setLoading] = createSignal(false)
-    const [open, setOpen] = createSignal(true)
 
     const refresh = async () => {
       if (loading()) return
@@ -226,10 +225,17 @@ export default Plugin.define({
           suggested: true,
           run: () => showDetails(),
         },
+        {
+          id: "antigravity.quota.refresh",
+          title: "Refresh Antigravity Quota",
+          group: "Antigravity",
+          palette: true,
+          run: () => refresh(),
+        },
       ],
     }))
 
-    // 1. Sidebar Section (wo MCPs und Context rechts angezeigt werden)
+    // 1. Sidebar Section (direkt dauerhaft aufgeklappt)
     const SidebarSection = () => {
       const q = quota()
       const g = q?.gemini
@@ -238,41 +244,39 @@ export default Plugin.define({
       return (
         <box flexDirection="column" gap={0}>
           {/* Header */}
-          <box
-            flexDirection="row"
-            gap={1}
-            onMouseDown={() => setOpen(!open())}
-          >
-            <text fg={context.theme.text.base}>{open() ? "▼" : "▶"}</text>
+          <box flexDirection="row" gap={1}>
+            <text fg={context.theme.text.base}>▼</text>
             <text fg={context.theme.text.base}>
               <b>Quota</b>
             </text>
-            <Show when={!open() && q}>
-              <text fg={context.theme.text.muted}>
-                {" "}
-                (G: {g?.sprint.pct}% · C: {c?.sprint.pct}%)
-              </text>
-            </Show>
+            <text fg={context.theme.text.muted}> (Antigravity)</text>
             <Show when={loading()}>
-              <text fg={context.theme.text.muted}> …</text>
+              <text fg={context.theme.text.muted}> ↻</text>
             </Show>
           </box>
 
-          {/* Inhalt wenn ausgeklappt */}
-          <Show when={open() && q}>
+          {/* Direkt aufgeklappter Inhalt */}
+          <Show
+            when={q}
+            fallback={
+              <box paddingLeft={1}>
+                <text fg={context.theme.text.muted}>Lade Kontingente…</text>
+              </box>
+            }
+          >
             <box flexDirection="column" paddingLeft={1} gap={0}>
               {/* Gemini */}
-              <box flexDirection="row" gap={1} justifyContent="space-between">
-                <text fg={context.theme.text.base}>• Gemini 5h</text>
+              <text fg={context.theme.text.base}>• Gemini</text>
+              <box flexDirection="row" gap={1} justifyContent="space-between" paddingLeft={1}>
+                <text fg={context.theme.text.muted}>5h-Sprint</text>
                 <box flexDirection="row" gap={1}>
                   <text fg={getColor(g!.sprint.pct)}>{g!.sprint.pct}%</text>
                   <text fg={context.theme.text.muted}>[{makeBar(g!.sprint.pct)}]</text>
                   <text fg={context.theme.text.muted}>{g!.sprint.reset}</text>
                 </box>
               </box>
-
-              <box flexDirection="row" gap={1} justifyContent="space-between">
-                <text fg={context.theme.text.muted}>  Gemini Woche</text>
+              <box flexDirection="row" gap={1} justifyContent="space-between" paddingLeft={1}>
+                <text fg={context.theme.text.muted}>Woche</text>
                 <box flexDirection="row" gap={1}>
                   <text fg={getColor(g!.weekly.pct)}>{g!.weekly.pct}%</text>
                   <text fg={context.theme.text.muted}>[{makeBar(g!.weekly.pct)}]</text>
@@ -281,17 +285,17 @@ export default Plugin.define({
               </box>
 
               {/* Claude */}
-              <box flexDirection="row" gap={1} justifyContent="space-between" paddingTop={0}>
-                <text fg={context.theme.text.base}>• Claude 5h</text>
+              <text fg={context.theme.text.base} paddingTop={0}>• Claude / GPT</text>
+              <box flexDirection="row" gap={1} justifyContent="space-between" paddingLeft={1}>
+                <text fg={context.theme.text.muted}>5h-Sprint</text>
                 <box flexDirection="row" gap={1}>
                   <text fg={getColor(c!.sprint.pct)}>{c!.sprint.pct}%</text>
                   <text fg={context.theme.text.muted}>[{makeBar(c!.sprint.pct)}]</text>
                   <text fg={context.theme.text.muted}>{c!.sprint.reset}</text>
                 </box>
               </box>
-
-              <box flexDirection="row" gap={1} justifyContent="space-between">
-                <text fg={context.theme.text.muted}>  Claude Woche</text>
+              <box flexDirection="row" gap={1} justifyContent="space-between" paddingLeft={1}>
+                <text fg={context.theme.text.muted}>Woche</text>
                 <box flexDirection="row" gap={1}>
                   <text fg={getColor(c!.weekly.pct)}>{c!.weekly.pct}%</text>
                   <text fg={context.theme.text.muted}>[{makeBar(c!.weekly.pct)}]</text>
@@ -304,54 +308,10 @@ export default Plugin.define({
       )
     }
 
-    // 2. Statusleisten-Widget (für Home-Footer & Prompt-Footer)
-    const QuotaStatusWidget = () => {
-      const q = quota()
-      if (!q) {
-        return (
-          <box flexDirection="row" onMouseUp={refresh}>
-            <text fg={context.theme.text.muted}>⚡ Quota…</text>
-          </box>
-        )
-      }
-
-      const gSprint = q.gemini.sprint.pct
-      const gWeek = q.gemini.weekly.pct
-      const cSprint = q.claude.sprint.pct
-      const cWeek = q.claude.weekly.pct
-
-      return (
-        <box flexDirection="row" gap={1} onMouseUp={showDetails}>
-          <text fg={context.theme.text.muted}>⚡</text>
-          <text fg={context.theme.text.muted}>G:</text>
-          <text fg={getColor(gSprint)}>{gSprint}%</text>
-          <text fg={context.theme.text.muted}>/</text>
-          <text fg={getColor(gWeek)}>{gWeek}%</text>
-          <text fg={context.theme.text.muted}>│</text>
-          <text fg={context.theme.text.muted}>C:</text>
-          <text fg={getColor(cSprint)}>{cSprint}%</text>
-          <text fg={context.theme.text.muted}>/</text>
-          <text fg={getColor(cWeek)}>{cWeek}%</text>
-        </box>
-      )
-    }
-
     // In der rechten Sidebar bei MCPs und Context
     context.ui.slot({
       append: "sidebar.content",
       render: () => <SidebarSection />,
-    })
-
-    // Im Home-Footer
-    context.ui.slot({
-      append: "home.footer",
-      render: () => <QuotaStatusWidget />,
-    })
-
-    // Im Session Prompt-Footer
-    context.ui.slot({
-      append: "prompt.footer",
-      render: () => <QuotaStatusWidget />,
     })
 
     return () => {

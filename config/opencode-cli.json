@@ -24,7 +24,8 @@
     "open.menu": "ctrl+l",
     "input.move.up": "none",
     "input.move.down": "none",
-    "session.parent": "<leader>up"
+    "session.parent": "<leader>up",
+    "session.child.first": "<leader>down"
   },
   "terminal": {
     "title": true
