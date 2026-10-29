@@ -46,17 +46,17 @@
             "reasoningEffort": "high"
           },
           "variants": {
-            "high": {
-              "model": "gemini-3.8-flash-high",
-              "reasoningEffort": "high"
+            "low": {
+              "model": "gemini-3.8-flash-low",
+              "reasoningEffort": "low"
             },
             "medium": {
               "model": "gemini-3.8-flash-medium",
               "reasoningEffort": "medium"
             },
-            "low": {
-              "model": "gemini-3.8-flash-low",
-              "reasoningEffort": "low"
+            "high": {
+              "model": "gemini-3.8-flash-high",
+              "reasoningEffort": "high"
             }
           },
           "limit": {
