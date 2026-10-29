@@ -33,11 +33,6 @@ function formatTime(resetStr?: string): string {
   }
 }
 
-function makeBar(pct: number): string {
-  const len = Math.min(10, Math.max(0, Math.round(pct / 10)))
-  return "█".repeat(len) + "░".repeat(10 - len)
-}
-
 async function fetchQuota(): Promise<QuotaState | null> {
   const credsPath = path.join(os.homedir(), ".config/antigravity-oauth-proxy/oauth_creds.json")
   if (!fs.existsSync(credsPath)) {
@@ -194,16 +189,20 @@ export default Plugin.define({
       const g = q.gemini
       const c = q.claude
       const updated = q.lastUpdated ? q.lastUpdated.toLocaleTimeString() : "gerade"
+      const makeBar10 = (pct: number) => {
+        const len = Math.min(10, Math.max(0, Math.round(pct / 10)))
+        return "█".repeat(len) + "░".repeat(10 - len)
+      }
       const msg = [
         "Antigravity Live-Kontingente (Google CloudCode):",
         "",
         `Gemini (Flash & Pro):`,
-        `  • 5h-Sprint:    ${g.sprint.pct}% [${makeBar(g.sprint.pct)}] Reset ${g.sprint.reset}`,
-        `  • Wochen-Limit: ${g.weekly.pct}% [${makeBar(g.weekly.pct)}] Reset ${g.weekly.reset}`,
+        `  • 5h:    ${g.sprint.pct}% [${makeBar10(g.sprint.pct)}] Reset ${g.sprint.reset}`,
+        `  • Woche: ${g.weekly.pct}% [${makeBar10(g.weekly.pct)}] Reset ${g.weekly.reset}`,
         "",
         `Claude & GPT (Opus, Sonnet, GPT-OSS):`,
-        `  • 5h-Sprint:    ${c.sprint.pct}% [${makeBar(c.sprint.pct)}] Reset ${c.sprint.reset}`,
-        `  • Wochen-Limit: ${c.weekly.pct}% [${makeBar(c.weekly.pct)}] Reset ${c.weekly.reset}`,
+        `  • 5h:    ${c.sprint.pct}% [${makeBar10(c.sprint.pct)}] Reset ${c.sprint.reset}`,
+        `  • Woche: ${c.weekly.pct}% [${makeBar10(c.weekly.pct)}] Reset ${c.weekly.reset}`,
         "",
         `Stand: ${updated}${q.error ? ` (${q.error})` : ""}`,
       ].join("\n")
@@ -235,7 +234,26 @@ export default Plugin.define({
       ],
     }))
 
-    // 1. Sidebar Section (direkt dauerhaft aufgeklappt)
+    // Eine Quota-Zeile mit pixelgenauer Spaltenausrichtung
+    const QuotaRow = (props: { label: string; pct: number; reset: string }) => {
+      const fill = () => Math.min(10, Math.max(0, Math.round(props.pct / 10)))
+      const pctStr = () => String(props.pct).padStart(3) + "%"
+      const labelStr = () => ("  " + props.label).padEnd(8)
+      const resetStr = () => props.reset.padStart(7)
+
+      return (
+        <box flexDirection="row">
+          <text fg={context.theme.text.muted}>{labelStr()}</text>
+          <text fg={getColor(props.pct)}>{pctStr()}</text>
+          <text fg={context.theme.text.muted}> [</text>
+          <text fg={getColor(props.pct)}>{"█".repeat(fill())}</text>
+          <text fg={context.theme.text.muted}>{"░".repeat(10 - fill()) + "] "}</text>
+          <text fg={context.theme.text.muted}>{resetStr()}</text>
+        </box>
+      )
+    }
+
+    // Sidebar-Bereich: Dauerhaft geöffnet, ohne Aufklapp-Pfeil, sauber ausgerichtet
     const SidebarSection = () => {
       const q = quota()
       const g = q?.gemini
@@ -243,19 +261,18 @@ export default Plugin.define({
 
       return (
         <box flexDirection="column" gap={0}>
-          {/* Header */}
+          {/* Header ohne Pfeil */}
           <box flexDirection="row" gap={1}>
-            <text fg={context.theme.text.base}>▼</text>
             <text fg={context.theme.text.base}>
               <b>Quota</b>
             </text>
-            <text fg={context.theme.text.muted}> (Antigravity)</text>
+            <text fg={context.theme.text.muted}>(Antigravity)</text>
             <Show when={loading()}>
-              <text fg={context.theme.text.muted}> ↻</text>
+              <text fg={context.theme.text.muted}>↻</text>
             </Show>
           </box>
 
-          {/* Direkt aufgeklappter Inhalt */}
+          {/* Inhalt direkt dauerhaft sichtbar */}
           <Show
             when={q}
             fallback={
@@ -264,51 +281,23 @@ export default Plugin.define({
               </box>
             }
           >
-            <box flexDirection="column" paddingLeft={1} gap={0}>
+            <box flexDirection="column" gap={0}>
               {/* Gemini */}
               <text fg={context.theme.text.base}>• Gemini</text>
-              <box flexDirection="row" gap={1} justifyContent="space-between" paddingLeft={1}>
-                <text fg={context.theme.text.muted}>5h-Sprint</text>
-                <box flexDirection="row" gap={1}>
-                  <text fg={getColor(g!.sprint.pct)}>{g!.sprint.pct}%</text>
-                  <text fg={context.theme.text.muted}>[{makeBar(g!.sprint.pct)}]</text>
-                  <text fg={context.theme.text.muted}>{g!.sprint.reset}</text>
-                </box>
-              </box>
-              <box flexDirection="row" gap={1} justifyContent="space-between" paddingLeft={1}>
-                <text fg={context.theme.text.muted}>Woche</text>
-                <box flexDirection="row" gap={1}>
-                  <text fg={getColor(g!.weekly.pct)}>{g!.weekly.pct}%</text>
-                  <text fg={context.theme.text.muted}>[{makeBar(g!.weekly.pct)}]</text>
-                  <text fg={context.theme.text.muted}>{g!.weekly.reset}</text>
-                </box>
-              </box>
+              <QuotaRow label="5h" pct={g!.sprint.pct} reset={g!.sprint.reset} />
+              <QuotaRow label="Woche" pct={g!.weekly.pct} reset={g!.weekly.reset} />
 
               {/* Claude */}
-              <text fg={context.theme.text.base} paddingTop={0}>• Claude / GPT</text>
-              <box flexDirection="row" gap={1} justifyContent="space-between" paddingLeft={1}>
-                <text fg={context.theme.text.muted}>5h-Sprint</text>
-                <box flexDirection="row" gap={1}>
-                  <text fg={getColor(c!.sprint.pct)}>{c!.sprint.pct}%</text>
-                  <text fg={context.theme.text.muted}>[{makeBar(c!.sprint.pct)}]</text>
-                  <text fg={context.theme.text.muted}>{c!.sprint.reset}</text>
-                </box>
-              </box>
-              <box flexDirection="row" gap={1} justifyContent="space-between" paddingLeft={1}>
-                <text fg={context.theme.text.muted}>Woche</text>
-                <box flexDirection="row" gap={1}>
-                  <text fg={getColor(c!.weekly.pct)}>{c!.weekly.pct}%</text>
-                  <text fg={context.theme.text.muted}>[{makeBar(c!.weekly.pct)}]</text>
-                  <text fg={context.theme.text.muted}>{c!.weekly.reset}</text>
-                </box>
-              </box>
+              <text fg={context.theme.text.base}>• Claude / GPT</text>
+              <QuotaRow label="5h" pct={c!.sprint.pct} reset={c!.sprint.reset} />
+              <QuotaRow label="Woche" pct={c!.weekly.pct} reset={c!.weekly.reset} />
             </box>
           </Show>
         </box>
       )
     }
 
-    // In der rechten Sidebar bei MCPs und Context
+    // Registrierung ausschließlich in der rechten Sidebar
     context.ui.slot({
       append: "sidebar.content",
       render: () => <SidebarSection />,
