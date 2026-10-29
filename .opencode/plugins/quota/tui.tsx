@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin/tui"
-import { createSignal, onCleanup } from "solid-js"
+import { createSignal } from "solid-js"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -33,6 +33,11 @@ function formatTime(resetStr?: string): string {
   }
 }
 
+function makeBar(pct: number): string {
+  const len = Math.min(10, Math.max(0, Math.round(pct / 10)))
+  return "█".repeat(len) + "░".repeat(10 - len)
+}
+
 async function fetchQuota(): Promise<QuotaState | null> {
   const credsPath = path.join(os.homedir(), ".config/antigravity-oauth-proxy/oauth_creds.json")
   if (!fs.existsSync(credsPath)) {
@@ -43,47 +48,104 @@ async function fetchQuota(): Promise<QuotaState | null> {
     }
   }
 
-  const creds = JSON.parse(fs.readFileSync(credsPath, "utf8"))
-  if (!creds.access_token) {
+  let creds: any
+  try {
+    creds = JSON.parse(fs.readFileSync(credsPath, "utf8"))
+  } catch {
     return {
       gemini: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
       claude: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
-      error: "Kein Token",
+      error: "Fehler beim Lesen der Credentials",
     }
   }
 
-  const res = await fetch("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + creds.access_token,
-      "Content-Type": "application/json",
-      "User-Agent": "antigravity/cli/1.1.13 (aidev_client; os_type=linux; arch=amd64; cl=964361259; auth_method=consumer)",
-    },
-    body: JSON.stringify({ project: "aicode-consumers" }),
-  })
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`)
+  if (!creds?.access_token) {
+    return {
+      gemini: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
+      claude: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
+      error: "Kein Access Token",
+    }
   }
 
-  const data: any = await res.json()
+  const headers = {
+    Authorization: "Bearer " + creds.access_token,
+    "Content-Type": "application/json",
+    "User-Agent": "antigravity/cli/1.1.13 (aidev_client; os_type=linux; arch=amd64; cl=964361259; auth_method=consumer)",
+  }
+
+  let data: any
+  try {
+    const res = await fetch("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ project: "aicode-consumers" }),
+    })
+    if (res.ok) {
+      data = await res.json()
+    }
+  } catch {
+    // Fallback unten
+  }
+
+  // Fallback auf fetchAvailableModels falls retrieveUserQuotaSummary nicht antwortet
+  if (!data?.groups) {
+    try {
+      const res = await fetch("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ project: "aicode-consumers" }),
+      })
+      if (res.ok) {
+        data = await res.json()
+      }
+    } catch {
+      // Ignorieren
+    }
+  }
+
+  if (!data || (!data.groups && !data.models)) {
+    throw new Error("Ungültige Antwort von Google")
+  }
+
   const result: QuotaState = {
     gemini: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
     claude: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
     lastUpdated: new Date(),
   }
 
-  for (const group of data.groups || []) {
-    const isGemini = (group.displayName || "").toLowerCase().includes("gemini")
-    const target = isGemini ? result.gemini : result.claude
-    for (const b of group.buckets || []) {
-      const w = ((b.window || "") + (b.bucketId || "")).toLowerCase()
-      const frac = typeof b.remainingFraction === "number" ? b.remainingFraction : 1
-      const pct = Math.round(frac * 100)
-      const reset = formatTime(b.resetTime)
-      if (w.includes("5h")) {
+  if (data.groups) {
+    for (const group of data.groups || []) {
+      const isGemini = (group.displayName || "").toLowerCase().includes("gemini")
+      const target = isGemini ? result.gemini : result.claude
+      for (const b of group.buckets || []) {
+        const w = ((b.window || "") + (b.bucketId || "")).toLowerCase()
+        const frac = typeof b.remainingFraction === "number" ? b.remainingFraction : 1
+        const pct = Math.round(frac * 100)
+        const reset = formatTime(b.resetTime)
+        if (w.includes("5h")) {
+          target.sprint = { pct, reset }
+        } else if (w.includes("week")) {
+          target.weekly = { pct, reset }
+        }
+      }
+    }
+  } else if (data.models) {
+    const pools = [
+      { key: "gemini", keys: ["gemini-3.8-flash-high", "gemini-pro-agent"] },
+      { key: "claude", keys: ["claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium"] },
+    ]
+    for (const pool of pools) {
+      const target = pool.key === "gemini" ? result.gemini : result.claude
+      let q: any = null
+      for (const k of pool.keys) {
+        q = data.models[k]?.quotaInfo
+        if (q) break
+      }
+      if (q) {
+        const frac = typeof q.remainingFraction === "number" ? q.remainingFraction : 1
+        const pct = Math.round(frac * 100)
+        const reset = formatTime(q.resetTime)
         target.sprint = { pct, reset }
-      } else if (w.includes("week")) {
         target.weekly = { pct, reset }
       }
     }
@@ -95,7 +157,6 @@ async function fetchQuota(): Promise<QuotaState | null> {
 export default Plugin.define({
   id: "antigravity.quota",
   setup(context) {
-    console.log("ANTIGRAVITY_QUOTA_SETUP: width=", context.renderer?.width)
     const [quota, setQuota] = createSignal<QuotaState | null>(null)
     const [loading, setLoading] = createSignal(false)
 
@@ -112,8 +173,14 @@ export default Plugin.define({
       }
     }
 
+    // Sofortiger Abruf + periodischer Timer
     refresh()
     const timer = setInterval(refresh, 45000)
+
+    // Nach jedem erfolgreichen Agenten-Turn aktualisieren
+    const stopExecutionListener = context.data.on("session.execution.succeeded", () => {
+      refresh()
+    })
 
     const showDetails = () => {
       const q = quota()
@@ -144,10 +211,20 @@ export default Plugin.define({
       })
     }
 
-    function makeBar(pct: number): string {
-      const len = Math.min(10, Math.max(0, Math.round(pct / 10)))
-      return "█".repeat(len) + "░".repeat(10 - len)
-    }
+    // Befehl in der Command Palette registrieren
+    context.keymap.layer(() => ({
+      mode: "global",
+      commands: [
+        {
+          id: "antigravity.quota.details",
+          title: "Show Antigravity Quota",
+          group: "Antigravity",
+          palette: true,
+          suggested: true,
+          run: () => showDetails(),
+        },
+      ],
+    }))
 
     const getColor = (pct: number) => {
       if (pct < 30) return context.theme.text.feedback.error.base
@@ -200,16 +277,21 @@ export default Plugin.define({
       )
     }
 
+    // Auf dem Homescreen rechts unten
     context.ui.slot({
       append: "home.footer",
       render: () => <QuotaView />,
     })
 
+    // In Sessions in der Prompt-Leiste rechts
     context.ui.slot({
       append: "prompt.footer",
       render: () => <QuotaView />,
     })
 
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+      stopExecutionListener()
+    }
   },
 })
