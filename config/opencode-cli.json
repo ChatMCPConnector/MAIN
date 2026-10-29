@@ -21,6 +21,7 @@
     "prompt.history.previous": "ctrl+up",
     "prompt.history.next": "ctrl+down",
     "variant.cycle": "ctrl+t,ctrl+o",
+    "open.menu": "ctrl+l",
     "input.move.up": "none",
     "input.move.down": "none",
     "session.parent": "<leader>up"

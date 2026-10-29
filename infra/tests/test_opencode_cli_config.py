@@ -26,6 +26,11 @@ KEYBIND_MAP = {
     "session_parent": "session.parent",
 }
 
+# v2-spezifische Keybinds ohne v1-Entsprechung (z. B. neues open.menu)
+V2_ONLY_KEYBINDS = {
+    "open.menu": "ctrl+l",
+}
+
 
 def load(path: Path) -> dict:
     return json.loads(path.read_text())
@@ -37,7 +42,9 @@ def test_v2_cli_config_has_expected_shape() -> None:
     assert cli["mouse"] is False
     assert cli["prompt"]["image_preview"] is True
     assert cli["session"]["image_preview"] is True
-    assert set(cli["keybinds"]) == set(KEYBIND_MAP.values())
+    assert set(cli["keybinds"]) == set(KEYBIND_MAP.values()) | set(V2_ONLY_KEYBINDS)
+    for name, value in V2_ONLY_KEYBINDS.items():
+        assert cli["keybinds"][name] == value, name
 
 
 def test_keybinds_match_v1_tui_config() -> None:
