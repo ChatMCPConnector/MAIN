@@ -12,8 +12,30 @@ interface BucketInfo {
 interface QuotaState {
   gemini: { sprint: BucketInfo; weekly: BucketInfo }
   claude: { sprint: BucketInfo; weekly: BucketInfo }
-  lastUpdated?: Date
+  lastUpdated?: string
   error?: string
+}
+
+const CACHE_FILE = "/tmp/opencode/quota-cache.json"
+
+function loadCache(): QuotaState | null {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const raw = fs.readFileSync(CACHE_FILE, "utf8")
+      const parsed = JSON.parse(raw)
+      if (parsed?.gemini && parsed?.claude) {
+        return parsed
+      }
+    }
+  } catch {}
+  return null
+}
+
+function saveCache(data: QuotaState) {
+  try {
+    fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true })
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(data), "utf8")
+  } catch {}
 }
 
 function formatTime(resetStr?: string): string {
@@ -74,6 +96,7 @@ async function fetchQuota(): Promise<QuotaState | null> {
       method: "POST",
       headers,
       body: JSON.stringify({ project: "aicode-consumers" }),
+      signal: AbortSignal.timeout(4000),
     })
     if (res.ok) {
       data = await res.json()
@@ -88,6 +111,7 @@ async function fetchQuota(): Promise<QuotaState | null> {
         method: "POST",
         headers,
         body: JSON.stringify({ project: "aicode-consumers" }),
+        signal: AbortSignal.timeout(4000),
       })
       if (res.ok) {
         data = await res.json()
@@ -104,7 +128,7 @@ async function fetchQuota(): Promise<QuotaState | null> {
   const result: QuotaState = {
     gemini: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
     claude: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
-    lastUpdated: new Date(),
+    lastUpdated: new Date().toISOString(),
   }
 
   if (data.groups) {
@@ -145,21 +169,29 @@ async function fetchQuota(): Promise<QuotaState | null> {
     }
   }
 
+  saveCache(result)
   return result
 }
 
 export default Plugin.define({
   id: "antigravity.quota",
   setup(context) {
-    const [quota, setQuota] = createSignal<QuotaState | null>(null)
+    // 0ms Latenz: Initialer Zustand direkt aus lokalem Cache
+    const [quota, setQuota] = createSignal<QuotaState | null>(loadCache())
     const [loading, setLoading] = createSignal(false)
 
-    const refresh = async () => {
+    const refresh = async (force = false) => {
       if (loading()) return
+      const current = quota()
+      if (!force && current?.lastUpdated) {
+        const age = Date.now() - new Date(current.lastUpdated).getTime()
+        if (age < 25000) return // Cache ist noch frisch genug
+      }
+
       setLoading(true)
       try {
         const q = await fetchQuota()
-        setQuota(q)
+        if (q) setQuota(q)
       } catch (err: any) {
         setQuota((prev) => (prev ? { ...prev, error: err.message } : null))
       } finally {
@@ -167,11 +199,13 @@ export default Plugin.define({
       }
     }
 
-    refresh()
-    const timer = setInterval(refresh, 45000)
+    // Sofortiger Hintergrundabruf nur falls Cache älter als 25s
+    refresh(false)
+    const timer = setInterval(() => refresh(true), 45000)
 
+    // Nach jedem beendeten Agenten-Turn sofort frisch abfragen
     const stopExecutionListener = context.data.on("session.execution.succeeded", () => {
-      refresh()
+      refresh(true)
     })
 
     const getColor = (pct: number) => {
@@ -183,12 +217,12 @@ export default Plugin.define({
     const showDetails = () => {
       const q = quota()
       if (!q) {
-        refresh()
+        refresh(true)
         return
       }
       const g = q.gemini
       const c = q.claude
-      const updated = q.lastUpdated ? q.lastUpdated.toLocaleTimeString() : "gerade"
+      const updated = q.lastUpdated ? new Date(q.lastUpdated).toLocaleTimeString() : "gerade"
       const makeBar10 = (pct: number) => {
         const len = Math.min(10, Math.max(0, Math.round(pct / 10)))
         return "█".repeat(len) + "░".repeat(10 - len)
@@ -229,7 +263,7 @@ export default Plugin.define({
           title: "Refresh Antigravity Quota",
           group: "Antigravity",
           palette: true,
-          run: () => refresh(),
+          run: () => refresh(true),
         },
       ],
     }))
