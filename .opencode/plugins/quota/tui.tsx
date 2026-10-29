@@ -208,13 +208,13 @@ export default Plugin.define({
     const getQuotaColor = (pct: number) => {
       if (pct < 30) return context.theme.text.feedback.error.base
       if (pct < 70) return context.theme.text.feedback.warning.base
-      return context.theme.text.base
+      return context.theme.text.muted
     }
 
     const getContextColor = (pct: number) => {
       if (pct >= 90) return context.theme.text.feedback.error.base
       if (pct >= 75) return context.theme.text.feedback.warning.base
-      return context.theme.text.base
+      return context.theme.text.muted
     }
 
     const formatTokenCount = (n: number) => {
@@ -309,7 +309,7 @@ export default Plugin.define({
                     <Show when={inf.percent !== undefined}>
                       <box flexDirection="row">
                         <text fg={getContextColor(pct())}>{bar().filled}</text>
-                        <text fg={context.theme.text.muted}>{bar().empty}</text>
+                        <text fg={context.theme.border.base ?? context.theme.text.muted}>{bar().empty}</text>
                       </box>
                       <text fg={context.theme.text.muted}>{pct()}% used</text>
                     </Show>
@@ -341,8 +341,8 @@ export default Plugin.define({
           <text fg={getQuotaColor(props.pct)}>{pctStr()}</text>
           <text fg={context.theme.text.muted}> [</text>
           <text fg={getQuotaColor(props.pct)}>{"█".repeat(fill())}</text>
-          <text fg={context.theme.text.muted}>{"░".repeat(10 - fill()) + "] "}</text>
-          <text fg={context.theme.text.muted}>{resetStr()}</text>
+          <text fg={context.theme.border.base ?? context.theme.text.muted}>{"░".repeat(10 - fill())}</text>
+          <text fg={context.theme.text.muted}>{"] " + resetStr()}</text>
         </box>
       )
     }
