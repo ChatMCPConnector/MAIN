@@ -208,13 +208,13 @@ export default Plugin.define({
     const getQuotaColor = (pct: number) => {
       if (pct < 30) return context.theme.text.feedback.error.base
       if (pct < 70) return context.theme.text.feedback.warning.base
-      return context.theme.text.feedback.success.base
+      return context.theme.text.base
     }
 
     const getContextColor = (pct: number) => {
-      if (pct >= 85) return context.theme.text.feedback.error.base
-      if (pct >= 65) return context.theme.text.feedback.warning.base
-      return context.theme.text.feedback.success.base
+      if (pct >= 90) return context.theme.text.feedback.error.base
+      if (pct >= 75) return context.theme.text.feedback.warning.base
+      return context.theme.text.base
     }
 
     const formatTokenCount = (n: number) => {
