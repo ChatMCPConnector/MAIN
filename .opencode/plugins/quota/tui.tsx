@@ -212,7 +212,10 @@ export default Plugin.define({
     }
 
     const makeBar = (pct: number, totalLen = 30) => {
-      const filled = Math.min(totalLen, Math.max(0, Math.round((pct / 100) * totalLen)))
+      let filled = Math.round((pct / 100) * totalLen)
+      if (pct > 0 && filled === 0) filled = 1
+      if (pct < 100 && filled === totalLen) filled = totalLen - 1
+      filled = Math.min(totalLen, Math.max(0, filled))
       return {
         filled: "█".repeat(filled),
         empty: "░".repeat(totalLen - filled),
@@ -296,8 +299,12 @@ export default Plugin.define({
                     <text fg={context.theme.text.muted}>{tokenStr()}</text>
                     <Show when={inf.percent !== undefined}>
                       <box flexDirection="row">
-                        <text fg={context.theme.text.muted}>{bar().filled}</text>
-                        <text fg={context.theme.border.base ?? context.theme.text.muted}>{bar().empty}</text>
+                        <Show when={bar().filled.length > 0}>
+                          <text fg={context.theme.text.muted}>{bar().filled}</text>
+                        </Show>
+                        <Show when={bar().empty.length > 0}>
+                          <text fg={context.theme.border.base ?? context.theme.text.muted}>{bar().empty}</text>
+                        </Show>
                       </box>
                       <text fg={context.theme.text.muted}>{pct()}% used</text>
                     </Show>
@@ -328,8 +335,12 @@ export default Plugin.define({
           <text fg={context.theme.text.muted}>{labelStr()}</text>
           <text fg={context.theme.text.muted}>{pctStr()}</text>
           <text fg={context.theme.text.muted}> [</text>
-          <text fg={context.theme.text.muted}>{"█".repeat(fill())}</text>
-          <text fg={context.theme.border.base ?? context.theme.text.muted}>{"░".repeat(10 - fill())}</text>
+          <Show when={fill() > 0}>
+            <text fg={context.theme.text.muted}>{"█".repeat(fill())}</text>
+          </Show>
+          <Show when={fill() < 10}>
+            <text fg={context.theme.border.base ?? context.theme.text.muted}>{"░".repeat(10 - fill())}</text>
+          </Show>
           <text fg={context.theme.text.muted}>{"] " + resetStr()}</text>
         </box>
       )
