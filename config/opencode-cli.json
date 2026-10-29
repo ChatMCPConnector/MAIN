@@ -35,5 +35,8 @@
     "layout": "horizontal",
     "mode": "off",
     "scope": "cwd"
+  },
+  "attention": {
+    "sound": false
   }
 }
