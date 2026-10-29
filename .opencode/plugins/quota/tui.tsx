@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin/tui"
-import { createSignal } from "solid-js"
+import { createSignal, Show } from "solid-js"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -55,7 +55,7 @@ async function fetchQuota(): Promise<QuotaState | null> {
     return {
       gemini: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
       claude: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
-      error: "Fehler beim Lesen der Credentials",
+      error: "Fehler beim Lesen",
     }
   }
 
@@ -63,7 +63,7 @@ async function fetchQuota(): Promise<QuotaState | null> {
     return {
       gemini: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
       claude: { sprint: { pct: 100, reset: "" }, weekly: { pct: 100, reset: "" } },
-      error: "Kein Access Token",
+      error: "Kein Token",
     }
   }
 
@@ -84,10 +84,9 @@ async function fetchQuota(): Promise<QuotaState | null> {
       data = await res.json()
     }
   } catch {
-    // Fallback unten
+    // Fallback
   }
 
-  // Fallback auf fetchAvailableModels falls retrieveUserQuotaSummary nicht antwortet
   if (!data?.groups) {
     try {
       const res = await fetch("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", {
@@ -159,6 +158,7 @@ export default Plugin.define({
   setup(context) {
     const [quota, setQuota] = createSignal<QuotaState | null>(null)
     const [loading, setLoading] = createSignal(false)
+    const [open, setOpen] = createSignal(true)
 
     const refresh = async () => {
       if (loading()) return
@@ -173,14 +173,18 @@ export default Plugin.define({
       }
     }
 
-    // Sofortiger Abruf + periodischer Timer
     refresh()
     const timer = setInterval(refresh, 45000)
 
-    // Nach jedem erfolgreichen Agenten-Turn aktualisieren
     const stopExecutionListener = context.data.on("session.execution.succeeded", () => {
       refresh()
     })
+
+    const getColor = (pct: number) => {
+      if (pct < 30) return context.theme.text.feedback.error.base
+      if (pct < 70) return context.theme.text.feedback.warning.base
+      return context.theme.text.feedback.success.base
+    }
 
     const showDetails = () => {
       const q = quota()
@@ -211,7 +215,6 @@ export default Plugin.define({
       })
     }
 
-    // Befehl in der Command Palette registrieren
     context.keymap.layer(() => ({
       mode: "global",
       commands: [
@@ -226,13 +229,83 @@ export default Plugin.define({
       ],
     }))
 
-    const getColor = (pct: number) => {
-      if (pct < 30) return context.theme.text.feedback.error.base
-      if (pct < 70) return context.theme.text.feedback.warning.base
-      return context.theme.text.muted
+    // 1. Sidebar Section (wo MCPs und Context rechts angezeigt werden)
+    const SidebarSection = () => {
+      const q = quota()
+      const g = q?.gemini
+      const c = q?.claude
+
+      return (
+        <box flexDirection="column" gap={0}>
+          {/* Header */}
+          <box
+            flexDirection="row"
+            gap={1}
+            onMouseDown={() => setOpen(!open())}
+          >
+            <text fg={context.theme.text.base}>{open() ? "▼" : "▶"}</text>
+            <text fg={context.theme.text.base}>
+              <b>Quota</b>
+            </text>
+            <Show when={!open() && q}>
+              <text fg={context.theme.text.muted}>
+                {" "}
+                (G: {g?.sprint.pct}% · C: {c?.sprint.pct}%)
+              </text>
+            </Show>
+            <Show when={loading()}>
+              <text fg={context.theme.text.muted}> …</text>
+            </Show>
+          </box>
+
+          {/* Inhalt wenn ausgeklappt */}
+          <Show when={open() && q}>
+            <box flexDirection="column" paddingLeft={1} gap={0}>
+              {/* Gemini */}
+              <box flexDirection="row" gap={1} justifyContent="space-between">
+                <text fg={context.theme.text.base}>• Gemini 5h</text>
+                <box flexDirection="row" gap={1}>
+                  <text fg={getColor(g!.sprint.pct)}>{g!.sprint.pct}%</text>
+                  <text fg={context.theme.text.muted}>[{makeBar(g!.sprint.pct)}]</text>
+                  <text fg={context.theme.text.muted}>{g!.sprint.reset}</text>
+                </box>
+              </box>
+
+              <box flexDirection="row" gap={1} justifyContent="space-between">
+                <text fg={context.theme.text.muted}>  Gemini Woche</text>
+                <box flexDirection="row" gap={1}>
+                  <text fg={getColor(g!.weekly.pct)}>{g!.weekly.pct}%</text>
+                  <text fg={context.theme.text.muted}>[{makeBar(g!.weekly.pct)}]</text>
+                  <text fg={context.theme.text.muted}>{g!.weekly.reset}</text>
+                </box>
+              </box>
+
+              {/* Claude */}
+              <box flexDirection="row" gap={1} justifyContent="space-between" paddingTop={0}>
+                <text fg={context.theme.text.base}>• Claude 5h</text>
+                <box flexDirection="row" gap={1}>
+                  <text fg={getColor(c!.sprint.pct)}>{c!.sprint.pct}%</text>
+                  <text fg={context.theme.text.muted}>[{makeBar(c!.sprint.pct)}]</text>
+                  <text fg={context.theme.text.muted}>{c!.sprint.reset}</text>
+                </box>
+              </box>
+
+              <box flexDirection="row" gap={1} justifyContent="space-between">
+                <text fg={context.theme.text.muted}>  Claude Woche</text>
+                <box flexDirection="row" gap={1}>
+                  <text fg={getColor(c!.weekly.pct)}>{c!.weekly.pct}%</text>
+                  <text fg={context.theme.text.muted}>[{makeBar(c!.weekly.pct)}]</text>
+                  <text fg={context.theme.text.muted}>{c!.weekly.reset}</text>
+                </box>
+              </box>
+            </box>
+          </Show>
+        </box>
+      )
     }
 
-    const QuotaView = () => {
+    // 2. Statusleisten-Widget (für Home-Footer & Prompt-Footer)
+    const QuotaStatusWidget = () => {
       const q = quota()
       if (!q) {
         return (
@@ -246,20 +319,6 @@ export default Plugin.define({
       const gWeek = q.gemini.weekly.pct
       const cSprint = q.claude.sprint.pct
       const cWeek = q.claude.weekly.pct
-
-      const width = context.renderer?.width ?? 120
-      const compact = width < 100
-
-      if (compact) {
-        return (
-          <box flexDirection="row" gap={1} onMouseUp={showDetails}>
-            <text fg={context.theme.text.muted}>⚡</text>
-            <text fg={getColor(Math.min(gSprint, gWeek))}>G:{gSprint}%</text>
-            <text fg={context.theme.text.muted}>·</text>
-            <text fg={getColor(Math.min(cSprint, cWeek))}>C:{cSprint}%</text>
-          </box>
-        )
-      }
 
       return (
         <box flexDirection="row" gap={1} onMouseUp={showDetails}>
@@ -277,16 +336,22 @@ export default Plugin.define({
       )
     }
 
-    // Auf dem Homescreen rechts unten
+    // In der rechten Sidebar bei MCPs und Context
     context.ui.slot({
-      append: "home.footer",
-      render: () => <QuotaView />,
+      append: "sidebar.content",
+      render: () => <SidebarSection />,
     })
 
-    // In Sessions in der Prompt-Leiste rechts
+    // Im Home-Footer
+    context.ui.slot({
+      append: "home.footer",
+      render: () => <QuotaStatusWidget />,
+    })
+
+    // Im Session Prompt-Footer
     context.ui.slot({
       append: "prompt.footer",
-      render: () => <QuotaView />,
+      render: () => <QuotaStatusWidget />,
     })
 
     return () => {
