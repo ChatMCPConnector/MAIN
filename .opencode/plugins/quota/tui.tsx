@@ -176,7 +176,6 @@ async function fetchQuota(): Promise<QuotaState | null> {
 export default Plugin.define({
   id: "antigravity.quota",
   setup(context) {
-    // 0ms Latenz: Initialer Zustand direkt aus lokalem Cache
     const [quota, setQuota] = createSignal<QuotaState | null>(loadCache())
     const [loading, setLoading] = createSignal(false)
 
@@ -185,7 +184,7 @@ export default Plugin.define({
       const current = quota()
       if (!force && current?.lastUpdated) {
         const age = Date.now() - new Date(current.lastUpdated).getTime()
-        if (age < 25000) return // Cache ist noch frisch genug
+        if (age < 25000) return
       }
 
       setLoading(true)
@@ -199,76 +198,137 @@ export default Plugin.define({
       }
     }
 
-    // Sofortiger Hintergrundabruf nur falls Cache älter als 25s
     refresh(false)
     const timer = setInterval(() => refresh(true), 45000)
 
-    // Nach jedem beendeten Agenten-Turn sofort frisch abfragen
     const stopExecutionListener = context.data.on("session.execution.succeeded", () => {
       refresh(true)
     })
 
-    const getColor = (pct: number) => {
+    const getQuotaColor = (pct: number) => {
       if (pct < 30) return context.theme.text.feedback.error.base
       if (pct < 70) return context.theme.text.feedback.warning.base
       return context.theme.text.feedback.success.base
     }
 
-    const showDetails = () => {
-      const q = quota()
-      if (!q) {
-        refresh(true)
-        return
-      }
-      const g = q.gemini
-      const c = q.claude
-      const updated = q.lastUpdated ? new Date(q.lastUpdated).toLocaleTimeString() : "gerade"
-      const makeBar10 = (pct: number) => {
-        const len = Math.min(10, Math.max(0, Math.round(pct / 10)))
-        return "█".repeat(len) + "░".repeat(10 - len)
-      }
-      const msg = [
-        "Antigravity Live-Kontingente (Google CloudCode):",
-        "",
-        `Gemini (Flash & Pro):`,
-        `  • 5h:    ${g.sprint.pct}% [${makeBar10(g.sprint.pct)}] Reset ${g.sprint.reset}`,
-        `  • Woche: ${g.weekly.pct}% [${makeBar10(g.weekly.pct)}] Reset ${g.weekly.reset}`,
-        "",
-        `Claude & GPT (Opus, Sonnet, GPT-OSS):`,
-        `  • 5h:    ${c.sprint.pct}% [${makeBar10(c.sprint.pct)}] Reset ${c.sprint.reset}`,
-        `  • Woche: ${c.weekly.pct}% [${makeBar10(c.weekly.pct)}] Reset ${c.weekly.reset}`,
-        "",
-        `Stand: ${updated}${q.error ? ` (${q.error})` : ""}`,
-      ].join("\n")
-
-      context.ui.dialog.alert({
-        title: "⚡ Antigravity Quota Status",
-        message: msg,
-      })
+    const getContextColor = (pct: number) => {
+      if (pct >= 85) return context.theme.text.feedback.error.base
+      if (pct >= 65) return context.theme.text.feedback.warning.base
+      return context.theme.text.feedback.success.base
     }
 
-    context.keymap.layer(() => ({
-      mode: "global",
-      commands: [
-        {
-          id: "antigravity.quota.details",
-          title: "Show Antigravity Quota",
-          group: "Antigravity",
-          palette: true,
-          suggested: true,
-          run: () => showDetails(),
-        },
-        {
-          id: "antigravity.quota.refresh",
-          title: "Refresh Antigravity Quota",
-          group: "Antigravity",
-          palette: true,
-          run: () => refresh(true),
-        },
-      ],
-    }))
+    const formatTokenCount = (n: number) => {
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(2).replace(/\.00$/, "") + "M"
+      if (n >= 10_000) return (n / 1000).toFixed(2).replace(/\.00$/, "") + "K"
+      return n.toLocaleString("en-US")
+    }
 
-    // Eine Quota-Zeile mit pixelgenauer Spaltenausrichtung
+    const makeBar = (pct: number, totalLen = 30) => {
+      const filled = Math.min(totalLen, Math.max(0, Math.round((pct / 100) * totalLen)))
+      return {
+        filled: "█".repeat(filled),
+        empty: "░".repeat(totalLen - filled),
+      }
+    }
+
+    const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
+
+    // 1. Context-Bereich (mit Fortschrittsbalken)
+    const ContextSection = (props: { sessionID?: string }) => {
+      const session = () => (props.sessionID ? context.data.session.get(props.sessionID) : undefined)
+      const messages = () => (props.sessionID ? context.data.session.message.list(props.sessionID) : [])
+      const cost = () => (props.sessionID ? context.data.session.cost(props.sessionID) : 0)
+
+      const models = () => {
+        const s = session()
+        return context.data.location.model.list(s?.location ?? context.location)
+      }
+
+      const contextInfo = () => {
+        const msgs = messages()
+        if (!msgs || msgs.length === 0) return null
+        const s = session()
+        const revertID = s?.revert?.messageID
+
+        const limitIdx = revertID ? msgs.findIndex((m) => m.id === revertID) : -1
+        const endIdx = limitIdx === -1 ? msgs.length : limitIdx
+
+        const compactionIdx = msgs.findLastIndex(
+          (m, i) => m.type === "compaction" && m.status === "completed" && i < endIdx
+        )
+
+        const lastAssistant = msgs.findLast(
+          (m, i) => m.type === "assistant" && m.tokens && i > compactionIdx && i < endIdx
+        )
+        if (!lastAssistant || !lastAssistant.tokens) return null
+
+        const t = lastAssistant.tokens
+        const total = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.read || 0) + (t.cache?.write || 0)
+        if (total <= 0) return null
+
+        const modList = models()
+        const modelInfo = modList?.find(
+          (m) => m.providerID === lastAssistant.model?.providerID && m.id === lastAssistant.model?.id
+        )
+        const contextLimit = modelInfo?.limit?.context
+
+        let percent: number | undefined
+        if (contextLimit && contextLimit > 0) {
+          percent = Math.round((total / contextLimit) * 100)
+        }
+
+        return {
+          tokens: total,
+          limit: contextLimit,
+          percent,
+        }
+      }
+
+      return (
+        <Show when={contextInfo() || cost() > 0}>
+          <box flexDirection="column" gap={0} paddingBottom={1}>
+            <text fg={context.theme.text.base}>
+              <b>Context</b>
+            </text>
+
+            <Show when={contextInfo()}>
+              {(info) => {
+                const inf = info()
+                const pct = () => inf.percent ?? 0
+                const bar = () => makeBar(pct(), 30)
+                const tokenStr = () => {
+                  if (inf.limit) {
+                    return `${inf.tokens.toLocaleString("en-US")} / ${formatTokenCount(inf.limit)} tokens`
+                  }
+                  return `${inf.tokens.toLocaleString("en-US")} tokens`
+                }
+
+                return (
+                  <box flexDirection="column" gap={0}>
+                    <text fg={context.theme.text.muted}>{tokenStr()}</text>
+                    <Show when={inf.percent !== undefined}>
+                      <box flexDirection="row">
+                        <text fg={getContextColor(pct())}>{bar().filled}</text>
+                        <text fg={context.theme.text.muted}>{bar().empty}</text>
+                      </box>
+                      <text fg={context.theme.text.muted}>{pct()}% used</text>
+                    </Show>
+                  </box>
+                )
+              }}
+            </Show>
+
+            <Show when={cost() > 0}>
+              <text fg={context.theme.text.muted}>
+                {currencyFormatter.format(cost())} spent
+              </text>
+            </Show>
+          </box>
+        </Show>
+      )
+    }
+
+    // 2. QuotaRow mit gerader Spaltenausrichtung
     const QuotaRow = (props: { label: string; pct: number; reset: string }) => {
       const fill = () => Math.min(10, Math.max(0, Math.round(props.pct / 10)))
       const pctStr = () => String(props.pct).padStart(3) + "%"
@@ -278,24 +338,23 @@ export default Plugin.define({
       return (
         <box flexDirection="row">
           <text fg={context.theme.text.muted}>{labelStr()}</text>
-          <text fg={getColor(props.pct)}>{pctStr()}</text>
+          <text fg={getQuotaColor(props.pct)}>{pctStr()}</text>
           <text fg={context.theme.text.muted}> [</text>
-          <text fg={getColor(props.pct)}>{"█".repeat(fill())}</text>
+          <text fg={getQuotaColor(props.pct)}>{"█".repeat(fill())}</text>
           <text fg={context.theme.text.muted}>{"░".repeat(10 - fill()) + "] "}</text>
           <text fg={context.theme.text.muted}>{resetStr()}</text>
         </box>
       )
     }
 
-    // Sidebar-Bereich: Dauerhaft geöffnet, ohne Aufklapp-Pfeil, sauber ausgerichtet
-    const SidebarSection = () => {
+    // 3. Quota-Bereich (dauerhaft geöffnet, ohne Aufklapp-Pfeil)
+    const QuotaSection = () => {
       const q = quota()
       const g = q?.gemini
       const c = q?.claude
 
       return (
         <box flexDirection="column" gap={0}>
-          {/* Header ohne Pfeil */}
           <box flexDirection="row" gap={1}>
             <text fg={context.theme.text.base}>
               <b>Quota</b>
@@ -306,7 +365,6 @@ export default Plugin.define({
             </Show>
           </box>
 
-          {/* Inhalt direkt dauerhaft sichtbar */}
           <Show
             when={q}
             fallback={
@@ -316,12 +374,10 @@ export default Plugin.define({
             }
           >
             <box flexDirection="column" gap={0}>
-              {/* Gemini */}
               <text fg={context.theme.text.base}>• Gemini</text>
               <QuotaRow label="5h" pct={g!.sprint.pct} reset={g!.sprint.reset} />
               <QuotaRow label="Woche" pct={g!.weekly.pct} reset={g!.weekly.reset} />
 
-              {/* Claude */}
               <text fg={context.theme.text.base}>• Claude / GPT</text>
               <QuotaRow label="5h" pct={c!.sprint.pct} reset={c!.sprint.reset} />
               <QuotaRow label="Woche" pct={c!.weekly.pct} reset={c!.weekly.reset} />
@@ -331,10 +387,15 @@ export default Plugin.define({
       )
     }
 
-    // Registrierung ausschließlich in der rechten Sidebar
+    // In der rechten Sidebar: Context (mit Balken) + Quota
     context.ui.slot({
-      append: "sidebar.content",
-      render: () => <SidebarSection />,
+      prepend: "sidebar.content",
+      render: (input) => (
+        <box flexDirection="column" gap={0}>
+          <ContextSection sessionID={input?.sessionID} />
+          <QuotaSection />
+        </box>
+      ),
     })
 
     return () => {
